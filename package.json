@@ -1,0 +1,13 @@
+{
+  "name": "caipiao-lottery",
+  "private": true,
+  "version": "0.0.1",
+  "description": "彩票/精密终端 仓储：用户端、管理端、后端、技能资产分目录",
+  "scripts": {
+    "dev:client": "npm run dev --prefix client",
+    "build:client": "npm run build --prefix client",
+    "preview:client": "npm run preview --prefix client",
+    "dev:admin": "npm run dev --prefix admin",
+    "build:admin": "npm run build --prefix admin"
+  }
+}

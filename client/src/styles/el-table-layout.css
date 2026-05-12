@@ -1,0 +1,44 @@
+/**
+ * Element Plus 表格布局（全项目默认）
+ * — 见 client/DESIGN.md §8「el-table 布局」。
+ * — 确需横向滚动时：在 <el-table> 上增加 class `el-table--scroll-x`。
+ */
+
+.el-table:not(.el-table--scroll-x) .el-table__inner-wrapper,
+.el-table:not(.el-table--scroll-x) .el-table__body-wrapper,
+.el-table:not(.el-table--scroll-x) .el-table__header-wrapper,
+.el-table:not(.el-table--scroll-x) .el-table__footer-wrapper {
+  overflow-x: hidden !important;
+}
+
+.el-table:not(.el-table--scroll-x) .el-scrollbar__wrap {
+  overflow-x: hidden !important;
+}
+
+.el-table:not(.el-table--scroll-x) .el-scrollbar__bar.is-horizontal {
+  display: none !important;
+}
+
+.el-table:not(.el-table--scroll-x) th.el-table__cell .cell,
+.el-table:not(.el-table--scroll-x) td.el-table__cell .cell {
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
+/* —— 豁免：显式开启横向滚动 —— */
+.el-table.el-table--scroll-x .el-table__inner-wrapper,
+.el-table.el-table--scroll-x .el-table__body-wrapper,
+.el-table.el-table--scroll-x .el-table__header-wrapper,
+.el-table.el-table--scroll-x .el-table__footer-wrapper {
+  overflow-x: auto !important;
+}
+
+.el-table.el-table--scroll-x .el-scrollbar__wrap {
+  overflow-x: auto !important;
+}
+
+.el-table.el-table--scroll-x .el-scrollbar__bar.is-horizontal {
+  display: block !important;
+}

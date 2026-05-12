@@ -1,0 +1,21 @@
+---
+description: 数字精算主义 — 默认 UI/视觉规范（交易与游戏管理前端）
+alwaysApply: true
+---
+
+# 数字精算主义（默认设计规范）
+
+实现或改版 **`client/`** 内界面时，**必须**以 **`client/DESIGN.md`**（《数字精算主义 / Digital Actuarialism》）为单一产品视觉依据。
+
+## 摘要（具体条文以 DESIGN.md 为准）
+
+- **色彩：** Primary `#0050cb` / `#0066ff`；Surface `#f7f9fb` → 卡片 `#ffffff`；倾向**色阶分层**，避免用 1px 实线切大块区域；浮动层用半透明 + `backdrop-blur` (20–40px)。
+- **字体：** 中文 **Noto Sans SC**；西文/数字正文 **Inter**；标题 **Plus Jakarta Sans**；Body 约 14–16px、行高 1.6–1.8；小标签约 11px。
+- **阴影：** 大模糊、低不透明度（约 4%–8%），避免厚重灰影。
+- **组件：** 表格、表单、弹层、反馈等**优先使用 Element Plus**（见 `client/DESIGN.md` §8）；Primary 按钮与全局 `--el-color-primary` 对齐；自绘区块（如走势图）可例外。
+- **`el-table`：** 不写满屏固定 `width` 造成横滚；用 `min-width` + 全局 `el-table-layout.css`；特例加 `el-table--scroll-x`（见 `client/DESIGN.md` §8）。
+- **禁区：** 纯黑 `#000`、纯装饰线、容器内边距小于 **1rem**、与功能无关的装饰投影。
+
+`client/` 工程已启用按需自动引入；新增页面优先 `<el-*>`，避免重复实现无障碍与键盘行为。
+
+改版现有页面时，在不大改业务的前提下**逐步**向 `client/DESIGN.md` 对齐。

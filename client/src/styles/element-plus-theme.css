@@ -1,0 +1,13 @@
+/**
+ * Element Plus 主题：与 client/DESIGN.md「数字精算主义」主色对齐
+ * 在 main.ts 中于应用入口前引入
+ */
+:root {
+  --el-color-primary: #0050cb;
+  --el-color-primary-light-3: #4d7fd8;
+  --el-color-primary-light-5: #80a2e3;
+  --el-color-primary-light-7: #b3c5ef;
+  --el-color-primary-light-8: #ccd6f4;
+  --el-color-primary-light-9: #e6ebfa;
+  --el-color-primary-dark-2: #0040a3;
+}

@@ -1,0 +1,33 @@
+/**
+ * 设计令牌（与 Stitch 项目「精密终端」暗色/大厅浅色对齐，便于后续换肤）
+ */
+:root {
+  /* Dark shell（跟单、玩法详情） */
+  --color-surface: #0c1324;
+  --color-surface-low: #151b2d;
+  --color-surface-high: #23293c;
+  --color-surface-highest: #2e3447;
+  --color-on-surface: #dce1fb;
+  --color-on-surface-variant: #bac9cd;
+  --color-primary: #baf2ff;
+  --color-primary-container: #00e0ff;
+  --color-tertiary: #86ffc6;
+  --color-outline-variant: #3b494c;
+  --shadow-float: 0 20px 40px rgba(7, 13, 31, 0.4);
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --font-display: 'Manrope', 'Inter', system-ui, sans-serif;
+  --font-body: 'Inter', system-ui, sans-serif;
+}
+
+/* 游戏大厅 - 白色主题 */
+.theme-lobby {
+  --lobby-bg: #f4f7fb;
+  --lobby-card: #ffffff;
+  --lobby-text: #0f172a;
+  --lobby-text-muted: #64748b;
+  --lobby-accent: #00a8c5;
+  --lobby-accent-soft: #e0f7fb;
+  --lobby-border: #e2e8f0;
+}

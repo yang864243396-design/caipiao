@@ -1,0 +1,20 @@
+node_modules
+dist
+.DS_Store
+*.log
+.vscode/*
+!.vscode/extensions.json
+.env.local
+.env.*.local
+
+# 子工程
+client/node_modules
+client/dist
+admin/node_modules
+admin/dist
+backend/**/node_modules
+backend/**/dist
+
+# ui-ux-pro-max 本地 Python
+**/__pycache__/
+*.pyc

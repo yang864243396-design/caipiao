@@ -1,0 +1,73 @@
+/**
+ * 玩法详情 / 倍投设定 等页面的顶栏分段 Tab（el-radio-group + el-radio-button）
+ * 浅底 + 底部指示条选中态，与 EP 拼接线/外框解耦变量
+ */
+.detail-tab-rg {
+  width: 100%;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 0;
+  margin: 0;
+  padding: 0 min(0.5rem, 2vw);
+  box-sizing: border-box;
+  border: none;
+  background: #f8fafc;
+  /** 线段 Tab：底栏式选中无实心底，不能与 EP 默认「主色底+白字」一致，否则正文为白色 */
+  --el-radio-button-checked-border-color: transparent;
+  --el-radio-button-checked-bg-color: transparent;
+  --el-radio-button-checked-text-color: #0066ff;
+}
+
+.detail-tab-rg .el-radio-button {
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0 !important;
+}
+
+.detail-tab-rg .el-radio-button__inner {
+  width: 100%;
+  padding: 0.7rem 0.15rem 0.55rem;
+  font-size: 0.6875rem;
+  line-height: 1.25;
+  margin: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+  color: #94a3b8;
+  font-weight: 500;
+  border-bottom: 2px solid transparent !important;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease,
+    font-weight 0.15s ease;
+}
+
+.detail-tab-rg .el-radio-button.is-active .el-radio-button__inner {
+  background: transparent !important;
+  color: #0066ff !important;
+  font-weight: 700;
+  border-bottom-color: #0066ff !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.detail-tab-rg .el-radio-button:hover:not(.is-disabled):not(.is-active) .el-radio-button__inner {
+  color: #64748b;
+  box-shadow: none !important;
+}
+
+.detail-tab-rg .el-radio-button.is-active:hover:not(.is-disabled) .el-radio-button__inner {
+  color: #0066ff !important;
+  border-bottom-color: #0066ff !important;
+  box-shadow: none !important;
+}
+
+.detail-tab-rg .el-radio-button__original-radio:focus-visible + .el-radio-button__inner {
+  outline: none !important;
+  border-left: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
