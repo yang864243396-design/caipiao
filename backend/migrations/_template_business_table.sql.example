@@ -1,0 +1,39 @@
+-- 业务表迁移模板（复制为 000XX_xxx.sql，勿直接执行本文件）
+-- 规范：每张业务表、每个字段必须有中文 COMMENT；见 docs/db-schema-conventions.md
+
+-- +goose Up
+-- +goose StatementBegin
+CREATE TABLE example_orders (
+    id            BIGSERIAL PRIMARY KEY,
+    member_id     BIGINT         NOT NULL,
+    order_no      VARCHAR(32)    NOT NULL,
+    amount        NUMERIC(18, 2) NOT NULL,
+    status        VARCHAR(16)    NOT NULL DEFAULT 'pending',
+    created_at    TIMESTAMPTZ    NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ    NOT NULL DEFAULT now(),
+
+    CONSTRAINT uq_example_orders_order_no UNIQUE (order_no),
+    CONSTRAINT fk_example_orders_member FOREIGN KEY (member_id) REFERENCES members (id) ON DELETE RESTRICT,
+    CONSTRAINT chk_example_orders_amount CHECK (amount > 0),
+    CONSTRAINT chk_example_orders_status CHECK (status IN ('pending', 'paid', 'cancelled'))
+);
+
+COMMENT ON TABLE example_orders IS '示例：会员订单主表（模板用，非业务表）';
+COMMENT ON COLUMN example_orders.id IS '主键';
+COMMENT ON COLUMN example_orders.member_id IS '会员 ID，关联 members.id';
+COMMENT ON COLUMN example_orders.order_no IS '业务订单号，全局唯一';
+COMMENT ON COLUMN example_orders.amount IS '订单金额（元，2 位小数）';
+COMMENT ON COLUMN example_orders.status IS '状态：pending=待处理，paid=已支付，cancelled=已取消';
+COMMENT ON COLUMN example_orders.created_at IS '创建时间（UTC）';
+COMMENT ON COLUMN example_orders.updated_at IS '最后更新时间（UTC）';
+
+CREATE INDEX idx_example_orders_member_created
+    ON example_orders (member_id, created_at DESC);
+
+COMMENT ON INDEX idx_example_orders_member_created IS '按会员查询订单列表';
+-- +goose StatementEnd
+
+-- +goose Down
+-- +goose StatementBegin
+DROP TABLE IF EXISTS example_orders;
+-- +goose StatementEnd

@@ -1,0 +1,178 @@
+{"index":0,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"1","label":"直选复式","ruleId":"1","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:01:09+08:00"}
+
+{"index":1,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"2","label":"直选单式","ruleId":"2","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:01:13+08:00"}
+
+{"index":2,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"3","label":"直选和值","ruleId":"3","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:01:14+08:00"}
+
+{"index":3,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"4","label":"直选跨度","ruleId":"4","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:01:16+08:00"}
+
+{"index":4,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"5","label":"组合","ruleId":"5","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:01:19+08:00"}
+
+{"index":5,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"6","label":"组三","ruleId":"6","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:01:21+08:00"}
+
+{"index":6,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"7","label":"组六","ruleId":"7","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:01:24+08:00"}
+
+{"index":7,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"8","label":"组选和值","ruleId":"8","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注注数不正确","at":"2026-06-24T19:01:27+08:00"}
+
+{"index":8,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"9","label":"组选包胆","ruleId":"9","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:01:29+08:00"}
+
+{"index":9,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"10","label":"混合组选","ruleId":"10","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:01:31+08:00"}
+
+{"index":10,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"11","label":"和值尾数","ruleId":"11","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注数字不合规...","at":"2026-06-24T19:01:34+08:00"}
+
+{"index":11,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"12","label":"特殊号","ruleId":"12","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注内容不合规.","at":"2026-06-24T19:01:36+08:00"}
+
+{"index":12,"lotteryCode":"tron_ffc_1m","typeId":"g002","subId":"14","label":"直选复式","ruleId":"14","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:01:38+08:00"}
+
+{"index":13,"lotteryCode":"tron_ffc_1m","typeId":"g002","subId":"15","label":"直选单式","ruleId":"15","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:01:40+08:00"}
+
+{"index":14,"lotteryCode":"tron_ffc_1m","typeId":"g002","subId":"16","label":"直选和值","ruleId":"16","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:01:42+08:00"}
+
+{"index":15,"lotteryCode":"tron_ffc_1m","typeId":"g002","subId":"17","label":"直选跨度","ruleId":"17","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:01:44+08:00"}
+
+{"index":16,"lotteryCode":"tron_ffc_1m","typeId":"g002","subId":"18","label":"组合","ruleId":"18","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:01:47+08:00"}
+
+{"index":17,"lotteryCode":"tron_ffc_1m","typeId":"g002","subId":"19","label":"组三","ruleId":"19","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:01:49+08:00"}
+
+{"index":18,"lotteryCode":"tron_ffc_1m","typeId":"g002","subId":"20","label":"组六","ruleId":"20","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:01:51+08:00"}
+
+{"index":19,"lotteryCode":"tron_ffc_1m","typeId":"g002","subId":"21","label":"组选和值","ruleId":"21","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:01:54+08:00"}
+
+{"index":20,"lotteryCode":"tron_ffc_1m","typeId":"g002","subId":"22","label":"组选包胆","ruleId":"22","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:01:56+08:00"}
+
+{"index":21,"lotteryCode":"tron_ffc_1m","typeId":"g002","subId":"23","label":"混合组选","ruleId":"23","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:01:58+08:00"}
+
+{"index":22,"lotteryCode":"tron_ffc_1m","typeId":"g002","subId":"24","label":"和值尾数","ruleId":"24","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注数字不合规...","at":"2026-06-24T19:02:00+08:00"}
+
+{"index":23,"lotteryCode":"tron_ffc_1m","typeId":"g002","subId":"25","label":"特殊号","ruleId":"25","status":"skip","error":"当前期已封盘","at":"2026-06-24T19:02:02+08:00"}
+
+{"index":24,"lotteryCode":"tron_ffc_1m","typeId":"g003","subId":"26","label":"直选复式","ruleId":"26","status":"skip","error":"当前期已封盘","at":"2026-06-24T19:02:04+08:00"}
+
+{"index":25,"lotteryCode":"tron_ffc_1m","typeId":"g003","subId":"27","label":"直选单式","ruleId":"27","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:02:07+08:00"}
+
+{"index":26,"lotteryCode":"tron_ffc_1m","typeId":"g003","subId":"28","label":"直选和值","ruleId":"28","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:02:09+08:00"}
+
+{"index":27,"lotteryCode":"tron_ffc_1m","typeId":"g003","subId":"29","label":"直选跨度","ruleId":"29","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:02:11+08:00"}
+
+{"index":28,"lotteryCode":"tron_ffc_1m","typeId":"g003","subId":"30","label":"组合","ruleId":"30","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:02:13+08:00"}
+
+{"index":29,"lotteryCode":"tron_ffc_1m","typeId":"g003","subId":"31","label":"组三","ruleId":"31","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:02:16+08:00"}
+
+{"index":0,"lotteryCode":"tron_ffc_1m","typeId":"g006","subId":"13","label":"定位胆","ruleId":"13","status":"ok","orderNo":"BO11782298982439","issueNo":"111202606241143","at":"2026-06-24T19:03:00+08:00"}
+
+{"index":0,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"1","label":"直选复式","ruleId":"1","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:12:41+08:00"}
+
+{"index":1,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"2","label":"直选单式","ruleId":"2","status":"ok","orderNo":"BO11782299566756","issueNo":"111202606241153","at":"2026-06-24T19:12:46+08:00"}
+
+{"index":2,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"3","label":"直选和值","ruleId":"3","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注注数不正确","at":"2026-06-24T19:12:50+08:00"}
+
+{"index":3,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"4","label":"直选跨度","ruleId":"4","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注注数不正确","at":"2026-06-24T19:12:54+08:00"}
+
+{"index":4,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"5","label":"组合","ruleId":"5","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:12:57+08:00"}
+
+{"index":5,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"6","label":"组三","ruleId":"6","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注数字不合规.","at":"2026-06-24T19:13:00+08:00"}
+
+{"index":6,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"7","label":"组六","ruleId":"7","status":"skip","error":"当前期已封盘","at":"2026-06-24T19:13:04+08:00"}
+
+{"index":7,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"8","label":"组选和值","ruleId":"8","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:13:07+08:00"}
+
+{"index":8,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"9","label":"组选包胆","ruleId":"9","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注注数不正确","at":"2026-06-24T19:13:10+08:00"}
+
+{"index":9,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"10","label":"混合组选","ruleId":"10","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注数字不合规..","at":"2026-06-24T19:13:13+08:00"}
+
+{"index":10,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"11","label":"和值尾数","ruleId":"11","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:13:17+08:00"}
+
+{"index":11,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"12","label":"特殊号","ruleId":"12","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:13:20+08:00"}
+
+{"index":12,"lotteryCode":"tron_ffc_1m","typeId":"g002","subId":"14","label":"直选复式","ruleId":"14","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:13:23+08:00"}
+
+{"index":13,"lotteryCode":"tron_ffc_1m","typeId":"g002","subId":"15","label":"直选单式","ruleId":"15","status":"ok","orderNo":"BO11782299607365","issueNo":"111202606241154","at":"2026-06-24T19:13:26+08:00"}
+
+{"index":14,"lotteryCode":"tron_ffc_1m","typeId":"g002","subId":"16","label":"直选和值","ruleId":"16","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注注数不正确","at":"2026-06-24T19:13:31+08:00"}
+
+{"index":15,"lotteryCode":"tron_ffc_1m","typeId":"g002","subId":"17","label":"直选跨度","ruleId":"17","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注注数不正确","at":"2026-06-24T19:13:34+08:00"}
+
+{"index":16,"lotteryCode":"tron_ffc_1m","typeId":"g002","subId":"18","label":"组合","ruleId":"18","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:13:37+08:00"}
+
+{"index":17,"lotteryCode":"tron_ffc_1m","typeId":"g002","subId":"19","label":"组三","ruleId":"19","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注数字不合规.","at":"2026-06-24T19:13:40+08:00"}
+
+{"index":18,"lotteryCode":"tron_ffc_1m","typeId":"g002","subId":"20","label":"组六","ruleId":"20","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注数字不合规.","at":"2026-06-24T19:13:44+08:00"}
+
+{"index":19,"lotteryCode":"tron_ffc_1m","typeId":"g002","subId":"21","label":"组选和值","ruleId":"21","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注注数不正确","at":"2026-06-24T19:13:47+08:00"}
+
+{"index":20,"lotteryCode":"tron_ffc_1m","typeId":"g002","subId":"22","label":"组选包胆","ruleId":"22","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注注数不正确","at":"2026-06-24T19:13:51+08:00"}
+
+{"index":21,"lotteryCode":"tron_ffc_1m","typeId":"g002","subId":"23","label":"混合组选","ruleId":"23","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注数字不合规..","at":"2026-06-24T19:13:54+08:00"}
+
+{"index":22,"lotteryCode":"tron_ffc_1m","typeId":"g002","subId":"24","label":"和值尾数","ruleId":"24","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:13:58+08:00"}
+
+{"index":23,"lotteryCode":"tron_ffc_1m","typeId":"g002","subId":"25","label":"特殊号","ruleId":"25","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:14:01+08:00"}
+
+{"index":24,"lotteryCode":"tron_ffc_1m","typeId":"g003","subId":"26","label":"直选复式","ruleId":"26","status":"skip","error":"当前期已封盘","at":"2026-06-24T19:14:04+08:00"}
+
+{"index":25,"lotteryCode":"tron_ffc_1m","typeId":"g003","subId":"27","label":"直选单式","ruleId":"27","status":"ok","orderNo":"BO11782299649396","issueNo":"111202606241155","at":"2026-06-24T19:14:08+08:00"}
+
+{"index":26,"lotteryCode":"tron_ffc_1m","typeId":"g003","subId":"28","label":"直选和值","ruleId":"28","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注注数不正确","at":"2026-06-24T19:14:14+08:00"}
+
+{"index":27,"lotteryCode":"tron_ffc_1m","typeId":"g003","subId":"29","label":"直选跨度","ruleId":"29","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注注数不正确","at":"2026-06-24T19:14:17+08:00"}
+
+{"index":28,"lotteryCode":"tron_ffc_1m","typeId":"g003","subId":"30","label":"组合","ruleId":"30","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:14:20+08:00"}
+
+{"index":29,"lotteryCode":"tron_ffc_1m","typeId":"g003","subId":"31","label":"组三","ruleId":"31","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注数字不合规.","at":"2026-06-24T19:14:24+08:00"}
+
+{"index":0,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"1","label":"直选复式","ruleId":"1","status":"skip","error":"当前无开盘期号","at":"2026-06-24T19:23:02+08:00"}
+
+{"index":1,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"2","label":"直选单式","ruleId":"2","status":"ok","orderNo":"BO11782300187028","issueNo":"111202606241164","at":"2026-06-24T19:23:06+08:00"}
+
+{"index":2,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"3","label":"直选和值","ruleId":"3","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:23:11+08:00"}
+
+{"index":3,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"4","label":"直选跨度","ruleId":"4","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注注数不正确","at":"2026-06-24T19:23:14+08:00"}
+
+{"index":4,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"5","label":"组合","ruleId":"5","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注内容格式错误","at":"2026-06-24T19:23:18+08:00"}
+
+{"index":5,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"6","label":"组三","ruleId":"6","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注数字不合规.","at":"2026-06-24T19:23:21+08:00"}
+
+{"index":6,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"7","label":"组六","ruleId":"7","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注数字不合规.","at":"2026-06-24T19:23:24+08:00"}
+
+{"index":7,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"8","label":"组选和值","ruleId":"8","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注注数不正确","at":"2026-06-24T19:23:27+08:00"}
+
+{"index":8,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"9","label":"组选包胆","ruleId":"9","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注注数不正确","at":"2026-06-24T19:23:31+08:00"}
+
+{"index":9,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"10","label":"混合组选","ruleId":"10","status":"ok","orderNo":"BO11782300215318","issueNo":"111202606241164","at":"2026-06-24T19:23:34+08:00"}
+
+{"index":10,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"11","label":"和值尾数","ruleId":"11","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:23:39+08:00"}
+
+{"index":11,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"12","label":"特殊号","ruleId":"12","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:23:42+08:00"}
+
+{"index":12,"lotteryCode":"tron_ffc_1m","typeId":"g002","subId":"14","label":"直选复式","ruleId":"14","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注内容格式错误","at":"2026-06-24T19:23:47+08:00"}
+
+{"index":13,"lotteryCode":"tron_ffc_1m","typeId":"g002","subId":"15","label":"直选单式","ruleId":"15","status":"ok","orderNo":"BO11782300231623","issueNo":"111202606241164","at":"2026-06-24T19:23:51+08:00"}
+
+{"index":14,"lotteryCode":"tron_ffc_1m","typeId":"g002","subId":"16","label":"直选和值","ruleId":"16","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:23:55+08:00"}
+
+{"index":0,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"6","label":"组三","ruleId":"6","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:26:38+08:00"}
+
+{"index":0,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"1","label":"直选复式","ruleId":"1","status":"ok","orderNo":"BO11782302375296","issueNo":"111202606241200","at":"2026-06-24T19:59:33+08:00"}
+
+{"index":1,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"2","label":"直选单式","ruleId":"2","status":"ok","orderNo":"BO11782302379235","issueNo":"111202606241200","at":"2026-06-24T19:59:39+08:00"}
+
+{"index":2,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"3","label":"直选和值","ruleId":"3","status":"ok","orderNo":"BO11782302383335","issueNo":"111202606241200","at":"2026-06-24T19:59:42+08:00"}
+
+{"index":3,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"4","label":"直选跨度","ruleId":"4","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T19:59:48+08:00"}
+
+{"index":4,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"5","label":"组合","ruleId":"5","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注内容格式错误","at":"2026-06-24T19:59:51+08:00"}
+
+{"index":5,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"6","label":"组三","ruleId":"6","status":"ok","orderNo":"BO11782302394493","issueNo":"111202606241200","at":"2026-06-24T19:59:54+08:00"}
+
+{"index":6,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"7","label":"组六","ruleId":"7","status":"ok","orderNo":"BO11782302399909","issueNo":"111202606241200","at":"2026-06-24T19:59:58+08:00"}
+
+{"index":7,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"8","label":"组选和值","ruleId":"8","status":"skip","error":"当前期已封盘","at":"2026-06-24T20:00:03+08:00"}
+
+{"index":8,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"9","label":"组选包胆","ruleId":"9","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注注数不正确","at":"2026-06-24T20:00:07+08:00"}
+
+{"index":9,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"10","label":"混合组选","ruleId":"10","status":"ok","orderNo":"BO11782302411299","issueNo":"111202606241201","at":"2026-06-24T20:00:11+08:00"}
+
+{"index":10,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"11","label":"和值尾数","ruleId":"11","status":"ok","orderNo":"BO11782302416737","issueNo":"111202606241201","at":"2026-06-24T20:00:16+08:00"}
+
+{"index":11,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"12","label":"特殊号","ruleId":"12","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-24T20:00:21+08:00"}
+

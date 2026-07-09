@@ -1,0 +1,107 @@
+/**
+ * admin 与设计令「数字精算主义」对齐：主色与设计稿一致，
+ * Element Plus CSS 变量见 https://element-plus.org/zh-CN/guide/theming.html
+ */
+:root {
+  --admin-surface-bg: #f7f9fb;
+  --el-color-primary: #0066ff;
+  --el-color-primary-light-9: rgb(235 246 255);
+  --admin-font-display: 'Plus Jakarta Sans', 'Noto Sans SC', system-ui, sans-serif;
+  --admin-font-body: 'Inter', 'Noto Sans SC', system-ui, sans-serif;
+  /** 侧栏宽度：大屏加宽以匹配 1920 等桌面分辨率（小屏仍由布局里压缩） */
+  --admin-aside-width: 232px;
+  --admin-main-pad-inline: clamp(1rem, 0.9vw + 0.65rem, 1.75rem);
+  --admin-main-pad-block: clamp(1rem, 0.65vw + 0.65rem, 1.5rem);
+}
+
+@media (min-width: 1440px) {
+  :root {
+    --admin-aside-width: 248px;
+  }
+}
+
+@media (min-width: 1920px) {
+  :root {
+    --admin-aside-width: 264px;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-family: var(--admin-font-body);
+  /** 14px 起、随视口略增，1080p 约 15–16px，避免「整页像缩在小组件里」 */
+  font-size: clamp(14px, 0.22vw + 12.8px, 16px);
+  line-height: 1.6;
+  background: var(--admin-surface-bg);
+}
+
+.admin-page-title {
+  font-family: var(--admin-font-display);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0 0 1rem;
+  font-size: 1.25rem;
+}
+
+/** 报表等筛选区：日期范围（约束 Element Plus daterange 默认宽度） */
+.admin-filter-date {
+  flex: 0 0 240px;
+  width: 240px;
+  max-width: 100%;
+}
+
+.admin-filter-date .el-date-editor {
+  --el-date-editor-width: 240px;
+  --el-date-editor-daterange-width: 240px;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  box-sizing: border-box;
+}
+
+.admin-kpi-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));
+}
+
+/** 大屏（含 1920×1080）：六卡一行拉满主内容区 */
+@media (min-width: 1400px) {
+  .admin-kpi-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1200px) and (max-width: 1399.98px) {
+  .admin-kpi-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.admin-kpi-card {
+  padding: 1rem 1.25rem;
+  border-radius: var(--el-border-radius-large);
+  background: linear-gradient(145deg, #ffffff 0%, #fafbfd 100%);
+  box-shadow: 0 10px 32px rgb(26 62 138 / 5%);
+}
+
+.admin-kpi-label {
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 0.5rem;
+}
+
+.admin-kpi-value {
+  font-size: 1.375rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--admin-font-display);
+  color: var(--el-text-color-primary);
+}

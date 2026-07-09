@@ -1,22 +1,46 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import LobbyTabBar from '@/components/lobby/LobbyTabBar.vue'
-
-interface RunningScheme {
-  id: string
-  lotteryName: string
-  schemeName: string
-  statusLabel: string
-  turnover: string
-  countdown: string
-  pnl: string
-  runTime: string
-  lookbackPnl: string
-  multiplier: string
-  simBet: boolean
-}
+import ContentDialog from '@/components/ui/ContentDialog.vue'
+import { startCloudRunningSync, cloudRunningPollMs } from '@/composables/useCloudRunningPoll'
+import { ApiError } from '@/api/client'
+import { deleteSchemeDefinition, getSchemeDefinition } from '@/api/schemes/definitions'
+import { confirmDialog } from '@/utils/confirmDialog'
+import { normalizeSchemeTimePairFromConfig, schemeStartTimeOpenError } from '@/utils/schemeDateTime'
+import {
+  fetchCloudGlobalSettings,
+  fetchCloudCenterStats,
+  formatCloudStatAmount,
+  emptyCloudCenterStats,
+  fetchLookbackSettings,
+  fetchRunningSchemesPage,
+  CLOUD_SCHEME_PAGE_SIZE,
+  formatRunTime,
+  schemeCardDisplayStatus,
+  globalSettingsFromUi,
+  globalSettingsToUi,
+  instanceToDisplay,
+  lookbackFromUi,
+  lookbackSummaryFromUi,
+  lookbackToUi,
+  type LookbackJudgment,
+  mergeCloudSchemesStable,
+  mergeSchemeCountdownOnPoll,
+  schemeCountdownDisplayFields,
+  SCHEME_COUNTDOWN_WAITING_LABEL,
+  tickSchemeRunTimeSec,
+  schemeCountdownText,
+  stopCloudInstance,
+  startCloudInstance,
+  saveCloudGlobalSettings,
+  saveLookbackSettings,
+  saveCloudInstanceMultiplier,
+  saveCloudInstanceSimBet,
+  normalizeSchemeMultiplier,
+  type CloudSchemeCard,
+} from '@/api/cloud/center'
 
 const router = useRouter()
 
@@ -25,47 +49,44 @@ const totalTakeProfit = ref('0')
 const planMultiplier = ref('1')
 const breakPeriodStop = ref(false)
 const lookbackSummary = ref('无')
+const pageLoading = ref(false)
 
-const runningSchemes = ref<RunningScheme[]>([
-  {
-    id: 's1',
-    lotteryName: '美国数据分分彩',
-    schemeName: '漠北万位',
-    statusLabel: '等待开启',
-    turnover: '0.0',
-    countdown: '00:07',
-    pnl: '0.0',
-    runTime: '00:00:00',
-    lookbackPnl: '0.0',
-    multiplier: '1',
-    simBet: false,
-  },
-  {
-    id: 's2',
-    lotteryName: '腾讯分分彩',
-    schemeName: '刚好',
-    statusLabel: '等待开启',
-    turnover: '0.0',
-    countdown: '00:07',
-    pnl: '0.0',
-    runTime: '00:00:00',
-    lookbackPnl: '0.0',
-    multiplier: '1',
-    simBet: true,
-  },
-])
+const runningSchemes = ref<CloudSchemeCard[]>([])
+const listNextCursor = ref<string | undefined>()
+const listHasMore = ref(true)
+const listTotal = ref(0)
+const listLoadingMore = ref(false)
+const loadMoreSentinel = ref<HTMLElement | null>(null)
+/** 倒计时本地 1s tick；列表同步见 useCloudRunningPoll（WS 事件 + 15s REST 轮询） */
+/** 各方案倍数系数上次已保存值，用于弹窗确定时判断是否需要提交 */
+const multiplierSaved = ref<Record<string, string>>({})
+const multiplierSavingId = ref<string | null>(null)
+const simBetSavingId = ref<string | null>(null)
+const multiplierDialogVisible = ref(false)
+const multiplierEditScheme = ref<CloudSchemeCard | null>(null)
+const multiplierDraft = ref('1')
+
+const searchDialogVisible = ref(false)
+const searchDraft = ref('')
+const schemeSearchKeyword = ref('')
+
+const displayedSchemes = computed(() => {
+  const q = schemeSearchKeyword.value.trim().toLowerCase()
+  if (!q) return runningSchemes.value
+  return runningSchemes.value.filter((s) => {
+    const hay = `${s.schemeName} ${s.lotteryName} ${s.definitionId} ${s.id}`.toLowerCase()
+    return hay.includes(q)
+  })
+})
 
 const lookbackDialogVisible = ref(false)
 
-/** 回头设置（与运营中心最新原型对齐，接口对接时可改为服务端 DTO） */
 const lookback = reactive({
-  runMode: 'prod' as 'sim' | 'prod',
-  /** 个别判断 | 整体判断（互斥） */
-  judgment: 'individual' as 'individual' | 'overall',
-  /** —— 个别判断：单方案盈亏回头 —— */
+  runModeSim: false,
+  runModeProd: false,
+  judgment: '' as LookbackJudgment,
   singleProfitThreshold: '100.00',
   singleLossThreshold: '0.00',
-  /** —— 整体判断 —— */
   overallProfitThreshold: '',
   overallLossThreshold: '',
   schemeWinsMin: '',
@@ -74,7 +95,221 @@ const lookback = reactive({
   periodLoss: '',
 })
 
+const globalSaving = ref(false)
+const enableAllBusy = ref(false)
+const centerStats = ref(emptyCloudCenterStats())
+
+let stopCloudPoll: (() => void) | null = null
+let cloudRefresh: (() => void) | null = null
+let countdownTimer: ReturnType<typeof setInterval> | null = null
+let loadMoreObserver: IntersectionObserver | null = null
+let lastWaitingRefreshAt = 0
+
+function setupLoadMoreObserver() {
+  loadMoreObserver?.disconnect()
+  if (!loadMoreSentinel.value) return
+  loadMoreObserver = new IntersectionObserver(
+    (entries) => {
+      if (entries.some((e) => e.isIntersecting)) {
+        void loadSchemePage(false)
+      }
+    },
+    { root: null, rootMargin: '120px', threshold: 0 },
+  )
+  loadMoreObserver.observe(loadMoreSentinel.value)
+}
+
+function applyRunningSchemes(cards: CloudSchemeCard[], preserveOrder = false) {
+  const prev = runningSchemes.value
+  const merged = preserveOrder ? mergeCloudSchemesStable(prev, cards) : cards
+  runningSchemes.value = merged
+  const next: Record<string, string> = { ...multiplierSaved.value }
+  for (const s of merged) {
+    next[s.id] = s.multiplier
+  }
+  multiplierSaved.value = next
+}
+
+function appendRunningSchemes(cards: CloudSchemeCard[]) {
+  if (cards.length === 0) return
+  const seen = new Set(runningSchemes.value.map((s) => s.id))
+  const merged = [...runningSchemes.value]
+  for (const c of cards) {
+    if (!seen.has(c.id)) {
+      merged.push(c)
+      seen.add(c.id)
+      multiplierSaved.value[c.id] = c.multiplier
+    }
+  }
+  runningSchemes.value = merged
+}
+
+async function loadSchemePage(reset = false) {
+  if (listLoadingMore.value) return
+  if (!reset && !listHasMore.value) return
+  if (reset) {
+    listNextCursor.value = undefined
+    listHasMore.value = true
+  }
+  if (reset) {
+    pageLoading.value = true
+  } else {
+    listLoadingMore.value = true
+  }
+  try {
+    const res = await fetchRunningSchemesPage({
+      limit: CLOUD_SCHEME_PAGE_SIZE,
+      cursor: reset ? undefined : listNextCursor.value,
+    })
+    const cards = res.items.map(instanceToDisplay)
+    listTotal.value = res.total ?? cards.length
+    listHasMore.value = res.page?.hasMore ?? false
+    listNextCursor.value = res.page?.nextCursor
+    if (reset) {
+      applyRunningSchemes(cards)
+    } else {
+      appendRunningSchemes(cards)
+    }
+  } catch (e) {
+    if (reset) {
+      ElMessage.error(e instanceof Error ? e.message : '加载失败')
+    }
+  } finally {
+    if (reset) {
+      pageLoading.value = false
+    }
+    listLoadingMore.value = false
+    await nextTick()
+    setupLoadMoreObserver()
+  }
+}
+
+async function refreshCloudStats() {
+  try {
+    centerStats.value = await fetchCloudCenterStats()
+  } catch {
+    /* 保留上次有效数据 */
+  }
+}
+
+async function loadCloudData() {
+  try {
+    const [lb, global, stats] = await Promise.all([
+      fetchLookbackSettings(),
+      fetchCloudGlobalSettings(),
+      fetchCloudCenterStats().catch(() => emptyCloudCenterStats()),
+    ])
+    centerStats.value = stats
+    await loadSchemePage(true)
+    Object.assign(lookback, lookbackToUi(lb))
+    lookbackSummary.value = lookbackSummaryFromUi(lookback)
+    const g = globalSettingsToUi(global)
+    totalStopLoss.value = g.totalStopLoss
+    totalTakeProfit.value = g.totalTakeProfit
+    planMultiplier.value = g.planMultiplier
+    breakPeriodStop.value = g.breakPeriodStop
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '加载失败')
+  }
+}
+
+async function persistGlobalSettings() {
+  if (globalSaving.value) return
+  globalSaving.value = true
+  try {
+    const saved = await saveCloudGlobalSettings(
+      globalSettingsFromUi({
+        totalStopLoss: totalStopLoss.value,
+        totalTakeProfit: totalTakeProfit.value,
+        planMultiplier: planMultiplier.value,
+        breakPeriodStop: breakPeriodStop.value,
+      }),
+    )
+    const g = globalSettingsToUi(saved)
+    totalStopLoss.value = g.totalStopLoss
+    totalTakeProfit.value = g.totalTakeProfit
+    planMultiplier.value = g.planMultiplier
+    breakPeriodStop.value = g.breakPeriodStop
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '保存全局规则失败')
+  } finally {
+    globalSaving.value = false
+  }
+}
+
+function tickSchemeLiveFields() {
+  let periodEnded = false
+  let needsWaitingRefresh = false
+  for (const s of runningSchemes.value) {
+    s.runTimeSec = tickSchemeRunTimeSec(s)
+
+    if (!s.countdownEndTime) continue
+
+    const prev = s.countdownSec
+    const display = schemeCountdownDisplayFields(s)
+    s.countdownSec = display.countdownSec
+    if (s.status === 'running') {
+      s.countdownLabel = display.countdownLabel
+    }
+    if (prev > 0 && s.countdownSec === 0) {
+      periodEnded = true
+    }
+    if (
+      s.status === 'running'
+      && s.countdownSec <= 0
+      && (s.countdownLabel === SCHEME_COUNTDOWN_WAITING_LABEL || display.countdownLabel === SCHEME_COUNTDOWN_WAITING_LABEL)
+    ) {
+      needsWaitingRefresh = true
+    }
+  }
+  if (periodEnded) {
+    void cloudRefresh?.()
+    return
+  }
+  if (needsWaitingRefresh) {
+    const now = Date.now()
+    const waitMs = Math.max(5_000, Math.floor(cloudRunningPollMs() / 2))
+    if (now - lastWaitingRefreshAt >= waitMs) {
+      lastWaitingRefreshAt = now
+      void cloudRefresh?.()
+    }
+  }
+}
+
+function statPnlClass(n: number): string {
+  return n < 0 ? 'cc-stat-em cc-stat-em--loss' : 'cc-stat-em'
+}
+
+onMounted(async () => {
+  const sync = startCloudRunningSync(
+    () => runningSchemes.value.map((s) => s.id),
+    (cards) => applyRunningSchemes(cards, true),
+  )
+  stopCloudPoll = sync.stop
+  cloudRefresh = async () => {
+    await sync.refresh()
+    await refreshCloudStats()
+  }
+  countdownTimer = window.setInterval(tickSchemeLiveFields, 1000)
+  await loadCloudData()
+  void sync.refresh()
+})
+
+onUnmounted(() => {
+  loadMoreObserver?.disconnect()
+  loadMoreObserver = null
+  if (countdownTimer) {
+    window.clearInterval(countdownTimer)
+    countdownTimer = null
+  }
+  stopCloudPoll?.()
+  stopCloudPoll = null
+  cloudRefresh = null
+})
+
 function openLookbackDialog() {
+  lookback.schemeWinsMin = toPositiveIntString(lookback.schemeWinsMin)
+  lookback.schemeWinsMax = toPositiveIntString(lookback.schemeWinsMax)
   lookbackDialogVisible.value = true
 }
 
@@ -82,53 +317,365 @@ function cancelLookback() {
   lookbackDialogVisible.value = false
 }
 
-function confirmLookback() {
-  const parts: string[] = []
-  parts.push(lookback.runMode === 'sim' ? '模拟运行' : '正式运行')
-  if (lookback.judgment === 'individual') {
-    parts.push('个别判断')
-    parts.push(
-      `单方案盈亏(${lookback.singleProfitThreshold || '—'}/${lookback.singleLossThreshold || '—'})`
-    )
-  } else {
-    parts.push('整体判断')
-    parts.push(
-      `整体盈亏(${lookback.overallProfitThreshold || '—'}/${lookback.overallLossThreshold || '—'})`
-    )
-    parts.push(`方案几(${lookback.schemeWinsMin || '—'}~${lookback.schemeWinsMax || '—'}次)`)
-    parts.push(`单期盈亏(${lookback.periodProfit || '—'}/${lookback.periodLoss || '—'})`)
+/** 仅保留正整数（1, 2, 3…），非法输入清空 */
+function toPositiveIntString(v: string | number): string {
+  const digits = String(v ?? '').replace(/[^\d]/g, '')
+  if (!digits) return ''
+  const n = parseInt(digits, 10)
+  return n >= 1 ? String(n) : ''
+}
+
+function onSchemeWinsMinChange(v: string | number) {
+  lookback.schemeWinsMin = toPositiveIntString(v)
+}
+
+function onSchemeWinsMaxChange(v: string | number) {
+  lookback.schemeWinsMax = toPositiveIntString(v)
+}
+
+function openMultiplierDialog(s: CloudSchemeCard) {
+  if (multiplierSavingId.value !== null) return
+  multiplierEditScheme.value = s
+  multiplierDraft.value = s.multiplier
+  multiplierDialogVisible.value = true
+}
+
+function cancelMultiplierDialog() {
+  multiplierDialogVisible.value = false
+}
+
+watch(multiplierDialogVisible, (open) => {
+  if (!open) multiplierEditScheme.value = null
+})
+
+function onMultiplierDraftChange(v: string | number) {
+  multiplierDraft.value = normalizeSchemeMultiplier(v)
+}
+
+async function confirmMultiplierDialog() {
+  const s = multiplierEditScheme.value
+  if (!s || multiplierSavingId.value !== null) return
+
+  const normalized = normalizeSchemeMultiplier(multiplierDraft.value)
+  multiplierDraft.value = normalized
+  const baseline = multiplierSaved.value[s.id] ?? s.multiplier
+  if (normalized === baseline) {
+    multiplierDialogVisible.value = false
+    return
   }
-  lookbackSummary.value = parts.join(' · ')
-  lookbackDialogVisible.value = false
-  ElMessage.success('已保存回头设置')
+
+  multiplierSavingId.value = s.id
+  try {
+    const row = await saveCloudInstanceMultiplier(s.id, Number(normalized))
+    patchSchemeCard(row)
+    multiplierSaved.value = {
+      ...multiplierSaved.value,
+      [s.id]: normalizeSchemeMultiplier(row.multiplier),
+    }
+    multiplierDialogVisible.value = false
+    ElMessage.success('倍数系数已更新')
+  } catch (e) {
+    ElMessage.error(e instanceof ApiError ? e.message : '倍数系数保存失败')
+  } finally {
+    multiplierSavingId.value = null
+  }
+}
+
+async function toggleSimBet(s: CloudSchemeCard, simBet: boolean) {
+  if (simBetSavingId.value !== null) return
+  const prev = s.simBet
+  simBetSavingId.value = s.id
+  try {
+    const row = await saveCloudInstanceSimBet(s.id, simBet)
+    patchSchemeCard(row)
+    ElMessage.success(simBet ? '已开启模拟投注' : '已关闭模拟投注')
+  } catch (e) {
+    const idx = runningSchemes.value.findIndex((x) => x.id === s.id)
+    if (idx >= 0) runningSchemes.value[idx] = { ...runningSchemes.value[idx], simBet: prev }
+    ElMessage.error(e instanceof ApiError ? e.message : '模拟投注设置保存失败')
+  } finally {
+    simBetSavingId.value = null
+  }
+}
+
+function toggleLookbackJudgment(mode: Exclude<LookbackJudgment, ''>) {
+  lookback.judgment = lookback.judgment === mode ? '' : mode
+}
+
+function toggleLookbackRunMode(mode: 'sim' | 'prod') {
+  if (mode === 'sim') lookback.runModeSim = !lookback.runModeSim
+  else lookback.runModeProd = !lookback.runModeProd
+}
+
+function validateSchemeWinsRange(): string | null {
+  if (lookback.judgment !== 'overall') return null
+  const minS = lookback.schemeWinsMin.trim()
+  const maxS = lookback.schemeWinsMax.trim()
+  if (!minS && !maxS) return null
+  if (!minS || !maxS) return '请填写方案几回头的最小与最大次数'
+  const min = Number(minS)
+  const max = Number(maxS)
+  if (!Number.isInteger(min) || min < 1) return '最小次数须为正整数'
+  if (!Number.isInteger(max) || max < 1) return '最大次数须为正整数'
+  if (min >= max) return '最小次数须小于最大次数'
+  return null
+}
+
+async function confirmLookback() {
+  const winsErr = validateSchemeWinsRange()
+  if (winsErr) {
+    ElMessage.warning(winsErr)
+    return
+  }
+  try {
+    const saved = await saveLookbackSettings(lookbackFromUi(lookback))
+    Object.assign(lookback, lookbackToUi(saved))
+    lookbackSummary.value = lookbackSummaryFromUi(lookback)
+    lookbackDialogVisible.value = false
+    ElMessage.success('已保存回头设置')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '保存失败')
+  }
 }
 
 function onHeaderSearch() {
-  ElMessage.info('方案搜索：后续对接接口')
+  searchDraft.value = schemeSearchKeyword.value
+  searchDialogVisible.value = true
+}
+
+function applySchemeSearch() {
+  schemeSearchKeyword.value = searchDraft.value.trim()
+  searchDialogVisible.value = false
+  if (schemeSearchKeyword.value && displayedSchemes.value.length === 0) {
+    ElMessage.info('未找到匹配的运行中方案')
+  }
+}
+
+function clearSchemeSearch() {
+  schemeSearchKeyword.value = ''
+  searchDraft.value = ''
 }
 
 function onHeaderAdd() {
-  ElMessage.info('新增方案：后续对接接口')
+  void router.push({ name: 'custom-scheme-new' })
 }
 
-function enableAllSchemes() {
-  ElMessage.success('已请求一键开启方案（演示）')
+async function enableAllSchemes() {
+  if (enableAllBusy.value) return
+  const targets = runningSchemes.value.filter(
+    (s) => (s.status === 'pending' || s.status === 'paused') && s.statusReason !== 'maintenance',
+  )
+  if (targets.length === 0) {
+    ElMessage.info('当前没有待开启的方案')
+    return
+  }
+  const ok = await confirmDialog({
+    title: '一键开启方案',
+    message: `将开启 ${targets.length} 个待开启方案。是否继续？`,
+    confirmText: '全部开启',
+    tone: 'primary',
+  })
+  if (!ok) return
+
+  enableAllBusy.value = true
+  let okCount = 0
+  const failed: string[] = []
+  try {
+    for (const s of targets) {
+      if (!(await validateStartTimeBeforeOpen(s))) continue
+      try {
+        const updated = await startCloudInstance(s.id)
+        patchSchemeCard(updated)
+        okCount++
+      } catch (e) {
+        const msg = e instanceof ApiError && e.message.includes('预计开启时间') ? START_TIME_OPEN_MSG : e instanceof Error ? e.message : '失败'
+        failed.push(`${s.schemeName}：${msg}`)
+      }
+    }
+    if (okCount > 0) {
+      ElMessage.success(`已成功开启 ${okCount} 个方案`)
+      void refreshCloudStats()
+    }
+    if (failed.length > 0) {
+      const hint = failed.slice(0, 2).join('；')
+      ElMessage.warning(
+        failed.length === targets.length ? `全部开启失败：${hint}` : `部分失败（${failed.length}/${targets.length}）：${hint}`,
+      )
+    }
+  } finally {
+    enableAllBusy.value = false
+  }
 }
 
 function openBetRecords() {
   void router.push({ name: 'bet-records' })
 }
 
-function startScheme(s: RunningScheme) {
-  ElMessage.success(`已请求开启：${s.schemeName}`)
+/** 点击运行中方案 → 查看方案详情（合并新增方案 + 方案配置） */
+function openSchemeDetail(s: CloudSchemeCard) {
+  if (!s.definitionId) {
+    ElMessage.info('该方案暂无可查看的配置详情')
+    return
+  }
+  void router.push({
+    name: 'scheme-detail',
+    params: { definitionId: s.definitionId },
+    query: {
+      turnover: s.turnover,
+      sessionPnl: s.sessionPnl,
+      multiplier: s.multiplier,
+      status: s.status,
+    },
+  })
 }
 
-function removeScheme(id: string) {
-  runningSchemes.value = runningSchemes.value.filter((x) => x.id !== id)
-  ElMessage.success('已从列表移除（演示）')
+const START_TIME_OPEN_MSG = '预计开启时间小于现在时间 请修改后再执行开启'
+
+async function validateStartTimeBeforeOpen(s: CloudSchemeCard): Promise<boolean> {
+  if (!s.definitionId) return true
+  try {
+    const def = await getSchemeDefinition(s.definitionId)
+    const times = normalizeSchemeTimePairFromConfig(
+      def.config?.startTime,
+      def.config?.endTime,
+    )
+    const err = schemeStartTimeOpenError(times.start)
+    if (err) {
+      await confirmDialog({
+        title: '无法开启',
+        message: err,
+        tone: 'warning',
+        confirmText: '我知道了',
+        showCancel: false,
+      })
+      return false
+    }
+    return true
+  } catch {
+    return true
+  }
 }
 
-const schemeCount = computed(() => runningSchemes.value.length)
+function showStartOpenError(e: unknown): void {
+  const msg =
+    e instanceof ApiError && e.message.includes('预计开启时间')
+      ? START_TIME_OPEN_MSG
+      : e instanceof Error
+        ? e.message
+        : '操作失败'
+  if (msg.includes('预计开启时间')) {
+    void confirmDialog({
+      title: '无法开启',
+      message: START_TIME_OPEN_MSG,
+      tone: 'warning',
+      confirmText: '我知道了',
+      showCancel: false,
+    })
+    return
+  }
+  ElMessage.error(msg)
+}
+
+async function startScheme(s: CloudSchemeCard) {
+  if (!(await validateStartTimeBeforeOpen(s))) return
+  try {
+    const updated = await startCloudInstance(s.id)
+    patchSchemeCard(updated)
+    void refreshCloudStats()
+    ElMessage.success(`已开启：${s.schemeName}`)
+  } catch (e) {
+    showStartOpenError(e)
+  }
+}
+
+async function stopScheme(s: CloudSchemeCard) {
+  try {
+    const updated = await stopCloudInstance(s.id)
+    patchSchemeCard(updated)
+    void refreshCloudStats()
+    ElMessage.success(`已停止：${s.schemeName}`)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '停止失败')
+  }
+}
+
+function canStartScheme(s: CloudSchemeCard): boolean {
+  return s.status === 'pending' || s.status === 'paused'
+}
+
+function patchSchemeCard(updated: Awaited<ReturnType<typeof startCloudInstance>>) {
+  const idx = runningSchemes.value.findIndex((x) => x.id === updated.id)
+  const card = instanceToDisplay(updated)
+  if (idx >= 0) {
+    runningSchemes.value[idx] = mergeSchemeCountdownOnPoll(runningSchemes.value[idx], card)
+  }
+}
+
+async function removeScheme(card: CloudSchemeCard) {
+  if (!card.definitionId) {
+    ElMessage.error('该方案缺少配置信息，无法删除')
+    return
+  }
+  const ok = await confirmDialog({
+    title: '删除方案',
+    message: `确定删除方案「${card.schemeName}」？删除后云端实例与方案配置将一并移除，不可恢复。`,
+    tone: 'danger',
+    confirmText: '删除',
+    cancelText: '取消',
+  })
+  if (!ok) return
+  try {
+    await deleteSchemeDefinition(card.definitionId)
+    runningSchemes.value = runningSchemes.value.filter((x) => x.id !== card.id)
+    listTotal.value = Math.max(0, listTotal.value - 1)
+    ElMessage.success('方案已删除')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '删除失败')
+  }
+}
+
+const schemeCount = computed(() => (listTotal.value > 0 ? listTotal.value : runningSchemes.value.length))
+const displayedSchemeCount = computed(() => displayedSchemes.value.length)
+
+function schemeCardClass(s: CloudSchemeCard): string[] {
+  const classes = ['cc-card', 'cc-card--clickable']
+  if (s.status === 'running') classes.push('cc-card--running')
+  return classes
+}
+
+function statusBadgeClass(s: CloudSchemeCard): string {
+  const reason = schemeCardDisplayStatus(s).reason
+  if (s.status === 'running') {
+    switch (reason) {
+      case 'await_next_bet':
+        return 'cc-badge--info'
+      case 'cloud_active':
+        return 'cc-badge--active'
+      default:
+        return 'cc-badge--info'
+    }
+  }
+  if (s.status === 'pending' || s.status === 'paused') {
+    switch (s.statusReason) {
+      case 'insufficient_funds':
+        return 'cc-badge--warn'
+      case 'bet_failed':
+        return 'cc-badge--warn'
+      case 'maintenance':
+        return 'cc-badge--muted'
+      case 'end_time':
+        return 'cc-badge--info'
+      case 'scheme_stop_loss':
+      case 'scheme_take_profit':
+      case 'total_stop_loss':
+      case 'total_take_profit':
+        return 'cc-badge--warn'
+      default:
+        return ''
+    }
+  }
+  return ''
+}
 </script>
 
 <template>
@@ -152,15 +699,17 @@ const schemeCount = computed(() => runningSchemes.value.length)
           <div class="cc-stat-rows">
             <div class="cc-stat-row">
               <span>总投注</span>
-              <span>0</span>
+              <span>{{ formatCloudStatAmount(centerStats.formal.totalTurnover) }}</span>
             </div>
             <div class="cc-stat-row">
               <span>总盈亏</span>
-              <span class="cc-stat-em">0</span>
+              <span :class="statPnlClass(centerStats.formal.totalSessionPnl)">{{
+                formatCloudStatAmount(centerStats.formal.totalSessionPnl) }}</span>
             </div>
             <div class="cc-stat-row cc-stat-row--pill">
               <span>运行中盈亏</span>
-              <span>0</span>
+              <span :class="statPnlClass(centerStats.formal.runningSessionPnl)">{{
+                formatCloudStatAmount(centerStats.formal.runningSessionPnl) }}</span>
             </div>
           </div>
         </div>
@@ -170,15 +719,17 @@ const schemeCount = computed(() => runningSchemes.value.length)
           <div class="cc-stat-rows">
             <div class="cc-stat-row">
               <span>总投注</span>
-              <span>0</span>
+              <span>{{ formatCloudStatAmount(centerStats.sim.totalTurnover) }}</span>
             </div>
             <div class="cc-stat-row">
               <span>总盈亏</span>
-              <span class="cc-stat-em">0</span>
+              <span :class="statPnlClass(centerStats.sim.totalSessionPnl)">{{
+                formatCloudStatAmount(centerStats.sim.totalSessionPnl) }}</span>
             </div>
             <div class="cc-stat-row cc-stat-row--pill">
               <span>运行中盈亏</span>
-              <span>0</span>
+              <span :class="statPnlClass(centerStats.sim.runningSessionPnl)">{{
+                formatCloudStatAmount(centerStats.sim.runningSessionPnl) }}</span>
             </div>
           </div>
         </div>
@@ -193,14 +744,16 @@ const schemeCount = computed(() => runningSchemes.value.length)
               总止损
               <span class="cc-ms cc-lbl-ico" aria-hidden="true">info</span>
             </label>
-            <el-input v-model="totalStopLoss" type="number" size="large" class="cc-el-inp" />
+            <el-input v-model="totalStopLoss" type="number" size="large" class="cc-el-inp"
+              @change="persistGlobalSettings" />
           </div>
           <div class="cc-field">
             <label class="cc-lbl">
               总止盈
               <span class="cc-ms cc-lbl-ico" aria-hidden="true">trending_up</span>
             </label>
-            <el-input v-model="totalTakeProfit" type="number" size="large" class="cc-el-inp" />
+            <el-input v-model="totalTakeProfit" type="number" size="large" class="cc-el-inp"
+              @change="persistGlobalSettings" />
           </div>
         </div>
 
@@ -208,7 +761,8 @@ const schemeCount = computed(() => runningSchemes.value.length)
           <label class="cc-lbl">方案倍数系数</label>
           <div class="cc-mult-wrap">
             <div class="cc-mult-prefix" aria-hidden="true">乘</div>
-            <el-input v-model="planMultiplier" type="number" size="large" class="cc-el-inp cc-el-inp--grow" />
+            <el-input v-model="planMultiplier" type="number" size="large" class="cc-el-inp cc-el-inp--grow"
+              @change="persistGlobalSettings" />
           </div>
         </div>
 
@@ -219,12 +773,13 @@ const schemeCount = computed(() => runningSchemes.value.length)
           </div>
           <div class="cc-switch-row">
             <span class="cc-switch-lbl">断期停投</span>
-            <el-switch v-model="breakPeriodStop" />
+            <el-switch v-model="breakPeriodStop" @change="persistGlobalSettings" />
           </div>
         </div>
 
         <div class="cc-actions">
-          <el-button type="primary" size="large" round class="cc-btn cc-btn--primary" @click="enableAllSchemes">
+          <el-button type="primary" size="large" round class="cc-btn cc-btn--primary" :loading="enableAllBusy"
+            :disabled="enableAllBusy" @click="enableAllSchemes">
             一键开启方案
           </el-button>
           <el-button size="large" round class="cc-btn cc-btn--outline" @click="openLookbackDialog">
@@ -239,18 +794,31 @@ const schemeCount = computed(() => runningSchemes.value.length)
       <section class="cc-list-sec">
         <div class="cc-list-head">
           <h2 class="cc-list-h2">运行中方案</h2>
-          <span class="cc-list-meta">共 {{ schemeCount }} 个方案</span>
+          <span class="cc-list-meta">
+            共 {{ schemeCount }} 个方案
+            <template v-if="schemeSearchKeyword">
+              ，筛选 {{ displayedSchemeCount }} 个
+              <button type="button" class="cc-search-clear" @click="clearSchemeSearch">清除</button>
+            </template>
+          </span>
         </div>
 
-        <div v-for="s in runningSchemes" :key="s.id" class="cc-card">
+        <p v-if="displayedSchemes.length === 0" class="cc-list-empty">
+          {{ schemeSearchKeyword ? '未找到匹配的运行中方案' : '暂无运行中的方案' }}
+        </p>
+
+        <div v-for="s in displayedSchemes" :key="s.id" :class="schemeCardClass(s)" role="button" tabindex="0"
+          @click="openSchemeDetail(s)" @keyup.enter="openSchemeDetail(s)">
           <div class="cc-card-hd">
             <div class="cc-card-title-row">
               <h3 class="cc-card-h3">{{ s.lotteryName }}</h3>
-              <button type="button" class="cc-fav" aria-label="收藏">
-                <span class="cc-ms cc-fav-ico" aria-hidden="true">favorite</span>
-              </button>
+              <el-tag v-if="s.runTypeLabel" size="small" type="info" effect="plain" class="cc-runtype-tag">
+                {{ s.runTypeLabel }}
+              </el-tag>
+              <span class="cc-ms cc-card-title-arrow" aria-hidden="true">chevron_right</span>
             </div>
-            <span class="cc-badge">{{ s.statusLabel }}</span>
+            <span class="cc-badge" :class="statusBadgeClass(s)" :title="schemeCardDisplayStatus(s).label">{{
+              schemeCardDisplayStatus(s).label }}</span>
           </div>
 
           <div class="cc-kv-grid">
@@ -264,54 +832,80 @@ const schemeCount = computed(() => runningSchemes.value.length)
             </div>
             <div class="cc-kv">
               <span class="cc-k">倒计时</span>
-              <span class="cc-v cc-v--primary">{{ s.countdown }}</span>
+              <span class="cc-v cc-v--primary cc-v--mono">{{ schemeCountdownText(s) }}</span>
             </div>
             <div class="cc-kv">
-              <span class="cc-k">盈亏</span>
-              <span class="cc-v cc-v--error">{{ s.pnl }}</span>
+              <span class="cc-k">本次盈亏</span>
+              <span class="cc-v cc-v--error">{{ s.sessionPnl }}</span>
             </div>
             <div class="cc-kv">
               <span class="cc-k">运行时间</span>
-              <span class="cc-v">{{ s.runTime }}</span>
+              <span class="cc-v cc-v--mono">{{ formatRunTime(s.runTimeSec) }}</span>
             </div>
             <div class="cc-kv">
               <span class="cc-k">回头盈亏</span>
               <span class="cc-v cc-v--error">{{ s.lookbackPnl }}</span>
             </div>
-          </div>
-
-          <div class="cc-mult-inline">
-            <span class="cc-mult-lbl">倍数系数：</span>
-            <el-input v-model="s.multiplier" type="number" size="small" class="cc-el-inp cc-el-inp--w" />
+            <div class="cc-kv cc-kv--last cc-kv--mult" @click.stop>
+              <span class="cc-k">倍数系数</span>
+              <el-input :model-value="s.multiplier" readonly size="small"
+                class="cc-el-inp cc-el-inp--mult cc-el-inp--mult-trigger" :disabled="multiplierSavingId === s.id"
+                @click="openMultiplierDialog(s)" />
+            </div>
           </div>
 
           <div class="cc-card-foot">
             <div class="cc-foot-left">
-              <el-button type="primary" round class="cc-start-btn" @click="startScheme(s)">开启方案</el-button>
-              <el-button class="cc-del-btn" round @click="removeScheme(s.id)" aria-label="删除">
+              <el-button v-if="canStartScheme(s)" type="primary" round class="cc-start-btn"
+                @click.stop="startScheme(s)">
+                开启方案
+              </el-button>
+              <el-button v-else-if="s.status === 'running'" round class="cc-start-btn" @click.stop="stopScheme(s)">
+                停止
+              </el-button>
+              <el-button class="cc-del-btn" round @click.stop="removeScheme(s)" aria-label="删除">
                 <span class="cc-ms cc-ms--sm" aria-hidden="true">delete</span>
               </el-button>
             </div>
-            <div class="cc-foot-right">
+            <div class="cc-foot-right" @click.stop>
               <span class="cc-sim-lbl">模拟投注</span>
-              <el-switch v-model="s.simBet" />
+              <el-switch :model-value="s.simBet" :disabled="simBetSavingId === s.id || s.status === 'running'"
+                @update:model-value="(v: boolean) => toggleSimBet(s, v)" />
             </div>
           </div>
         </div>
+
+        <div v-if="listHasMore && displayedSchemes.length > 0 && !schemeSearchKeyword" ref="loadMoreSentinel"
+          class="cc-list-sentinel" aria-hidden="true" />
+        <p v-if="listLoadingMore" class="cc-list-more">加载中…</p>
+        <p v-else-if="!listHasMore && runningSchemes.length > 0 && !schemeSearchKeyword"
+          class="cc-list-more cc-list-more--done">
+          已加载全部方案
+        </p>
       </section>
     </main>
 
     <LobbyTabBar />
 
-    <el-dialog
-      v-model="lookbackDialogVisible"
-      class="cc-lookback-dialog"
-      width="min(32rem, 92vw)"
-      align-center
-      destroy-on-close
-      :show-close="false"
-      append-to-body
-    >
+    <el-dialog v-model="searchDialogVisible" title="搜索方案" width="min(22rem, 88vw)" align-center append-to-body
+      class="cc-search-dialog">
+      <el-input v-model="searchDraft" clearable size="large" placeholder="方案名称、彩种或方案 ID"
+        @keyup.enter="applySchemeSearch" />
+      <template #footer>
+        <el-button @click="searchDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="applySchemeSearch">搜索</el-button>
+      </template>
+    </el-dialog>
+
+    <ContentDialog v-model="multiplierDialogVisible" title="修改倍数系数" icon="tune" confirm-text="确定" show-cancel
+      :confirm-loading="multiplierSavingId !== null" :auto-close-on-confirm="false" @confirm="confirmMultiplierDialog"
+      @cancel="cancelMultiplierDialog">
+      <el-input :model-value="multiplierDraft" inputmode="numeric" maxlength="6" size="large" placeholder="请输入正整数"
+        class="cc-mult-inp" @update:model-value="onMultiplierDraftChange" @keyup.enter="confirmMultiplierDialog" />
+    </ContentDialog>
+
+    <el-dialog v-model="lookbackDialogVisible" class="cc-lookback-dialog" width="min(32rem, 92vw)" align-center
+      destroy-on-close :show-close="false" append-to-body>
       <template #header>
         <div class="lb-dlg-head">
           <h2 class="lb-dlg-title">回头设置</h2>
@@ -328,13 +922,17 @@ const schemeCount = computed(() => runningSchemes.value.length)
             <span class="cc-ms lb-section-ico" aria-hidden="true">play_arrow</span>
             <span class="lb-section-title">运行模式选择</span>
           </div>
-          <div class="lb-run-grid" role="radiogroup" aria-label="运行模式">
-            <label class="lb-run-opt" :class="{ 'is-active': lookback.runMode === 'sim' }">
-              <input v-model="lookback.runMode" type="radio" class="lb-sr-only" value="sim" />
+          <div class="lb-run-grid" role="group" aria-label="运行模式（可多选）">
+            <label class="lb-run-opt" :class="{ 'is-active': lookback.runModeSim }"
+              @click.prevent="toggleLookbackRunMode('sim')">
+              <input type="checkbox" class="lb-sr-only" tabindex="-1" :checked="lookback.runModeSim"
+                aria-hidden="true" />
               <span class="lb-run-card">模拟运行</span>
             </label>
-            <label class="lb-run-opt" :class="{ 'is-active': lookback.runMode === 'prod' }">
-              <input v-model="lookback.runMode" type="radio" class="lb-sr-only" value="prod" />
+            <label class="lb-run-opt" :class="{ 'is-active': lookback.runModeProd }"
+              @click.prevent="toggleLookbackRunMode('prod')">
+              <input type="checkbox" class="lb-sr-only" tabindex="-1" :checked="lookback.runModeProd"
+                aria-hidden="true" />
               <span class="lb-run-card">正式运行</span>
             </label>
           </div>
@@ -347,82 +945,57 @@ const schemeCount = computed(() => runningSchemes.value.length)
             <span class="lb-section-title">回头条件逻辑配置</span>
           </div>
 
-          <el-radio-group v-model="lookback.judgment" class="lb-judgment-rg">
-            <!-- 个别判断 -->
+          <div class="lb-judge-list">
+            <!-- 个别判断：可与整体判断同时不选；勾选时互斥 -->
             <div class="lb-judge-section">
-              <el-radio value="individual" size="large" class="lb-judge-top-radio">
+              <label class="lb-judge-top" :class="{ 'is-active': lookback.judgment === 'individual' }"
+                @click.prevent="toggleLookbackJudgment('individual')">
+                <input type="checkbox" class="lb-sr-only" tabindex="-1" :checked="lookback.judgment === 'individual'"
+                  aria-hidden="true" />
+                <span class="lb-judge-check" aria-hidden="true" />
                 <span class="lb-judge-label-txt">个别判断</span>
-              </el-radio>
-              <div
-                class="lb-judge-indent"
-                :class="{ 'lb-judge-panel--inactive': lookback.judgment !== 'individual' }"
-              >
+              </label>
+              <div class="lb-judge-indent" :class="{ 'lb-judge-panel--inactive': lookback.judgment !== 'individual' }">
                 <div class="lb-logic-card">
                   <div class="lb-logic-card-h">单方案盈亏回头</div>
                   <div class="lb-row2">
                     <div class="lb-cell">
                       <label class="lb-field-lbl" for="lb-sp">盈利阈值</label>
-                      <el-input
-                        id="lb-sp"
-                        v-model="lookback.singleProfitThreshold"
-                        type="number"
-                        size="small"
-                        class="lb-inp"
-                        :disabled="lookback.judgment !== 'individual'"
-                      />
+                      <el-input id="lb-sp" v-model="lookback.singleProfitThreshold" type="number" size="small"
+                        class="lb-inp" :disabled="lookback.judgment !== 'individual'" />
                     </div>
                     <div class="lb-cell">
                       <label class="lb-field-lbl" for="lb-sl">亏损阈值</label>
-                      <el-input
-                        id="lb-sl"
-                        v-model="lookback.singleLossThreshold"
-                        type="number"
-                        size="small"
-                        class="lb-inp"
-                        placeholder="0.00"
-                        :disabled="lookback.judgment !== 'individual'"
-                      />
+                      <el-input id="lb-sl" v-model="lookback.singleLossThreshold" type="number" size="small"
+                        class="lb-inp" placeholder="0.00" :disabled="lookback.judgment !== 'individual'" />
                     </div>
                   </div>
                 </div>
               </div>
             </div>
 
-            <!-- 整体判断 -->
+            <!-- 整体判断：可与个别判断同时不选；勾选时互斥 -->
             <div class="lb-judge-section">
-              <el-radio value="overall" size="large" class="lb-judge-top-radio">
+              <label class="lb-judge-top" :class="{ 'is-active': lookback.judgment === 'overall' }"
+                @click.prevent="toggleLookbackJudgment('overall')">
+                <input type="checkbox" class="lb-sr-only" tabindex="-1" :checked="lookback.judgment === 'overall'"
+                  aria-hidden="true" />
+                <span class="lb-judge-check" aria-hidden="true" />
                 <span class="lb-judge-label-txt">整体判断</span>
-              </el-radio>
-              <div
-                class="lb-judge-indent"
-                :class="{ 'lb-judge-panel--inactive': lookback.judgment !== 'overall' }"
-              >
+              </label>
+              <div class="lb-judge-indent" :class="{ 'lb-judge-panel--inactive': lookback.judgment !== 'overall' }">
                 <div class="lb-logic-card">
                   <div class="lb-logic-card-h">整体盈亏回头</div>
                   <div class="lb-row2">
                     <div class="lb-cell">
                       <label class="lb-field-lbl" for="lb-op">盈利阈值</label>
-                      <el-input
-                        id="lb-op"
-                        v-model="lookback.overallProfitThreshold"
-                        type="number"
-                        size="small"
-                        class="lb-inp"
-                        placeholder="盈利阈值"
-                        :disabled="lookback.judgment !== 'overall'"
-                      />
+                      <el-input id="lb-op" v-model="lookback.overallProfitThreshold" type="number" size="small"
+                        class="lb-inp" placeholder="盈利阈值" :disabled="lookback.judgment !== 'overall'" />
                     </div>
                     <div class="lb-cell">
                       <label class="lb-field-lbl" for="lb-ol">亏损阈值</label>
-                      <el-input
-                        id="lb-ol"
-                        v-model="lookback.overallLossThreshold"
-                        type="number"
-                        size="small"
-                        class="lb-inp"
-                        placeholder="亏损阈值"
-                        :disabled="lookback.judgment !== 'overall'"
-                      />
+                      <el-input id="lb-ol" v-model="lookback.overallLossThreshold" type="number" size="small"
+                        class="lb-inp" placeholder="亏损阈值" :disabled="lookback.judgment !== 'overall'" />
                     </div>
                   </div>
                 </div>
@@ -430,25 +1003,15 @@ const schemeCount = computed(() => runningSchemes.value.length)
                 <div class="lb-logic-card">
                   <div class="lb-logic-card-h">方案中几回头</div>
                   <div class="lb-wins-inline">
-                    <span class="lb-wins-txt lb-wins-op">&gt;=</span>
-                    <el-input
-                      v-model="lookback.schemeWinsMin"
-                      type="number"
-                      size="small"
-                      class="lb-inp lb-inp--wins"
-                      placeholder="最小"
-                      :disabled="lookback.judgment !== 'overall'"
-                    />
-                    <span class="lb-wins-txt lb-wins-op">&lt;=</span>
-                    <el-input
-                      v-model="lookback.schemeWinsMax"
-                      type="number"
-                      size="small"
-                      class="lb-inp lb-inp--wins"
-                      placeholder="最大"
-                      :disabled="lookback.judgment !== 'overall'"
-                    />
-                    <span class="lb-wins-txt">次即回头</span>
+                    <span class="lb-wins-txt lb-wins-op">{{ '>=' }}</span>
+                    <el-input v-model="lookback.schemeWinsMin" inputmode="numeric" size="small"
+                      class="lb-inp lb-inp--wins" placeholder="最小" :disabled="lookback.judgment !== 'overall'"
+                      @update:model-value="onSchemeWinsMinChange" />
+                    <span class="lb-wins-txt lb-wins-op">{{ '<=' }}</span>
+                        <el-input v-model="lookback.schemeWinsMax" inputmode="numeric" size="small"
+                          class="lb-inp lb-inp--wins" placeholder="最大" :disabled="lookback.judgment !== 'overall'"
+                          @update:model-value="onSchemeWinsMaxChange" />
+                        <span class="lb-wins-txt">次即回头</span>
                   </div>
                 </div>
 
@@ -457,33 +1020,19 @@ const schemeCount = computed(() => runningSchemes.value.length)
                   <div class="lb-row2">
                     <div class="lb-cell">
                       <label class="lb-field-lbl" for="lb-pp">盈利</label>
-                      <el-input
-                        id="lb-pp"
-                        v-model="lookback.periodProfit"
-                        type="number"
-                        size="small"
-                        class="lb-inp"
-                        placeholder="0.00"
-                        :disabled="lookback.judgment !== 'overall'"
-                      />
+                      <el-input id="lb-pp" v-model="lookback.periodProfit" type="number" size="small" class="lb-inp"
+                        placeholder="0.00" :disabled="lookback.judgment !== 'overall'" />
                     </div>
                     <div class="lb-cell">
                       <label class="lb-field-lbl" for="lb-ploss">亏损</label>
-                      <el-input
-                        id="lb-ploss"
-                        v-model="lookback.periodLoss"
-                        type="number"
-                        size="small"
-                        class="lb-inp"
-                        placeholder="0.00"
-                        :disabled="lookback.judgment !== 'overall'"
-                      />
+                      <el-input id="lb-ploss" v-model="lookback.periodLoss" type="number" size="small" class="lb-inp"
+                        placeholder="0.00" :disabled="lookback.judgment !== 'overall'" />
                     </div>
                   </div>
                 </div>
               </div>
             </div>
-          </el-radio-group>
+          </div>
         </section>
 
         <div class="lb-alert" role="alert">
@@ -635,6 +1184,10 @@ const schemeCount = computed(() => runningSchemes.value.length)
   opacity: 1;
 }
 
+.cc-stat-em--loss {
+  color: #ffb4ab;
+}
+
 .cc-stat-row--pill {
   font-weight: 700;
   opacity: 1;
@@ -648,13 +1201,11 @@ const schemeCount = computed(() => runningSchemes.value.length)
   width: 1px;
   align-self: stretch;
   min-height: 6rem;
-  background: linear-gradient(
-    180deg,
-    transparent,
-    rgba(255, 255, 255, 0.22) 15%,
-    rgba(255, 255, 255, 0.22) 85%,
-    transparent
-  );
+  background: linear-gradient(180deg,
+      transparent,
+      rgba(255, 255, 255, 0.22) 15%,
+      rgba(255, 255, 255, 0.22) 85%,
+      transparent);
 }
 
 /* ===== Main ===== */
@@ -763,6 +1314,12 @@ const schemeCount = computed(() => runningSchemes.value.length)
   white-space: nowrap;
 }
 
+.cc-hint--switch {
+  margin: 0.35rem 0 0;
+  line-height: 1.5;
+  white-space: normal;
+}
+
 .cc-switch-row {
   display: flex;
   align-items: center;
@@ -837,6 +1394,43 @@ const schemeCount = computed(() => runningSchemes.value.length)
   color: var(--cc-on-var);
 }
 
+.cc-search-clear {
+  margin-left: 0.35rem;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--cc-primary, #0066ff);
+  font-size: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.cc-list-empty {
+  margin: 0.5rem 0 1rem;
+  padding: 1.25rem;
+  text-align: center;
+  font-size: 0.875rem;
+  color: var(--cc-on-var);
+  background: var(--cc-card);
+  border-radius: 1rem;
+}
+
+.cc-list-sentinel {
+  width: 100%;
+  height: 1px;
+}
+
+.cc-list-more {
+  margin: 0.75rem 0 1rem;
+  text-align: center;
+  font-size: 0.8125rem;
+  color: var(--cc-on-var);
+}
+
+.cc-list-more--done {
+  opacity: 0.72;
+}
+
 .cc-card {
   background: var(--cc-card);
   border-radius: 1.25rem;
@@ -846,9 +1440,9 @@ const schemeCount = computed(() => runningSchemes.value.length)
 
 .cc-card-hd {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 0.75rem;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.45rem;
   margin-bottom: 1.15rem;
 }
 
@@ -857,40 +1451,96 @@ const schemeCount = computed(() => runningSchemes.value.length)
   align-items: center;
   gap: 0.35rem;
   min-width: 0;
+  width: 100%;
+}
+
+.cc-card-hd>.cc-badge {
+  align-self: flex-end;
+  max-width: 100%;
+}
+
+.cc-card--clickable {
+  cursor: pointer;
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.cc-card--clickable:hover {
+  box-shadow: 0 18px 40px -24px rgba(0, 80, 203, 0.35);
+}
+
+.cc-card--running {
+  background:
+    linear-gradient(145deg, rgba(0, 102, 255, 0.1) 0%, rgba(0, 80, 203, 0.04) 52%, #ffffff 100%);
+  box-shadow: 0 16px 36px -18px rgba(0, 80, 203, 0.28);
+}
+
+.cc-card--running:hover {
+  box-shadow: 0 20px 44px -20px rgba(0, 80, 203, 0.38);
+}
+
+.cc-card--running .cc-card-h3 {
+  color: var(--cc-primary);
+}
+
+.cc-card--running .cc-v--primary {
+  color: var(--cc-primary-strong);
+  font-weight: 700;
+}
+
+.cc-card-title-arrow {
+  font-size: 1.05rem;
+  color: #94a3b8;
 }
 
 .cc-card-h3 {
   margin: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 0.9375rem;
   font-weight: 800;
   font-family: 'Plus Jakarta Sans', 'Noto Sans SC', system-ui, sans-serif;
 }
 
-.cc-fav {
-  border: none;
-  background: transparent;
-  padding: 0;
-  line-height: 0;
-  cursor: pointer;
-  color: #cbd5e1;
-}
-
-.cc-fav:hover {
-  color: #94a3b8;
-}
-
-.cc-fav-ico {
-  font-size: 1.25rem;
+.cc-runtype-tag {
+  flex-shrink: 0;
+  font-size: 11px;
 }
 
 .cc-badge {
   flex-shrink: 0;
+  max-width: 100%;
+  text-align: right;
+  line-height: 1.35;
+  word-break: break-word;
   font-size: 0.6875rem;
   font-weight: 600;
   color: var(--cc-on-var);
   background: var(--cc-variant);
   padding: 0.2rem 0.45rem;
   border-radius: 0.35rem;
+}
+
+.cc-badge--warn {
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.14);
+}
+
+.cc-badge--muted {
+  color: #64748b;
+  background: rgba(100, 116, 139, 0.12);
+}
+
+.cc-badge--info {
+  color: #0050cb;
+  background: rgba(0, 102, 255, 0.1);
+}
+
+.cc-badge--active {
+  color: #047857;
+  background: rgba(16, 185, 129, 0.12);
 }
 
 .cc-kv-grid {
@@ -930,21 +1580,52 @@ const schemeCount = computed(() => runningSchemes.value.length)
   font-weight: 800;
 }
 
-.cc-mult-inline {
-  margin-top: 1rem;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
+.cc-v--mono {
+  font-family: Inter, ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
 }
 
-.cc-mult-lbl {
-  font-size: 0.6875rem;
-  font-weight: 700;
-  color: var(--cc-on-var);
+.cc-kv--last {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.cc-kv--mult {
+  justify-content: space-between;
+}
+
+.cc-el-inp--mult {
+  width: 3.25rem;
+}
+
+.cc-el-inp--mult-trigger :deep(.el-input__wrapper) {
+  cursor: pointer;
+}
+
+.cc-el-inp--mult-trigger :deep(.el-input__inner) {
+  cursor: pointer;
+  text-align: center;
+}
+
+.cc-mult-inp {
+  width: 100%;
+}
+
+.cc-mult-inp :deep(.el-input__inner) {
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.cc-mult-dialog-hint {
+  margin: 0 0 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--cc-on-var, #424656);
+  line-height: 1.5;
 }
 
 .cc-card-foot {
-  margin-top: 1.25rem;
+  margin-top: 0.85rem;
   padding-top: 1.1rem;
   border-top: 1px solid rgba(226, 232, 240, 0.65);
   display: flex;
@@ -1062,12 +1743,14 @@ const schemeCount = computed(() => runningSchemes.value.length)
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
+  min-width: 0;
 }
 
 .lb-section {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+  min-width: 0;
 }
 
 .lb-section-head {
@@ -1091,7 +1774,7 @@ const schemeCount = computed(() => runningSchemes.value.length)
   gap: 1rem;
 }
 
-.lb-judgment-rg.el-radio-group {
+.lb-judge-list {
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -1103,16 +1786,39 @@ const schemeCount = computed(() => runningSchemes.value.length)
   display: flex;
   flex-direction: column;
   gap: 0.65rem;
+  min-width: 0;
 }
 
-.lb-judge-top-radio.el-radio {
-  height: auto;
-  margin-right: 0;
+.lb-judge-top {
+  display: inline-flex;
   align-items: center;
+  gap: 0.5rem;
+  width: fit-content;
+  cursor: pointer;
+  user-select: none;
 }
 
-.lb-judge-top-radio .el-radio__label {
-  padding-left: 0.5rem;
+.lb-judge-check {
+  width: 1.125rem;
+  height: 1.125rem;
+  border-radius: 0.25rem;
+  border: 1.5px solid #c4c7cf;
+  background: #fff;
+  flex-shrink: 0;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.lb-judge-top.is-active .lb-judge-check {
+  border-color: var(--el-color-primary);
+  background: var(--el-color-primary);
+  box-shadow: inset 0 0 0 2px #fff;
+}
+
+.lb-judge-top.is-active .lb-judge-label-txt {
+  color: var(--el-color-primary);
 }
 
 .lb-judge-label-txt {
@@ -1127,6 +1833,7 @@ const schemeCount = computed(() => runningSchemes.value.length)
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+  min-width: 0;
   transition:
     opacity 0.25s ease,
     filter 0.25s ease;
@@ -1142,10 +1849,10 @@ const schemeCount = computed(() => runningSchemes.value.length)
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
-  gap: 0.35rem;
+  gap: 0.3rem;
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
   transition: opacity 0.15s;
 }
 
@@ -1161,14 +1868,16 @@ const schemeCount = computed(() => runningSchemes.value.length)
   letter-spacing: 0.02em;
 }
 
-.lb-inp--wins.el-input {
-  width: 4.25rem;
-  min-width: 3.25rem;
-  flex-shrink: 0;
+.lb-inp--wins .el-input__inner {
+  padding-left: 0.25rem;
+  padding-right: 0.25rem;
 }
 
 .lb-inp--wins .el-input__wrapper {
   justify-content: center;
+  padding-left: 0.15rem;
+  padding-right: 0.15rem;
+  min-width: 0;
 }
 
 .lb-run-grid {
@@ -1210,8 +1919,7 @@ const schemeCount = computed(() => runningSchemes.value.length)
     color 0.15s;
 }
 
-.lb-run-opt.is-active .lb-run-card,
-.lb-run-opt:focus-within .lb-run-card {
+.lb-run-opt.is-active .lb-run-card {
   border-color: #0050cb;
   background: rgba(0, 102, 255, 0.08);
   color: #0050cb;
@@ -1225,6 +1933,9 @@ const schemeCount = computed(() => runningSchemes.value.length)
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .lb-logic-card-h {
@@ -1259,6 +1970,13 @@ const schemeCount = computed(() => runningSchemes.value.length)
 
 .lb-inp.el-input {
   width: 100%;
+}
+
+.lb-inp.el-input.lb-inp--wins {
+  width: auto;
+  flex: 0 1 2.125rem;
+  min-width: 1.75rem;
+  max-width: 2.625rem;
 }
 
 .lb-alert {

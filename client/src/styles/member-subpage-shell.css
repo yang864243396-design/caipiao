@@ -1,0 +1,376 @@
+/**
+ * 会员中心二级页：渐变顶栏 + 标题 + 快捷 Tab（pill / 下划线 / 顶栏内分段）
+ * 与 client/DESIGN.md 主色一致；页面根节点请加 class="member-subpage"
+ */
+
+.member-subpage {
+  --mss-primary: #0050cb;
+  --mss-primary-strong: #0066ff;
+  --mss-surface: #f7f9fb;
+  --mss-card: #ffffff;
+  --mss-tonal: #eef2f7;
+  --mss-on: #191c1e;
+  --mss-on-var: #424656;
+  --mss-on-mute: #727687;
+  padding-bottom: calc(1.5rem + env(safe-area-inset-bottom));
+}
+
+/* ---- 顶栏 ---- */
+.mss-head {
+  position: relative;
+  background: linear-gradient(180deg, var(--mss-primary-strong) 0%, var(--mss-primary) 100%);
+  color: #fff;
+  padding: max(0.75rem, env(safe-area-inset-top)) 1rem 1rem;
+  border-radius: 0 0 1.5rem 1.5rem;
+  box-shadow: 0 16px 36px -22px rgba(0, 80, 203, 0.45);
+  overflow: hidden;
+}
+
+@media (min-width: 640px) {
+  .mss-head {
+    border-radius: 0 0 2rem 2rem;
+  }
+}
+
+.mss-head-deco {
+  position: absolute;
+  inset: -40% -15% auto auto;
+  width: 14rem;
+  height: 14rem;
+  background: radial-gradient(closest-side, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0) 70%);
+  pointer-events: none;
+}
+
+.mss-head-bar {
+  position: relative;
+  display: grid;
+  grid-template-columns: 2.5rem 1fr 2.5rem;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.mss-back,
+.mss-head-icon-btn {
+  width: 2.5rem;
+  height: 2.5rem;
+  border: none;
+  cursor: pointer;
+  border-radius: 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  transition: background 0.15s;
+  padding: 0;
+  font: inherit;
+}
+
+.mss-back:hover,
+.mss-head-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.mss-title {
+  margin: 0;
+  text-align: center;
+  font-family: 'Plus Jakarta Sans', 'Noto Sans SC', system-ui, sans-serif;
+  font-size: 1.0625rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  line-height: 1.25;
+  color: #fff;
+}
+
+.mss-head-spacer {
+  display: block;
+  width: 2.5rem;
+  height: 2.5rem;
+}
+
+/* 顶栏标题行下方全宽分段（如 充值 | 充提记录） */
+.mss-head-below {
+  position: relative;
+  margin-top: 0.45rem;
+}
+
+.mss-head > .mss-head-below.mss-head-seg {
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+}
+
+.mss-ms {
+  font-family: 'Material Symbols Outlined', sans-serif;
+  font-size: 1.35rem;
+  line-height: 1;
+  font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 24;
+  display: inline-block;
+  user-select: none;
+}
+
+/* 顶栏内居中分段（如 团队总览 | 用户统计） */
+.mss-head-seg {
+  display: flex;
+  align-items: center;
+  border-radius: 0.85rem;
+  padding: 0.2rem;
+  background: rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.08);
+  min-width: 0;
+}
+
+.mss-head-seg-btn {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  cursor: pointer;
+  background: transparent;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 750;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.88);
+  padding: 0.5rem 0.35rem;
+  border-radius: 0.65rem;
+  line-height: 1.2;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    box-shadow 0.15s;
+}
+
+.mss-head-seg-btn.is-active {
+  background: var(--mss-card);
+  color: var(--mss-primary);
+  font-weight: 800;
+  box-shadow:
+    0 2px 8px -2px rgba(15, 23, 42, 0.12),
+    0 0 0 1px rgba(0, 80, 203, 0.06);
+}
+
+.mss-head-seg-btn:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.55);
+  outline-offset: 1px;
+}
+
+/* ---- 快捷 Tab：pill 轨道（今日 / 昨日 或多项） ---- */
+.mss-quick {
+  max-width: 40rem;
+  margin: -0.35rem auto 0;
+  padding: 0 1.15rem;
+  position: relative;
+  z-index: 1;
+  box-sizing: border-box;
+}
+
+.mss-quick-track {
+  display: flex;
+  align-items: center;
+  padding-block: 0.32rem;
+  padding-inline: 0.28rem;
+  border-radius: 0.85rem;
+  background: rgba(0, 80, 203, 0.07);
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.06);
+  overflow: hidden;
+  box-sizing: border-box;
+  gap: 0.2rem;
+}
+
+.mss-quick-btn {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  cursor: pointer;
+  background: transparent;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 750;
+  letter-spacing: 0.03em;
+  color: var(--mss-on-var);
+  margin-block: 0.1rem;
+  padding-block: 0.58rem;
+  padding-inline: 0.3rem;
+  line-height: 1.2;
+  border-radius: 0.58rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  transition:
+    color 0.15s,
+    background 0.15s,
+    box-shadow 0.15s;
+}
+
+@media (min-width: 400px) {
+  .mss-quick-btn {
+    font-size: 0.875rem;
+    padding-inline: 0.45rem;
+  }
+}
+
+@media (min-width: 480px) {
+  .mss-quick-btn {
+    font-size: 0.9375rem;
+    padding-inline: 0.5rem;
+  }
+}
+
+.mss-quick-btn.is-active {
+  background: var(--mss-card);
+  color: var(--mss-primary);
+  font-weight: 800;
+  box-shadow:
+    0 2px 8px -2px rgba(15, 23, 42, 0.12),
+    0 0 0 1px rgba(0, 80, 203, 0.07);
+}
+
+.mss-quick-btn:focus-visible {
+  outline: 2px solid rgba(0, 102, 255, 0.45);
+  outline-offset: 1px;
+}
+
+/* ---- 快捷 Tab：下划线（白底卡片轨） ---- */
+.mss-quick--underline .mss-quick-underline-track {
+  display: flex;
+  align-items: stretch;
+  background: var(--mss-card);
+  border-radius: 1rem;
+  padding: 0 0.25rem;
+  box-shadow:
+    0 18px 40px -28px rgba(15, 23, 42, 0.16),
+    0 4px 14px -8px rgba(15, 23, 42, 0.06);
+  overflow: hidden;
+}
+
+.mss-quick-tab {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  cursor: pointer;
+  background: transparent;
+  font: inherit;
+  font-size: 0.9375rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  color: var(--mss-on-var);
+  padding-block: 0.85rem;
+  padding-inline: 0.5rem;
+  position: relative;
+  transition: color 0.15s;
+}
+
+.mss-quick-tab.is-active {
+  color: var(--mss-primary);
+  font-weight: 800;
+}
+
+.mss-quick-tab.is-active::after {
+  content: '';
+  position: absolute;
+  left: 18%;
+  right: 18%;
+  bottom: 0.35rem;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--mss-primary), var(--mss-primary-strong));
+}
+
+.mss-quick-tab:focus-visible {
+  outline: 2px solid rgba(0, 102, 255, 0.45);
+  outline-offset: 1px;
+  border-radius: 0.35rem;
+}
+
+.mss-quick-tab-divider {
+  align-self: stretch;
+  width: 1px;
+  margin-block: 0.85rem;
+  background: rgba(15, 23, 42, 0.08);
+}
+
+/* ---- 会员中心列表区：禁止横向滚动，列在容器内分配、单元格换行（见 DESIGN.md §8） ---- */
+.member-subpage .mbr-results,
+.member-subpage .mlg-results,
+.member-subpage .mpr-results,
+.member-subpage .mls-results {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+  box-sizing: border-box;
+}
+
+.member-subpage .mbr-table,
+.member-subpage .mlg-table,
+.member-subpage .mpr-table,
+.member-subpage .mls-table {
+  width: 100%;
+  max-width: 100%;
+}
+
+
+/* 会员中心数据表：一屏内展示全部列（参考玩法详情 detail-bet-table） */
+.member-subpage .member-list-table.el-table {
+  width: 100% !important;
+}
+
+.member-subpage .member-list-table .el-table__header-wrapper,
+.member-subpage .member-list-table .el-table__body-wrapper {
+  width: 100% !important;
+}
+
+.member-subpage .member-list-table .el-table__header-wrapper table,
+.member-subpage .member-list-table .el-table__body-wrapper table {
+  table-layout: fixed !important;
+  width: 100% !important;
+}
+
+.member-subpage .member-list-table colgroup col {
+  width: auto !important;
+}
+
+.member-subpage .member-list-table .el-table__header th.el-table__cell {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--mss-on-var);
+  padding: 5px 0 !important;
+  vertical-align: middle;
+}
+
+.member-subpage .member-list-table .el-table__body td.el-table__cell {
+  font-size: 11px;
+  padding: 5px 0 !important;
+  vertical-align: top;
+}
+
+.member-subpage .member-list-table th.el-table__cell .cell,
+.member-subpage .member-list-table td.el-table__cell .cell {
+  padding: 0 1px !important;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.member-subpage .member-list-table th.el-table__cell .cell {
+  white-space: normal;
+  word-break: keep-all;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.member-subpage .member-list-table .el-table__header th.el-table__cell > .cell {
+  display: block;
+  width: 100%;
+}
+
+/* 筛选项标签与下拉：优先 Noto Sans SC，避免 Inter 缺字显示 ? */
+.member-subpage .mbr-lbl,
+.member-subpage .sp-lbl,
+.member-subpage .fr-lbl,
+.member-subpage .mlg-lbl,
+.member-subpage :deep(.el-select__wrapper),
+.member-subpage :deep(.el-select__selected-item),
+.member-subpage :deep(.el-select__placeholder),
+.member-subpage :deep(.el-select-dropdown__item) {
+  font-family: 'Noto Sans SC', Inter, system-ui, sans-serif;
+}

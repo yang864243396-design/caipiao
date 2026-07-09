@@ -1,7 +1,36 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { ApiError } from '@/api/client'
+import {
+  getSchemeDefinition,
+  saveBetMultiplier,
+  type BetMultiplierPayload,
+} from '@/api/schemes/betMultiplier'
+import {
+  SCHEME_DRAFT_ID,
+  isDraftSchemeId,
+  loadSchemeDraft,
+  saveDraftBetMultiplier,
+} from '@/utils/schemeDraftStorage'
+import {
+  loadPlayDetailShareDock,
+  savePlayDetailShareDock,
+} from '@/utils/playDetailShareDock'
+import {
+  startSchemeTemplatesSync,
+  stopSchemeTemplatesSync,
+  useSchemeTemplateLibrary,
+} from '@/composables/useSchemeTemplateLibrary'
+import {
+  canGenerateNewbiePlan,
+  canGenerateOneclickPlan,
+  generateNewbiePlan,
+  generateOneclickPlan,
+  type PlanTableRow,
+} from '@/utils/betMultiplierPlan'
+import { confirmDialog } from '@/utils/confirmDialog'
 
 const route = useRoute()
 const router = useRouter()
@@ -25,83 +54,276 @@ function goBack() {
   else router.push({ name: 'play-detail' })
 }
 
+function needsBetPlanTable(): boolean {
+  return (
+    (activeSubTab.value === '0' && newbiePlanRows.value.length === 0) ||
+    (activeSubTab.value === '1' && oneclickPlanRows.value.length === 0)
+  )
+}
+
 function validateBetMultiplier(): string | null {
-  if (activeSubTab.value === '0') {
-    if (!newbiePrincipal.value.trim()) return '请填写总本金'
-    if (newbieProfitType.value === 'rate' && !newbieRateVal.value.trim()) return '请填写收益利率'
-    if (newbieProfitType.value === 'fixed' && !newbieFixedVal.value.trim()) return '请填写固定利润'
-    if (newbieProfitType.value === 'accum') {
-      if (!newbieAccumStart.value.trim()) return '请填写累加起步'
-      if (!newbieAccumStep.value.trim()) return '请填写累进步长'
-    }
-  }
-  if (activeSubTab.value === '1') {
-    if (!oneclickCycle.value.trim()) return '请填写计划周期'
-    if (!oneclickProfit.value.trim()) return '请填写收益利润'
-  }
   if (activeSubTab.value === '2' && !simpleMultiples.value.trim()) return '请填写倍数序列'
-  if (activeSubTab.value === '3' && !selectedAdvancedId.value) return '请选择高级倍投方案'
+  if (activeSubTab.value === '3' && !selectedAdvancedId.value) {
+    return '无法保存，请先在高级倍投列表中选择一个方案'
+  }
   return null
 }
 
 /** 从方案配置进入倍投设定时，校验失败将报错文案带回方案页右侧展示 */
-function navigateBackToSchemeWithError(msg: string) {
-  const schemeId = route.query.schemeId
-  if (schemeId == null || String(schemeId) === '') {
-    ElMessage.error(msg)
+/** 进入页标识：scheme-detail / play-detail / advanced-scheme-edit（默认） */
+const returnName = (() => {
+  const r = route.query.returnName
+  const v = String(Array.isArray(r) ? r[0] : (r ?? ''))
+  return v === 'scheme-detail' || v === 'play-detail' ? v : 'advanced-scheme-edit'
+})()
+
+/** 返回进入页，带回 query（bmsKind 回显 / bmsError 报错） */
+function returnToEntry(extra: Record<string, string>) {
+  const schemeId = String(route.query.schemeId ?? '')
+  const q: Record<string, string> = { ...extra }
+  if (route.query.title != null && String(route.query.title) !== '') q.title = String(route.query.title)
+  if (route.query.lottery != null && String(route.query.lottery) !== '') q.lottery = String(route.query.lottery)
+  for (const key of ['draft', 'kind', 'runType', 'playType', 'subPlay'] as const) {
+    const v = route.query[key]
+    if (v != null && String(v) !== '') q[key] = String(Array.isArray(v) ? v[0] : v)
+  }
+
+  if (returnName === 'scheme-detail') {
+    if (!schemeId) {
+      router.back()
+      return
+    }
+    void router.push({ name: 'scheme-detail', params: { definitionId: schemeId }, query: q })
     return
   }
-  const q: Record<string, string> = {
-    bmsError: encodeURIComponent(msg),
+  if (returnName === 'play-detail') {
+    for (const key of [
+      'scheme',
+      'snapshotId',
+      'lotteryCode',
+      'playMethod',
+      'board',
+      'typeId',
+      'playTypeId',
+      'subId',
+      'subPlayId',
+      'tab',
+    ] as const) {
+      const v = route.query[key]
+      if (v != null && String(v) !== '') q[key] = String(Array.isArray(v) ? v[0] : v)
+    }
+    void router.push({ name: 'play-detail', query: q })
+    return
   }
-  if (route.query.title != null && String(route.query.title) !== '') {
-    q.title = String(route.query.title)
+  if (!schemeId) {
+    router.back()
+    return
   }
-  if (route.query.lottery != null && String(route.query.lottery) !== '') {
-    q.lottery = String(route.query.lottery)
+  void router.push({ name: 'advanced-scheme-edit', params: { schemeId }, query: q })
+}
+
+/** 是否从方案相关页面进入（需将校验错误带回上一页） */
+function playDetailShareDockKey(): string {
+  return String(route.query.snapshotId ?? '').trim() || '__no_snapshot__'
+}
+
+function shouldSavePlayDetailShareDock(): boolean {
+  return returnName === 'play-detail'
+}
+
+function shouldReturnErrorToEntry(): boolean {
+  if (returnName === 'play-detail') return true
+  const schemeId = String(route.query.schemeId ?? '').trim()
+  if (!schemeId) return false
+  if (route.query.fromScheme === '1') return true
+  return returnName === 'scheme-detail' || returnName === 'advanced-scheme-edit'
+}
+
+function showConfirmError(msg: string): void {
+  if (shouldReturnErrorToEntry()) {
+    returnToEntry({ bmsError: encodeURIComponent(msg) })
+  } else {
+    ElMessage.error(msg)
   }
-  void router.push({
-    name: 'advanced-scheme-edit',
-    params: { schemeId: String(schemeId) },
-    query: q,
-  })
 }
 
 function navigateBackToSchemeWithKind() {
-  const schemeId = route.query.schemeId
-  if (schemeId == null || String(schemeId) === '') return
-  const q: Record<string, string> = {
-    bmsKind: String(activeSubTab.value),
+  const schemeId = String(route.query.schemeId ?? '')
+  if (!schemeId && returnName !== 'play-detail') return
+  returnToEntry({ bmsKind: String(activeSubTab.value) })
+}
+
+function newbiePlanInput() {
+  return {
+    principal: newbiePrincipal.value,
+    mode: newbieMode.value,
+    profitType: newbieProfitType.value,
+    rateVal: newbieRateVal.value,
+    fixedVal: newbieFixedVal.value,
+    accumStart: newbieAccumStart.value,
+    accumStep: newbieAccumStep.value,
+    preset: newbieGeneratePreset.value,
   }
-  if (route.query.title != null && String(route.query.title) !== '') {
-    q.title = String(route.query.title)
+}
+
+function oneclickPlanInput() {
+  return {
+    cycle: oneclickCycle.value,
+    profit: oneclickProfit.value,
+    preset: oneclickGeneratePreset.value,
   }
-  if (route.query.lottery != null && String(route.query.lottery) !== '') {
-    q.lottery = String(route.query.lottery)
+}
+
+function buildBetMultiplierPayload(): BetMultiplierPayload {
+  return {
+    kind: activeSubTab.value,
+    newbie: {
+      principal: newbiePrincipal.value,
+      mode: newbieMode.value,
+      profitType: newbieProfitType.value,
+      rateVal: newbieRateVal.value,
+      fixedVal: newbieFixedVal.value,
+      accumStart: newbieAccumStart.value,
+      accumStep: newbieAccumStep.value,
+      generatePreset: newbieGeneratePreset.value,
+      profitTable: newbiePlanRows.value,
+    },
+    oneclick: {
+      cycle: oneclickCycle.value,
+      profit: oneclickProfit.value,
+      generatePreset: oneclickGeneratePreset.value,
+      profitTable: oneclickPlanRows.value,
+    },
+    simple: {
+      multiples: simpleMultiples.value,
+    },
+    advanced: {
+      selectedId: selectedAdvancedId.value,
+    },
   }
-  void router.push({
-    name: 'advanced-scheme-edit',
-    params: { schemeId: String(schemeId) },
-    query: q,
-  })
+}
+
+function applyBetMultiplierPayload(raw: unknown) {
+  if (!raw || typeof raw !== 'object') return
+  const payload = raw as BetMultiplierPayload
+  if (payload.kind === '0' || payload.kind === '1' || payload.kind === '2' || payload.kind === '3') {
+    activeSubTab.value = payload.kind
+  }
+  const nb = payload.newbie as Record<string, unknown> | undefined
+  if (nb) {
+    if (nb.principal != null) newbiePrincipal.value = String(nb.principal)
+    if (typeof nb.mode === 'string') newbieMode.value = nb.mode
+    if (nb.profitType === 'rate' || nb.profitType === 'fixed' || nb.profitType === 'accum') {
+      newbieProfitType.value = nb.profitType
+    }
+    if (nb.rateVal != null) newbieRateVal.value = String(nb.rateVal)
+    if (nb.fixedVal != null) newbieFixedVal.value = String(nb.fixedVal)
+    if (nb.accumStart != null) newbieAccumStart.value = String(nb.accumStart)
+    if (nb.accumStep != null) newbieAccumStep.value = String(nb.accumStep)
+    const gp = nb.generatePreset
+    if (gp === 'line' || gp === 'followStop' || gp === 'suspend1' || gp === 'suspend2') {
+      newbieGeneratePreset.value = gp
+    }
+    const nbTable = nb.profitTable
+    if (Array.isArray(nbTable) && nbTable.length > 0) {
+      newbiePlanRows.value = nbTable as PlanTableRow[]
+    }
+  }
+  const oc = payload.oneclick as Record<string, unknown> | undefined
+  if (oc) {
+    if (oc.cycle != null) oneclickCycle.value = String(oc.cycle)
+    if (oc.profit != null) oneclickProfit.value = String(oc.profit)
+    const ogp = oc.generatePreset
+    if (ogp === 'line' || ogp === 'wave') {
+      oneclickGeneratePreset.value = ogp
+    }
+    const ocTable = oc.profitTable
+    if (Array.isArray(ocTable) && ocTable.length > 0) {
+      oneclickPlanRows.value = ocTable as PlanTableRow[]
+    }
+  }
+  const sm = payload.simple as Record<string, string> | undefined
+  if (sm?.multiples != null) simpleMultiples.value = String(sm.multiples)
+  const adv = payload.advanced as Record<string, string | null> | undefined
+  if (adv?.selectedId) selectedAdvancedId.value = adv.selectedId
+}
+
+async function loadDefinitionBetMultiplier(definitionId: string) {
+  if (isDraftSchemeId(definitionId)) {
+    const draft = loadSchemeDraft()
+    if (draft?.betMultiplier) applyBetMultiplierPayload(draft.betMultiplier)
+    return
+  }
+  try {
+    const def = await getSchemeDefinition(definitionId)
+    applyBetMultiplierPayload(def.config?.betMultiplier)
+  } catch {
+    /* 加载失败保留默认表单 */
+  }
 }
 
 /**
- * 倍投设定本期不在前端做持久化：每次从入口（玩法详情 / 各方案配置）进入都是独立、
- * 全新的编辑会话。点击「确认」时校验通过后提示并返回；后续接入接口后，该数据会随
- * 当前方案一并保存到云端。
+ * 倍投设定：从方案配置进入时持久化到 scheme_definitions.config.betMultiplier
  */
-function onConfirm() {
-  const err = validateBetMultiplier()
-  if (err) {
-    if (route.query.fromScheme === '1') navigateBackToSchemeWithError(err)
-    else ElMessage.error(err)
+function shouldPersistBetMultiplier(): boolean {
+  const schemeId = String(route.query.schemeId ?? '').trim()
+  if (!schemeId) return false
+  if (route.query.fromScheme === '1') return true
+  return returnName === 'scheme-detail' || returnName === 'advanced-scheme-edit'
+}
+
+async function onConfirm() {
+  if (needsBetPlanTable()) {
+    await showParamRequiredDialog('请生成倍投计划')
     return
   }
-  ElMessage.success('已保存倍投方式')
-  if (route.query.fromScheme === '1' && route.query.schemeId != null && String(route.query.schemeId) !== '') {
+  const err = validateBetMultiplier()
+  if (err) {
+    await showParamRequiredDialog(err)
+    return
+  }
+
+  const schemeId = String(route.query.schemeId ?? '').trim()
+  const persist = shouldPersistBetMultiplier()
+
+  if (persist && isDraftSchemeId(schemeId)) {
+    const kind = String(activeSubTab.value) as '0' | '1' | '2' | '3'
+    saveDraftBetMultiplier(route.query as Record<string, unknown>, kind, buildBetMultiplierPayload())
+    ElMessage.success('已保存倍投方式')
+    returnToEntry({ bmsKind: kind })
+    return
+  }
+
+  if (persist) {
+    try {
+      await saveBetMultiplier(schemeId, buildBetMultiplierPayload())
+    } catch (e) {
+      const message = e instanceof ApiError ? e.message : e instanceof Error ? e.message : '保存失败'
+      // 云端中心方案详情：即便保存被拒（如运行中），仍回显所选倍投方式并提示
+      if (returnName === 'scheme-detail') {
+        ElMessage.warning(message)
+        navigateBackToSchemeWithKind()
+        return
+      }
+      showConfirmError(message)
+      return
+    }
+  }
+
+  if (persist) {
+    ElMessage.success('已保存倍投方式')
     navigateBackToSchemeWithKind()
+  } else if (shouldSavePlayDetailShareDock()) {
+    const kind = String(activeSubTab.value) as '0' | '1' | '2' | '3'
+    savePlayDetailShareDock(playDetailShareDockKey(), {
+      entryMode: 'cloud',
+      betMultiplierKind: kind,
+      betMultiplier: buildBetMultiplierPayload(),
+    })
+    ElMessage.success('已确认倍投设定')
+    returnToEntry({ bmsKind: kind })
   } else {
+    ElMessage.success('已确认倍投设定')
     router.back()
   }
 }
@@ -123,7 +345,63 @@ const newbieAccumStep = ref('')
 type NewbieGeneratePreset = 'line' | 'followStop' | 'suspend1' | 'suspend2'
 const newbieGeneratePreset = ref<NewbieGeneratePreset>('line')
 
+const newbiePlanRows = ref<PlanTableRow[]>([])
+const oneclickPlanRows = ref<PlanTableRow[]>([])
+
+// —— 一键倍投 ——
+const oneclickCycle = ref('')
+const oneclickProfit = ref('')
+type OneclickGeneratePreset = 'line' | 'wave'
+const oneclickGeneratePreset = ref<OneclickGeneratePreset>('line')
+
+async function showParamRequiredDialog(message: string): Promise<void> {
+  await confirmDialog({
+    title: '提示',
+    message,
+    tone: 'warning',
+    confirmText: '我知道了',
+    showCancel: false,
+  })
+}
+
+function onGenerateNewbie(preset: NewbieGeneratePreset) {
+  newbieGeneratePreset.value = preset
+  const input = { ...newbiePlanInput(), preset }
+  const err = canGenerateNewbiePlan(input)
+  if (err) {
+    void showParamRequiredDialog(err)
+    return
+  }
+  const rows = generateNewbiePlan(input)
+  if (!rows?.length) {
+    void showParamRequiredDialog('无法生成利润表，请检查上方参数后重试')
+    newbiePlanRows.value = []
+    return
+  }
+  newbiePlanRows.value = rows
+  ElMessage.success('已生成利润表')
+}
+
+function onGenerateOneclick(preset: OneclickGeneratePreset) {
+  oneclickGeneratePreset.value = preset
+  const input = { ...oneclickPlanInput(), preset }
+  const err = canGenerateOneclickPlan(input)
+  if (err) {
+    void showParamRequiredDialog(err)
+    return
+  }
+  const rows = generateOneclickPlan(input)
+  if (!rows?.length) {
+    void showParamRequiredDialog('无法生成利润表，请填写计划周期与收益利润后重试')
+    oneclickPlanRows.value = []
+    return
+  }
+  oneclickPlanRows.value = rows
+  ElMessage.success('已生成利润表')
+}
+
 watch(newbieProfitType, (mode) => {
+  newbiePlanRows.value = []
   if (mode === 'rate') {
     newbieFixedVal.value = ''
     newbieAccumStart.value = ''
@@ -138,50 +416,107 @@ watch(newbieProfitType, (mode) => {
   }
 })
 
-// —— 一键倍投 ——
-const oneclickCycle = ref('')
-const oneclickProfit = ref('')
-/** 一键倍投底部两个一键生成按钮（与小白倍投相同样式与交互形态） */
-type OneclickGeneratePreset = 'line' | 'wave'
-const oneclickGeneratePreset = ref<OneclickGeneratePreset>('line')
+watch(
+  [
+    newbiePrincipal,
+    newbieMode,
+    newbieRateVal,
+    newbieFixedVal,
+    newbieAccumStart,
+    newbieAccumStep,
+    oneclickCycle,
+    oneclickProfit,
+  ],
+  () => {
+    newbiePlanRows.value = []
+    oneclickPlanRows.value = []
+  },
+)
 
 // —— 简单倍投 ——
 const simpleMultiples = ref('1,2,4')
 
-// —— 高级倍投 ——
+// —— 高级倍投（列表由管理后台方案模板库下发） ——
 interface AdvancedScheme {
   id: string
   title: string
+  lotteryCode?: string
+  lotteryLabel?: string
 }
-const advancedSchemes = ref<AdvancedScheme[]>([
-  { id: '1', title: '两期中跟挂停' },
-  { id: '2', title: '三期推波方案' },
-  { id: '3', title: '四期倍投计划' },
-  { id: '4', title: '六期倍投方案' },
-])
+
+const { advancedSchemes: templateSchemes } = useSchemeTemplateLibrary()
+const advancedSchemes = computed(() => templateSchemes.value)
 const selectedAdvancedId = ref<string | null>(null)
 
-function addAdvancedScheme() {
-  const n = advancedSchemes.value.length + 1
-  advancedSchemes.value.push({
-    id: String(Date.now()),
-    title: `新方案 ${n}`,
-  })
-}
+watch(
+  advancedSchemes,
+  (rows) => {
+    if (selectedAdvancedId.value && !rows.some((r) => r.id === selectedAdvancedId.value)) {
+      selectedAdvancedId.value = null
+    }
+  },
+  { immediate: true },
+)
 
 function openAdvancedSchemeEditor(row: AdvancedScheme) {
+  const q: Record<string, string> = { title: encodeURIComponent(row.title) }
+  const ownerSchemeId = String(route.query.schemeId ?? '').trim()
+  if (ownerSchemeId) q.schemeId = ownerSchemeId
+  if (route.query.fromScheme === '1') q.fromScheme = '1'
   router.push({
-    name: 'advanced-scheme-edit',
+    name: 'advanced-scheme-rounds',
     params: { schemeId: row.id },
-    query: { title: encodeURIComponent(row.title) },
+    query: q,
   })
 }
 
-function removeAdvancedScheme(row: AdvancedScheme) {
-  advancedSchemes.value = advancedSchemes.value.filter((item) => item.id !== row.id)
-  if (selectedAdvancedId.value === row.id) selectedAdvancedId.value = null
-  ElMessage.success('已删除方案')
+function onAddAdvancedScheme() {
+  const ownerSchemeId = String(route.query.schemeId ?? '').trim()
+  if (!ownerSchemeId) {
+    ElMessage.warning('缺少方案 ID，无法新增高级倍投方案')
+    return
+  }
+  const q: Record<string, string> = {
+    title: encodeURIComponent('新方案'),
+    newTemplate: '1',
+    schemeId: ownerSchemeId,
+  }
+  if (route.query.fromScheme === '1') q.fromScheme = '1'
+  router.push({
+    name: 'advanced-scheme-rounds',
+    params: { schemeId: 'new' },
+    query: q,
+  })
 }
+
+const showAdvancedAddBtn = computed(() => activeSubTab.value === '3')
+
+/** 高级倍投模板库：有方案 ID 时用该方案；跟单大厅玩法详情无方案 ID 时用平台库 */
+function templateSyncDefinitionId(): string {
+  const schemeId = String(route.query.schemeId ?? '').trim()
+  if (schemeId) return schemeId
+  if (shouldSavePlayDetailShareDock()) return SCHEME_DRAFT_ID
+  return ''
+}
+
+onMounted(() => {
+  const schemeId = String(route.query.schemeId ?? '').trim()
+  startSchemeTemplatesSync(templateSyncDefinitionId())
+  if (schemeId) {
+    void loadDefinitionBetMultiplier(schemeId)
+  } else if (shouldSavePlayDetailShareDock()) {
+    const dock = loadPlayDetailShareDock(playDetailShareDockKey())
+    if (dock?.betMultiplier) applyBetMultiplierPayload(dock.betMultiplier)
+  }
+})
+onUnmounted(stopSchemeTemplatesSync)
+
+watch(
+  () => templateSyncDefinitionId(),
+  (definitionId) => {
+    startSchemeTemplatesSync(definitionId)
+  },
+)
 
 /** 倍投计划表列：仅用 `minWidth`，与全局 el-table 无横滚约定一致（见 DESIGN.md §8） */
 interface PlanTableColumn {
@@ -202,7 +537,11 @@ const tableColumns: PlanTableColumn[] = [
   { prop: 'margin', label: '利润率%', minWidth: 48, overflowEllipsis: true },
 ]
 
-const planTableEmpty = computed(() => [] as Record<string, string>[])
+const planTableData = computed(() => {
+  if (activeSubTab.value === '0') return newbiePlanRows.value
+  if (activeSubTab.value === '1') return oneclickPlanRows.value
+  return []
+})
 
 const showPlanTable = computed(() => activeSubTab.value === '0' || activeSubTab.value === '1')
 </script>
@@ -218,8 +557,14 @@ const showPlanTable = computed(() => activeSubTab.value === '0' || activeSubTab.
         </button>
         <h1 class="bms-title">倍投设定</h1>
         <div class="bms-header-right">
-          <el-button v-if="activeSubTab === '3'" type="primary" class="bms-add-scheme" plain size="small"
-            @click="addAdvancedScheme">
+          <el-button
+            v-if="showAdvancedAddBtn"
+            type="primary"
+            plain
+            size="small"
+            class="bms-add-scheme"
+            @click="onAddAdvancedScheme"
+          >
             新增方案
           </el-button>
         </div>
@@ -275,22 +620,22 @@ const showPlanTable = computed(() => activeSubTab.value === '0' || activeSubTab.
           <div class="bms-action-grid">
             <el-button type="warning" :plain="newbieGeneratePreset !== 'line'"
               :class="['bms-btn-generate', { 'bms-btn-generate--solid': newbieGeneratePreset === 'line' }]"
-              @click="newbieGeneratePreset = 'line'">
+              @click="onGenerateNewbie('line')">
               一键生成<br>直线倍投
             </el-button>
             <el-button type="warning" :plain="newbieGeneratePreset !== 'followStop'"
               :class="['bms-btn-generate', { 'bms-btn-generate--solid': newbieGeneratePreset === 'followStop' }]"
-              @click="newbieGeneratePreset = 'followStop'">
+              @click="onGenerateNewbie('followStop')">
               一键生成<br>中跟挂停
             </el-button>
             <el-button type="warning" :plain="newbieGeneratePreset !== 'suspend1'"
               :class="['bms-btn-generate', { 'bms-btn-generate--solid': newbieGeneratePreset === 'suspend1' }]"
-              @click="newbieGeneratePreset = 'suspend1'">
+              @click="onGenerateNewbie('suspend1')">
               一键生成<br>挂停1期
             </el-button>
             <el-button type="warning" :plain="newbieGeneratePreset !== 'suspend2'"
               :class="['bms-btn-generate', { 'bms-btn-generate--solid': newbieGeneratePreset === 'suspend2' }]"
-              @click="newbieGeneratePreset = 'suspend2'">
+              @click="onGenerateNewbie('suspend2')">
               一键生成<br>挂停2期
             </el-button>
           </div>
@@ -319,7 +664,7 @@ const showPlanTable = computed(() => activeSubTab.value === '0' || activeSubTab.
               type="warning"
               :plain="oneclickGeneratePreset !== 'line'"
               :class="['bms-btn-generate', { 'bms-btn-generate--solid': oneclickGeneratePreset === 'line' }]"
-              @click="oneclickGeneratePreset = 'line'"
+              @click="onGenerateOneclick('line')"
             >
               一键生成(直线)<br>倍投计划
             </el-button>
@@ -327,7 +672,7 @@ const showPlanTable = computed(() => activeSubTab.value === '0' || activeSubTab.
               type="warning"
               :plain="oneclickGeneratePreset !== 'wave'"
               :class="['bms-btn-generate', { 'bms-btn-generate--solid': oneclickGeneratePreset === 'wave' }]"
-              @click="oneclickGeneratePreset = 'wave'"
+              @click="onGenerateOneclick('wave')"
             >
               一键生成(推波)<br>倍投计划
             </el-button>
@@ -348,7 +693,10 @@ const showPlanTable = computed(() => activeSubTab.value === '0' || activeSubTab.
 
       <!-- 高级倍投 -->
       <template v-else>
-        <div class="bms-advanced-list">
+        <p v-if="advancedSchemes.length === 0" class="bms-hint">
+          暂无可用高级倍投模板，请联系运营在管理后台「方案模板库」中创建并启用。
+        </p>
+        <div v-else class="bms-advanced-list">
           <div class="bms-advanced-head">
             <span>方案</span>
             <span>操作</span>
@@ -372,19 +720,13 @@ const showPlanTable = computed(() => activeSubTab.value === '0' || activeSubTab.
                 aria-label="编辑"
                 @click.stop="openAdvancedSchemeEditor(row)"
               />
-              <button
-                type="button"
-                class="bms-icon-btn bms-icon-btn--del"
-                aria-label="删除"
-                @click.stop="removeAdvancedScheme(row)"
-              />
             </div>
           </div>
         </div>
       </template>
 
       <div v-if="showPlanTable" class="table-card" aria-label="倍投计划表">
-        <el-table :data="planTableEmpty" class="detail-bet-table" size="small" stripe empty-text="暂无数据"
+        <el-table :data="planTableData" class="detail-bet-table" size="small" stripe empty-text="暂无数据，请先填写参数并点击一键生成"
           :style="{ width: '100%' }">
           <el-table-column v-for="col in tableColumns" :key="col.prop" :prop="col.prop" :label="col.label"
             :min-width="col.minWidth" header-align="center"
@@ -488,7 +830,9 @@ const showPlanTable = computed(() => activeSubTab.value === '0' || activeSubTab.
 }
 
 .bms-add-scheme {
+  margin: 0;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .bms-main {

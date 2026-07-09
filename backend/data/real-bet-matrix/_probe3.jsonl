@@ -1,0 +1,6 @@
+{"index":0,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"1","label":"直选复式","ruleId":"1","status":"fail","error":"授权已失效，请重新授权","at":"2026-06-25T10:20:02+08:00"}
+
+{"index":1,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"2","label":"直选单式","ruleId":"2","status":"fail","error":"授权已失效，请重新授权","at":"2026-06-25T10:20:03+08:00"}
+
+{"index":2,"lotteryCode":"tron_ffc_1m","typeId":"g001","subId":"3","label":"直选和值","ruleId":"3","status":"fail","error":"授权已失效，请重新授权","at":"2026-06-25T10:20:04+08:00"}
+

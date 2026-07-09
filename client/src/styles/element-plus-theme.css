@@ -11,3 +11,19 @@
   --el-color-primary-light-9: #e6ebfa;
   --el-color-primary-dark-2: #0040a3;
 }
+
+/**
+ * el-dialog / drawer 打开时 lock-scroll 会给 html/body 加 padding-right 与
+ * width: calc(100% - Npx) 补偿滚动条。移动端 H5 通常无可见滚动条，补偿反而
+ * 在右侧留下空白并挤压页面内容（如云端中心「回头设置」弹窗）。
+ */
+html.el-popup-parent--hidden,
+body.el-popup-parent--hidden {
+  padding-right: 0 !important;
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+.el-popup-parent--hidden {
+  overflow: hidden !important;
+}

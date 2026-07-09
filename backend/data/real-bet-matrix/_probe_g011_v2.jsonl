@@ -1,0 +1,38 @@
+{"index":0,"lotteryCode":"bnb_ffc_1m","typeId":"g011","subId":"74","label":"直选复式","ruleId":"74","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注内容格式错误","at":"2026-06-26T09:47:01+08:00"}
+
+{"index":1,"lotteryCode":"bnb_ffc_1m","typeId":"g011","subId":"75","label":"直选单式","ruleId":"75","status":"skip","error":"当前期已封盘","at":"2026-06-26T09:47:04+08:00"}
+
+{"index":2,"lotteryCode":"bnb_ffc_1m","typeId":"g011","subId":"76","label":"直选和值","ruleId":"76","status":"ok","orderNo":"BO11782438427748","issueNo":"10111202606260588","at":"2026-06-26T09:47:07+08:00"}
+
+{"index":3,"lotteryCode":"bnb_ffc_1m","typeId":"g011","subId":"77","label":"组选复式","ruleId":"77","status":"ok","orderNo":"BO11782438431445","issueNo":"10111202606260588","at":"2026-06-26T09:47:11+08:00"}
+
+{"index":4,"lotteryCode":"bnb_ffc_1m","typeId":"g011","subId":"78","label":"组选单式","ruleId":"78","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-26T09:47:15+08:00"}
+
+{"index":5,"lotteryCode":"bnb_ffc_1m","typeId":"g011","subId":"79","label":"组选和值","ruleId":"79","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注数字不合规..","at":"2026-06-26T09:47:18+08:00"}
+
+{"index":6,"lotteryCode":"bnb_ffc_1m","typeId":"g011","subId":"81","label":"直选单式","ruleId":"81","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-26T09:47:21+08:00"}
+
+{"index":7,"lotteryCode":"bnb_ffc_1m","typeId":"g011","subId":"82","label":"直选和值","ruleId":"82","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注数字不合规","at":"2026-06-26T09:47:24+08:00"}
+
+{"index":8,"lotteryCode":"bnb_ffc_1m","typeId":"g011","subId":"83","label":"组三复式","ruleId":"83","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-26T09:47:27+08:00"}
+
+{"index":9,"lotteryCode":"bnb_ffc_1m","typeId":"g011","subId":"84","label":"组三单式","ruleId":"84","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-26T09:47:31+08:00"}
+
+{"index":10,"lotteryCode":"bnb_ffc_1m","typeId":"g011","subId":"85","label":"组六复式","ruleId":"85","status":"ok","orderNo":"BO11782438454575","issueNo":"10111202606260588","at":"2026-06-26T09:47:34+08:00"}
+
+{"index":11,"lotteryCode":"bnb_ffc_1m","typeId":"g011","subId":"86","label":"组六单式","ruleId":"86","status":"fail","error":"第三方接单失败: guaji api code=40000: 投注数字不合规...","at":"2026-06-26T09:47:38+08:00"}
+
+{"index":12,"lotteryCode":"bnb_ffc_1m","typeId":"g011","subId":"87","label":"混合组选","ruleId":"87","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-26T09:47:41+08:00"}
+
+{"index":13,"lotteryCode":"bnb_ffc_1m","typeId":"g011","subId":"88","label":"组选和值","ruleId":"88","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-26T09:47:44+08:00"}
+
+{"index":14,"lotteryCode":"bnb_ffc_1m","typeId":"g011","subId":"141","label":"直选复式","ruleId":"141","status":"fail","error":"第三方接单失败: guaji api code=40000: 单挑参数错误","at":"2026-06-26T09:47:47+08:00"}
+
+{"index":15,"lotteryCode":"bnb_ffc_1m","typeId":"g011","subId":"142","label":"直选单式","ruleId":"142","status":"ok","orderNo":"BO11782438471210","issueNo":"10111202606260588","at":"2026-06-26T09:47:51+08:00"}
+
+{"index":16,"lotteryCode":"bnb_ffc_1m","typeId":"g011","subId":"143","label":"组选24","ruleId":"143","status":"ok","orderNo":"BO11782438475301","issueNo":"10111202606260588","at":"2026-06-26T09:47:54+08:00"}
+
+{"index":17,"lotteryCode":"bnb_ffc_1m","typeId":"g011","subId":"144","label":"组选12","ruleId":"144","status":"ok","orderNo":"BO11782438478968","issueNo":"10111202606260588","at":"2026-06-26T09:47:58+08:00"}
+
+{"index":18,"lotteryCode":"bnb_ffc_1m","typeId":"g011","subId":"145","label":"组选6","ruleId":"145","status":"skip","error":"当前期已封盘","at":"2026-06-26T09:48:02+08:00"}
+

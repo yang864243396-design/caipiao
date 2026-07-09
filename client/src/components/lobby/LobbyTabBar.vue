@@ -2,10 +2,22 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 
-/** 底栏三项占位图，可分别改为不同 PNG 路径 */
-const TAB_ICON_SRC = '/images/lobby/icon-placeholder.png'
+/** 底栏三项图标 */
+const TAB_ICONS = {
+  lobby: '/images/lobby/tab-lobby.png',
+  cloud: '/images/lobby/tab-cloud.png',
+  member: '/images/lobby/tab-member.png',
+} as const
 
 const route = useRoute()
+
+/** 仅主 Tab 页展示底栏；会员中心次级页隐藏 */
+const visible = computed(() => {
+  const path = route.path
+  if (path === '/' || path === '/cloud' || path === '/member') return true
+  return false
+})
+
 const key = computed(() => {
   if (route.path.startsWith('/cloud')) return 'cloud'
   if (route.path.startsWith('/member')) return 'member'
@@ -14,14 +26,14 @@ const key = computed(() => {
 </script>
 
 <template>
-  <nav class="bottom" aria-label="底部导航">
+  <nav v-if="visible" class="bottom" aria-label="底部导航">
     <RouterLink
       to="/"
       class="nav-item"
       :class="{ active: key === 'lobby' }"
     >
       <img
-        :src="TAB_ICON_SRC"
+        :src="TAB_ICONS.lobby"
         alt=""
         width="24"
         height="24"
@@ -36,7 +48,7 @@ const key = computed(() => {
       :class="{ active: key === 'cloud' }"
     >
       <img
-        :src="TAB_ICON_SRC"
+        :src="TAB_ICONS.cloud"
         alt=""
         width="24"
         height="24"
@@ -51,7 +63,7 @@ const key = computed(() => {
       :class="{ active: key === 'member' }"
     >
       <img
-        :src="TAB_ICON_SRC"
+        :src="TAB_ICONS.member"
         alt=""
         width="24"
         height="24"

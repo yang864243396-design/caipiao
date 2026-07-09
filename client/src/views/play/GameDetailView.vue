@@ -1,101 +1,375 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { formatClientApiError } from '@/utils/guajiError'
+import {
+  contraryBet,
+  shareAddToCloud,
+  shareFollowBet,
+} from '@/api/schemes/shareAddToCloud'
+import type { BetMultiplierPayload } from '@/api/schemes/betMultiplier'
+import {
+  loadPlayDetailShareDock,
+  savePlayDetailShareDock,
+} from '@/utils/playDetailShareDock'
+import {
+  addSchemeFavorite,
+  fetchSchemeFavorites,
+  removeSchemeFavorite,
+} from '@/api/schemes/favorites'
+import {
+  gameDetailCountdownDisplayFields,
+  gameDetailCountdownText,
+  mergeGameDetailCountdownOnPoll,
+  SCHEME_COUNTDOWN_WAITING_LABEL,
+  thirdPartyPeriodDisplay,
+} from '@/api/cloud/center'
+import {
+  fetchGameDetail,
+  fetchGameDraws,
+  placeGameBet,
+  type GameBetRecordDto,
+  type GameBettingRow,
+  type GamePlanTrendChartPoint,
+  type GamePlanTrendRow,
+} from '@/api/games/detail'
+import { fetchPlayTree } from '@/api/games/lotteries'
+import { fetchGuajiBalance } from '@/api/guaji/accounts'
+import type { PlayTreeResponse } from '@/types/playCatalog'
+import {
+  buildGameBetPayload,
+  buildGroupContent,
+  countBetUnits,
+  resolvePlayConfig,
+  seedDigitsFromNumbers,
+  type PlayConfig,
+} from '@/utils/betPayload'
+import {
+  digitOptionsForConfig,
+  textPickOptionsForConfig,
+} from '@/utils/pickPanelOptions'
+import {
+  defaultPlaySelection,
+  findSubPlay,
+  formatSubPlayLabel,
+  resolvePlayConfigFromTree,
+  type PlayTreePlayConfig,
+} from '@/utils/playConfig'
+import {
+  LHC_NUMBERS,
+  LHC_TAIL_OPTIONS,
+  LHC_ZODIACS,
+  lhcAttrOptions,
+} from '@/constants/lhcPlay'
+import { BET_MODE_OPTIONS } from '@/constants/betModeOptions'
+import { demoAppBrand } from '@/demo/demoAccount'
+import { startGameDrawSync } from '@/composables/useGameDrawSync'
+import type { WsDrawResultPayload } from '@shared/types/ws'
 
 const route = useRoute()
 const router = useRouter()
 
-/** 详情页图标占位 PNG，可按位置改为不同资源 */
-const ICON_PLACEHOLDER = '/images/lobby/icon-placeholder.png'
+const ICON_BACK = '/images/lobby/icon-back.png'
+const ICON_TIMER = '/images/lobby/icon-timer.png'
+const ICON_DRAG = '/images/lobby/icon-drag-handle.png'
+
+function isLhcLotteryCode(code: string): boolean {
+  return code.includes('lhc')
+}
 
 const pageTitle = computed(() => {
   const raw = route.query.scheme as string | undefined
   if (raw) return decodeURIComponent(raw)
-  return '禄螭万位 - 定位胆万位'
+  return isLhcLotteryCode(lotteryCode.value) ? '特码方案 - 特码A' : '禄螭万位 - 定位胆万位'
 })
+
+const snapshotId = computed(() => String(route.query.snapshotId ?? '').trim())
+const lotteryCode = computed(() => String(route.query.lotteryCode ?? 'tron_ffc_1m').trim())
+const playMethodQuery = computed(() => String(route.query.playMethod ?? '').trim())
+const playTypeId = computed(() =>
+  String(route.query.typeId ?? route.query.playTypeId ?? '').trim(),
+)
+const subPlayId = computed(() =>
+  String(route.query.subId ?? route.query.subPlayId ?? '').trim(),
+)
+
+const playTree = ref<PlayTreeResponse | null>(null)
+const playTreeLoading = ref(false)
+const selectedTypeId = ref('')
+const selectedSubId = ref('')
+
+const activePlaySelection = computed(() => {
+  if (!playTree.value) return null
+  const typeId = selectedTypeId.value
+  const subId = selectedSubId.value
+  if (!typeId || !subId) return null
+  return findSubPlay(playTree.value, typeId, subId)
+})
+
+const playMethod = computed(() => {
+  if (activePlaySelection.value) return activePlaySelection.value.subNode.label
+  if (playMethodQuery.value) return playMethodQuery.value
+  return isLhcLotteryCode(lotteryCode.value) ? '特码A' : '一星定位胆 · 万位'
+})
+
+const playConfig = computed((): PlayConfig | PlayTreePlayConfig => {
+  const sel = activePlaySelection.value
+  if (sel && playTree.value) {
+    return resolvePlayConfigFromTree(
+      playTree.value.playTemplate,
+      sel.typeNode,
+      sel.subNode,
+    )
+  }
+  return resolvePlayConfig({
+    playMethod: playMethod.value,
+    playTypeId: playTypeId.value || undefined,
+    subPlayId: subPlayId.value || undefined,
+  })
+})
+
+const activePlayTypes = computed(() => playTree.value?.playTypes ?? [])
+const activeSubPlays = computed(() => {
+  const typeId = selectedTypeId.value
+  if (!typeId || !playTree.value) return []
+  return playTree.value.playTypes.find((t) => t.typeId === typeId)?.subPlays ?? []
+})
+
+/** 跟单大厅等带 snapshot / 玩法 ID 进入时，投注 Tab 不展示完整玩法树 */
+const isPlaySelectionLocked = computed(
+  () =>
+    Boolean(snapshotId.value) ||
+    (Boolean(playTypeId.value) && Boolean(subPlayId.value)),
+)
+const showBetTabPlayPicker = computed(
+  () => !isPlaySelectionLocked.value && activePlayTypes.value.length > 0,
+)
+
+const pickDigits = ref<string[]>(['1', '3', '7'])
+const pickLines = ref<string[][]>([])
+const danshiInput = ref('')
+
+const isLhcTemplate = computed(() => playTree.value?.playTemplate === 'lhc_std')
+
+const lhcDanshiPlaceholder = computed(() => {
+  const mode = playConfig.value.betMode ?? ''
+  if (mode === 'tuotou') return '拖头：胆码|拖码，如 01,02|03,04,05'
+  if (mode.endsWith('_dp')) return '对碰：A组|B组，生肖如 马|龙 或号码如 01,02|03,04'
+  if (mode === 'guoguan') return '过关：大,单,双 等，逗号分隔'
+  if (isLhcTemplate.value) return '输入选号，逗号分隔'
+  return '每行或逗号分隔，如 392,123'
+})
+
+const lhcPickOptions = computed((): readonly string[] => {
+  const cfg = playConfig.value
+  if (cfg.inputMode === 'lhc_zodiac') return LHC_ZODIACS
+  if (cfg.inputMode === 'lhc_tail') return LHC_TAIL_OPTIONS
+  if (cfg.inputMode === 'lhc_attr') {
+    return lhcAttrOptions(cfg.betMode ?? '', 'lhc_attr')
+  }
+  return LHC_NUMBERS
+})
+
+function initManualPicks(cfg: PlayConfig = playConfig.value) {
+  if (snapshotId.value) return
+  if (cfg.inputMode === 'multiline') {
+    pickLines.value = cfg.segmentLabels.map(() => ['0'])
+    return
+  }
+  if (cfg.inputMode === 'danshi') {
+    danshiInput.value = isLhcTemplate.value ? '大,单' : '0'.repeat(cfg.segmentLen)
+    return
+  }
+  if (cfg.inputMode === 'lhc_num') {
+    pickDigits.value = ['01', '13', '25']
+    return
+  }
+  if (cfg.inputMode === 'lhc_zodiac') {
+    pickDigits.value = ['马', '龙']
+    return
+  }
+  if (cfg.inputMode === 'lhc_tail') {
+    pickDigits.value = ['0', '5']
+    return
+  }
+  if (cfg.inputMode === 'lhc_attr') {
+    const opts = lhcAttrOptions(cfg.betMode ?? '', 'lhc_attr')
+    pickDigits.value = opts.length ? [opts[0]!] : ['红']
+    return
+  }
+  const opts = textPickOptions.value
+  if (opts.length) {
+    pickDigits.value = [opts[0]!]
+    danshiInput.value = opts[0]!
+    return
+  }
+  const seed = bettingRows.value[0]?.numbers
+  const defaults = digitOptions.value.slice(1, 4)
+  pickDigits.value = seed ? seedDigitsFromNumbers(seed) : defaults.length ? defaults : ['1', '3', '7']
+}
+
+function togglePickDigit(d: string) {
+  const set = new Set(pickDigits.value)
+  if (set.has(d)) set.delete(d)
+  else set.add(d)
+  pickDigits.value = [...set].sort()
+}
+
+function toggleLineDigit(lineIndex: number, d: string) {
+  const lines = pickLines.value.map((line) => [...line])
+  while (lines.length < playConfig.value.segmentLen) {
+    lines.push([])
+  }
+  const line = new Set(lines[lineIndex] ?? [])
+  if (line.has(d)) line.delete(d)
+  else line.add(d)
+  lines[lineIndex] = [...line].sort()
+  pickLines.value = lines
+}
+
+function isLineDigitSelected(lineIndex: number, d: string) {
+  return (pickLines.value[lineIndex] ?? []).includes(d)
+}
+
+const manualGroupContent = computed(() =>
+  buildGroupContent(playConfig.value, {
+    digits: pickDigits.value,
+    lines: pickLines.value,
+    danshi: danshiInput.value,
+  }),
+)
+
+const digitOptions = computed(() => digitOptionsForConfig(playConfig.value))
+const textPickOptions = computed(() => textPickOptionsForConfig(playConfig.value))
+const actionLoading = ref(false)
+const detailLoading = ref(false)
+
+const currentIssue = ref('')
+const nextIssue = ref('')
+const countdownSec = ref(0)
+const countdownEndTime = ref('')
+const countdownPeriod = ref('')
+const countdownLabel = ref('')
+const countdownDisplay = computed(() =>
+  gameDetailCountdownText({
+    countdownEndTime: countdownEndTime.value,
+    countdownPeriod: countdownPeriod.value,
+    lotteryCode: lotteryCode.value,
+    countdownSec: countdownSec.value,
+    countdownLabel: countdownLabel.value,
+  }),
+)
+
+/** 顶部开奖区期号展示（去掉第三方前缀 101 等，保留完整期号供下注） */
+const displayCurrentIssue = computed(() => thirdPartyPeriodDisplay(currentIssue.value))
+const displayNextIssue = computed(() => thirdPartyPeriodDisplay(nextIssue.value))
+
+function schemeNameFromRoute(): string {
+  const raw = route.query.scheme as string | undefined
+  if (!raw) return ''
+  try {
+    return decodeURIComponent(raw).split(' - ')[0]?.trim() ?? ''
+  } catch {
+    return String(raw).split(' - ')[0]?.trim() ?? ''
+  }
+}
 
 watch(
   pageTitle,
   (t) => {
-    document.title = `游戏详情 · ${t} · 精密终端`
+    document.title = `游戏详情 · ${t} · ${demoAppBrand}`
   },
   { immediate: true }
 )
 
-const tab = ref(0)
+/** Tab 值与 el-radio-button :value 同型（字符串），避免 Android WebView 原生 radio 值类型不一致 */
+type DetailTabId = '0' | '1' | '2' | '3' | '4'
+const tab = ref<DetailTabId>('0')
 const tabLabels = ['投注', '计划反集', '计划走势', '历史开奖', '投注记录'] as const
 
-/** 计划反集：号码串与注数（接口对接时替换） */
-const planInverseDigits = ref('xxx,xxx,xxx,xxx,xxx')
-const planInverseBetCount = ref(3)
+/** 计划反集：号码串与注数（由详情接口 planInverseDigits / planInverseBetCount 填充） */
+const planInverseDigits = ref('')
+const planInverseBetCount = ref(0)
 
-/** 计划走势：走势注数、更新时间、折线点、期号横轴、近期中挂 */
-const planTrendGroupBets = ref(7)
-const planTrendChartLineD =
-  'M 0 60 L 5.26 40 L 10.53 80 L 15.79 20 L 21.05 60 L 26.32 40 L 31.58 0 L 36.84 80 L 42.11 100 L 47.37 60 L 52.63 20 L 57.89 40 L 63.16 80 L 68.42 60 L 73.68 20 L 78.95 0 L 84.21 40 L 89.47 80 L 94.74 100 L 100 60'
-const planTrendChartAreaD =
-  'M 0 60 L 5.26 40 L 10.53 80 L 15.79 20 L 21.05 60 L 26.32 40 L 31.58 0 L 36.84 80 L 42.11 100 L 47.37 60 L 52.63 20 L 57.89 40 L 63.16 80 L 68.42 60 L 73.68 20 L 78.95 0 L 84.21 40 L 89.47 80 L 94.74 100 L 100 60 V 100 H 0 Z'
+/** 快照方案投注区推演（由详情接口 scheme* 字段填充） */
+const schemeBetUnit = ref(0)
+const schemeBetMultiplier = ref(1)
+const schemeBetUnits = ref(0)
+const schemeContraryBetUnits = ref(0)
+const schemePickDigits = ref('')
+const estimatedPrize = ref(0)
+const contraryEstimatedPrize = ref(0)
 
-const planTrendDots = [
-  { left: 0, top: 60, hit: true },
-  { left: 5.26, top: 40, hit: false },
-  { left: 10.53, top: 80, hit: true },
-  { left: 15.79, top: 20, hit: false },
-  { left: 21.05, top: 60, hit: true },
-  { left: 26.32, top: 40, hit: false },
-  { left: 31.58, top: 0, hit: false },
-  { left: 36.84, top: 80, hit: true },
-  { left: 42.11, top: 100, hit: true },
-  { left: 47.37, top: 60, hit: false },
-  { left: 52.63, top: 20, hit: false },
-  { left: 57.89, top: 40, hit: true },
-  { left: 63.16, top: 80, hit: true },
-  { left: 68.42, top: 60, hit: false },
-  { left: 73.68, top: 20, hit: false },
-  { left: 78.95, top: 0, hit: false },
-  { left: 84.21, top: 40, hit: true },
-  { left: 89.47, top: 80, hit: true },
-  { left: 94.74, top: 100, hit: true },
-  { left: 100, top: 60, hit: false },
-] as const
+/** 计划走势：走势注数、折线点、期号横轴、近期中挂（由详情接口填充） */
+const PLAN_TREND_HISTORY_INITIAL = 20
+const PLAN_TREND_HISTORY_MAX = 100
+const planTrendGroupBets = ref(0)
+const planTrendChartPoints = ref<GamePlanTrendChartPoint[]>([])
+const planTrendHistoryRows = ref<GamePlanTrendRow[]>([])
+const planTrendHistoryVisibleCount = ref(PLAN_TREND_HISTORY_INITIAL)
 
-const planTrendXLabels = [
-  { text: '001', show: true },
-  { text: '002', show: false },
-  { text: '003', show: true },
-  { text: '004', show: false },
-  { text: '005', show: true },
-  { text: '006', show: false },
-  { text: '007', show: true },
-  { text: '008', show: false },
-  { text: '009', show: true },
-  { text: '010', show: false },
-  { text: '011', show: true },
-  { text: '012', show: false },
-  { text: '013', show: true },
-  { text: '014', show: false },
-  { text: '015', show: true },
-  { text: '016', show: false },
-  { text: '017', show: true },
-  { text: '018', show: false },
-  { text: '019', show: true },
-  { text: '020', show: false },
-] as const
+function buildPlanTrendChartView(points: readonly GamePlanTrendChartPoint[]) {
+  if (!points.length) {
+    return {
+      lineD: '',
+      areaD: '',
+      dots: [] as { left: number; top: number; hit: boolean }[],
+      xLabels: [] as { text: string; show: boolean }[],
+      yTicks: [] as { label: string; top: number }[],
+    }
+  }
+  const scores = points.map((p) => p.round)
+  let min = Math.min(...scores)
+  let max = Math.max(...scores)
+  if (min === max) {
+    min -= 1
+    max += 1
+  }
+  const domainMin = Math.floor(min)
+  const domainMax = Math.ceil(max)
+  const domainRange = domainMax - domainMin || 1
 
-const planTrendHistoryRows = [
-  { period: '032', win: false },
-  { period: '029 - 031', win: true },
-  { period: '028', win: false },
-  { period: '025 - 027', win: true },
-  { period: '024', win: false },
-  { period: '021 - 023', win: true },
-] as const
+  const valueToTop = (value: number) =>
+    ((domainMax - value) / domainRange) * 100
 
-/** 历史开奖：子 Tab 与列表（接口对接时替换） */
+  const step = Math.max(1, Math.ceil(domainRange / 5))
+  const tickValues: number[] = []
+  for (let v = domainMax; v >= domainMin; v -= step) {
+    tickValues.push(v)
+  }
+  if (tickValues[tickValues.length - 1] !== domainMin) {
+    tickValues.push(domainMin)
+  }
+
+  const yTicks = tickValues.map((value) => ({
+    label: String(value),
+    top: valueToTop(value),
+  }))
+
+  const dots = points.map((p, i) => {
+    const left = points.length <= 1 ? 50 : (i / (points.length - 1)) * 100
+    const top = valueToTop(p.round)
+    return { left, top, hit: p.win }
+  })
+  const lineCoords = dots.map((d) => `${d.left} ${d.top}`)
+  const lineD = `M ${lineCoords.join(' L ')}`
+  const areaD = `${lineD} V 100 H 0 Z`
+  const xLabels = points.map((p, i) => ({
+    text: p.period,
+    show: i % 2 === 0 || points.length <= 8,
+  }))
+  return { lineD, areaD, dots, xLabels, yTicks }
+}
+
+const planTrendChartView = computed(() => buildPlanTrendChartView(planTrendChartPoints.value))
+
+/** 历史开奖：子 Tab 与列表 */
 const historySubTabLabels = ['号码', '大小', '单双', '龙虎', '总和'] as const
-const historySubTab = ref(0)
+type HistorySubTabId = '0' | '1' | '2' | '3' | '4'
+const historySubTab = ref<HistorySubTabId>('0')
 
-const historyGameTag = '腾讯分分彩'
+const historyGameTag = ref('')
 
 interface HistoryDrawRecord {
   periodShort: string
@@ -104,32 +378,8 @@ interface HistoryDrawRecord {
   sum: number
 }
 
-const historyDrawRecords: readonly HistoryDrawRecord[] = [
-  {
-    periodShort: '031',
-    time: '2023-10-27 12:40:00',
-    balls: ['3', '9', '2', '7', '5'],
-    sum: 26,
-  },
-  {
-    periodShort: '030',
-    time: '2023-10-27 12:35:00',
-    balls: ['8', '1', '0', '6', '4'],
-    sum: 19,
-  },
-  {
-    periodShort: '029',
-    time: '2023-10-27 12:30:00',
-    balls: ['4', '5', '5', '1', '8'],
-    sum: 23,
-  },
-  {
-    periodShort: '028',
-    time: '2023-10-27 12:25:00',
-    balls: ['2', '2', '9', '0', '3'],
-    sum: 16,
-  },
-]
+const historyDrawRecords = ref<HistoryDrawRecord[]>([])
+const historyDrawsLoading = ref(false)
 
 const HISTORY_DT_LABELS = ['万千', '万百', '万十', '万个', '千百', '千十', '千个', '百十', '百个', '十个'] as const
 
@@ -175,7 +425,21 @@ function historyParityDigit(ball: string): '单' | '双' {
 }
 
 const betMultiplier = ref(1)
-const betMode = ref('2元')
+const betMode = ref('2')
+
+/** 倍投设定 Tab 与中文名称（与 BetMultiplierSettingsView 一致） */
+const BET_MULTIPLIER_KIND_LABELS: Record<string, string> = {
+  '0': '小白倍投',
+  '1': '一键倍投',
+  '2': '简单倍投',
+  '3': '高级倍投',
+}
+const betMultiplierKind = ref<'' | '0' | '1' | '2' | '3'>('')
+const betMultiplierPayload = ref<BetMultiplierPayload | undefined>()
+const betMultiplierError = ref('')
+const betMultiplierSelectedLabel = computed(() =>
+  betMultiplierKind.value ? (BET_MULTIPLIER_KIND_LABELS[betMultiplierKind.value] ?? '') : '',
+)
 
 /** 投注区面板展开（把手点击切换） */
 const betDockOpen = ref(true)
@@ -183,86 +447,354 @@ const betDockOpen = ref(true)
 /** 投注区入口：手动下注（手机） / 云端挂机 */
 const betDockEntryMode = ref<'manual' | 'cloud'>('manual')
 
+const dockConfirmLabel = computed(() => {
+  if (tab.value === '1') return '确认投注'
+  if (betDockEntryMode.value === 'cloud') return '添加至云端'
+  return '确认投注'
+})
+
 function toggleBetDockEntryMode() {
   betDockEntryMode.value = betDockEntryMode.value === 'manual' ? 'cloud' : 'manual'
+  persistShareDockState()
+}
+
+function shareDockStorageKey() {
+  return snapshotId.value || '__no_snapshot__'
+}
+
+function persistShareDockState() {
+  savePlayDetailShareDock(shareDockStorageKey(), {
+    entryMode: betDockEntryMode.value,
+    betMultiplierKind: betMultiplierKind.value,
+    betMultiplier: betMultiplierPayload.value,
+  })
+}
+
+function loadShareDockBetMultiplier() {
+  const dock = loadPlayDetailShareDock(shareDockStorageKey())
+  if (!dock) return
+  if (dock.entryMode === 'manual' || dock.entryMode === 'cloud') {
+    betDockEntryMode.value = dock.entryMode
+  }
+  if (dock.betMultiplierKind) betMultiplierKind.value = dock.betMultiplierKind
+  if (dock.betMultiplier) betMultiplierPayload.value = dock.betMultiplier
+}
+
+function buildPlayDetailRouteQuery(): Record<string, string> {
+  const q: Record<string, string> = {}
+  for (const [key, val] of Object.entries(route.query)) {
+    const v = Array.isArray(val) ? val[0] : val
+    if (v != null && String(v) !== '') q[key] = String(v)
+  }
+  return q
+}
+
+function stripBetMultiplierRouteQuery() {
+  const q = buildPlayDetailRouteQuery()
+  delete q.bmsKind
+  delete q.bmsError
+  void router.replace({ query: q })
+}
+
+function applyBetMultiplierFromRoute() {
+  const rawKind = route.query.bmsKind
+  const kind = String(Array.isArray(rawKind) ? rawKind[0] : (rawKind ?? '')).trim()
+  if (kind === '0' || kind === '1' || kind === '2' || kind === '3') {
+    betMultiplierKind.value = kind
+    betMultiplierError.value = ''
+    loadShareDockBetMultiplier()
+    betDockEntryMode.value = 'cloud'
+    persistShareDockState()
+    stripBetMultiplierRouteQuery()
+    return
+  }
+  const rawErr = route.query.bmsError
+  const errRaw = String(Array.isArray(rawErr) ? rawErr[0] : (rawErr ?? '')).trim()
+  if (!errRaw) return
+  try {
+    betMultiplierError.value = decodeURIComponent(errRaw)
+  } catch {
+    betMultiplierError.value = errRaw
+  }
+  betMultiplierKind.value = ''
+  stripBetMultiplierRouteQuery()
 }
 
 function goBetMultiplierSettings() {
-  router.push({ name: 'bet-multiplier-settings' })
+  betMultiplierError.value = ''
+  persistShareDockState()
+  const q: Record<string, string> = {
+    ...buildPlayDetailRouteQuery(),
+    returnName: 'play-detail',
+    ...(betMultiplierKind.value ? { activeTab: betMultiplierKind.value } : {}),
+  }
+  delete q.bmsKind
+  delete q.bmsError
+  void router.push({ name: 'bet-multiplier-settings', query: q })
 }
 
-/** 开奖展示：drawing=开奖中；drawn=已开出，展示 {@link drawnNumbers} */
+async function onDockConfirm() {
+  if (actionLoading.value) return
+
+  if (tab.value === '1') {
+    if (!planInverseDigits.value.trim()) {
+      ElMessage.warning('计划反集号码为空')
+      return
+    }
+    actionLoading.value = true
+    try {
+      const cfg = playConfig.value
+      await contraryBet({
+        lotteryCode: lotteryCode.value,
+        planInverseNumbers: planInverseDigits.value.trim(),
+        playMethod: playMethod.value || undefined,
+        playTemplate: playTree.value?.playTemplate,
+        typeId: 'typeId' in cfg ? cfg.typeId : selectedTypeId.value || undefined,
+        subId: 'subId' in cfg ? cfg.subId : selectedSubId.value || undefined,
+      })
+      ElMessage.success('反买投注成功，方案已运行')
+      void router.push({ name: 'cloud' })
+    } catch (e) {
+      await handleBetError(e)
+    } finally {
+      actionLoading.value = false
+    }
+    return
+  }
+
+  if (tab.value !== '0') {
+    ElMessage.info('当前 Tab 不支持此操作')
+    return
+  }
+
+  if (!snapshotId.value) {
+    if (betDockEntryMode.value !== 'manual') {
+      ElMessage.warning('缺少分享方案信息，请从跟单大厅进入')
+      return
+    }
+    if (selectedBetCount.value <= 0) {
+      ElMessage.warning('请先选择有效号码')
+      return
+    }
+    actionLoading.value = true
+    try {
+      const pm = playMethod.value || '一星定位胆 · 万位'
+      const cfg = playConfig.value
+      await placeGameBet(lotteryCode.value, {
+        issueNo: nextIssue.value,
+        amount: estimatedBetAmount.value,
+        multiplier: betMultiplier.value,
+        betMode: betMode.value,
+        playMethod: pm,
+        runMode: 'real',
+        betPayload: buildGameBetPayload(pm, manualGroupContent.value, {
+          playTemplate: playTree.value?.playTemplate,
+          typeId: 'typeId' in cfg ? cfg.typeId : playTypeId.value || undefined,
+          subId: 'subId' in cfg ? cfg.subId : subPlayId.value || undefined,
+        }),
+      })
+      ElMessage.success('投注成功')
+      void loadGameDetail()
+      void refreshDockBalance()
+    } catch (e) {
+      await handleBetError(e)
+    } finally {
+      actionLoading.value = false
+    }
+    return
+  }
+
+  actionLoading.value = true
+  try {
+    if (betDockEntryMode.value === 'cloud') {
+      if (!betMultiplierKind.value || !betMultiplierPayload.value) {
+        ElMessage.warning('请先设置倍投模式')
+        return
+      }
+      await shareAddToCloud(snapshotId.value, {
+        betMultiplier: betMultiplierPayload.value as unknown as Record<string, unknown>,
+      })
+      savePlayDetailShareDock(shareDockStorageKey(), {
+        entryMode: 'cloud',
+        betMultiplierKind: betMultiplierKind.value,
+        betMultiplier: betMultiplierPayload.value,
+      })
+      ElMessage.success('已添加至云端，请手动开启')
+    } else {
+      const cfg = playConfig.value
+      await shareFollowBet(snapshotId.value, {
+        lotteryCode: lotteryCode.value,
+        playMethod: playMethod.value || undefined,
+        playTemplate: playTree.value?.playTemplate,
+        typeId: 'typeId' in cfg ? cfg.typeId : selectedTypeId.value || undefined,
+        subId: 'subId' in cfg ? cfg.subId : selectedSubId.value || undefined,
+      })
+      ElMessage.success('跟单投注成功，方案已运行')
+    }
+    void router.push({ name: 'cloud' })
+  } catch (e) {
+    await handleBetError(e, '操作失败')
+  } finally {
+    actionLoading.value = false
+  }
+}
+
+/** 开奖展示：drawing=等待开奖；drawn=已开出，展示 {@link drawnNumbers} */
 const drawPhase = ref<'drawing' | 'drawn'>('drawing')
 
-/** 玩法收藏（后续可对接接口同步） */
+/** 玩法收藏（仅跟单大厅来源，按 snapshotId 同步后端） */
 const isFavorite = ref(false)
-function toggleFavorite() {
-  isFavorite.value = !isFavorite.value
+const favoritePending = ref(false)
+
+async function loadFavoriteState() {
+  if (!snapshotId.value) return
+  try {
+    const rows = await fetchSchemeFavorites()
+    isFavorite.value = rows.some((r) => r.snapshotId === snapshotId.value)
+  } catch {
+    // 收藏状态拉取失败不影响页面其他功能
+  }
 }
 
-/** 已开奖时的 5 个号码（两位字符串，由接口赋值） */
-const drawnNumbers = ref<readonly string[]>(['0', '1', '9', '2', '3'])
-
-const tableRows = [
-  { time: '031-032', scheme: '禄螭万位', numbers: '1 3 7', period: '031', draw: '1 6 5 8 3', win: true },
-  { time: '030-031', scheme: '禄螭万位', numbers: '4 5 9', period: '030', draw: '2 4 9 1 5', win: false },
-  { time: '029-030', scheme: '禄螭万位', numbers: '2 8 9', period: '029', draw: '3 7 8 4 9', win: true },
-  { time: '028-029', scheme: '禄螭万位', numbers: '1 2 5', period: '028', draw: '0 1 7 2 1', win: true },
-  { time: '027-028', scheme: '禄螭万位', numbers: '3 6 0', period: '027', draw: '2 8 3 5 5', win: false },
-  { time: '026-027', scheme: '禄螭万位', numbers: '1 9 1', period: '026', draw: '6 4 0 3 7', win: true },
-  { time: '025-026', scheme: '禄螭万位', numbers: '4 7 2', period: '025', draw: '5 9 8 1 2', win: false },
-] as const
-
-const bettingTableList = computed(() => [...tableRows])
-const planTrendHistoryList = computed(() => [...planTrendHistoryRows])
-
-/** 投注记录：期数、玩法、倍数、轮次、金额、盈亏、状态（接口对齐字段） */
-interface BetRecordRow {
-  /** 期数 */
-  period: string
-  /** 玩法 */
-  playMethod: string
-  /** 倍数 */
-  multiplier: string
-  /** 轮次 */
-  round: string
-  /** 金额（元） */
-  amount: string
-  /** 盈亏：正数为盈，负数为亏，0 为走水/未结 */
-  profitLoss: number
-  /** 状态 */
-  status: string
+async function toggleFavorite() {
+  if (!snapshotId.value || favoritePending.value) return
+  favoritePending.value = true
+  try {
+    if (isFavorite.value) {
+      await removeSchemeFavorite(snapshotId.value)
+      isFavorite.value = false
+      ElMessage.success('已取消收藏')
+    } else {
+      await addSchemeFavorite(snapshotId.value)
+      isFavorite.value = true
+      ElMessage.success('已收藏，可在内置计画方案中跟投')
+    }
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '操作失败')
+  } finally {
+    favoritePending.value = false
+  }
 }
 
-const betRecordRows = ref<BetRecordRow[]>([
-  {
-    period: '20231103032',
-    playMethod: '禄螭万位',
-    multiplier: '2',
-    round: '1',
-    amount: '12.00',
-    profitLoss: 88.5,
-    status: '已结算',
-  },
-  {
-    period: '20231103031',
-    playMethod: '禄螭万位',
-    multiplier: '1',
-    round: '2',
-    amount: '6.00',
-    profitLoss: -6.0,
-    status: '已结算',
-  },
-  {
-    period: '20231103033',
-    playMethod: '禄螭万位',
-    multiplier: '5',
-    round: '1',
-    amount: '30.00',
-    profitLoss: 0,
-    status: '待开奖',
-  },
-])
+function resetSchemeDock() {
+  schemeBetUnit.value = 0
+  schemeBetMultiplier.value = 1
+  schemeBetUnits.value = 0
+  schemeContraryBetUnits.value = 0
+  schemePickDigits.value = ''
+  estimatedPrize.value = 0
+  contraryEstimatedPrize.value = 0
+}
+
+function applySchemeDockFromDetail(detail: Awaited<ReturnType<typeof fetchGameDetail>>) {
+  if (!snapshotId.value) {
+    resetSchemeDock()
+    return
+  }
+  schemeBetUnit.value = detail.schemeBetUnit ?? 0
+  schemeBetMultiplier.value = detail.schemeBetMultiplier ?? 1
+  schemeBetUnits.value = detail.schemeBetUnits ?? 0
+  schemeContraryBetUnits.value = detail.schemeContraryBetUnits ?? 0
+  schemePickDigits.value = detail.schemePickDigits ?? ''
+  estimatedPrize.value = detail.estimatedPrize ?? 0
+  contraryEstimatedPrize.value = detail.contraryEstimatedPrize ?? 0
+  if (schemeBetUnit.value > 0) {
+    betMode.value = String(schemeBetUnit.value)
+  }
+  if (schemeBetMultiplier.value > 0) {
+    betMultiplier.value = Math.max(1, Math.round(schemeBetMultiplier.value))
+  }
+}
+
+/** 已开奖号码（由接口赋值；加载前为空） */
+const drawnNumbers = ref<readonly string[]>([])
+
+const bettingRows = ref<GameBettingRow[]>([])
+
+const bettingTableList = computed(() => bettingRows.value)
+const planTrendHistoryList = computed(() =>
+  planTrendHistoryRows.value.slice(0, planTrendHistoryVisibleCount.value),
+)
+const planTrendHistoryCanLoadMore = computed(() => {
+  const total = planTrendHistoryRows.value.length
+  if (total <= 0) return false
+  const cap = Math.min(total, PLAN_TREND_HISTORY_MAX)
+  return planTrendHistoryVisibleCount.value < cap
+})
+
+function resetPlanTrendHistoryView() {
+  planTrendHistoryVisibleCount.value = PLAN_TREND_HISTORY_INITIAL
+}
+
+function loadMorePlanTrendHistory() {
+  const total = planTrendHistoryRows.value.length
+  planTrendHistoryVisibleCount.value = Math.min(total, PLAN_TREND_HISTORY_MAX)
+}
+
+const betRecordRows = ref<GameBetRecordDto[]>([])
+
+function isBarePlayToken(s: string): boolean {
+  const t = s.trim()
+  if (!t) return true
+  if (/^\d+$/.test(t)) return true
+  if (/^g\d+$/i.test(t)) return true
+  return false
+}
+
+/** 投注记录玩法列：优先用已解析玩法名，避免 subPlayId（如 13）闪现 */
+const betRecordPlayLabel = computed(() => {
+  const pm = playMethod.value.trim()
+  if (pm && !isBarePlayToken(pm)) return pm
+  const sel = activePlaySelection.value
+  if (sel) {
+    const label = formatSubPlayLabel(sel.subNode.label).trim()
+    if (label && !isBarePlayToken(label)) return label
+  }
+  return pm || '—'
+})
+
+function applyGameDetailData(detail: Awaited<ReturnType<typeof fetchGameDetail>>) {
+  currentIssue.value = detail.currentIssue
+  drawPhase.value = detail.drawPhase
+  drawnNumbers.value = detail.drawnNumbers
+  const mergedCountdown = mergeGameDetailCountdownOnPoll(
+    {
+      countdownEndTime: countdownEndTime.value,
+      countdownPeriod: countdownPeriod.value,
+      lotteryCode: lotteryCode.value,
+      countdownSec: countdownSec.value,
+      countdownLabel: countdownLabel.value,
+    },
+    {
+      countdownEndTime: detail.countdownEndTime,
+      countdownPeriod: detail.countdownPeriod ?? detail.nextIssue,
+      lotteryCode: lotteryCode.value,
+      countdownSec: detail.countdownSec,
+      countdownLabel: detail.countdownLabel,
+    },
+  )
+  countdownSec.value = mergedCountdown.countdownSec
+  countdownEndTime.value = mergedCountdown.countdownEndTime ?? ''
+  countdownPeriod.value = mergedCountdown.countdownPeriod ?? ''
+  countdownLabel.value = mergedCountdown.countdownLabel ?? ''
+  nextIssue.value = mergedCountdown.countdownPeriod || detail.nextIssue
+  planInverseDigits.value = detail.planInverseDigits
+  planInverseBetCount.value = detail.planInverseBetCount
+  historyGameTag.value = detail.lotteryLabel
+  bettingRows.value = detail.bettingRows
+  betRecordRows.value = detail.betRecords
+  planTrendGroupBets.value = detail.planTrendGroupBets
+  planTrendHistoryRows.value = detail.planTrendHistory
+  resetPlanTrendHistoryView()
+  planTrendChartPoints.value = detail.planTrendChart ?? []
+  applySchemeDockFromDetail(detail)
+  syncDrawingUrgentPoll()
+}
+
+function formatDockAmount(v: number) {
+  if (!Number.isFinite(v) || v <= 0) return '—'
+  return String(Math.round(v * 100) / 100)
+}
 
 /** 金额列展示：只显示整数部分（向下取整），接口可为带小数字符串 */
 function formatBetRecordAmount(amount: string) {
@@ -276,32 +808,284 @@ function formatBetRecordPl(n: number) {
   return String(Math.abs(Math.trunc(n)))
 }
 
+const betUnitAmount = computed(() => {
+  if (snapshotId.value && schemeBetUnit.value > 0) return schemeBetUnit.value
+  const n = Number(betMode.value)
+  return Number.isFinite(n) && n > 0 ? n : 2
+})
+
+const effectiveMultiplier = computed(() => {
+  if (snapshotId.value && schemeBetMultiplier.value > 0) return schemeBetMultiplier.value
+  return betMultiplier.value
+})
+
+const selectedBetCount = computed(() => {
+  if (tab.value === '1') {
+    if (snapshotId.value && schemeContraryBetUnits.value > 0) return schemeContraryBetUnits.value
+    return planInverseBetCount.value
+  }
+  if (snapshotId.value && schemeBetUnits.value > 0) return schemeBetUnits.value
+  return countBetUnits(playConfig.value, manualGroupContent.value)
+})
+
+const estimatedBetAmount = computed(() =>
+  Math.round(betUnitAmount.value * effectiveMultiplier.value * selectedBetCount.value * 100) / 100,
+)
+
+const dockEstimatedPrize = computed(() => {
+  if (tab.value === '1') return contraryEstimatedPrize.value
+  return estimatedPrize.value
+})
+
+// §23.2：real 手动下注 dock 展示第三方主币种实账（与会员中心顶栏同源）
+const dockBalance = ref<{ currency: string; amount: number } | null>(null)
+const dockBalanceText = computed(() => {
+  const b = dockBalance.value
+  if (!b) return ''
+  const sym = b.currency === 'CNY' ? '¥' : b.currency + ' '
+  return `${sym}${b.amount.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+})
+
+async function refreshDockBalance() {
+  try {
+    const b = await fetchGuajiBalance()
+    dockBalance.value = { currency: b.currency, amount: b.amount }
+  } catch {
+    dockBalance.value = null
+  }
+}
+
+async function loadGameDetail(options?: { silent?: boolean }) {
+  const silent = options?.silent === true
+  if (!silent) detailLoading.value = true
+  try {
+    const detail = await fetchGameDetail(lotteryCode.value, {
+      schemeName: schemeNameFromRoute() || undefined,
+      playMethod: playMethod.value || undefined,
+      snapshotId: snapshotId.value || undefined,
+      board: String(route.query.board ?? '').trim() || undefined,
+      playTypeId: playTypeId.value || undefined,
+      subPlayId: subPlayId.value || undefined,
+    })
+    applyGameDetailData(detail)
+    if (!silent) initManualPicks()
+  } catch (e) {
+    if (!silent) ElMessage.error(formatClientApiError(e, '加载游戏详情失败'))
+  } finally {
+    if (!silent) detailLoading.value = false
+  }
+}
+
+async function loadGameDraws(options?: { silent?: boolean }) {
+  const silent = options?.silent === true
+  if (!silent) historyDrawsLoading.value = true
+  try {
+    const result = await fetchGameDraws(lotteryCode.value, undefined, 50)
+    historyDrawRecords.value = result.items
+  } catch (e) {
+    historyDrawRecords.value = []
+    if (!silent) ElMessage.error(formatClientApiError(e, '加载历史开奖失败'))
+  } finally {
+    if (!silent) historyDrawsLoading.value = false
+  }
+}
+
+let countdownTimer: ReturnType<typeof setInterval> | undefined
+let drawSync: ReturnType<typeof startGameDrawSync> | null = null
+
+/** 等待开奖时的 REST 兜底：静默拉 detail，不触发整页 loading */
+function pollDrawStateQuiet() {
+  void loadGameDetail({ silent: true })
+}
+
+function applyDrawResultFromWs(payload: WsDrawResultPayload) {
+  const issue = String(payload.issueNo ?? '').trim()
+  const balls = Array.isArray(payload.balls) ? payload.balls.filter(Boolean) : []
+  if (!balls.length) return
+  const waitingIssue = String(currentIssue.value ?? '').trim()
+  if (waitingIssue && issue && waitingIssue !== issue) return
+  if (issue) currentIssue.value = issue
+  drawnNumbers.value = balls
+  drawPhase.value = 'drawn'
+  syncDrawingUrgentPoll()
+  void loadGameDraws({ silent: true })
+  void loadGameDetail({ silent: true })
+}
+
+function refreshDrawStateAfterPeriodClose() {
+  void loadGameDetail({ silent: true })
+  void loadGameDraws({ silent: true })
+}
+
+function syncDrawingUrgentPoll() {
+  const waiting =
+    countdownSec.value <= 0
+    && countdownLabel.value === SCHEME_COUNTDOWN_WAITING_LABEL
+  drawSync?.setDrawingUrgent(drawPhase.value === 'drawing' || waiting)
+}
+
+function tickGameDetailCountdown() {
+  // 与云端中心一致：仅认 countdownEndTime 本地重算；归零/请等待时主动刷新
+  if (!countdownEndTime.value) {
+    syncDrawingUrgentPoll()
+    return
+  }
+  const prev = countdownSec.value
+  const display = gameDetailCountdownDisplayFields({
+    countdownEndTime: countdownEndTime.value,
+    countdownPeriod: countdownPeriod.value,
+    lotteryCode: lotteryCode.value,
+    countdownSec: countdownSec.value,
+    countdownLabel: countdownLabel.value,
+  })
+  countdownSec.value = display.countdownSec
+  countdownLabel.value = display.countdownLabel
+
+  const periodEnded = prev > 0 && countdownSec.value === 0
+  if (periodEnded) {
+    refreshDrawStateAfterPeriodClose()
+    syncDrawingUrgentPoll()
+    return
+  }
+
+  syncDrawingUrgentPoll()
+}
+
+onMounted(async () => {
+  if (route.query.board === 'contrary') tab.value = '1'
+  loadShareDockBetMultiplier()
+  applyBetMultiplierFromRoute()
+  await loadPlayTree()
+  void loadGameDetail()
+  void loadGameDraws()
+  void refreshDockBalance()
+  void loadFavoriteState()
+  drawSync = startGameDrawSync(lotteryCode.value, {
+    onPoll: pollDrawStateQuiet,
+    onDrawResult: applyDrawResultFromWs,
+  })
+  syncDrawingUrgentPoll()
+  countdownTimer = setInterval(tickGameDetailCountdown, 1000)
+})
+
+async function loadPlayTree() {
+  playTreeLoading.value = true
+  try {
+    const tree = await fetchPlayTree(lotteryCode.value)
+    playTree.value = tree
+    const routeType = playTypeId.value
+    const routeSub = subPlayId.value
+    if (routeType && routeSub && findSubPlay(tree, routeType, routeSub)) {
+      selectedTypeId.value = routeType
+      selectedSubId.value = routeSub
+    } else {
+      const def = defaultPlaySelection(tree)
+      selectedTypeId.value = def.typeId
+      selectedSubId.value = def.subId
+    }
+    initManualPicks()
+  } catch (e) {
+    playTree.value = null
+    ElMessage.error(formatClientApiError(e, '加载玩法树失败'))
+  } finally {
+    playTreeLoading.value = false
+  }
+}
+
+function selectPlayType(typeId: string) {
+  if (selectedTypeId.value === typeId) return
+  selectedTypeId.value = typeId
+  const subs = playTree.value?.playTypes.find((t) => t.typeId === typeId)?.subPlays ?? []
+  selectedSubId.value = subs[0]?.subId ?? ''
+  initManualPicks()
+}
+
+function selectSubPlay(subId: string) {
+  if (selectedSubId.value === subId) return
+  selectedSubId.value = subId
+  initManualPicks()
+}
+
+watch([playMethod, playTypeId, subPlayId, selectedTypeId, selectedSubId], () => {
+  initManualPicks()
+})
+
+watch(lotteryCode, (code) => {
+  drawnNumbers.value = []
+  bettingRows.value = []
+  betRecordRows.value = []
+  planTrendChartPoints.value = []
+  planTrendHistoryRows.value = []
+  resetPlanTrendHistoryView()
+  planTrendGroupBets.value = 0
+  historyDrawRecords.value = []
+  planInverseDigits.value = ''
+  planInverseBetCount.value = 0
+  resetSchemeDock()
+  currentIssue.value = ''
+  nextIssue.value = ''
+  countdownSec.value = 0
+  countdownEndTime.value = ''
+  countdownPeriod.value = ''
+  countdownLabel.value = ''
+  drawSync?.stop()
+  void loadPlayTree().then(() => {
+    void loadGameDetail()
+    void loadGameDraws()
+  })
+  drawSync = startGameDrawSync(code, {
+    onPoll: pollDrawStateQuiet,
+    onDrawResult: applyDrawResultFromWs,
+  })
+  syncDrawingUrgentPoll()
+})
+
+watch(snapshotId, () => {
+  loadShareDockBetMultiplier()
+  void loadPlayTree().then(() => loadGameDetail())
+})
+
+watch(
+  () => [route.query.bmsKind, route.query.bmsError] as const,
+  () => applyBetMultiplierFromRoute(),
+)
+
+watch(playMethod, (label, prev) => {
+  if (!snapshotId.value) return
+  if (!label || isBarePlayToken(label)) return
+  if (prev && !isBarePlayToken(prev)) return
+  void loadGameDetail()
+})
+
+onUnmounted(() => {
+  drawSync?.stop()
+  if (countdownTimer) clearInterval(countdownTimer)
+})
+
 function goBack() {
   if (window.history.length > 1) router.back()
   else router.push('/copy-hall')
 }
 
-/** 临时：点击开奖区域切换 drawing / drawn，联调完成后删除 */
-function toggleDrawPhaseDemo() {
-  drawPhase.value = drawPhase.value === 'drawing' ? 'drawn' : 'drawing'
+async function handleBetError(e: unknown, fallback = '投注失败'): Promise<void> {
+  ElMessage.error(formatClientApiError(e, fallback))
 }
+
 </script>
 
 <template>
-  <div class="detail" :class="{
-    'dock-collapsed': !betDockOpen && tab !== 2 && tab !== 3 && tab !== 4,
-    'detail--plan-trend': tab === 2 || tab === 3 || tab === 4,
-  }">
+  <div class="detail">
     <header class="header-wrap">
       <div class="head-row">
         <div class="head-left">
           <button type="button" class="icon-link" aria-label="返回" @click="goBack">
-            <img :src="ICON_PLACEHOLDER" alt="" width="24" height="24" class="primary-ico-img" decoding="async" />
+            <img :src="ICON_BACK" alt="" width="24" height="24" class="primary-ico-img" decoding="async" />
           </button>
           <h1 class="head-title">{{ pageTitle }}</h1>
         </div>
-        <button type="button" class="icon-link fav-btn" :class="{ 'fav-btn--on': isFavorite }"
-          :aria-label="isFavorite ? '取消收藏' : '收藏'" :aria-pressed="isFavorite" @click="toggleFavorite">
+        <button v-if="snapshotId" type="button" class="icon-link fav-btn" :class="{ 'fav-btn--on': isFavorite }"
+          :aria-label="isFavorite ? '取消收藏' : '收藏'" :aria-pressed="isFavorite" :disabled="favoritePending"
+          @click="toggleFavorite">
           <svg class="fav-star" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false">
             <path v-if="!isFavorite" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
               stroke-linejoin="round"
@@ -314,37 +1098,70 @@ function toggleDrawPhaseDemo() {
 
       <div class="draw-block">
         <div class="draw-row" :class="{ 'draw-row-balls-inline': drawPhase === 'drawn' }">
-          <h2 class="period-main">第 20231103032 期</h2>
-          <button type="button" class="badge-wrap badge-wrap-demo-toggle" :aria-label="drawPhase === 'drawing'
-            ? '临时演示：切换到已开奖视图'
-            : '临时演示：切换到开奖中视图'
-            " title="临时：点击切换开奖展示状态" @click="toggleDrawPhaseDemo">
-            <span v-if="drawPhase === 'drawing'" class="draw-badge" aria-live="polite">开奖中</span>
+          <h2 class="period-main">第 {{ displayCurrentIssue }} 期</h2>
+          <span
+            class="badge-wrap"
+            :aria-label="drawPhase === 'drawing' ? '等待开奖' : `本期开奖号码 ${drawnNumbers.join(' ')}`"
+          >
+            <span v-if="drawPhase === 'drawing'" class="draw-badge" aria-live="polite">等待开奖</span>
             <span v-else class="draw-result" role="group" :aria-label="`本期开奖号码 ${drawnNumbers.join(' ')}`">
               <span v-for="(num, idx) in drawnNumbers" :key="idx" class="draw-ball">{{ num }}</span>
             </span>
-          </button>
+          </span>
         </div>
         <div class="draw-row draw-row-2">
-          <h2 class="period-sub">距离 20231103033 期</h2>
+          <h2 class="period-sub">距离 {{ displayNextIssue }} 期</h2>
           <div class="timer-pill">
-            <img :src="ICON_PLACEHOLDER" alt="" width="18" height="18" class="timer-ico-img" decoding="async" />
-            <span class="timer-txt">00:40</span>
+            <img :src="ICON_TIMER" alt="" width="18" height="18" class="timer-ico-img" decoding="async" />
+            <span class="timer-txt">{{ countdownDisplay }}</span>
           </div>
         </div>
       </div>
 
       <el-radio-group v-model="tab" size="small" class="detail-tab-rg">
-        <el-radio-button v-for="(label, i) in tabLabels" :key="label" :value="i">{{ label }}</el-radio-button>
+        <el-radio-button v-for="(label, i) in tabLabels" :key="label" :value="String(i)">{{ label }}</el-radio-button>
       </el-radio-group>
     </header>
 
-    <main class="main">
-      <template v-if="tab === 0">
-        <div class="table-card">
+    <main
+      class="main"
+      :class="{
+        'main--with-dock': (tab === '0' || tab === '1') && betDockOpen,
+        'main--dock-collapsed': (tab === '0' || tab === '1') && !betDockOpen,
+        'main--no-dock': tab === '2' || tab === '3' || tab === '4',
+      }"
+    >
+      <template v-if="tab === '0'">
+        <section v-if="showBetTabPlayPicker" class="play-picker" aria-label="玩法选择">
+          <div class="play-picker-types">
+            <button
+              v-for="pt in activePlayTypes"
+              :key="pt.typeId"
+              type="button"
+              class="play-picker-chip"
+              :class="{ 'is-active': selectedTypeId === pt.typeId }"
+              @click="selectPlayType(pt.typeId)"
+            >
+              {{ pt.label }}
+            </button>
+          </div>
+          <div v-if="activeSubPlays.length" class="play-picker-subs">
+            <button
+              v-for="sp in activeSubPlays"
+              :key="sp.subId"
+              type="button"
+              class="play-picker-sub"
+              :class="{ 'is-active': selectedSubId === sp.subId }"
+              @click="selectSubPlay(sp.subId)"
+            >
+              {{ formatSubPlayLabel(sp.label) }}
+            </button>
+          </div>
+        </section>
+        <div v-loading="detailLoading" class="table-card">
           <el-table :data="bettingTableList" class="detail-bet-table" size="small" stripe empty-text="暂无数据"
             :style="{ width: '100%' }">
-            <el-table-column prop="time" label="下注时间" :min-width="40" />
+            <el-table-column prop="time" label="下注时间" :min-width="42" />
             <el-table-column prop="scheme" label="方案名" :min-width="42" />
             <el-table-column prop="numbers" label="下注号码" :min-width="44">
               <template #default="{ row }">
@@ -362,17 +1179,18 @@ function toggleDrawPhaseDemo() {
           </el-table>
         </div>
       </template>
-      <template v-else-if="tab === 1">
+      <template v-else-if="tab === '1'">
         <div class="plan-inverse-page">
           <div class="plan-inverse-inner">
             <el-card class="plan-inverse-card" shadow="never">
-              <p class="plan-inverse-digits">{{ planInverseDigits }}</p>
+              <p v-if="!planInverseDigits" class="plan-inverse-empty">暂无反集数据</p>
+              <p v-else class="plan-inverse-digits">{{ planInverseDigits }}</p>
               <p class="plan-inverse-meta">共 {{ planInverseBetCount }} 注</p>
             </el-card>
           </div>
         </div>
       </template>
-      <template v-else-if="tab === 2">
+      <template v-else-if="tab === '2'">
         <div class="plan-trend-page">
           <section class="plan-trend-chart-card" aria-label="号码走势图表">
             <div class="plan-trend-chart-head">
@@ -380,11 +1198,21 @@ function toggleDrawPhaseDemo() {
             </div>
             <div class="plan-trend-chart-body">
               <div class="plan-trend-y-axis">
-                <span v-for="y in ['5', '4', '3', '2', '1', '0']" :key="y">{{ y }}</span>
+                <span
+                  v-for="tick in planTrendChartView.yTicks"
+                  :key="tick.label"
+                  class="plan-trend-y-label"
+                  :style="{ top: `${tick.top}%` }"
+                >{{ tick.label }}</span>
               </div>
               <div class="plan-trend-chart-plot">
                 <div class="plan-trend-grid">
-                  <div v-for="i in 6" :key="i" class="plan-trend-grid-line" />
+                  <div
+                    v-for="tick in planTrendChartView.yTicks"
+                    :key="`grid-${tick.label}`"
+                    class="plan-trend-grid-line"
+                    :style="{ top: `${tick.top}%` }"
+                  />
                 </div>
                 <svg class="plan-trend-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
                   <defs>
@@ -393,19 +1221,39 @@ function toggleDrawPhaseDemo() {
                       <stop offset="100%" stop-color="#ffffff" />
                     </linearGradient>
                   </defs>
-                  <path :d="planTrendChartAreaD" fill="url(#planTrendChartGrad)" opacity="0.1" />
-                  <path :d="planTrendChartLineD" fill="none" stroke="#0066ff" stroke-width="1.5"
-                    stroke-linejoin="round" />
+                  <path
+                    v-if="planTrendChartView.areaD"
+                    :d="planTrendChartView.areaD"
+                    fill="url(#planTrendChartGrad)"
+                    opacity="0.1"
+                  />
+                  <path
+                    v-if="planTrendChartView.lineD"
+                    :d="planTrendChartView.lineD"
+                    fill="none"
+                    stroke="#0066ff"
+                    stroke-width="1.5"
+                    stroke-linejoin="round"
+                  />
                 </svg>
-                <div class="plan-trend-dots-layer">
-                  <div v-for="(d, idx) in planTrendDots" :key="idx" class="plan-trend-dot-anchor"
-                    :style="{ left: `${d.left}%`, top: `${d.top}%` }">
+                <div v-if="!planTrendChartView.dots.length" class="plan-trend-chart-empty">暂无走势数据</div>
+                <div v-else class="plan-trend-dots-layer">
+                  <div
+                    v-for="(d, idx) in planTrendChartView.dots"
+                    :key="idx"
+                    class="plan-trend-dot-anchor"
+                    :style="{ left: `${d.left}%`, top: `${d.top}%` }"
+                  >
                     <span class="plan-trend-dot" :class="d.hit ? 'plan-trend-dot--hit' : 'plan-trend-dot--miss'" />
                   </div>
                 </div>
                 <div class="plan-trend-x-axis">
-                  <span v-for="(x, xi) in planTrendXLabels" :key="xi" class="plan-trend-x-tick"
-                    :class="{ 'plan-trend-x-tick--hide': !x.show }">{{ x.text }}</span>
+                  <span
+                    v-for="(x, xi) in planTrendChartView.xLabels"
+                    :key="xi"
+                    class="plan-trend-x-tick"
+                    :class="{ 'plan-trend-x-tick--hide': !x.show }"
+                  >{{ x.text }}</span>
                 </div>
               </div>
             </div>
@@ -426,22 +1274,23 @@ function toggleDrawPhaseDemo() {
                 </el-table-column>
               </el-table>
             </div>
-            <div class="plan-trend-history-foot">
-              <el-button type="primary" link @click.prevent>查看更多历史计划</el-button>
+            <div v-if="planTrendHistoryCanLoadMore" class="plan-trend-history-foot">
+              <el-button type="primary" link @click="loadMorePlanTrendHistory">查看更多历史计划</el-button>
             </div>
           </section>
         </div>
       </template>
-      <template v-else-if="tab === 3">
+      <template v-else-if="tab === '3'">
         <div class="history-page">
           <div class="history-subtabs-wrap">
             <el-radio-group v-model="historySubTab" size="small" class="history-subtabs-ep">
-              <el-radio-button v-for="(label, hi) in historySubTabLabels" :key="label" :value="hi">{{ label
+              <el-radio-button v-for="(label, hi) in historySubTabLabels" :key="label" :value="String(hi)">{{ label
               }}</el-radio-button>
             </el-radio-group>
           </div>
-          <section class="history-list" aria-label="开奖记录">
-            <article v-for="(rec, ri) in historyDrawRecords" :key="ri" class="history-card">
+          <section v-loading="historyDrawsLoading" class="history-list" aria-label="开奖记录">
+            <p v-if="!historyDrawsLoading && !historyDrawRecords.length" class="history-empty">暂无开奖数据</p>
+            <article v-for="(rec, ri) in historyDrawRecords" :key="`${rec.periodShort}-${ri}`" class="history-card">
               <div class="history-card-head">
                 <span class="history-game-name">{{ historyGameTag }}</span>
                 <span class="history-period-line">第 <strong class="history-period-num">{{ rec.periodShort }}</strong>
@@ -450,27 +1299,27 @@ function toggleDrawPhaseDemo() {
               <div class="history-card-divider" role="presentation" />
 
               <div class="history-card-content">
-                <template v-if="historySubTab === 0">
+                <template v-if="historySubTab === '0'">
                   <div class="history-balls">
                     <div v-for="(b, bi) in rec.balls" :key="bi" class="history-ball history-ball--primary">{{ b }}
                     </div>
                   </div>
                 </template>
-                <template v-else-if="historySubTab === 1">
+                <template v-else-if="historySubTab === '1'">
                   <div class="history-sq-row">
                     <span v-for="(b, bi) in rec.balls" :key="bi" class="history-sq history-sq-dx"
                       :class="historyBigSmallDigit(b) === '大' ? 'history-sq-dx--big' : 'history-sq-dx--small'">{{
                         historyBigSmallDigit(b) }}</span>
                   </div>
                 </template>
-                <template v-else-if="historySubTab === 2">
+                <template v-else-if="historySubTab === '2'">
                   <div class="history-sq-row">
                     <span v-for="(b, bi) in rec.balls" :key="bi" class="history-sq history-sq-oe"
                       :class="historyParityDigit(b) === '单' ? 'history-sq-oe--odd' : 'history-sq-oe--even'">{{
                         historyParityDigit(b) }}</span>
                   </div>
                 </template>
-                <template v-else-if="historySubTab === 3">
+                <template v-else-if="historySubTab === '3'">
                   <div class="history-dt-grid">
                     <div v-for="(cell, ci) in historyDragonTigerCells(historyDigitsFromBalls(rec.balls))" :key="ci"
                       class="history-dt-cell">
@@ -503,19 +1352,21 @@ function toggleDrawPhaseDemo() {
           </section>
           <div class="history-foot-note" role="status">
             <span class="history-foot-dot" />
-            已加载最近50期数据
+            {{ historyDrawRecords.length ? `已加载最近${historyDrawRecords.length}期数据` : '暂无历史开奖' }}
             <span class="history-foot-dot" />
           </div>
         </div>
       </template>
-      <template v-else-if="tab === 4">
+      <template v-else-if="tab === '4'">
         <div class="table-card">
           <el-table :data="betRecordRows" class="detail-bet-table" size="small" stripe empty-text="暂无数据"
             :style="{ width: '100%' }">
             <el-table-column prop="period" label="期数" :min-width="44" />
-            <el-table-column prop="playMethod" label="玩法" :min-width="44" />
-            <el-table-column prop="multiplier" label="倍数" :min-width="34" align="center" />
-            <el-table-column prop="round" label="轮次" :min-width="34" align="center" />
+            <el-table-column label="玩法" :min-width="44">
+              <template #default>{{ betRecordPlayLabel }}</template>
+            </el-table-column>
+            <el-table-column prop="multiplier" label="倍数" :min-width="24" align="center" />
+            <el-table-column prop="round" label="轮次" :min-width="24" align="center" />
             <el-table-column prop="amount" label="金额" :min-width="36" align="right">
               <template #default="{ row }">
                 <span class="detail-bet-table-nums bet-record-num">{{ formatBetRecordAmount(row.amount) }}</span>
@@ -531,7 +1382,7 @@ function toggleDrawPhaseDemo() {
                   ">{{ formatBetRecordPl(row.profitLoss) }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="状态" :min-width="40" align="center">
+            <el-table-column label="状态" :min-width="48" align="center">
               <template #default="{ row }">
                 <el-tag type="primary" effect="light" size="small">{{ row.status }}</el-tag>
               </template>
@@ -540,37 +1391,138 @@ function toggleDrawPhaseDemo() {
         </div>
       </template>
       <div v-else class="tab-placeholder">
-        <p>「{{ tabLabels[tab] }}」功能开发中</p>
+        <p>「{{ tabLabels[Number(tab)] }}」功能开发中</p>
       </div>
     </main>
 
-    <div v-if="tab !== 2 && tab !== 3 && tab !== 4" class="bet-dock" :class="{ 'is-collapsed': !betDockOpen }"
+    <div v-if="tab !== '2' && tab !== '3' && tab !== '4'" class="bet-dock" :class="{ 'is-collapsed': !betDockOpen }"
       aria-label="投注区">
       <button type="button" class="dock-handle" :aria-expanded="betDockOpen" aria-controls="bet-dock-panel"
         :aria-label="betDockOpen ? '收起投注区' : '展开投注区'" @click="betDockOpen = !betDockOpen">
-        <img :src="ICON_PLACEHOLDER" alt="" width="28" height="28" class="handle-ico-img"
+        <img :src="ICON_DRAG" alt="" width="28" height="28" class="handle-ico-img"
           :class="{ 'handle-ico-collapsed': !betDockOpen }" decoding="async" />
       </button>
       <div id="bet-dock-panel" v-show="betDockOpen" class="dock-inner">
+        <div
+          v-if="tab === '0' && betDockEntryMode === 'manual' && !snapshotId"
+          class="dock-picks"
+        >
+          <p class="dock-picks-label">选号 · {{ playMethod || '一星定位胆 · 万位' }}</p>
+          <template v-if="playConfig.inputMode === 'danshi' && textPickOptions.length">
+            <div class="dock-pick-chips">
+              <button
+                v-for="d in textPickOptions"
+                :key="d"
+                type="button"
+                class="dock-pick-chip"
+                :class="{ 'is-active': pickDigits.includes(d) }"
+                @click="togglePickDigit(d)"
+              >
+                {{ d }}
+              </button>
+            </div>
+          </template>
+          <template v-else-if="playConfig.inputMode === 'danshi'">
+            <el-input
+              v-model="danshiInput"
+              type="textarea"
+              :rows="2"
+              :placeholder="lhcDanshiPlaceholder"
+              size="small"
+            />
+          </template>
+          <template v-else-if="playConfig.inputMode === 'lhc_num'">
+            <div class="dock-pick-chips dock-pick-chips--lhc">
+              <button
+                v-for="d in lhcPickOptions"
+                :key="d"
+                type="button"
+                class="dock-pick-chip dock-pick-chip--lhc"
+                :class="{ 'is-active': pickDigits.includes(d) }"
+                @click="togglePickDigit(d)"
+              >
+                {{ d }}
+              </button>
+            </div>
+          </template>
+          <template v-else-if="playConfig.inputMode === 'lhc_zodiac' || playConfig.inputMode === 'lhc_tail' || playConfig.inputMode === 'lhc_attr'">
+            <div class="dock-pick-chips dock-pick-chips--lhc">
+              <button
+                v-for="d in lhcPickOptions"
+                :key="d"
+                type="button"
+                class="dock-pick-chip dock-pick-chip--lhc"
+                :class="{ 'is-active': pickDigits.includes(d) }"
+                @click="togglePickDigit(d)"
+              >
+                {{ d }}
+              </button>
+            </div>
+          </template>
+          <template v-else-if="playConfig.inputMode === 'multiline'">
+            <div v-for="(label, li) in playConfig.segmentLabels" :key="label" class="dock-pick-row">
+              <span class="dock-pick-pos">{{ label }}</span>
+              <div class="dock-pick-chips">
+                <button
+                  v-for="d in digitOptions"
+                  :key="`${label}-${d}`"
+                  type="button"
+                  class="dock-pick-chip"
+                  :class="{ 'is-active': isLineDigitSelected(li, d) }"
+                  @click="toggleLineDigit(li, d)"
+                >
+                  {{ d }}
+                </button>
+              </div>
+            </div>
+          </template>
+          <template v-else>
+            <div class="dock-pick-chips">
+              <button
+                v-for="d in digitOptions"
+                :key="d"
+                type="button"
+                class="dock-pick-chip"
+                :class="{ 'is-active': pickDigits.includes(d) }"
+                @click="togglePickDigit(d)"
+              >
+                {{ d }}
+              </button>
+            </div>
+          </template>
+        </div>
         <el-form class="dock-form dock-form--row" label-width="auto">
           <el-form-item label="倍数" class="dock-form-item--mult">
-            <template v-if="betDockEntryMode === 'manual'">
+            <span v-if="snapshotId && betDockEntryMode === 'manual'" class="dock-readonly-val">{{ effectiveMultiplier }} 倍</span>
+            <el-button
+              v-else-if="betDockEntryMode === 'cloud'"
+              type="primary"
+              plain
+              size="small"
+              class="dock-multiplier-settings-btn"
+              @click="goBetMultiplierSettings"
+            >
+              <span v-if="betMultiplierError" class="dock-multiplier-err">{{ betMultiplierError }}</span>
+              <span v-else-if="betMultiplierSelectedLabel">{{ betMultiplierSelectedLabel }}</span>
+              <span v-else>请设置</span>
+            </el-button>
+            <template v-else>
               <div class="dock-mult-manual">
                 <el-input-number v-model="betMultiplier" :min="1" :controls="true" controls-position="right"
                   size="small" class="dock-inp-num" />
                 <span class="dock-unit">倍</span>
               </div>
             </template>
-            <el-button v-else type="primary" plain size="small" class="dock-multiplier-settings-btn"
-              @click="goBetMultiplierSettings">
-              请设置
-            </el-button>
           </el-form-item>
           <el-form-item label="模式" class="dock-form-item--mode">
-            <el-select v-model="betMode" size="small" class="dock-select" placeholder="模式">
-              <el-option label="2元" value="2元" />
-              <el-option label="1元" value="1元" />
-              <el-option label="0.2元" value="0.2元" />
+            <span v-if="snapshotId" class="dock-readonly-val">{{ betUnitAmount }} 元/注</span>
+            <el-select v-else v-model="betMode" size="small" class="dock-select" placeholder="模式">
+              <el-option
+                v-for="opt in BET_MODE_OPTIONS"
+                :key="opt.value"
+                :label="opt.label"
+                :value="opt.value"
+              />
             </el-select>
           </el-form-item>
         </el-form>
@@ -578,30 +1530,39 @@ function toggleDrawPhaseDemo() {
           <div class="stats">
             <div class="stat-line">
               <span class="stat-l">余额:</span>
-              <span class="stat-v err">0</span>
-              <span class="stat-u">元</span>
+              <span class="stat-v err">{{ dockBalanceText || '—' }}</span>
             </div>
             <div class="stat-line">
               <span class="stat-l">选中:</span>
-              <span class="stat-v err">3</span>
+              <span class="stat-v err">{{ selectedBetCount }}</span>
               <span class="stat-u">注</span>
             </div>
             <div class="stat-line">
               <span class="stat-l">总额:</span>
-              <span class="stat-v err">6</span>
+              <span class="stat-v err">{{ estimatedBetAmount }}</span>
               <span class="stat-u">元</span>
             </div>
             <div class="stat-line">
               <span class="stat-l">奖金:</span>
-              <span class="stat-v err">19.78</span>
+              <span class="stat-v err">{{ formatDockAmount(dockEstimatedPrize) }}</span>
               <span class="stat-u">元(预估)</span>
             </div>
           </div>
           <div class="dock-actions-col">
-            <el-button type="primary" class="dock-confirm-btn dock-confirm-btn--stacked">
-              {{ betDockEntryMode === 'manual' ? '确认投注' : '添加至云端' }}
+            <el-button
+              type="primary"
+              class="dock-confirm-btn dock-confirm-btn--stacked"
+              :loading="actionLoading"
+              @click="onDockConfirm"
+            >
+              {{ dockConfirmLabel }}
             </el-button>
-            <el-button type="default" class="dock-switch-mode-btn" @click="toggleBetDockEntryMode">
+            <el-button
+              v-if="tab !== '1'"
+              type="default"
+              class="dock-switch-mode-btn"
+              @click="toggleBetDockEntryMode"
+            >
               {{ betDockEntryMode === 'manual' ? '切换至云端挂机' : '切换至手动下注' }}
             </el-button>
           </div>
@@ -616,21 +1577,14 @@ function toggleDrawPhaseDemo() {
   --pri: #0066ff;
   --err: #ba1a1a;
   --surface: #f7f9fb;
-  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  overflow: hidden;
   background: var(--surface);
   color: #191c1e;
   font-family: 'Inter', 'Noto Sans SC', system-ui, sans-serif;
-  padding-bottom: calc(18rem + env(safe-area-inset-bottom));
   -webkit-font-smoothing: antialiased;
-  transition: padding-bottom 0.25s ease;
-}
-
-.detail.dock-collapsed {
-  padding-bottom: calc(2.5rem + env(safe-area-inset-bottom));
-}
-
-.detail--plan-trend {
-  padding-bottom: calc(1.25rem + env(safe-area-inset-bottom));
 }
 
 .primary-ico-img {
@@ -643,8 +1597,7 @@ function toggleDrawPhaseDemo() {
 }
 
 .header-wrap {
-  position: sticky;
-  top: 0;
+  flex-shrink: 0;
   z-index: 50;
   width: 100%;
   background: rgba(255, 255, 255, 0.9);
@@ -878,10 +1831,33 @@ function toggleDrawPhaseDemo() {
 }
 
 .main {
+  flex: 1;
+  min-height: 0;
   width: 100%;
   max-width: 32rem;
   margin: 0 auto;
   padding: 0.5rem 0.5rem 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.main::-webkit-scrollbar {
+  display: none;
+}
+
+.main--with-dock {
+  padding-bottom: calc(18rem + env(safe-area-inset-bottom));
+}
+
+.main--dock-collapsed {
+  padding-bottom: calc(2.5rem + env(safe-area-inset-bottom));
+}
+
+.main--no-dock {
+  padding-bottom: calc(1.25rem + env(safe-area-inset-bottom));
 }
 
 .plan-inverse-page {
@@ -909,6 +1885,12 @@ function toggleDrawPhaseDemo() {
   padding: 1.5rem;
 }
 
+.plan-inverse-empty {
+  margin: 0;
+  font-size: 0.875rem;
+  color: #94a3b8;
+}
+
 .plan-inverse-digits {
   margin: 0;
   font-family: 'Inter', 'Noto Sans SC', system-ui, sans-serif;
@@ -917,6 +1899,7 @@ function toggleDrawPhaseDemo() {
   font-size: 1.125rem;
   line-height: 1.625;
   word-break: break-all;
+  white-space: pre-line;
 }
 
 .plan-inverse-meta {
@@ -958,21 +1941,27 @@ function toggleDrawPhaseDemo() {
 
 .plan-trend-chart-body {
   display: flex;
+  align-items: flex-start;
   margin-top: 0.5rem;
   width: 100%;
 }
 
 .plan-trend-y-axis {
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
+  position: relative;
   flex-shrink: 0;
+  width: 2rem;
   padding-right: 0.75rem;
-  padding-top: 0.25rem;
   height: calc(16rem - 1.5rem);
   font-size: 11px;
   font-weight: 500;
   color: #94a3b8;
+}
+
+.plan-trend-y-label {
+  position: absolute;
+  right: 0.75rem;
+  transform: translateY(-50%);
+  line-height: 1;
 }
 
 .plan-trend-chart-plot {
@@ -982,20 +1971,36 @@ function toggleDrawPhaseDemo() {
   height: 16rem;
 }
 
+.plan-trend-chart-empty,
+.history-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: #94a3b8;
+  pointer-events: none;
+}
+
+.history-empty {
+  position: static;
+  padding: 2rem 1rem;
+}
+
 .plan-trend-grid {
   position: absolute;
   inset: 0;
   bottom: 1.5rem;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
   pointer-events: none;
 }
 
 .plan-trend-grid-line {
+  position: absolute;
+  left: 0;
+  right: 0;
   border-bottom: 1px solid #f1f5f9;
   height: 0;
-  width: 100%;
 }
 
 .plan-trend-svg {
@@ -1095,18 +2100,14 @@ function toggleDrawPhaseDemo() {
 .plan-trend-history-scroll {
   overflow-x: hidden;
   overflow-y: auto;
-  max-height: 16rem;
+  max-height: none;
   -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
 .plan-trend-history-scroll::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-.plan-trend-history-scroll::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border-radius: 999px;
+  display: none;
 }
 
 .plan-trend-el-table :deep(.el-table) {
@@ -1472,6 +2473,46 @@ function toggleDrawPhaseDemo() {
   font-weight: 500;
 }
 
+.play-picker {
+  margin-bottom: 1rem;
+  padding: 1rem;
+  background: #fff;
+  border-radius: 0.75rem;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.04);
+}
+
+.play-picker-types,
+.play-picker-subs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.play-picker-subs {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #f1f5f9;
+}
+
+.play-picker-chip,
+.play-picker-sub {
+  padding: 0.375rem 0.75rem;
+  border: none;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.play-picker-chip.is-active,
+.play-picker-sub.is-active {
+  background: rgba(0, 102, 255, 0.1);
+  color: #0066ff;
+}
+
 .table-card {
   background: #fff;
   border-radius: 0.75rem;
@@ -1584,6 +2625,71 @@ function toggleDrawPhaseDemo() {
   gap: 1rem;
 }
 
+.dock-readonly-val {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.dock-picks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.dock-picks-label {
+  margin: 0;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.dock-pick-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.dock-pick-pos {
+  flex: 0 0 1.25rem;
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+}
+
+.dock-pick-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.dock-pick-chips--lhc {
+  max-height: 10rem;
+  overflow-y: auto;
+}
+
+.dock-pick-chip--lhc {
+  min-width: 2.25rem;
+  font-size: 12px;
+}
+
+.dock-pick-chip {
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0 0.35rem;
+  border: 1px solid rgb(148 163 184 / 35%);
+  border-radius: 0.5rem;
+  background: #fff;
+  color: var(--el-text-color-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.dock-pick-chip.is-active {
+  border-color: var(--el-color-primary);
+  background: rgb(0 102 255 / 8%);
+  color: var(--el-color-primary);
+  font-weight: 600;
+}
+
 .dock-form {
   width: 100%;
 }
@@ -1642,6 +2748,14 @@ function toggleDrawPhaseDemo() {
 
 .dock-multiplier-settings-btn {
   font-weight: 600;
+  max-width: 100%;
+  white-space: normal;
+  height: auto;
+  line-height: 1.35;
+}
+
+.dock-multiplier-err {
+  color: #dc2626;
 }
 
 .dock-actions-col {

@@ -1,0 +1,5 @@
+
+=== bnb_ffc_1m RETRY (patch jsonl, 2026-06-29) ===
+说明：以下为重跑结果，已合并写入 by-lottery/bnb_ffc_1m.jsonl；上文 FAIL 为首次跑批误报（期号对账 bug，已修复）。
+详见：bnb_ffc_1m-retry.log（index 89-101,128-140）、bnb_ffc_1m-retry-127.log（index 127）
+结果：170/170 ok

@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { computed, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { demoAppBrand } from '@/demo/demoAccount'
+import { fetchAnnouncementDetail, type AnnouncementDetail } from '@/api/content/announcements'
 
 /**
  * 公告详情页（数字精算主义 / Digital Actuarialism）
@@ -62,11 +64,11 @@ const ANNOUNCEMENTS: Record<string, AnnouncementData> = {
     id: 'version-2-4',
     category: 'Release',
     date: '2025/09/01',
-    title: '精密终端 2.4 版本上线公告',
+    title: `${demoAppBrand} 2.4 版本上线公告`,
     hero: HERO_IMG,
     greeting: '亲爱的会员您好：',
     paragraphs: [
-      '<em>精密终端 2.4</em> 已正式上线，本次升级聚焦于「方案分析」「跟单大厅」与「资金侧栏」三大主线，整体响应速度提升约 <em>32%</em>。',
+      `<em>${demoAppBrand} 2.4</em> 已正式上线，本次升级聚焦于「方案分析」「跟单大厅」与「资金侧栏」三大主线，整体响应速度提升约 <em>32%</em>。`,
       '我们重新设计了多维方案分析工具，可在同一视图内对比方案命中率、资金曲线与风险阈值，帮助您更高效地完成精算决策。',
     ],
     info: {
@@ -153,6 +155,7 @@ const ANNOUNCEMENTS: Record<string, AnnouncementData> = {
 
 const route = useRoute()
 const router = useRouter()
+const apiDetail = ref<AnnouncementDetail | null>(null)
 
 const announcement = computed<AnnouncementData>(() => {
   const raw = route.params.id ?? route.query.id ?? ''
@@ -161,38 +164,27 @@ const announcement = computed<AnnouncementData>(() => {
 })
 
 watch(
-  announcement,
-  (a) => {
-    document.title = `公告详情 · ${a.title} · 精密终端`
+  () => [announcement.value, apiDetail.value] as const,
+  ([a, api]) => {
+    document.title = `公告详情 · ${api?.title ?? a.title} · ${demoAppBrand}`
   },
-  { immediate: true }
+  { immediate: true },
 )
+
+onMounted(async () => {
+  const raw = route.params.id ?? route.query.id ?? ''
+  const id = String(Array.isArray(raw) ? raw[0] : raw)
+  if (!id) return
+  try {
+    apiDetail.value = await fetchAnnouncementDetail(id)
+  } catch {
+    /** 缺省仍展示 Mock 富文本 */
+  }
+})
 
 function goBack() {
   if (window.history.length > 1) router.back()
   else router.push('/')
-}
-
-async function onShare() {
-  const a = announcement.value
-  const url = typeof window !== 'undefined' ? window.location.href : ''
-  const nav = typeof navigator !== 'undefined' ? navigator : null
-
-  if (nav && typeof (nav as Navigator).share === 'function') {
-    try {
-      await (nav as Navigator).share({ title: a.title, url })
-      return
-    } catch {
-      /** 用户取消或不支持时降级到剪贴板 */
-    }
-  }
-  if (nav && nav.clipboard && typeof nav.clipboard.writeText === 'function') {
-    try {
-      await nav.clipboard.writeText(url)
-    } catch {
-      /** 静默失败：保持页面可用 */
-    }
-  }
 }
 </script>
 
@@ -203,13 +195,23 @@ async function onShare() {
         <span class="ann-ms" aria-hidden="true">arrow_back</span>
       </button>
       <h1 class="ann-header-title">公告详情</h1>
-      <button type="button" class="ann-icon-btn ann-share" aria-label="分享" @click="onShare">
-        <span class="ann-ms" aria-hidden="true">share</span>
-      </button>
+      <span class="ann-head-spacer" aria-hidden="true" />
     </header>
 
     <main class="ann-main">
-      <article class="ann-article" :key="announcement.id">
+      <article v-if="apiDetail" class="ann-article ann-article--api">
+        <header class="ann-article-head">
+          <div class="ann-meta">
+            <span class="ann-chip">Notice</span>
+            <span class="ann-date">{{ apiDetail.date }}</span>
+          </div>
+          <h2 class="ann-title">{{ apiDetail.title }}</h2>
+          <div class="ann-accent" aria-hidden="true" />
+        </header>
+        <div class="ann-body ann-body--api cms-rich-html" v-html="apiDetail.bodyHtml" />
+      </article>
+
+      <article v-else class="ann-article" :key="announcement.id">
         <header class="ann-article-head">
           <div class="ann-meta">
             <span class="ann-chip">{{ announcement.category }}</span>
@@ -281,6 +283,7 @@ async function onShare() {
 
 <style scoped>
 .ann {
+  overflow-x: hidden;
   --ann-surface: #f7f9fb;
   --ann-surface-low: #f2f4f6;
   --ann-surface-lowest: #ffffff;
@@ -354,7 +357,9 @@ async function onShare() {
   justify-self: start;
 }
 
-.ann-share {
+.ann-head-spacer {
+  width: 2.25rem;
+  height: 2.25rem;
   justify-self: end;
 }
 
@@ -371,6 +376,7 @@ async function onShare() {
 
 /* ======== Main ======== */
 .ann-main {
+  width: 100%;
   max-width: 36rem;
   margin: 0 auto;
   padding: 1.5rem 1rem 4rem;
@@ -381,6 +387,8 @@ async function onShare() {
 
 /* ======== Article Card ======== */
 .ann-article {
+  min-width: 0;
+  overflow-x: hidden;
   background: var(--ann-surface-lowest);
   border-radius: 1.5rem;
   padding: 1.75rem 1.5rem 2rem;
@@ -491,6 +499,37 @@ async function onShare() {
   .ann-body {
     font-size: 1rem;
   }
+}
+
+.ann-body--api {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.ann-body--api :deep(p) {
+  margin: 0 0 0.85rem;
+}
+
+.ann-body--api :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.ann-body--api :deep(a) {
+  color: var(--ann-primary);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.ann-body--api :deep(strong) {
+  color: var(--ann-on-surface);
+  font-weight: 700;
+}
+
+.ann-body--api :deep(em) {
+  font-style: normal;
+  color: var(--ann-primary);
+  font-weight: 700;
 }
 
 .ann-greeting {

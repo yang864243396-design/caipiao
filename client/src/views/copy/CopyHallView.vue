@@ -1,28 +1,74 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import LobbyTabBar from '@/components/lobby/LobbyTabBar.vue'
 import OptionPickerModal from '@/components/ui/OptionPickerModal.vue'
+import {
+  startCopyHallRankingsSync,
+  stopCopyHallRankingsSync,
+  useCopyHallRankings,
+} from '@/composables/useCopyHallRankings'
+import { useCopyHallPlayFilter } from '@/composables/useCopyHallPlayFilter'
+import { shareSnapshotToRankSlot, useCopyHallShareSchemes } from '@/composables/useCopyHallShareSchemes'
+import type { CopyHallBoardKind, CopyHallRankSlot } from '@shared/mock/copyHallRankings'
 
-/** 工具栏 / 筛选用占位 PNG */
-const ICON_PLACEHOLDER = '/images/lobby/icon-placeholder.png'
+/** 工具栏 / 列表图标 */
+const ICON_BACK = '/images/lobby/icon-back.png'
+const ICON_SEARCH = '/images/lobby/icon-search.png'
+const ICON_SCHEME = '/images/lobby/icon-scheme.png'
+const ICON_FILTER = '/images/lobby/icon-filter.png'
+const ICON_CHEVRON = '/images/lobby/icon-chevron-down.png'
 
-const tab = ref<'master' | 'contrary'>('master')
+const tab = ref<CopyHallBoardKind>('master')
 
-/** 顶部彩种（演示列表，接口接入后可替换） */
-const lotteryOptions = [
-  '腾讯分分彩',
-  '重庆时时彩',
-  '新疆时时彩',
-  '天津时时彩',
-  '福彩3D',
-  '排列三',
-] as const
-
-const selectedLottery = ref<(typeof lotteryOptions)[number]>('腾讯分分彩')
+const selectedLottery = ref('')
 const lotteryDialogVisible = ref(false)
 
+const { lotteryOptions, activeSlots, activeLotteryCode } = useCopyHallRankings(
+  () => selectedLottery.value,
+  () => tab.value,
+)
+
+const {
+  selectedPlayTypeId,
+  playFilterOptions,
+  selectedPlayLabel,
+  playTree,
+  resetPlayFilter,
+} = useCopyHallPlayFilter(
+  () => activeLotteryCode.value,
+  () => [],
+)
+
+const { filteredSchemes: filteredShareSchemes } = useCopyHallShareSchemes(
+  () => activeLotteryCode.value,
+  () => selectedPlayTypeId.value,
+  () => playTree.value,
+)
+
+watch(tab, () => {
+  resetPlayFilter()
+})
+
+const playDialogVisible = ref(false)
+
+const playPickerOptions = computed(() => playFilterOptions.value)
+
+function openPlayDialog() {
+  playDialogVisible.value = true
+}
+
+function onPlayPickerConfirm(val: string | number) {
+  selectedPlayTypeId.value = String(val)
+}
+
+watch(lotteryOptions, (opts) => {
+  if (!selectedLottery.value && opts.length) {
+    selectedLottery.value = opts[0]
+  }
+}, { immediate: true })
+
 const lotteryPickerOptions = computed(() =>
-  lotteryOptions.map((name) => ({ label: name, value: name }))
+  lotteryOptions.value.map((name) => ({ label: name, value: name })),
 )
 
 function openLotteryDialog() {
@@ -30,34 +76,75 @@ function openLotteryDialog() {
 }
 
 function onLotteryPickerConfirm(val: string | number) {
-  selectedLottery.value = val as (typeof lotteryOptions)[number]
+  selectedLottery.value = String(val)
 }
 
-const topRanks = [
-  { rank: 1, medal: 'yellow', name: '太乙后二', iconImg: ICON_PLACEHOLDER },
-  { rank: 2, medal: 'slate', name: '紫燕万位', iconImg: ICON_PLACEHOLDER },
-  { rank: 3, medal: 'orange', name: '莺凤十位', iconImg: ICON_PLACEHOLDER },
-  { rank: 4, medal: 'blue', name: '宛天个位', iconImg: ICON_PLACEHOLDER },
-  { rank: 5, medal: 'emerald', name: '路线6000+', iconImg: ICON_PLACEHOLDER },
-  { rank: 6, medal: 'blue', name: '打狗前二', iconImg: ICON_PLACEHOLDER },
-  { rank: 7, medal: 'emerald', name: '邯肖任四', iconImg: ICON_PLACEHOLDER },
-  { rank: 8, medal: 'teal', name: '关冲70+', iconImg: ICON_PLACEHOLDER },
-  { rank: 9, medal: 'cyan', name: '猎豹后二', iconImg: ICON_PLACEHOLDER },
-  { rank: 10, medal: 'emerald', name: '青衫万位', iconImg: ICON_PLACEHOLDER },
+const MEDAL_COLORS = [
+  'yellow',
+  'slate',
+  'orange',
+  'blue',
+  'emerald',
+  'blue',
+  'emerald',
+  'teal',
+  'cyan',
+  'emerald',
 ] as const
 
-const schemeCards = [
-  { iconImg: ICON_PLACEHOLDER, grad: 'g1', name: '禄螭万位' },
-  { iconImg: ICON_PLACEHOLDER, grad: 'g2', name: '月华万位' },
-  { iconImg: ICON_PLACEHOLDER, grad: 'g3', name: '青鸾后二' },
-  { iconImg: ICON_PLACEHOLDER, grad: 'g4', name: '重明千位' },
-  { iconImg: ICON_PLACEHOLDER, grad: 'g5', name: '麒麟个位' },
-  { iconImg: ICON_PLACEHOLDER, grad: 'g6', name: '白泽前三' },
-  { iconImg: ICON_PLACEHOLDER, grad: 'g7', name: '玄武后一' },
-  { iconImg: ICON_PLACEHOLDER, grad: 'g8', name: '朱雀任二' },
-  { iconImg: ICON_PLACEHOLDER, grad: 'g9', name: '青衫万位' },
-  { iconImg: ICON_PLACEHOLDER, grad: 'g10', name: '猎豹后二' },
+const GRAD_CLASSES = [
+  'g1',
+  'g2',
+  'g3',
+  'g4',
+  'g5',
+  'g6',
+  'g7',
+  'g8',
+  'g9',
+  'g10',
 ] as const
+
+const topRanks = computed(() =>
+  activeSlots.value.map((slot) => ({
+    slot,
+    rank: slot.rank,
+    medal: MEDAL_COLORS[slot.rank - 1] ?? 'blue',
+    name: slot.schemeName,
+    iconImg: ICON_SCHEME,
+  })),
+)
+
+const schemeCards = computed(() =>
+  filteredShareSchemes.value.map((item, i) => ({
+    slot: shareSnapshotToRankSlot(item),
+    iconImg: ICON_SCHEME,
+    grad: GRAD_CLASSES[i % GRAD_CLASSES.length] ?? 'g1',
+    name: item.schemeName,
+  })),
+)
+
+function gameDetailQuery(slot: CopyHallRankSlot) {
+  const q: Record<string, string> = {
+    scheme: `${slot.schemeName} - ${slot.playMethod}`,
+    snapshotId: slot.schemeId,
+    lotteryCode: activeLotteryCode.value,
+    playMethod: slot.playMethod,
+    board: tab.value,
+  }
+  if (slot.playTypeId) {
+    q.typeId = slot.playTypeId
+    q.playTypeId = slot.playTypeId
+  }
+  if (slot.subPlayId) {
+    q.subId = slot.subPlayId
+    q.subPlayId = slot.subPlayId
+  }
+  return q
+}
+
+onMounted(startCopyHallRankingsSync)
+onUnmounted(stopCopyHallRankingsSync)
 </script>
 
 <template>
@@ -66,7 +153,7 @@ const schemeCards = [
       <div class="topbar-inner">
         <RouterLink to="/" class="icon-btn topbar-side" aria-label="返回">
           <img
-            :src="ICON_PLACEHOLDER"
+            :src="ICON_BACK"
             alt=""
             width="24"
             height="24"
@@ -92,7 +179,7 @@ const schemeCards = [
         </div>
         <button type="button" class="icon-btn topbar-side" aria-label="搜索">
           <img
-            :src="ICON_PLACEHOLDER"
+            :src="ICON_SEARCH"
             alt=""
             width="24"
             height="24"
@@ -116,6 +203,19 @@ const schemeCards = [
       @confirm="onLotteryPickerConfirm"
     />
 
+    <OptionPickerModal
+      v-model="playDialogVisible"
+      panel-id="copy-hall-play-dialog"
+      :selected-value="selectedPlayTypeId"
+      title="选择玩法"
+      :options="playPickerOptions"
+      selection-accent="primary"
+      :show-header-divider="true"
+      :show-footer-divider="true"
+      :columns="2"
+      @confirm="onPlayPickerConfirm"
+    />
+
     <main class="main">
       <!-- Segmented -->
       <el-radio-group v-model="tab" size="default" class="seg-ep">
@@ -123,10 +223,32 @@ const schemeCards = [
         <el-radio-button value="contrary">反买榜</el-radio-button>
       </el-radio-group>
 
+      <!-- 空态占位 -->
+      <section v-if="!topRanks.length" class="rank-card hall-empty-card">
+        <el-empty
+          class="hall-empty"
+          :image-size="120"
+          :description="tab === 'master' ? '大神榜暂无上榜方案' : '反买榜暂无上榜方案'"
+        >
+          <template #description>
+            <p class="hall-empty-title">{{ tab === 'master' ? '大神榜暂无上榜方案' : '反买榜暂无上榜方案' }}</p>
+            <p class="hall-empty-hint">榜单按方案战绩实时生成，稍后再来看看吧</p>
+          </template>
+        </el-empty>
+      </section>
+
       <!-- Top 10 grid -->
-      <section class="rank-card">
+      <section v-else class="rank-card">
         <div class="rank-grid">
-          <div v-for="r in topRanks" :key="r.rank" class="rank-cell">
+          <RouterLink
+            v-for="r in topRanks"
+            :key="r.rank"
+            class="rank-cell"
+            :to="{
+              path: '/play/detail',
+              query: gameDetailQuery(r.slot),
+            }"
+          >
             <div class="medal-wrap">
               <img
                 :src="r.iconImg"
@@ -139,16 +261,16 @@ const schemeCards = [
               <span class="rank-num" :class="{ small: r.rank >= 10 }">{{ r.rank }}</span>
             </div>
             <span class="rank-name">{{ r.name }}</span>
-          </div>
+          </RouterLink>
         </div>
       </section>
 
       <!-- Filter -->
-      <div class="filter-bar">
+      <div v-if="playFilterOptions.length" class="filter-bar">
         <div class="filter-left">
           <div class="filter-ico">
             <img
-              :src="ICON_PLACEHOLDER"
+              :src="ICON_FILTER"
               alt=""
               width="18"
               height="18"
@@ -158,10 +280,18 @@ const schemeCards = [
           </div>
           <span class="filter-lbl">玩法筛选</span>
         </div>
-        <button type="button" class="filter-chip">
-          <span>定位胆</span>
+        <button
+          type="button"
+          class="filter-chip"
+          aria-haspopup="dialog"
+          :aria-expanded="playDialogVisible"
+          aria-controls="copy-hall-play-dialog"
+          :aria-label="`选择玩法，当前为 ${selectedPlayLabel}`"
+          @click="openPlayDialog"
+        >
+          <span>{{ selectedPlayLabel }}</span>
           <img
-            :src="ICON_PLACEHOLDER"
+            :src="ICON_CHEVRON"
             alt=""
             width="14"
             height="14"
@@ -172,14 +302,14 @@ const schemeCards = [
       </div>
 
       <!-- Scheme grid -->
-      <div class="scheme-grid">
+      <div v-if="schemeCards.length" class="scheme-grid">
         <RouterLink
           v-for="c in schemeCards"
-          :key="c.name"
+          :key="c.slot.schemeId"
           class="scheme-item"
           :to="{
             path: '/play/detail',
-            query: { scheme: `${c.name} - 定位胆万位` },
+            query: gameDetailQuery(c.slot),
           }"
         >
           <div class="scheme-grad" :class="c.grad">
@@ -195,6 +325,12 @@ const schemeCards = [
           <h3 class="scheme-name">{{ c.name }}</h3>
         </RouterLink>
       </div>
+      <p
+        v-else-if="playFilterOptions.length && !schemeCards.length"
+        class="scheme-filter-empty"
+      >
+        当前玩法暂无方案
+      </p>
     </main>
 
     <LobbyTabBar />
@@ -378,6 +514,24 @@ const schemeCards = [
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.04);
   border: 1px solid rgba(194, 198, 216, 0.1);
 }
+.hall-empty-card {
+  padding: 2rem 1rem 2.5rem;
+}
+.hall-empty {
+  --el-empty-padding: 0;
+}
+.hall-empty-title {
+  margin: 0 0 0.375rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--on-surface);
+}
+.hall-empty-hint {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--on-surface-variant);
+}
 .rank-grid {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
@@ -387,6 +541,18 @@ const schemeCards = [
   display: flex;
   flex-direction: column;
   align-items: center;
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 0.5rem;
+  padding: 0.25rem;
+  transition: transform 0.15s, background 0.15s;
+}
+.rank-cell:hover {
+  background: rgba(0, 80, 203, 0.06);
+}
+.rank-cell:active {
+  transform: scale(0.97);
 }
 .medal-wrap {
   position: relative;
@@ -572,5 +738,16 @@ const schemeCards = [
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+}
+.scheme-filter-empty {
+  margin: 0;
+  padding: 1.25rem 1rem;
+  text-align: center;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--on-surface-variant);
+  background: var(--surface-lowest);
+  border-radius: 0.75rem;
+  border: 1px solid rgba(194, 198, 216, 0.1);
 }
 </style>

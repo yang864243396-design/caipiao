@@ -1,0 +1,8 @@
+﻿go : # caipiao/backend/internal/db/sqlcdb
+所在位置 C:\Users\Administrator\AppData\Local\Temp\ps-script-2b6492fa-1952-4834-920e-51022645d34c.ps1:81 字符: 39
++ cd e:\CompanyCode\ai\caipiao\backend; go build ./... 2>&1 | Out-File  ...
++                                       ~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (# caipiao/backend/internal/db/sqlcdb:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+internal\db\sqlcdb\scheme_instance_ext.go:213:60: undefined: context

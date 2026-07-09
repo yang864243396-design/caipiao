@@ -1,0 +1,84 @@
+## bnb_ffc_1m (batch-summary)
+plays=170 ok=143 fail=27 exit=1 state=failed
+failSample: 第三方对账不一致: periods want=\
+time: 2026-06-29T16:03:12.6845211+08:00 -> 2026-06-29T16:42:21.8178470+08:00
+
+## bnb_ffc_5m (batch-summary)
+plays=170 ok=169 fail=1 exit=1 state=failed
+failSample: 等待开盘超时 (5m0s)
+time: 2026-06-29T17:02:06.0278946+08:00 -> 2026-06-29T17:22:36.9667011+08:00
+
+## bnb_k3_5m (batch-summary)
+plays=9 ok=8 fail=1 exit=1 state=failed
+failSample: 等待开盘超时 (5m0s)
+time: 2026-06-29T17:29:13.8136608+08:00 -> 2026-06-29T17:35:04.6684853+08:00
+
+## eth_ffc_5m (batch-summary)
+plays=170 ok=169 fail=1 exit=1 state=failed
+failSample: 等待开盘超时 (5m0s)
+time: 2026-06-29T18:42:26.7613551+08:00 -> 2026-06-29T19:04:08.2711365+08:00
+
+## hash_ffc_1m (batch-summary)
+plays=170 ok=169 fail=1 exit=1 state=failed
+failSample: 第三方接单失败: guaji api code=40050: 区块获取异常,下注失败
+time: 2026-06-29T20:14:40.2666434+08:00 -> 2026-06-29T20:33:14.2059934+08:00
+
+## bnb_ffc_1m FAIL log (26 lines)
+[89] FAIL bnb_ffc_1m g010/57: 绗笁鏂瑰璐︿笉涓€鑷? periods want="10111202606290973" got="10111202606290974"
+[90] FAIL bnb_ffc_1m g010/58: 绗笁鏂瑰璐︿笉涓€鑷? periods want="10111202606290973" got="10111202606290974"
+[91] FAIL bnb_ffc_1m g010/59: 绗笁鏂瑰璐︿笉涓€鑷? periods want="10111202606290973" got="10111202606290974"
+[92] FAIL bnb_ffc_1m g010/60: 绗笁鏂瑰璐︿笉涓€鑷? periods want="10111202606290973" got="10111202606290974"
+[93] FAIL bnb_ffc_1m g010/61: 绗笁鏂瑰璐︿笉涓€鑷? periods want="10111202606290973" got="10111202606290974"
+[94] FAIL bnb_ffc_1m g010/62: 绗笁鏂瑰璐︿笉涓€鑷? periods want="10111202606290973" got="10111202606290974"
+[95] FAIL bnb_ffc_1m g010/63: 绗笁鏂瑰璐︿笉涓€鑷? periods want="10111202606290973" got="10111202606290974"
+[96] FAIL bnb_ffc_1m g010/64: 绗笁鏂瑰璐︿笉涓€鑷? periods want="10111202606290973" got="10111202606290974"
+[97] FAIL bnb_ffc_1m g010/65: 绗笁鏂瑰璐︿笉涓€鑷? periods want="10111202606290973" got="10111202606290974"
+[98] FAIL bnb_ffc_1m g010/66: 绗笁鏂瑰璐︿笉涓€鑷? periods want="10111202606290973" got="10111202606290974"
+[99] FAIL bnb_ffc_1m g010/67: 绗笁鏂瑰璐︿笉涓€鑷? periods want="10111202606290973" got="10111202606290974"
+[100] FAIL bnb_ffc_1m g010/68: 绗笁鏂瑰璐︿笉涓€鑷? periods want="10111202606290973" got="10111202606290974"
+[101] FAIL bnb_ffc_1m g010/69: 绗笁鏂瑰璐︿笉涓€鑷? periods want="10111202606290973" got="10111202606290974"
+[127] FAIL bnb_ffc_1m g012/91: 瓒呰繃 24 娆℃湡鍙烽噸璇曚粛鏈垚鍔熶笅鍗?[128] FAIL bnb_ffc_1m g012/92: 绗笁鏂瑰璐︿笉涓€鑷? periods want="10111202606290999" got="10111202606291000"
+[129] FAIL bnb_ffc_1m g012/93: 绗笁鏂瑰璐︿笉涓€鑷? periods want="10111202606290999" got="10111202606291000"
+[130] FAIL bnb_ffc_1m g012/94: 绗笁鏂瑰璐︿笉涓€鑷? periods want="10111202606290999" got="10111202606291000"
+[131] FAIL bnb_ffc_1m g012/95: 绗笁鏂瑰璐︿笉涓€鑷? periods want="10111202606290999" got="10111202606291000"
+[132] FAIL bnb_ffc_1m g012/96: 绗笁鏂瑰璐︿笉涓€鑷? periods want="10111202606290999" got="10111202606291000"
+[133] FAIL bnb_ffc_1m g012/97: 绗笁鏂瑰璐︿笉涓€鑷? periods want="10111202606290999" got="10111202606291000"
+[134] FAIL bnb_ffc_1m g012/98: 绗笁鏂瑰璐︿笉涓€鑷? periods want="10111202606290999" got="10111202606291000"
+[135] FAIL bnb_ffc_1m g012/99: 绗笁鏂瑰璐︿笉涓€鑷? periods want="10111202606290999" got="10111202606291000"
+[136] FAIL bnb_ffc_1m g012/100: 绗笁鏂瑰璐︿笉涓€鑷? periods want="10111202606290999" got="10111202606291000"
+[137] FAIL bnb_ffc_1m g013/127: 绗笁鏂瑰璐︿笉涓€鑷? periods want="10111202606290999" got="10111202606291000"
+[138] FAIL bnb_ffc_1m g013/128: 绗笁鏂瑰璐︿笉涓€鑷? periods want="10111202606290999" got="10111202606291000"
+[139] FAIL bnb_ffc_1m g013/129: 绗笁鏂瑰璐︿笉涓€鑷? periods want="10111202606290999" got="10111202606291000"
+[140] FAIL bnb_ffc_1m g013/130: 绗笁鏂瑰璐︿笉涓€鑷? periods want="10111202606290999" got="10111202606291000"
+SECTION_END: done tested=170 ok=143 skip=0 fail=27 report=data\real-bet-matrix\by-lottery\bnb_ffc_1m.jsonl
+LOTTERY_SUMMARY: => ok=143 skip=0 fail=27 exit=1 state=failed
+
+## bnb_ffc_5m FAIL log (1 lines)
+[34] FAIL bnb_ffc_5m g003/36: 绛夊緟寮€鐩樿秴鏃?(5m0s)
+SECTION_END: done tested=170 ok=169 skip=0 fail=1 report=data\real-bet-matrix\by-lottery\bnb_ffc_5m.jsonl
+LOTTERY_SUMMARY: => ok=169 skip=0 fail=1 exit=1 state=failed
+
+## bnb_k3_5m FAIL log (1 lines)
+[8] FAIL bnb_k3_5m g007/232: 绛夊緟寮€鐩樿秴鏃?(5m0s)
+SECTION_END: done tested=9 ok=8 skip=0 fail=1 report=data\real-bet-matrix\by-lottery\bnb_k3_5m.jsonl
+LOTTERY_SUMMARY: => ok=8 skip=0 fail=1 exit=1 state=failed
+
+## eth_ffc_5m FAIL log (1 lines)
+[30] FAIL eth_ffc_5m g003/32: 绛夊緟寮€鐩樿秴鏃?(5m0s)
+SECTION_END: done tested=170 ok=169 skip=0 fail=1 report=data\real-bet-matrix\by-lottery\eth_ffc_5m.jsonl
+LOTTERY_SUMMARY: => ok=169 skip=0 fail=1 exit=1 state=failed
+
+## hash_ffc_1m FAIL log (1 lines)
+[29] FAIL hash_ffc_1m g003/31: 绗笁鏂规帴鍗曞け璐? guaji api code=40050: 鍖哄潡鑾峰彇寮傚父,涓嬫敞澶辫触
+SECTION_END: done tested=170 ok=169 skip=0 fail=1 report=data\real-bet-matrix\by-lottery\hash_ffc_1m.jsonl
+LOTTERY_SUMMARY: => ok=169 skip=0 fail=1 exit=1 state=failed
+
+## bnb_ffc_1m jsonl non-ok rows: 0
+
+## bnb_ffc_5m jsonl non-ok rows: 0
+
+## bnb_k3_5m jsonl non-ok rows: 0
+
+## eth_ffc_5m jsonl non-ok rows: 0
+
+## hash_ffc_1m jsonl non-ok rows: 0

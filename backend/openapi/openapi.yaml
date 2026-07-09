@@ -1,0 +1,4364 @@
+openapi: 3.0.3
+info:
+  title: 彩票平台 API
+  version: 0.1.0
+  description: |
+    Client（/client/*）、Admin（/admin/*）、公共（/public/*）REST 契约。
+    接入计划见 backend/docs/integration-plan.md
+servers:
+  - url: /api/v1
+    description: 默认基址（与 VITE_API_BASE_URL 对齐）
+
+tags:
+  - name: public
+    description: 无需登录
+  - name: client-auth
+    description: 会员/代理登录
+  - name: client-cloud
+    description: 云端中心
+  - name: client-member
+    description: 会员中心
+  - name: client-funds
+    description: 充值 / 提现 / 充提记录
+  - name: client-orders
+    description: 订单与帐变
+  - name: client-copy-hall
+    description: 跟单大厅
+  - name: client-games
+    description: 彩种游戏详情 / 开奖 / 手动下注
+  - name: client-schemes
+    description: 方案私池 / 分享池 / 云端实例
+  - name: client-content
+    description: 公告 / FAQ / 帮助 / 意见回馈
+  - name: admin-auth
+    description: 管理端登录
+  - name: admin-ops
+    description: 运营管理
+  - name: admin-content
+    description: 内容 CMS / 系统讯息
+  - name: client-chat
+    description: 聊天与系统讯息
+
+paths:
+  /health:
+    get:
+      summary: 健康检查
+      tags: [public]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseHealth'
+
+  /public/maintenance:
+    get:
+      summary: 全站维护状态（Client 大厅拦截）
+      tags: [public]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseMaintenance'
+
+  /public/site-brand:
+    get:
+      summary: 站点品牌（只读）
+      tags: [public]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseSiteBrand'
+
+  /public/lobby-slots:
+    get:
+      summary: 大厅运营位（只读 · 仅上架）
+      tags: [public]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponsePublicLobbySlotList'
+
+  /public/lotteries:
+    get:
+      summary: 彩种大厅列表（sale_status=on_sale）
+      tags: [public]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponsePublicLotteryList'
+
+  /public/lotteries/{code}/play-tree:
+    get:
+      summary: 彩种玩法树（两层 · 仅上架）
+      tags: [public]
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponsePublicPlayTree'
+        '403':
+          description: 彩种维护中
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /public/lotteries/{code}/status:
+    get:
+      summary: 彩种路由状态（旧码/无效码/维护 · 供 Client 路由守卫）
+      tags: [public]
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseLotteryRouteStatus'
+
+  /admin/games/lottery-catalog:
+    get:
+      summary: 彩种目录（含维护态 · Admin 全量）
+      tags: [admin-system]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseLotteryCatalogList'
+
+  /admin/games/lottery-catalog/{code}:
+    patch:
+      summary: 彩种维护 PATCH（P5 · 上架→维护 / 维护改 4 字段）
+      description: |
+        上架态仅允许 `enterMaintenance: true` 进入维护。
+        维护态可改 `displayName`、`outboundLotteryCode`、`sortOrder`、`saleStatus`（上架↔维护）；
+        改中文名会同步该彩种下用户方案的 `lottery_label`。
+      tags: [admin-system]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchLotteryCatalogRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseLotteryCatalogRow'
+        '403':
+          description: 上架态不可直接编辑
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /admin/games/play-templates:
+    get:
+      summary: 玩法模板列表（只读）
+      tags: [admin-system]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+
+  /admin/games/play-templates/{templateCode}/play-tree:
+    get:
+      summary: 玩法树（只读 · 按模板）
+      tags: [admin-system]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: templateCode
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+
+  /client/auth/login:
+    post:
+      summary: 会员/代理登录
+      tags: [client-auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAuthToken'
+
+  /client/member/profile:
+    get:
+      summary: 当前会员资料与余额摘要
+      tags: [client-member]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseMemberProfile'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /client/member/wallet:
+    get:
+      summary: 当前会员钱包（可用/冻结余额）
+      tags: [client-member]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseMemberWallet'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /client/funds/records:
+    get:
+      summary: 充提记录 · 充值与提现订单合并列表
+      description: 只读；充值下单见 POST /client/funds/recharge（内测演示即时到账）
+      tags: [client-funds]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseFundRecords'
+
+  # ===== 第三方挂机授权（Guaji · T1/T1b/T6） =====
+  /client/guaji/auth-status:
+    get:
+      summary: 当前会员第三方授权门禁状态（hasActiveGuajiAuth / bindingCount / activeUsername）
+      tags: [client-guaji]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /client/guaji/accounts:
+    get:
+      summary: 第三方授权账号列表（绑定列表）
+      tags: [client-guaji]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /client/guaji/accounts/bind:
+    post:
+      summary: 绑定第三方授权账号（用户名+密码；可能返回 mfaRequired）
+      tags: [client-guaji]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username: { type: string }
+                password: { type: string }
+                loginKey: { type: string }
+                googleCode: { type: string }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object } } } }
+
+  /client/guaji/accounts/{id}/activate:
+    post:
+      summary: 设为启用（切换主授权，内含全部 running/pending 方案批量暂停）
+      tags: [client-guaji]
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object } } } }
+
+  /client/guaji/accounts/{id}/reauth:
+    post:
+      summary: 重新授权（全自动 MFA 刷新 Token；连续失败 3 次引导绑定页）
+      tags: [client-guaji]
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object } } } }
+
+  /client/guaji/accounts/{id}:
+    delete:
+      summary: 解绑授权账号（内含全部 running/pending 方案批量暂停）
+      tags: [client-guaji]
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object } } } }
+
+  /client/guaji/balance:
+    get:
+      summary: 当前启用授权的主币种实账余额（取自第三方 users/i/info）
+      tags: [client-guaji]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object } } } }
+
+  /client/guaji/primary-currency:
+    get:
+      summary: 查询会员主币种（USDT/TRX/CNY）
+      tags: [client-guaji]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object } } } }
+    put:
+      summary: 切换主币种（内含全部 running/pending 方案批量暂停）
+      tags: [client-guaji]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                currency: { type: string, enum: [USDT, TRX, CNY] }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object } } } }
+
+  /admin/members/{memberNo}/guaji-accounts:
+    get:
+      summary: Admin 会员详情 · 第三方授权只读列表（§19.5）
+      tags: [admin-guaji]
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: memberNo, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object } } } }
+
+  /admin/guaji/health:
+    get:
+      summary: Admin · 第三方授权健康指标（totalBindings/activeAccounts/erroredTokens/expiringSoon）
+      tags: [admin-guaji]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object } } } }
+
+  /client/orders/ledger:
+    get:
+      summary: 会员 · 帐变记录
+      description: 对应 Client `MemberLedgerView`；默认查询当日（UTC+8）
+      tags: [client-orders]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: dateFrom
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: dateTo
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [all, deposit, withdraw, bet, payout, adjust, withdraw_freeze]
+        - name: orderNo
+          in: query
+          schema:
+            type: string
+        - name: scope
+          in: query
+          schema:
+            type: string
+            enum: [self, team]
+            default: self
+        - name: cursor
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseWalletLedger'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /client/cloud/bet-records:
+    get:
+      summary: 云端 · 最近 N 日投注记录（按方案分组）
+      description: |
+        对应 Client `BetRecordsView`。
+        Tab「真实/模拟」通过 mode 区分；汇总栏用 summary；列表用 groups。
+      tags: [client-cloud]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/mode'
+        - $ref: '#/components/parameters/days'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseBetRecordGroups'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /client/cloud/bet-records/{schemeId}:
+    get:
+      summary: 云端 · 单方案投注明细
+      description: 对应 Client `BetRecordsSchemeDetailView` 表格
+      tags: [client-cloud]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: schemeId
+          in: path
+          required: true
+          schema:
+            type: string
+          example: cloud_demo_2001
+        - $ref: '#/components/parameters/mode'
+        - $ref: '#/components/parameters/days'
+        - $ref: '#/components/parameters/cursor'
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseBetRecordDetail'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /client/cloud/schemes/running:
+    get:
+      summary: 云端 · 运行中方案列表
+      tags: [client-cloud]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: runMode
+          in: query
+          required: false
+          description: 分路筛选；不传返回全部
+          schema:
+            type: string
+            enum: [real, sim]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseCloudRunningSchemes'
+
+  /client/cloud/schemes/stats:
+    get:
+      summary: 云端 · 中心顶部统计（正式/模拟各 3 项）
+      tags: [client-cloud]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseCloudCenterStats'
+
+  /client/cloud/lookback:
+    get:
+      summary: 云端 · 回头设置
+      tags: [client-cloud]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseCloudLookback'
+    put:
+      summary: 云端 · 保存回头设置
+      tags: [client-cloud]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CloudLookbackSettings'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseCloudLookback'
+
+  /client/cloud/schemes/{schemeId}/start:
+    post:
+      summary: 云端 · 开启方案（兼容旧路径，等同 instances/{id}/start）
+      deprecated: true
+      tags: [client-cloud]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: schemeId
+          in: path
+          required: true
+          description: 实为 instanceId
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseSchemeInstance'
+
+  /client/orders/bets:
+    get:
+      summary: 会员 · 投注记录查询（全站）
+      description: 对应 `member-bet-records`，筛选维度多于云端三日记录
+      tags: [client-orders]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: dateFrom
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: dateTo
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: gameCode
+          in: query
+          schema:
+            type: string
+        - name: orderNo
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [all, pending, win, lose, cancel]
+        - name: scope
+          in: query
+          schema:
+            type: string
+            enum: [self, team]
+        - name: cursor
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseMemberBetList'
+
+  /client/copy-hall/rankings:
+    get:
+      summary: 跟单大厅 · 榜单
+      tags: [client-copy-hall]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: lotteryCode
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: board
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [master, contrary]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseCopyHallRankings'
+
+  /client/games/lottery-options:
+    get:
+      summary: 会员投注记录 · 彩种筛选项（含维护态，标注维护）
+      tags: [client-games]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseMemberLotteryFilterOptions'
+
+  /client/games/{code}/detail:
+    get:
+      summary: 彩种 · 游戏详情（倒计时 / 走势 / 投注明细）
+      tags: [client-games]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+          example: tron_ffc_1m
+        - name: schemeName
+          in: query
+          schema:
+            type: string
+          description: 方案名（跟单大厅跳转时传）
+        - name: playMethod
+          in: query
+          schema:
+            type: string
+          description: 玩法中文名，如「定位胆万位」
+        - name: playTypeId
+          in: query
+          schema:
+            type: string
+            enum: [dingwei, hou4, qian3, zhong3]
+          description: 跟单大厅跳转时传；Client 路由 query，优先于 playMethod 解析
+        - name: subPlayId
+          in: query
+          schema:
+            type: string
+            enum: [zhixuan_fs, zhixuan_ds, zuxuan_fs]
+          description: 子玩法 ID；与 playTypeId 一并传递
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseGameDetail'
+        '403':
+          description: 彩种维护中
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseError'
+
+  /client/games/{code}/draws:
+    get:
+      summary: 彩种 · 历史开奖
+      tags: [client-games]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: cursor
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseGameDraws'
+
+  /client/games/{code}/bets:
+    post:
+      summary: 彩种 · 手动下注（真实选号 + 扣钱包）
+      description: |
+        请求体须含 `betPayload.groupContent`（客户端选号）；后端校验玩法段后持久化至 `bet_orders.bet_payload`。
+        余额不足返回 code=403「可用余额不足」；选号无效返回 422。
+      tags: [client-games]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlaceGameBetRequest'
+      responses:
+        '200':
+          description: OK（订单 pending，待 settlement worker 开奖结算）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponsePlaceGameBet'
+        '403':
+          description: 彩种维护中 / 余额不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseError'
+        '422':
+          description: 选号无效 / 参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseError'
+
+  /client/games/{code}/scheme-options:
+    get:
+      summary: 彩种 · 方案选项（运行/玩法/子玩法）
+      description: 首期读种子配置；见 schemes.md D21
+      tags: [client-schemes]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+          example: tencent_ffc
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseLotterySchemeOptions'
+
+  /client/schemes:
+    get:
+      summary: 私池 · 我的方案列表
+      tags: [client-schemes]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: kind
+          in: query
+          schema:
+            $ref: '#/components/schemas/SchemeKind'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseSchemeDefinitionList'
+    post:
+      summary: 私池 · 创建方案
+      tags: [client-schemes]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSchemeRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseSchemeDefinition'
+        '422':
+          description: 方案名重复等
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseError'
+
+  /client/schemes/{definitionId}:
+    get:
+      summary: 私池 · 方案详情
+      tags: [client-schemes]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/definitionId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseSchemeDefinition'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      summary: 私池 · 更新方案（不可改锁定五字段）
+      tags: [client-schemes]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/definitionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSchemeRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseSchemeDefinition'
+        '409':
+          description: running 时不可改倍投/期次
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseError'
+    delete:
+      summary: 私池 · 删除方案（实例非 running）
+      tags: [client-schemes]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/definitionId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseEmpty'
+        '409':
+          description: 实例 running 禁止删除
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseError'
+
+  /client/schemes/{definitionId}/bet-multiplier:
+    put:
+      summary: 方案 · 保存倍投设定
+      tags: [client-schemes]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/definitionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseSchemeDefinition'
+        '409':
+          description: running 不可改
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseError'
+
+  /client/schemes/{definitionId}/rounds:
+    put:
+      summary: 方案 · 保存期次规则
+      tags: [client-schemes]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/definitionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rounds]
+              properties:
+                rounds:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/SchemeRoundRule'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseSchemeDefinition'
+
+  /client/schemes/{definitionId}/add-to-cloud:
+    post:
+      summary: 添加至云端（无实例时；自创可选分享）
+      description: 1 定义 1 实例；首次公开写分享池快照（type=custom）
+      tags: [client-schemes]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/definitionId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddSchemeToCloudRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAddSchemeToCloud'
+        '409':
+          description: 已有实例
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseError'
+        '429':
+          description: 1s 内重复点击
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseError'
+
+  /client/schemes/{definitionId}/fork-and-add-to-cloud:
+    post:
+      summary: 复制为新方案并添加至云端（已有实例时）
+      description: 整包复制；新方案默认私密；名称 原名-2 顺延
+      tags: [client-schemes]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/definitionId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseForkSchemeToCloud'
+
+  /client/schemes/favorites:
+    get:
+      summary: 跟单大厅方案收藏列表（内置计画选择来源）
+      tags: [client-schemes]
+      security:
+        - bearerAuth: []
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      summary: 收藏跟单大厅方案（body.snapshotId）
+      tags: [client-schemes]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [snapshotId]
+              properties:
+                snapshotId: { type: string }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: 快照不存在 }
+
+  /client/schemes/favorites/{snapshotId}:
+    delete:
+      summary: 取消收藏跟单大厅方案
+      tags: [client-schemes]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: snapshotId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /client/schemes/share-catalog:
+    get:
+      summary: 分享池 · 方案下载列表（仅自创快照）
+      tags: [client-schemes]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: keyword
+          in: query
+          schema:
+            type: string
+        - $ref: '#/components/parameters/cursor'
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseShareCatalog'
+
+  /client/schemes/share/{snapshotId}/add-to-cloud:
+    post:
+      summary: 分享池 → 私池（跟单方案 + pending）
+      tags: [client-schemes]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/snapshotId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseShareFollowAction'
+
+  /client/schemes/share/{snapshotId}/follow-bet:
+    post:
+      summary: 分享池 · 跟单投注（跟单方案 + running）
+      tags: [client-schemes]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/snapshotId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShareFollowBetRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseShareFollowAction'
+
+  /client/schemes/contrary/bet:
+    post:
+      summary: 反买 · 计划反集投注（反买方案 + running）
+      tags: [client-schemes]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContraryBetRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseShareFollowAction'
+
+  /client/cloud/global-settings:
+    get:
+      summary: 云端 · 会员全局规则（总止损止盈、断期停投等）
+      tags: [client-cloud]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseCloudGlobalSettings'
+    put:
+      summary: 云端 · 保存会员全局规则
+      tags: [client-cloud]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CloudGlobalSettings'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseCloudGlobalSettings'
+
+  /client/cloud/instances/{instanceId}/start:
+    post:
+      summary: 云端实例 · 开启（pending/paused → running）
+      tags: [client-schemes]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/instanceId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseSchemeInstance'
+        '422':
+          description: 未满足恢复条件
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseError'
+
+  /client/cloud/instances/{instanceId}/pause:
+    post:
+      summary: 云端实例 · 暂停
+      tags: [client-schemes]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/instanceId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseSchemeInstance'
+
+  /client/cloud/instances/{instanceId}/resume:
+    post:
+      summary: 云端实例 · 恢复运行
+      tags: [client-schemes]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/instanceId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseSchemeInstance'
+
+  /admin/auth/login:
+    post:
+      summary: 管理员登录
+      description: 返回 JWT 及账号绑定的 roleId（不再前端自选角色）
+      tags: [admin-auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAuthToken'
+
+  /admin/auth/session:
+    get:
+      summary: 当前 Admin 会话（账号 / 绑定角色）
+      tags: [admin-auth]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAdminSession'
+
+  /admin/system/users:
+    get:
+      summary: Admin 账号列表
+      tags: [admin-system]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAdminUserList'
+    post:
+      summary: 创建 Admin 账号
+      tags: [admin-system]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminUserSaveInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAdminUser'
+
+  /admin/system/users/{id}:
+    put:
+      summary: 更新 Admin 账号（可选重置密码）
+      tags: [admin-system]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminUserSaveInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAdminUser'
+    delete:
+      summary: 删除 Admin 账号
+      tags: [admin-system]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            format: int64
+
+  /admin/content/bundle:
+    get:
+      summary: 内容 CMS 批量加载（公告/FAQ/帮助/大厅位/站点品牌）
+      tags: [admin-content]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAdminContentBundle'
+
+  /admin/content/announcements:
+    get:
+      summary: 公告列表（Admin）
+      tags: [admin-content]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAdminAnnouncementList'
+    put:
+      summary: 保存公告
+      tags: [admin-content]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminAnnouncement'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAdminAnnouncement'
+
+  /admin/content/announcements/{id}:
+    delete:
+      summary: 删除公告
+      tags: [admin-content]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: string
+
+  /admin/content/faq/categories:
+    get:
+      summary: FAQ 分类列表
+      tags: [admin-content]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAdminFaqCategoryList'
+    put:
+      summary: 保存 FAQ 分类
+      tags: [admin-content]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminFaqCategory'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAdminFaqCategory'
+
+  /admin/content/faq/categories/{id}:
+    delete:
+      summary: 删除 FAQ 分类
+      tags: [admin-content]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: string
+
+  /admin/content/faq/articles:
+    get:
+      summary: FAQ 文章列表
+      tags: [admin-content]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAdminFaqArticleList'
+    put:
+      summary: 保存 FAQ 文章
+      tags: [admin-content]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminFaqArticle'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAdminFaqArticle'
+
+  /admin/content/faq/articles/{id}:
+    delete:
+      summary: 删除 FAQ 文章
+      tags: [admin-content]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: string
+
+  /admin/content/help/articles:
+    get:
+      summary: 帮助文章列表
+      tags: [admin-content]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAdminHelpArticleList'
+    put:
+      summary: 保存帮助文章
+      tags: [admin-content]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminHelpArticle'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAdminHelpArticle'
+
+  /admin/content/help/articles/{id}:
+    delete:
+      summary: 删除帮助文章
+      tags: [admin-content]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: string
+
+  /admin/content/lobby-slots:
+    put:
+      summary: 保存大厅运营位
+      tags: [admin-content]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminLobbySlot'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAdminLobbySlot'
+
+  /admin/content/site-brand:
+    put:
+      summary: 保存站点品牌
+      tags: [admin-content]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SiteBrand'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseSiteBrand'
+
+  /admin/operations/maintenance:
+    get:
+      summary: 全站维护状态（Admin 编辑）
+      tags: [admin-ops]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAdminMaintenance'
+    put:
+      summary: 更新全站维护开关
+      tags: [admin-ops]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminMaintenanceState'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAdminMaintenance'
+
+  /admin/content/system-message-templates:
+    get:
+      summary: 系统讯息模板列表
+      tags: [admin-content]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseSystemMessageTemplateList'
+    put:
+      summary: 保存系统讯息模板
+      tags: [admin-content]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SystemMessageTemplate'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseSystemMessageTemplate'
+
+  /admin/content/system-message-templates/{id}:
+    delete:
+      summary: 删除系统讯息模板
+      tags: [admin-content]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: string
+
+  /admin/content/system-messages/send:
+    post:
+      summary: 向单会员下发系统讯息（成功后 WS 推送 client.chat.system.message）
+      tags: [admin-content]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminSendSystemMessageInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAdminSendSystemMessage'
+
+  /client/content/announcements:
+    get:
+      summary: 平台公告列表
+      tags: [client-content]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAnnouncementList'
+
+  /client/content/announcements/{id}:
+    get:
+      summary: 公告详情（标记已读）
+      tags: [client-content]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAnnouncementDetail'
+
+  /client/content/faq:
+    get:
+      summary: 常见问题列表
+      tags: [client-content]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseFaqList'
+
+  /client/content/faq/{id}:
+    get:
+      summary: FAQ 详情
+      tags: [client-content]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseFaqDetail'
+
+  /client/content/help:
+    get:
+      summary: 帮助中心文章列表
+      tags: [client-content]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseHelpArticleList'
+
+  /client/content/feedback:
+    post:
+      summary: 提交意见回馈
+      tags: [client-content]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FeedbackSubmitInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseFeedbackResult'
+
+  /client/chat/hub:
+    get:
+      summary: 聊天 Hub（未读/上级/群组）
+      tags: [client-chat]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseChatHub'
+
+  /client/chat/threads/{peerId}/messages:
+    get:
+      summary: 会话消息列表
+      tags: [client-chat]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: peerId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            maximum: 200
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseChatMessageList'
+    post:
+      summary: 发送会话消息（成功后 WS fan-out）
+      tags: [client-chat]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: peerId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatSendInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseChatMessage'
+
+  /client/chat/system-messages:
+    get:
+      summary: 会员系统讯息列表
+      tags: [client-chat]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseSystemMessageList'
+
+  /client/funds/recharge:
+    post:
+      summary: 充值下单（内测演示 · 即时到账）
+      description: |
+        无第三方支付回调；校验渠道与限额后立即写入 `recharge_orders`（status=paid）、
+        增加钱包余额并写 `wallet_ledger`（txn_type=deposit）。生产环境应替换为真实支付流程。
+      tags: [client-funds]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RechargeSubmitInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseRechargeSubmit'
+
+  /client/funds/recharge-channels:
+    get:
+      summary: 充值渠道列表（仅上架）
+      tags: [client-funds]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseRechargeChannelList'
+
+  /admin/funds/recharge-channels:
+    get:
+      summary: 充值渠道列表（含下架）
+      tags: [admin-funds]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseRechargeChannelList'
+    put:
+      summary: 保存充值渠道
+      tags: [admin-funds]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RechargeChannel'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseRechargeChannel'
+
+  /admin/dashboard/kpi:
+    get:
+      summary: 仪表盘 KPI（充值/提现/投注/平台盈亏/运行中方案）
+      tags: [admin-ops]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAdminDashboardKpi'
+
+  /admin/members/{memberNo}/ops:
+    post:
+      summary: 会员运营统一事件（改代理/重置密码/冻结解冻）
+      tags: [admin-ops]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: memberNo
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action:
+                  type: string
+                  enum: [change_agent, reset_login_password, reset_fund_password, toggle_freeze]
+                l1AgentCode:
+                  type: string
+                l2AgentCode:
+                  type: string
+      responses:
+        '200':
+          description: OK
+
+  /admin/schemes/instances:
+    get:
+      summary: 全站方案监控 · 用户 Tab / 分享池 Tab
+      description: scope=user 会员方案+实例；scope=share 分享池快照（仅自创）
+      tags: [admin-ops]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: scope
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [user, share]
+        - name: keyword
+          in: query
+          schema:
+            type: string
+        - name: kind
+          in: query
+          schema:
+            $ref: '#/components/schemas/SchemeKind'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/SchemeInstanceStatus'
+        - name: runMode
+          in: query
+          schema:
+            type: string
+            enum: [real, sim]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseSchemeMonitorList'
+
+  /admin/schemes/share/{snapshotId}:
+    patch:
+      summary: 分享池 · 修改快照完整配置
+      tags: [admin-ops]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/snapshotId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchShareSnapshotRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseShareSnapshot'
+    delete:
+      summary: 分享池 · 删除快照
+      tags: [admin-ops]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/snapshotId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseEmpty'
+
+  /admin/schemes/instances/{instanceId}/force-stop:
+    post:
+      summary: 强停 → soft_stopped（已封停）
+      tags: [admin-ops]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/instanceId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseSchemeInstance'
+
+  /admin/schemes/instances/{instanceId}/release-stop:
+    post:
+      summary: 解封 → paused（已暂停）
+      tags: [admin-ops]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/instanceId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseSchemeInstance'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    mode:
+      name: mode
+      in: query
+      description: 真实记录 real / 模拟记录 sim
+      schema:
+        type: string
+        enum: [real, sim]
+        default: real
+    days:
+      name: days
+      in: query
+      description: 统计窗口（自然日），默认 3
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 30
+        default: 3
+    cursor:
+      name: cursor
+      in: query
+      schema:
+        type: string
+    limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 50
+    definitionId:
+      name: definitionId
+      in: path
+      required: true
+      schema:
+        type: string
+    instanceId:
+      name: instanceId
+      in: path
+      required: true
+      schema:
+        type: string
+    snapshotId:
+      name: snapshotId
+      in: path
+      required: true
+      schema:
+        type: string
+
+  responses:
+    Unauthorized:
+      description: 未登录或 Token 失效
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiResponseError'
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiResponseError'
+
+  schemas:
+    ApiResponseHealth:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                status:
+                  type: string
+                  example: ok
+
+    ApiResponseError:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              nullable: true
+
+    ApiEnvelope:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: integer
+          description: 0 成功，非 0 业务错误
+          example: 0
+        message:
+          type: string
+          example: ok
+        data:
+          nullable: true
+
+    MoneySummary:
+      type: object
+      required: [totalBet, dayPnl, winRate]
+      properties:
+        totalBet:
+          type: number
+          format: double
+          description: 总投注额（元）
+          example: 235.0
+        dayPnl:
+          type: number
+          format: double
+          description: 当日盈亏（元）
+          example: -27.5
+        winRate:
+          type: number
+          format: double
+          description: 胜率 0–100
+          example: 62.5
+
+    BetRecordSchemeGroup:
+      type: object
+      required: [schemeId, schemeName, totalBet, dayPnl, winRate]
+      properties:
+        schemeId:
+          type: string
+          example: sch-wan
+        schemeName:
+          type: string
+          example: 禄螭万位计划
+        totalBet:
+          type: number
+          format: double
+        dayPnl:
+          type: number
+          format: double
+        winRate:
+          type: number
+          format: double
+
+    BetRecordItem:
+      type: object
+      required: [id, period, playType, multiplier, round, amount, pnl, status]
+      properties:
+        id:
+          type: string
+        period:
+          type: string
+          example: '20240310031'
+        periods:
+          type: string
+          description: 第三方 web_bets/lott 接单返回的 periods
+          example: '115202606160196'
+        playType:
+          type: string
+          example: 万位定位
+        multiplier:
+          type: string
+          example: '1.5'
+        round:
+          type: string
+          example: 1/3
+        amount:
+          type: number
+          format: double
+          example: 10.0
+        pnl:
+          type: number
+          format: double
+          example: 5.0
+        status:
+          type: string
+          enum: [hit, miss]
+
+    PageMeta:
+      type: object
+      required: [hasMore]
+      properties:
+        nextCursor:
+          type: string
+          nullable: true
+        hasMore:
+          type: boolean
+
+    ApiResponseBetRecordGroups:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [mode, days, summary, groups]
+              properties:
+                mode:
+                  type: string
+                  enum: [real, sim]
+                days:
+                  type: integer
+                dateFrom:
+                  type: string
+                  description: 统计区间起（UTC+8 自然日，含）
+                  example: '2026-05-26'
+                dateTo:
+                  type: string
+                  description: 统计区间止（UTC+8 自然日，含）
+                  example: '2026-05-28'
+                summary:
+                  $ref: '#/components/schemas/MoneySummary'
+                groups:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/BetRecordSchemeGroup'
+
+    ApiResponseBetRecordDetail:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [schemeId, schemeName, mode, days, summary, records]
+              properties:
+                schemeId:
+                  type: string
+                schemeName:
+                  type: string
+                mode:
+                  type: string
+                  enum: [real, sim]
+                days:
+                  type: integer
+                dateFrom:
+                  type: string
+                  description: 统计区间起（UTC+8 自然日，含）
+                dateTo:
+                  type: string
+                  description: 统计区间止（UTC+8 自然日，含）
+                summary:
+                  $ref: '#/components/schemas/MoneySummary'
+                records:
+                  type: object
+                  required: [items, page]
+                  properties:
+                    items:
+                      type: array
+                      items:
+                        $ref: '#/components/schemas/BetRecordItem'
+                    page:
+                      $ref: '#/components/schemas/PageMeta'
+
+    CloudRunningScheme:
+      type: object
+      properties:
+        id:
+          type: string
+        lotteryCode:
+          type: string
+        lotteryName:
+          type: string
+        schemeName:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, paused, soft_stopped]
+        statusLabel:
+          type: string
+        turnover:
+          type: number
+        countdownSec:
+          type: integer
+        countdownEndTime:
+          type: string
+          description: 第三方 periods 原始 end_time（UTC 墙钟）
+        countdownCloseAt:
+          type: string
+          format: date-time
+          description: RFC3339 封盘时刻（兼容旧客户端）
+        pnl:
+          type: number
+        runTimeSec:
+          type: integer
+        lookbackPnl:
+          type: number
+        multiplier:
+          type: number
+        simBet:
+          type: boolean
+
+    CloudLookbackSettings:
+      type: object
+      properties:
+        runModes:
+          type: array
+          items:
+            type: string
+            enum: [real, sim]
+        judgment:
+          type: string
+          enum: [individual, overall]
+        singleProfitThreshold:
+          type: number
+        singleLossThreshold:
+          type: number
+        overallProfitThreshold:
+          type: number
+        overallLossThreshold:
+          type: number
+        schemeWinsMin:
+          type: number
+        schemeWinsMax:
+          type: number
+        periodProfit:
+          type: number
+        periodLoss:
+          type: number
+
+    CloudCenterChannelStats:
+      type: object
+      properties:
+        totalTurnover:
+          type: number
+          description: 该通道全部实例 turnover 之和
+        totalSessionPnl:
+          type: number
+          description: 顶部「总盈亏」展示值；该通道全部实例 session_pnl（本次盈亏）之和
+        runningSessionPnl:
+          type: number
+          description: 该通道 running 实例 session_pnl 之和
+
+    CloudCenterStats:
+      type: object
+      properties:
+        formal:
+          $ref: '#/components/schemas/CloudCenterChannelStats'
+        sim:
+          $ref: '#/components/schemas/CloudCenterChannelStats'
+
+    ApiResponseCloudCenterStats:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/CloudCenterStats'
+
+    ApiResponseCloudRunningSchemes:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/SchemeInstance'
+
+    ApiResponseCloudLookback:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/CloudLookbackSettings'
+
+    ApiResponseEmpty:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              nullable: true
+
+    LoginRequest:
+      type: object
+      required: [account, password]
+      properties:
+        account:
+          type: string
+        password:
+          type: string
+          format: password
+
+    AuthTokenPayload:
+      type: object
+      required: [accessToken, expiresAt, account, displayName]
+      properties:
+        accessToken:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+        account:
+          type: string
+        displayName:
+          type: string
+        roleId:
+          type: string
+          description: Admin 登录返回；绑定 admin_users.role_id
+
+    AdminSessionPayload:
+      type: object
+      required: [account, displayName, roleId]
+      properties:
+        account:
+          type: string
+        displayName:
+          type: string
+        roleId:
+          type: string
+
+    ApiResponseAdminSession:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/AdminSessionPayload'
+
+    AdminUser:
+      type: object
+      required: [id, account, displayName, roleId, status]
+      properties:
+        id:
+          type: integer
+          format: int64
+        account:
+          type: string
+        displayName:
+          type: string
+        roleId:
+          type: string
+        roleName:
+          type: string
+        status:
+          type: string
+          enum: [active, disabled]
+        lastLoginAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    AdminUserSaveInput:
+      type: object
+      required: [displayName, roleId, status]
+      properties:
+        account:
+          type: string
+          description: 创建时必填
+        displayName:
+          type: string
+        roleId:
+          type: string
+        status:
+          type: string
+          enum: [active, disabled]
+        password:
+          type: string
+          format: password
+          description: 创建时必填；更新时留空则不修改
+
+    ApiResponseAdminUser:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/AdminUser'
+
+    ApiResponseAdminUserList:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/AdminUser'
+
+    AnnouncementListItem:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        date:
+          type: string
+        read:
+          type: boolean
+
+    AnnouncementDetail:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        date:
+          type: string
+        bodyHtml:
+          type: string
+        read:
+          type: boolean
+
+    FaqListItem:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+
+    FaqDetail:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        bodyHtml:
+          type: string
+
+    HelpArticle:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        sort:
+          type: integer
+        bodyHtml:
+          type: string
+
+    FeedbackSubmitInput:
+      type: object
+      required: [subject, content]
+      properties:
+        subject:
+          type: string
+        content:
+          type: string
+
+    FeedbackResult:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        subject:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    ChatPeer:
+      type: object
+      properties:
+        peerKey:
+          type: string
+        label:
+          type: string
+        kind:
+          type: string
+          enum: [service, superior, notice, group]
+        unread:
+          type: integer
+
+    ChatHub:
+      type: object
+      properties:
+        unreadItems:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatPeer'
+        superior:
+          $ref: '#/components/schemas/ChatPeer'
+        groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatPeer'
+
+    ChatMessage:
+      type: object
+      properties:
+        id:
+          type: string
+        direction:
+          type: string
+          enum: [in, out]
+        body:
+          type: string
+        time:
+          type: string
+
+    ChatSendInput:
+      type: object
+      required: [body]
+      properties:
+        body:
+          type: string
+
+    AdminAnnouncement:
+      type: object
+      required: [title, status]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        status:
+          type: string
+          enum: [draft, published, archived]
+        publishedAt:
+          type: string
+          format: date-time
+        bodyHtml:
+          type: string
+
+    AdminFaqCategory:
+      type: object
+      required: [name]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        sort:
+          type: integer
+
+    AdminFaqArticle:
+      type: object
+      required: [categoryId, title]
+      properties:
+        id:
+          type: string
+        categoryId:
+          type: string
+        title:
+          type: string
+        sort:
+          type: integer
+        bodyHtml:
+          type: string
+
+    AdminHelpArticle:
+      type: object
+      required: [title]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        sort:
+          type: integer
+        bodyHtml:
+          type: string
+
+    AdminLobbySlot:
+      type: object
+      required: [slotKey, title]
+      properties:
+        id:
+          type: string
+        slotKey:
+          type: string
+        title:
+          type: string
+        brief:
+          type: string
+        sort:
+          type: integer
+        enabled:
+          type: boolean
+
+    PublicLobbySlot:
+      type: object
+      properties:
+        slotKey:
+          type: string
+        title:
+          type: string
+        brief:
+          type: string
+        sort:
+          type: integer
+
+    SiteBrand:
+      type: object
+      properties:
+        siteName:
+          type: string
+        logoUrl:
+          type: string
+        tagline:
+          type: string
+
+    AdminMaintenanceState:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        popupAnnouncementId:
+          type: string
+        title:
+          type: string
+        message:
+          type: string
+
+    AdminContentBundle:
+      type: object
+      properties:
+        announcements:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminAnnouncement'
+        faqCategories:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminFaqCategory'
+        faqArticles:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminFaqArticle'
+        helpArticles:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminHelpArticle'
+        lobbySlots:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminLobbySlot'
+        siteBrand:
+          $ref: '#/components/schemas/SiteBrand'
+
+    ApiResponseAnnouncementList:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/AnnouncementListItem'
+
+    ApiResponseAnnouncementDetail:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/AnnouncementDetail'
+
+    ApiResponseFaqList:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/FaqListItem'
+
+    ApiResponseFaqDetail:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/FaqDetail'
+
+    ApiResponseHelpArticleList:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/HelpArticle'
+
+    ApiResponseFeedbackResult:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/FeedbackResult'
+
+    ApiResponseChatHub:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/ChatHub'
+
+    ApiResponseChatMessageList:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/ChatMessage'
+
+    ApiResponseChatMessage:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/ChatMessage'
+
+    ApiResponseAdminContentBundle:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/AdminContentBundle'
+
+    ApiResponseAdminAnnouncementList:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/AdminAnnouncement'
+
+    ApiResponseAdminAnnouncement:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/AdminAnnouncement'
+
+    ApiResponseAdminFaqCategoryList:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/AdminFaqCategory'
+
+    ApiResponseAdminFaqCategory:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/AdminFaqCategory'
+
+    ApiResponseAdminFaqArticleList:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/AdminFaqArticle'
+
+    ApiResponseAdminFaqArticle:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/AdminFaqArticle'
+
+    ApiResponseAdminHelpArticleList:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/AdminHelpArticle'
+
+    ApiResponseAdminHelpArticle:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/AdminHelpArticle'
+
+    ApiResponseAdminLobbySlot:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/AdminLobbySlot'
+
+    ApiResponseSiteBrand:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/SiteBrand'
+
+    ApiResponsePublicLobbySlotList:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/PublicLobbySlot'
+
+    ApiResponsePublicLotteryList:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/PublicLotteryRow'
+
+    ApiResponsePublicPlayTree:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/PublicPlayTree'
+
+    PublicLotteryRow:
+      type: object
+      properties:
+        code: { type: string }
+        displayName: { type: string }
+        categoryCode: { type: string }
+        playTemplate: { type: string }
+        ballCount: { type: integer }
+        drawInterval: { type: string }
+        sortOrder: { type: integer }
+        outboundLotteryCode: { type: string }
+
+    PublicPlayTree:
+      type: object
+      properties:
+        lotteryCode: { type: string }
+        displayName: { type: string }
+        playTemplate: { type: string }
+        playTypes:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicPlayTypeNode'
+
+    PublicPlayTypeNode:
+      type: object
+      properties:
+        typeId: { type: string }
+        label: { type: string }
+        sortOrder: { type: integer }
+        panelType: { type: string }
+        subPlays:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicSubPlayNode'
+
+    PublicSubPlayNode:
+      type: object
+      properties:
+        subId: { type: string }
+        label: { type: string }
+        sortOrder: { type: integer }
+        betMode: { type: string }
+        outboundPlayCode: { type: string }
+        segmentRule: { type: object }
+
+    LotteryRouteStatus:
+      type: object
+      required: [code, exists, legacy]
+      properties:
+        code: { type: string }
+        exists: { type: boolean }
+        legacy: { type: boolean }
+        saleStatus:
+          type: string
+          enum: [on_sale, maintenance]
+
+    ApiResponseLotteryRouteStatus:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/LotteryRouteStatus'
+
+    LotteryCatalogRow:
+      type: object
+      properties:
+        code: { type: string }
+        displayName: { type: string }
+        categoryCode: { type: string }
+        playTemplate: { type: string }
+        ballCount: { type: integer }
+        drawInterval: { type: string }
+        sortOrder: { type: integer }
+        onSale: { type: boolean }
+        saleStatus:
+          type: string
+          enum: [on_sale, maintenance]
+        outboundLotteryCode: { type: string }
+
+    PatchLotteryCatalogRequest:
+      type: object
+      properties:
+        displayName: { type: string }
+        outboundLotteryCode: { type: string }
+        sortOrder: { type: integer, minimum: 1 }
+        saleStatus:
+          type: string
+          enum: [on_sale, maintenance]
+        enterMaintenance:
+          type: boolean
+          description: 上架态设为 true 时进入维护
+
+    ApiResponseLotteryCatalogList:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/LotteryCatalogRow'
+
+    ApiResponseLotteryCatalogRow:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/LotteryCatalogRow'
+
+    ApiResponseMemberLotteryFilterOptions:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/LotteryCatalogRow'
+
+    ApiResponseAdminMaintenance:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/AdminMaintenanceState'
+
+    SystemMessage:
+      type: object
+      properties:
+        id:
+          type: string
+        text:
+          type: string
+        time:
+          type: string
+          description: ISO8601 或展示用时间串
+
+    SystemMessageTemplate:
+      type: object
+      required: [name, bodyHtml]
+      properties:
+        id:
+          type: string
+          description: 留空则服务端生成
+        name:
+          type: string
+        bodyHtml:
+          type: string
+        audience:
+          type: string
+          default: 全员
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    AdminSendSystemMessageInput:
+      type: object
+      required: [memberNo]
+      properties:
+        memberNo:
+          type: string
+          description: 会员号（如 M00001）或登录账号（如 vs8888）
+        templateId:
+          type: string
+          description: 可选；与 body 二选一或组合（body 覆盖模板正文）
+        body:
+          type: string
+          description: 纯文本正文；留空且提供 templateId 时使用模板 HTML 转纯文本
+
+    AdminSendSystemMessageResult:
+      type: object
+      properties:
+        memberNo:
+          type: string
+        account:
+          type: string
+        message:
+          $ref: '#/components/schemas/SystemMessage'
+
+    ApiResponseSystemMessageList:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/SystemMessage'
+
+    ApiResponseSystemMessageTemplate:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/SystemMessageTemplate'
+
+    ApiResponseSystemMessageTemplateList:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/SystemMessageTemplate'
+
+    ApiResponseAdminSendSystemMessage:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/AdminSendSystemMessageResult'
+
+    RechargeSubmitInput:
+      type: object
+      required: [channelId, amount]
+      properties:
+        channelId:
+          type: string
+          description: 充值渠道编码，须为上架渠道
+        amount:
+          type: number
+          description: 充值金额（元，2 位小数）
+
+    RechargeSubmitResult:
+      type: object
+      properties:
+        orderNo:
+          type: string
+        amount:
+          type: number
+          description: 充值面额（含手续费基数）
+        fee:
+          type: number
+        actualCredit:
+          type: number
+          description: 实际到账（扣手续费后）
+        status:
+          type: string
+          enum: [paid]
+        availableBalance:
+          type: number
+        frozenBalance:
+          type: number
+
+    ApiResponseRechargeSubmit:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/RechargeSubmitResult'
+
+    RechargeChannel:
+      type: object
+      required: [id, group, label, icon, feeRate, min, max, showActivities, sortOrder, enabled]
+      properties:
+        id:
+          type: string
+        group:
+          type: string
+          enum: [crypto, social, wallet, alipay, bank]
+        label:
+          type: string
+        icon:
+          type: string
+        recommended:
+          type: boolean
+        feeRate:
+          type: number
+          description: 手续费比例，如 0.02 = 2%
+        min:
+          type: number
+        max:
+          type: number
+        showActivities:
+          type: boolean
+        bindReminder:
+          type: string
+        chainHint:
+          type: string
+        sortOrder:
+          type: integer
+        enabled:
+          type: boolean
+        updatedAt:
+          type: string
+          format: date-time
+
+    ApiResponseRechargeChannel:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/RechargeChannel'
+
+    ApiResponseRechargeChannelList:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/RechargeChannel'
+
+    ApiResponseAuthToken:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/AuthTokenPayload'
+
+    ApiResponseMaintenance:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                enabled:
+                  type: boolean
+                title:
+                  type: string
+                message:
+                  type: string
+
+    ApiResponseMemberProfile:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                account:
+                  type: string
+                displayName:
+                  type: string
+                currency:
+                  type: string
+                  example: CNY
+                memberNo:
+                  type: string
+
+    ApiResponseMemberWallet:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                balance:
+                  type: number
+                frozenBalance:
+                  type: number
+                availableBalance:
+                  type: number
+                currency:
+                  type: string
+                  example: CNY
+
+    ApiResponseWalletLedger:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/WalletLedgerItem'
+                nextCursor:
+                  type: string
+
+    WalletLedgerItem:
+      type: object
+      properties:
+        time:
+          type: string
+          format: date-time
+        type:
+          type: string
+          description: 中文类型名
+        typeCode:
+          type: string
+        orderId:
+          type: string
+        delta:
+          type: number
+        balanceAfter:
+          type: number
+        ledgerNo:
+          type: string
+
+    ApiResponseMemberBetList:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      time:
+                        type: string
+                      game:
+                        type: string
+                      orderId:
+                        type: string
+                      issue:
+                        type: string
+                      amount:
+                        type: number
+                      status:
+                        type: string
+                page:
+                  $ref: '#/components/schemas/PageMeta'
+
+    ApiResponseCopyHallRankings:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                lotteryCode:
+                  type: string
+                board:
+                  type: string
+                  enum: [master, contrary]
+                slots:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      rank:
+                        type: integer
+                      schemeId:
+                        type: string
+                      schemeName:
+                        type: string
+                      playMethod:
+                        type: string
+                      playTypeId:
+                        type: string
+                        enum: [dingwei, hou4, qian3, zhong3]
+                      subPlayId:
+                        type: string
+                        enum: [zhixuan_fs, zhixuan_ds, zuxuan_fs, '']
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                todayRecharge:
+                  type: number
+                todayWithdraw:
+                  type: number
+                todayBetVolume:
+                  type: number
+                memberTotalPnl:
+                  type: number
+                runningSchemesReal:
+                  type: integer
+                runningSchemesSim:
+                  type: integer
+
+    ApiResponseSchemeInstanceList:
+      deprecated: true
+      description: 请用 ApiResponseSchemeMonitorList
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/AdminSchemeMonitorRow'
+
+    SchemeKind:
+      type: string
+      enum: [custom, contrary, follow]
+      description: custom=自创, contrary=反买, follow=跟单
+
+    SchemeShareStatus:
+      type: string
+      enum: [private, public]
+
+    SchemeInstanceStatus:
+      type: string
+      enum: [pending, running, paused, soft_stopped]
+
+    SchemeShareSnapshotKind:
+      type: string
+      enum: [custom]
+
+    SchemeOptionItem:
+      type: object
+      required: [value, label]
+      properties:
+        value:
+          type: string
+        label:
+          type: string
+
+    SchemeRoundRule:
+      type: object
+      required: [mult, afterHit, afterMiss]
+      properties:
+        mult:
+          type: number
+        afterHit:
+          type: integer
+        afterMiss:
+          type: integer
+
+    SchemeConfigPayload:
+      type: object
+      properties:
+        schemeName:
+          type: string
+        lotteryCode:
+          type: string
+        runTypeId:
+          type: string
+        playTypeId:
+          type: string
+        subPlayId:
+          type: string
+        schemeGroups:
+          type: array
+          items:
+            type: string
+        startTime:
+          type: string
+          example: '09:00'
+        endTime:
+          type: string
+          example: '23:59'
+        stopLoss:
+          type: number
+          nullable: true
+        takeProfit:
+          type: number
+          nullable: true
+        betMultiplier:
+          type: object
+          additionalProperties: true
+        rounds:
+          type: array
+          items:
+            $ref: '#/components/schemas/SchemeRoundRule'
+
+    SchemeDefinition:
+      type: object
+      required: [id, kind, schemeName, lotteryCode, shareStatusLocked, hasInstance, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+        kind:
+          $ref: '#/components/schemas/SchemeKind'
+        schemeName:
+          type: string
+        lotteryCode:
+          type: string
+        lotteryLabel:
+          type: string
+        shareStatusLocked:
+          $ref: '#/components/schemas/SchemeShareStatus'
+        config:
+          $ref: '#/components/schemas/SchemeConfigPayload'
+        hasInstance:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    SchemeInstance:
+      type: object
+      required: [id, definitionId, kind, schemeName, status, statusLabel, runMode, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+        definitionId:
+          type: string
+        kind:
+          $ref: '#/components/schemas/SchemeKind'
+        schemeName:
+          type: string
+        lotteryCode:
+          type: string
+        lotteryLabel:
+          type: string
+        status:
+          $ref: '#/components/schemas/SchemeInstanceStatus'
+        statusLabel:
+          type: string
+        runMode:
+          type: string
+          enum: [real, sim]
+        turnover:
+          type: number
+        pnl:
+          type: number
+        runTimeSec:
+          type: integer
+        lookbackPnl:
+          type: number
+        multiplier:
+          type: number
+        countdownSec:
+          type: integer
+        countdownEndTime:
+          type: string
+          description: 第三方 periods 原始 end_time（UTC 墙钟）
+        countdownCloseAt:
+          type: string
+          format: date-time
+          description: RFC3339 封盘时刻（兼容旧客户端）
+        simBet:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    SchemeShareSnapshot:
+      type: object
+      required: [id, kind, schemeName, lotteryCode, config, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+        kind:
+          $ref: '#/components/schemas/SchemeShareSnapshotKind'
+        schemeName:
+          type: string
+        lotteryCode:
+          type: string
+        lotteryLabel:
+          type: string
+        playMethod:
+          type: string
+        fundYuan:
+          type: number
+        config:
+          $ref: '#/components/schemas/SchemeConfigPayload'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CreateSchemeRequest:
+      type: object
+      required: [kind, schemeName, lotteryCode, runTypeId, playTypeId, subPlayId]
+      properties:
+        kind:
+          $ref: '#/components/schemas/SchemeKind'
+        schemeName:
+          type: string
+        lotteryCode:
+          type: string
+        runTypeId:
+          type: string
+        playTypeId:
+          type: string
+        subPlayId:
+          type: string
+
+    UpdateSchemeRequest:
+      type: object
+      additionalProperties: true
+      description: 不可含 schemeName/lotteryCode/runTypeId/playTypeId/subPlayId
+
+    AddSchemeToCloudRequest:
+      type: object
+      properties:
+        shareStatus:
+          $ref: '#/components/schemas/SchemeShareStatus'
+
+    ShareFollowBetRequest:
+      type: object
+      properties:
+        lotteryCode:
+          type: string
+        playMethod:
+          type: string
+
+    ContraryBetRequest:
+      type: object
+      required: [lotteryCode, planInverseNumbers]
+      properties:
+        lotteryCode:
+          type: string
+        planInverseNumbers:
+          type: string
+        playMethod:
+          type: string
+
+    PatchShareSnapshotRequest:
+      type: object
+      required: [config]
+      properties:
+        config:
+          $ref: '#/components/schemas/SchemeConfigPayload'
+        schemeName:
+          type: string
+        lotteryCode:
+          type: string
+        lotteryLabel:
+          type: string
+        playMethod:
+          type: string
+        fundYuan:
+          type: number
+
+    CloudGlobalSettings:
+      type: object
+      properties:
+        totalStopLoss:
+          type: number
+        totalTakeProfit:
+          type: number
+        planMultiplier:
+          type: number
+        breakPeriodStop:
+          type: boolean
+          description: 断期停投。开=维护结束后须手动开启（续投保留盈亏）；关=维护结束且未触止损止盈时自动续投
+
+    AdminSchemeMonitorRow:
+      type: object
+      properties:
+        instanceId:
+          type: string
+        definitionId:
+          type: string
+        memberId:
+          type: string
+        memberName:
+          type: string
+        kind:
+          $ref: '#/components/schemas/SchemeKind'
+        schemeName:
+          type: string
+        lotteryCode:
+          type: string
+        lotteryLabel:
+          type: string
+        status:
+          $ref: '#/components/schemas/SchemeInstanceStatus'
+        statusLabel:
+          type: string
+        runMode:
+          type: string
+          enum: [real, sim]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    ApiResponseSchemeDefinition:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/SchemeDefinition'
+
+    ApiResponseSchemeDefinitionList:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/SchemeDefinition'
+
+    ApiResponseSchemeInstance:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/SchemeInstance'
+
+    ApiResponseAddSchemeToCloud:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [definition, instance]
+              properties:
+                definition:
+                  $ref: '#/components/schemas/SchemeDefinition'
+                instance:
+                  $ref: '#/components/schemas/SchemeInstance'
+                shareSnapshotId:
+                  type: string
+
+    ApiResponseForkSchemeToCloud:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [sourceDefinitionId, definition, instance]
+              properties:
+                sourceDefinitionId:
+                  type: string
+                definition:
+                  $ref: '#/components/schemas/SchemeDefinition'
+                instance:
+                  $ref: '#/components/schemas/SchemeInstance'
+
+    ApiResponseShareFollowAction:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [definition, instance]
+              properties:
+                definition:
+                  $ref: '#/components/schemas/SchemeDefinition'
+                instance:
+                  $ref: '#/components/schemas/SchemeInstance'
+
+    ApiResponseShareCatalog:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/SchemeShareSnapshot'
+                page:
+                  $ref: '#/components/schemas/PageMeta'
+
+    ApiResponseShareSnapshot:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/SchemeShareSnapshot'
+
+    ApiResponseLotterySchemeOptions:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                lotteryCode:
+                  type: string
+                runTypes:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/SchemeOptionItem'
+                playTypes:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/SchemeOptionItem'
+                subPlays:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/SchemeOptionItem'
+
+    ApiResponseCloudGlobalSettings:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/CloudGlobalSettings'
+
+    ApiResponseSchemeMonitorList:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                scope:
+                  type: string
+                  enum: [user, share]
+                items:
+                  type: array
+                  items:
+                    oneOf:
+                      - $ref: '#/components/schemas/AdminSchemeMonitorRow'
+                      - $ref: '#/components/schemas/SchemeShareSnapshot'
+
+    BetPayload:
+      type: object
+      required: [groupContent]
+      description: 手动下注选号，与 schemes/play_api.go 对齐；结算时 EvaluateBetPayload 使用
+      properties:
+        playMethod:
+          type: string
+          example: 定位胆万位
+        playTypeId:
+          type: string
+          enum: [dingwei, hou4, qian3, zhong3]
+        subPlayId:
+          type: string
+          enum: [zhixuan_fs, zhixuan_ds, zuxuan_fs]
+        groupContent:
+          type: string
+          description: 选号串；定位/池玩法逗号分隔，直选复式多行换行分隔，直选单式逗号分隔 N 位 token
+          example: '1,3,7'
+
+    PlaceGameBetRequest:
+      type: object
+      required: [amount, multiplier, betPayload]
+      properties:
+        issueNo:
+          type: string
+          description: 目标期号；不传则服务端取下一期
+        amount:
+          type: number
+          format: double
+          description: 投注总额（元）
+        multiplier:
+          type: integer
+          minimum: 1
+        betMode:
+          type: string
+        playMethod:
+          type: string
+          example: 定位胆万位
+        betPayload:
+          $ref: '#/components/schemas/BetPayload'
+
+    PlaceGameBetResult:
+      type: object
+      required: [orderNo, issueNo, amount, status, placedAt]
+      properties:
+        orderNo:
+          type: string
+        issueNo:
+          type: string
+        amount:
+          type: number
+        status:
+          type: string
+          enum: [pending]
+        placedAt:
+          type: string
+          format: date-time
+
+    GameBettingRow:
+      type: object
+      properties:
+        time:
+          type: string
+        scheme:
+          type: string
+        numbers:
+          type: string
+        period:
+          type: string
+        draw:
+          type: string
+        win:
+          type: boolean
+
+    GameBetRecordRow:
+      type: object
+      properties:
+        period:
+          type: string
+        playMethod:
+          type: string
+        multiplier:
+          type: string
+        round:
+          type: string
+        amount:
+          type: string
+        profitLoss:
+          type: number
+        status:
+          type: string
+
+    GamePlanTrendRow:
+      type: object
+      properties:
+        period:
+          type: string
+        win:
+          type: boolean
+
+    GameDetail:
+      type: object
+      properties:
+        lotteryCode:
+          type: string
+        lotteryLabel:
+          type: string
+        schemeTitle:
+          type: string
+        playMethod:
+          type: string
+        currentIssue:
+          type: string
+        nextIssue:
+          type: string
+        countdownSec:
+          type: integer
+        countdownEndTime:
+          type: string
+          description: 第三方 periods 原始 end_time（UTC 墙钟）
+        countdownCloseAt:
+          type: string
+          format: date-time
+          description: RFC3339 封盘时刻（兼容旧客户端）
+        drawPhase:
+          type: string
+          enum: [drawing, drawn]
+        drawnNumbers:
+          type: array
+          items:
+            type: string
+        planInverseDigits:
+          type: string
+        planInverseBetCount:
+          type: integer
+        bettingRows:
+          type: array
+          items:
+            $ref: '#/components/schemas/GameBettingRow'
+        betRecords:
+          type: array
+          items:
+            $ref: '#/components/schemas/GameBetRecordRow'
+        planTrendGroupBets:
+          type: integer
+        planTrendHistory:
+          type: array
+          items:
+            $ref: '#/components/schemas/GamePlanTrendRow'
+
+    HistoryDrawItem:
+      type: object
+      properties:
+        periodShort:
+          type: string
+        time:
+          type: string
+        balls:
+          type: array
+          items:
+            type: string
+        sum:
+          type: integer
+
+    ApiResponseGameDetail:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/GameDetail'
+
+    ApiResponseGameDraws:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items, page]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/HistoryDrawItem'
+                page:
+                  $ref: '#/components/schemas/PageMeta'
+
+    ApiResponsePlaceGameBet:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/PlaceGameBetResult'
+
+    FundRecordItem:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum: [recharge, withdraw]
+        channel:
+          type: string
+        amount:
+          type: number
+        fee:
+          type: number
+        actual:
+          type: number
+        status:
+          type: string
+          enum: [success, pending, failed]
+        time:
+          type: string
+          format: date-time
+        orderNo:
+          type: string
+
+    ApiResponseFundRecords:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/FundRecordItem'

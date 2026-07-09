@@ -1,0 +1,341 @@
+﻿template_code,type_id,sub_id,label,sort_order,bet_mode,segment_rule,outbound_play_code,enabled
+ssc_std,dingwei,dingwei_wan,一星定位胆 · 万位,1,dingwei,{},ssc_std:dingwei:dingwei_wan,true
+ssc_std,dingwei,dingwei_qian,一星定位胆 · 千位,2,dingwei,{},ssc_std:dingwei:dingwei_qian,true
+ssc_std,dingwei,dingwei_bai,一星定位胆 · 百位,3,dingwei,{},ssc_std:dingwei:dingwei_bai,true
+ssc_std,dingwei,dingwei_shi,一星定位胆 · 十位,4,dingwei,{},ssc_std:dingwei:dingwei_shi,true
+ssc_std,dingwei,dingwei_ge,一星定位胆 · 个位,5,dingwei,{},ssc_std:dingwei:dingwei_ge,true
+ssc_std,qian3,qian3_zhixuan_fs,前三直选复式,1,fushi,{},ssc_std:qian3:qian3_zhixuan_fs,true
+ssc_std,qian3,qian3_zhixuan_ds,前三直选单式,2,danshi,{},ssc_std:qian3:qian3_zhixuan_ds,true
+ssc_std,qian3,qian3_zhixuan_hz,前三直选和值,3,hezhi,{},ssc_std:qian3:qian3_zhixuan_hz,true
+ssc_std,qian3,qian3_zhixuan_kd,前三直选跨度,4,kuadu,{},ssc_std:qian3:qian3_zhixuan_kd,true
+ssc_std,qian3,qian3_zuhe,前三组合,5,zuhe,{},ssc_std:qian3:qian3_zuhe,true
+ssc_std,qian3,qian3_zu3,前三组三,6,zu3,{},ssc_std:qian3:qian3_zu3,true
+ssc_std,qian3,qian3_zu6,前三组六,7,zu6,{},ssc_std:qian3:qian3_zu6,true
+ssc_std,qian3,qian3_zuxuan_hz,前三组选和值,8,hezhi,{},ssc_std:qian3:qian3_zuxuan_hz,true
+ssc_std,qian3,qian3_zuxuan_bd,前三组选包胆,9,baodan,{},ssc_std:qian3:qian3_zuxuan_bd,true
+ssc_std,qian3,qian3_hunhe_zx,前三混合组选,10,hunhe,{},ssc_std:qian3:qian3_hunhe_zx,true
+ssc_std,qian3,qian3_hz_weishu,前三和值尾数,11,weishu,{},ssc_std:qian3:qian3_hz_weishu,true
+ssc_std,qian3,qian3_teshu,前三特殊号,12,teshu,{},ssc_std:qian3:qian3_teshu,true
+ssc_std,zhong3,zhong3_zhixuan_fs,中三直选复式,1,fushi,{},ssc_std:zhong3:zhong3_zhixuan_fs,true
+ssc_std,zhong3,zhong3_zhixuan_ds,中三直选单式,2,danshi,{},ssc_std:zhong3:zhong3_zhixuan_ds,true
+ssc_std,zhong3,zhong3_zhixuan_hz,中三直选和值,3,hezhi,{},ssc_std:zhong3:zhong3_zhixuan_hz,true
+ssc_std,zhong3,zhong3_zhixuan_kd,中三直选跨度,4,kuadu,{},ssc_std:zhong3:zhong3_zhixuan_kd,true
+ssc_std,zhong3,zhong3_zuhe,中三组合,5,zuhe,{},ssc_std:zhong3:zhong3_zuhe,true
+ssc_std,zhong3,zhong3_zu3,中三组三,6,zu3,{},ssc_std:zhong3:zhong3_zu3,true
+ssc_std,zhong3,zhong3_zu6,中三组六,7,zu6,{},ssc_std:zhong3:zhong3_zu6,true
+ssc_std,zhong3,zhong3_zuxuan_hz,中三组选和值,8,hezhi,{},ssc_std:zhong3:zhong3_zuxuan_hz,true
+ssc_std,zhong3,zhong3_zuxuan_bd,中三组选包胆,9,baodan,{},ssc_std:zhong3:zhong3_zuxuan_bd,true
+ssc_std,zhong3,zhong3_hunhe_zx,中三混合组选,10,hunhe,{},ssc_std:zhong3:zhong3_hunhe_zx,true
+ssc_std,zhong3,zhong3_hz_weishu,中三和值尾数,11,weishu,{},ssc_std:zhong3:zhong3_hz_weishu,true
+ssc_std,zhong3,zhong3_teshu,中三特殊号,12,teshu,{},ssc_std:zhong3:zhong3_teshu,true
+ssc_std,hou3,hou3_zhixuan_fs,后三直选复式,1,fushi,{},ssc_std:hou3:hou3_zhixuan_fs,true
+ssc_std,hou3,hou3_zhixuan_ds,后三直选单式,2,danshi,{},ssc_std:hou3:hou3_zhixuan_ds,true
+ssc_std,hou3,hou3_zhixuan_hz,后三直选和值,3,hezhi,{},ssc_std:hou3:hou3_zhixuan_hz,true
+ssc_std,hou3,hou3_zhixuan_kd,后三直选跨度,4,kuadu,{},ssc_std:hou3:hou3_zhixuan_kd,true
+ssc_std,hou3,hou3_zuhe,后三组合,5,zuhe,{},ssc_std:hou3:hou3_zuhe,true
+ssc_std,hou3,hou3_zu3,后三组三,6,zu3,{},ssc_std:hou3:hou3_zu3,true
+ssc_std,hou3,hou3_zu6,后三组六,7,zu6,{},ssc_std:hou3:hou3_zu6,true
+ssc_std,hou3,hou3_zuxuan_hz,后三组选和值,8,hezhi,{},ssc_std:hou3:hou3_zuxuan_hz,true
+ssc_std,hou3,hou3_zuxuan_bd,后三组选包胆,9,baodan,{},ssc_std:hou3:hou3_zuxuan_bd,true
+ssc_std,hou3,hou3_hunhe_zx,后三混合组选,10,hunhe,{},ssc_std:hou3:hou3_hunhe_zx,true
+ssc_std,hou3,hou3_hz_weishu,后三和值尾数,11,weishu,{},ssc_std:hou3:hou3_hz_weishu,true
+ssc_std,hou3,hou3_teshu,后三特殊号,12,teshu,{},ssc_std:hou3:hou3_teshu,true
+ssc_std,qian2,qian2_zhixuan_fs,前二直选复式,1,fushi,{},ssc_std:qian2:qian2_zhixuan_fs,true
+ssc_std,qian2,qian2_zhixuan_ds,前二直选单式,2,danshi,{},ssc_std:qian2:qian2_zhixuan_ds,true
+ssc_std,qian2,qian2_zhixuan_hz,前二直选和值,3,hezhi,{},ssc_std:qian2:qian2_zhixuan_hz,true
+ssc_std,qian2,qian2_zhixuan_kd,前二直选跨度,4,kuadu,{},ssc_std:qian2:qian2_zhixuan_kd,true
+ssc_std,qian2,qian2_zuxuan_fs,前二组选复式,5,fushi,{},ssc_std:qian2:qian2_zuxuan_fs,true
+ssc_std,qian2,qian2_zuxuan_ds,前二组选单式,6,danshi,{},ssc_std:qian2:qian2_zuxuan_ds,true
+ssc_std,qian2,qian2_zuxuan_hz,前二组选和值,7,hezhi,{},ssc_std:qian2:qian2_zuxuan_hz,true
+ssc_std,qian2,qian2_zuxuan_bd,前二组选包胆,8,baodan,{},ssc_std:qian2:qian2_zuxuan_bd,true
+ssc_std,hou2,hou2_zhixuan_fs,后二直选复式,1,fushi,{},ssc_std:hou2:hou2_zhixuan_fs,true
+ssc_std,hou2,hou2_zhixuan_ds,后二直选单式,2,danshi,{},ssc_std:hou2:hou2_zhixuan_ds,true
+ssc_std,hou2,hou2_zhixuan_hz,后二直选和值,3,hezhi,{},ssc_std:hou2:hou2_zhixuan_hz,true
+ssc_std,hou2,hou2_zhixuan_kd,后二直选跨度,4,kuadu,{},ssc_std:hou2:hou2_zhixuan_kd,true
+ssc_std,hou2,hou2_zuxuan_fs,后二组选复式,5,fushi,{},ssc_std:hou2:hou2_zuxuan_fs,true
+ssc_std,hou2,hou2_zuxuan_ds,后二组选单式,6,danshi,{},ssc_std:hou2:hou2_zuxuan_ds,true
+ssc_std,hou2,hou2_zuxuan_hz,后二组选和值,7,hezhi,{},ssc_std:hou2:hou2_zuxuan_hz,true
+ssc_std,hou2,hou2_zuxuan_bd,后二组选包胆,8,baodan,{},ssc_std:hou2:hou2_zuxuan_bd,true
+ssc_std,longhu,lh_wanqian_he,万千龙虎和,1,longhuhe,{},ssc_std:longhu:lh_wanqian_he,true
+ssc_std,longhu,lh_wanqian_dou,万千龙虎斗,2,longhu,{},ssc_std:longhu:lh_wanqian_dou,true
+ssc_std,longhu,lh_wanbai_he,万百龙虎和,3,longhuhe,{},ssc_std:longhu:lh_wanbai_he,true
+ssc_std,longhu,lh_wanbai_dou,万百龙虎斗,4,longhu,{},ssc_std:longhu:lh_wanbai_dou,true
+ssc_std,longhu,lh_wanshi_he,万十龙虎和,5,longhuhe,{},ssc_std:longhu:lh_wanshi_he,true
+ssc_std,longhu,lh_wanshi_dou,万十龙虎斗,6,longhu,{},ssc_std:longhu:lh_wanshi_dou,true
+ssc_std,longhu,lh_wange_he,万个龙虎和,7,longhuhe,{},ssc_std:longhu:lh_wange_he,true
+ssc_std,longhu,lh_wange_dou,万个龙虎斗,8,longhu,{},ssc_std:longhu:lh_wange_dou,true
+ssc_std,longhu,lh_qianbai_he,千百龙虎和,9,longhuhe,{},ssc_std:longhu:lh_qianbai_he,true
+ssc_std,longhu,lh_qianbai_dou,千百龙虎斗,10,longhu,{},ssc_std:longhu:lh_qianbai_dou,true
+ssc_std,longhu,lh_qianshi_he,千十龙虎和,11,longhuhe,{},ssc_std:longhu:lh_qianshi_he,true
+ssc_std,longhu,lh_qianshi_dou,千十龙虎斗,12,longhu,{},ssc_std:longhu:lh_qianshi_dou,true
+ssc_std,longhu,lh_qiange_he,千个龙虎和,13,longhuhe,{},ssc_std:longhu:lh_qiange_he,true
+ssc_std,longhu,lh_qiange_dou,千个龙虎斗,14,longhu,{},ssc_std:longhu:lh_qiange_dou,true
+ssc_std,longhu,lh_baishi_he,百十龙虎和,15,longhuhe,{},ssc_std:longhu:lh_baishi_he,true
+ssc_std,longhu,lh_baishi_dou,百十龙虎斗,16,longhu,{},ssc_std:longhu:lh_baishi_dou,true
+ssc_std,longhu,lh_baige_he,百个龙虎和,17,longhuhe,{},ssc_std:longhu:lh_baige_he,true
+ssc_std,longhu,lh_baige_dou,百个龙虎斗,18,longhu,{},ssc_std:longhu:lh_baige_dou,true
+ssc_std,longhu,lh_shige_he,十个龙虎和,19,longhuhe,{},ssc_std:longhu:lh_shige_he,true
+ssc_std,longhu,lh_shige_dou,十个龙虎斗,20,longhu,{},ssc_std:longhu:lh_shige_dou,true
+ssc_std,renxuan,ren2_zhixuan_fs,任二直选复式,1,fushi,{},ssc_std:renxuan:ren2_zhixuan_fs,true
+ssc_std,renxuan,ren2_zhixuan_ds,任二直选单式,2,danshi,{},ssc_std:renxuan:ren2_zhixuan_ds,true
+ssc_std,renxuan,ren2_zhixuan_hz,任二直选和值,3,hezhi,{},ssc_std:renxuan:ren2_zhixuan_hz,true
+ssc_std,renxuan,ren2_zuxuan_fs,任二组选复式,4,fushi,{},ssc_std:renxuan:ren2_zuxuan_fs,true
+ssc_std,renxuan,ren2_zuxuan_ds,任二组选单式,5,danshi,{},ssc_std:renxuan:ren2_zuxuan_ds,true
+ssc_std,renxuan,ren2_zuxuan_hz,任二组选和值,6,hezhi,{},ssc_std:renxuan:ren2_zuxuan_hz,true
+ssc_std,renxuan,ren3_zhixuan_fs,任三直选复式,7,fushi,{},ssc_std:renxuan:ren3_zhixuan_fs,true
+ssc_std,renxuan,ren3_zhixuan_ds,任三直选单式,8,danshi,{},ssc_std:renxuan:ren3_zhixuan_ds,true
+ssc_std,renxuan,ren3_zhixuan_hz,任三直选和值,9,hezhi,{},ssc_std:renxuan:ren3_zhixuan_hz,true
+ssc_std,renxuan,ren3_zu3_fs,任三组三复式,10,fushi,{},ssc_std:renxuan:ren3_zu3_fs,true
+ssc_std,renxuan,ren3_zu3_ds,任三组三单式,11,danshi,{},ssc_std:renxuan:ren3_zu3_ds,true
+ssc_std,renxuan,ren3_zu6_fs,任三组六复式,12,fushi,{},ssc_std:renxuan:ren3_zu6_fs,true
+ssc_std,renxuan,ren3_zu6_ds,任三组六单式,13,danshi,{},ssc_std:renxuan:ren3_zu6_ds,true
+ssc_std,renxuan,ren3_hunhe_zx,任三混合组选,14,hunhe,{},ssc_std:renxuan:ren3_hunhe_zx,true
+ssc_std,renxuan,ren3_zuxuan_hz,任三组选和值,15,hezhi,{},ssc_std:renxuan:ren3_zuxuan_hz,true
+ssc_std,renxuan,ren4_zhixuan_fs,任选四直选复式,16,fushi,{},ssc_std:renxuan:ren4_zhixuan_fs,true
+ssc_std,renxuan,ren4_zhixuan_ds,任选四直选单式,17,danshi,{},ssc_std:renxuan:ren4_zhixuan_ds,true
+ssc_std,renxuan,ren4_zu24,任选四组选24,18,zu24,{},ssc_std:renxuan:ren4_zu24,true
+ssc_std,renxuan,ren4_zu12,任选四组选12,19,zu12,{},ssc_std:renxuan:ren4_zu12,true
+ssc_std,renxuan,ren4_zu6,任选四组选6,20,zu6,{},ssc_std:renxuan:ren4_zu6,true
+ssc_std,qianzhonghou3,qzh3_zhixuan_fs,直选复式,1,fushi,{},ssc_std:qianzhonghou3:qzh3_zhixuan_fs,true
+ssc_std,qianzhonghou3,qzh3_zhixuan_ds,直选单式,2,danshi,{},ssc_std:qianzhonghou3:qzh3_zhixuan_ds,true
+ssc_std,qianzhonghou3,qzh3_zhixuan_hz,直选和值,3,hezhi,{},ssc_std:qianzhonghou3:qzh3_zhixuan_hz,true
+ssc_std,qianzhonghou3,qzh3_zhixuan_kd,直选跨度,4,kuadu,{},ssc_std:qianzhonghou3:qzh3_zhixuan_kd,true
+ssc_std,qianzhonghou3,qzh3_zuhe,组合,5,zuhe,{},ssc_std:qianzhonghou3:qzh3_zuhe,true
+ssc_std,qianzhonghou3,qzh3_zu3,组三,6,zu3,{},ssc_std:qianzhonghou3:qzh3_zu3,true
+ssc_std,qianzhonghou3,qzh3_zu6,组六,7,zu6,{},ssc_std:qianzhonghou3:qzh3_zu6,true
+ssc_std,qianzhonghou3,qzh3_zuxuan_hz,组选和值,8,hezhi,{},ssc_std:qianzhonghou3:qzh3_zuxuan_hz,true
+ssc_std,qianzhonghou3,qzh3_zuxuan_bd,组选包胆,9,baodan,{},ssc_std:qianzhonghou3:qzh3_zuxuan_bd,true
+ssc_std,qianzhonghou3,qzh3_hunhe_zx,混合组选,10,hunhe,{},ssc_std:qianzhonghou3:qzh3_hunhe_zx,true
+ssc_std,qianzhonghou3,qzh3_hz_weishu,和值尾数,11,weishu,{},ssc_std:qianzhonghou3:qzh3_hz_weishu,true
+ssc_std,qianzhonghou3,qzh3_teshu,特殊号,12,teshu,{},ssc_std:qianzhonghou3:qzh3_teshu,true
+ssc_std,qianhou3,qh3_zhixuan_fs,直选复式,1,fushi,{},ssc_std:qianhou3:qh3_zhixuan_fs,true
+ssc_std,qianhou3,qh3_zhixuan_ds,直选单式,2,danshi,{},ssc_std:qianhou3:qh3_zhixuan_ds,true
+ssc_std,qianhou3,qh3_zhixuan_hz,直选和值,3,hezhi,{},ssc_std:qianhou3:qh3_zhixuan_hz,true
+ssc_std,qianhou3,qh3_zhixuan_kd,直选跨度,4,kuadu,{},ssc_std:qianhou3:qh3_zhixuan_kd,true
+ssc_std,qianhou3,qh3_zuhe,组合,5,zuhe,{},ssc_std:qianhou3:qh3_zuhe,true
+ssc_std,qianhou3,qh3_zu3,组三,6,zu3,{},ssc_std:qianhou3:qh3_zu3,true
+ssc_std,qianhou3,qh3_zu6,组六,7,zu6,{},ssc_std:qianhou3:qh3_zu6,true
+ssc_std,qianhou3,qh3_zuxuan_hz,组选和值,8,hezhi,{},ssc_std:qianhou3:qh3_zuxuan_hz,true
+ssc_std,qianhou3,qh3_zuxuan_bd,组选包胆,9,baodan,{},ssc_std:qianhou3:qh3_zuxuan_bd,true
+ssc_std,qianhou3,qh3_hunhe_zx,混合组选,10,hunhe,{},ssc_std:qianhou3:qh3_hunhe_zx,true
+ssc_std,qianhou3,qh3_hz_weishu,和值尾数,11,weishu,{},ssc_std:qianhou3:qh3_hz_weishu,true
+ssc_std,qianhou3,qh3_teshu,特殊号,12,teshu,{},ssc_std:qianhou3:qh3_teshu,true
+ssc_std,budingwei,qian3_1ma,前三一码不定位,1,budingwei,{},ssc_std:budingwei:qian3_1ma,true
+ssc_std,budingwei,qian3_2ma,前三二码不定位,2,budingwei,{},ssc_std:budingwei:qian3_2ma,true
+ssc_std,budingwei,zhong3_1ma,中三一码不定位,3,budingwei,{},ssc_std:budingwei:zhong3_1ma,true
+ssc_std,budingwei,zhong3_2ma,中三二码不定位,4,budingwei,{},ssc_std:budingwei:zhong3_2ma,true
+ssc_std,budingwei,hou3_1ma,后三一码不定位,5,budingwei,{},ssc_std:budingwei:hou3_1ma,true
+ssc_std,budingwei,hou3_2ma,后三二码不定位,6,budingwei,{},ssc_std:budingwei:hou3_2ma,true
+ssc_std,budingwei,qian4_1ma,前四一码不定位,7,budingwei,{},ssc_std:budingwei:qian4_1ma,true
+ssc_std,budingwei,qian4_2ma,前四二码不定位,8,budingwei,{},ssc_std:budingwei:qian4_2ma,true
+ssc_std,budingwei,hou4_1ma,后四一码不定位,9,budingwei,{},ssc_std:budingwei:hou4_1ma,true
+ssc_std,budingwei,hou4_2ma,后四二码不定位,10,budingwei,{},ssc_std:budingwei:hou4_2ma,true
+ssc_std,budingwei,wuxing_1ma,五星一码不定位,11,budingwei,{},ssc_std:budingwei:wuxing_1ma,true
+ssc_std,budingwei,wuxing_2ma,五星二码不定位,12,budingwei,{},ssc_std:budingwei:wuxing_2ma,true
+ssc_std,budingwei,wuxing_3ma,五星三码不定位,13,budingwei,{},ssc_std:budingwei:wuxing_3ma,true
+ssc_std,combo24,qh2_zhixuan_fs,前后二直选复式,1,fushi,{},ssc_std:combo24:qh2_zhixuan_fs,true
+ssc_std,combo24,qh2_zhixuan_ds,前后二直选单式,2,danshi,{},ssc_std:combo24:qh2_zhixuan_ds,true
+ssc_std,combo24,qh2_zhixuan_hz,前后二直选和值,3,hezhi,{},ssc_std:combo24:qh2_zhixuan_hz,true
+ssc_std,combo24,qh2_zhixuan_kd,前后二直选跨度,4,kuadu,{},ssc_std:combo24:qh2_zhixuan_kd,true
+ssc_std,combo24,qh2_zuxuan_fs,前后二组选复式,5,fushi,{},ssc_std:combo24:qh2_zuxuan_fs,true
+ssc_std,combo24,qh2_zuxuan_ds,前后二组选单式,6,danshi,{},ssc_std:combo24:qh2_zuxuan_ds,true
+ssc_std,combo24,qh2_zuxuan_hz,前后二组选和值,7,hezhi,{},ssc_std:combo24:qh2_zuxuan_hz,true
+ssc_std,combo24,qh2_zuxuan_bd,前后二组选包胆,8,baodan,{},ssc_std:combo24:qh2_zuxuan_bd,true
+ssc_std,combo24,qh4_zhixuan_fs,前后四直选复式,9,fushi,{},ssc_std:combo24:qh4_zhixuan_fs,true
+ssc_std,combo24,qh4_zhixuan_ds,前后四直选单式,10,danshi,{},ssc_std:combo24:qh4_zhixuan_ds,true
+ssc_std,combo24,qh4_zhixuan_zh,前后四直选组合,11,zuhe,{},ssc_std:combo24:qh4_zhixuan_zh,true
+ssc_std,combo24,qh4_zu24,前后四组选24,12,zu24,{},ssc_std:combo24:qh4_zu24,true
+ssc_std,combo24,qh4_zu12,前后四组选12,13,zu12,{},ssc_std:combo24:qh4_zu12,true
+ssc_std,combo24,qh4_zu6,前后四组选6,14,zu6,{},ssc_std:combo24:qh4_zu6,true
+ssc_std,combo24,qh4_zu4,前后四组选4,15,zu4,{},ssc_std:combo24:qh4_zu4,true
+ssc_std,sixing,sixing_zhixuan_fs,四星直选复式,1,fushi,{},ssc_std:sixing:sixing_zhixuan_fs,true
+ssc_std,sixing,sixing_zhixuan_ds,四星直选单式,2,danshi,{},ssc_std:sixing:sixing_zhixuan_ds,true
+ssc_std,sixing,sixing_zhixuan_zh,四星直选组合,3,zuhe,{},ssc_std:sixing:sixing_zhixuan_zh,true
+ssc_std,sixing,sixing_zu24,四星组选24,4,zu24,{},ssc_std:sixing:sixing_zu24,true
+ssc_std,sixing,sixing_zu12,四星组选12,5,zu12,{},ssc_std:sixing:sixing_zu12,true
+ssc_std,sixing,sixing_zu6,四星组选6,6,zu6,{},ssc_std:sixing:sixing_zu6,true
+ssc_std,sixing,sixing_zu4,四星组选4,7,zu4,{},ssc_std:sixing:sixing_zu4,true
+ssc_std,wuxing,wuxing_zhixuan_fs,五星直选复式,1,fushi,{},ssc_std:wuxing:wuxing_zhixuan_fs,true
+ssc_std,wuxing,wuxing_zhixuan_ds,五星直选单式,2,danshi,{},ssc_std:wuxing:wuxing_zhixuan_ds,true
+ssc_std,wuxing,wuxing_zhixuan_zh,五星直选组合,3,zuhe,{},ssc_std:wuxing:wuxing_zhixuan_zh,true
+ssc_std,wuxing,wuxing_zu120,五星组选120,4,zu120,{},ssc_std:wuxing:wuxing_zu120,true
+ssc_std,wuxing,wuxing_zu60,五星组选60,5,zu60,{},ssc_std:wuxing:wuxing_zu60,true
+ssc_std,wuxing,wuxing_zu30,五星组选30,6,zu30,{},ssc_std:wuxing:wuxing_zu30,true
+ssc_std,wuxing,wuxing_zu20,五星组选20,7,zu20,{},ssc_std:wuxing:wuxing_zu20,true
+ssc_std,wuxing,wuxing_zu10,五星组选10,8,zu10,{},ssc_std:wuxing:wuxing_zu10,true
+ssc_std,wuxing,wuxing_zu5,五星组选5,9,zu5,{},ssc_std:wuxing:wuxing_zu5,true
+ssc_std,wuxing,wuxing_yifan,五星一帆风顺,10,teshu,{},ssc_std:wuxing:wuxing_yifan,true
+ssc_std,wuxing,wuxing_haoshi,五星好事成双,11,teshu,{},ssc_std:wuxing:wuxing_haoshi,true
+ssc_std,wuxing,wuxing_sanxing,五星三星报喜,12,teshu,{},ssc_std:wuxing:wuxing_sanxing,true
+ssc_std,wuxing,wuxing_siji,五星四季发财,13,teshu,{},ssc_std:wuxing:wuxing_siji,true
+ssc_std,dxds,hou2_dxds,后二大小单双,1,dxds,{},ssc_std:dxds:hou2_dxds,true
+ssc_std,dxds,hou3_dxds,后三大小单双,2,dxds,{},ssc_std:dxds:hou3_dxds,true
+ssc_std,dxds,qian2_dxds,前二大小单双,3,dxds,{},ssc_std:dxds:qian2_dxds,true
+ssc_std,dxds,qian3_dxds,前三大小单双,4,dxds,{},ssc_std:dxds:qian3_dxds,true
+ssc_std,dxds,wuxing_hz_ds,五星和值单双,5,danshuang,{},ssc_std:dxds:wuxing_hz_ds,true
+ssc_std,dxds,wuxing_hz_dx,五星和值大小,6,daxiao,{},ssc_std:dxds:wuxing_hz_dx,true
+lhc_std,tema,tema_a,特码A,1,tema,{},lhc_std:tema:tema_a,true
+lhc_std,tema,zheng1_te,正1特,2,zhengte,{},lhc_std:tema:zheng1_te,true
+lhc_std,tema,zheng2_te,正2特,3,zhengte,{},lhc_std:tema:zheng2_te,true
+lhc_std,tema,zheng3_te,正3特,4,zhengte,{},lhc_std:tema:zheng3_te,true
+lhc_std,tema,zheng4_te,正4特,5,zhengte,{},lhc_std:tema:zheng4_te,true
+lhc_std,tema,zheng5_te,正5特,6,zhengte,{},lhc_std:tema:zheng5_te,true
+lhc_std,tema,zheng6_te,正6特,7,zhengte,{},lhc_std:tema:zheng6_te,true
+lhc_std,erquanzhong,fushi,复式,8,fushi,{},lhc_std:erquanzhong:fushi,true
+lhc_std,erquanzhong,tuotou,拖头,9,tuotou,{},lhc_std:erquanzhong:tuotou,true
+lhc_std,erquanzhong,sx_dp,生肖对碰,10,sx_dp,{},lhc_std:erquanzhong:sx_dp,true
+lhc_std,erquanzhong,ws_dp,尾数对碰,11,ws_dp,{},lhc_std:erquanzhong:ws_dp,true
+lhc_std,erquanzhong,sw_dp,生尾对碰,12,sw_dp,{},lhc_std:erquanzhong:sw_dp,true
+lhc_std,erquanzhong,renyi_dp,任意对碰,13,renyi_dp,{},lhc_std:erquanzhong:renyi_dp,true
+lhc_std,erzhongte,fushi,复式,14,fushi,{},lhc_std:erzhongte:fushi,true
+lhc_std,erzhongte,tuotou,拖头,15,tuotou,{},lhc_std:erzhongte:tuotou,true
+lhc_std,erzhongte,sx_dp,生肖对碰,16,sx_dp,{},lhc_std:erzhongte:sx_dp,true
+lhc_std,erzhongte,ws_dp,尾数对碰,17,ws_dp,{},lhc_std:erzhongte:ws_dp,true
+lhc_std,erzhongte,sw_dp,生尾对碰,18,sw_dp,{},lhc_std:erzhongte:sw_dp,true
+lhc_std,erzhongte,renyi_dp,任意对碰,19,renyi_dp,{},lhc_std:erzhongte:renyi_dp,true
+lhc_std,techuan,fushi,复式,20,fushi,{},lhc_std:techuan:fushi,true
+lhc_std,techuan,tuotou,拖头,21,tuotou,{},lhc_std:techuan:tuotou,true
+lhc_std,techuan,sx_dp,生肖对碰,22,sx_dp,{},lhc_std:techuan:sx_dp,true
+lhc_std,techuan,ws_dp,尾数对碰,23,ws_dp,{},lhc_std:techuan:ws_dp,true
+lhc_std,techuan,sw_dp,生尾对碰,24,sw_dp,{},lhc_std:techuan:sw_dp,true
+lhc_std,techuan,renyi_dp,任意对碰,25,renyi_dp,{},lhc_std:techuan:renyi_dp,true
+lhc_std,sanzhonger,fushi,复式,26,fushi,{},lhc_std:sanzhonger:fushi,true
+lhc_std,sanzhonger,tuotou,拖头,27,tuotou,{},lhc_std:sanzhonger:tuotou,true
+lhc_std,sanquanzhong,fushi,复式,28,fushi,{},lhc_std:sanquanzhong:fushi,true
+lhc_std,sanquanzhong,tuotou,拖头,29,tuotou,{},lhc_std:sanquanzhong:tuotou,true
+lhc_std,shengxiao,texiao,特肖,30,texiao,{},lhc_std:shengxiao:texiao,true
+lhc_std,shengxiao,zongxiao,总肖,31,zongxiao,{},lhc_std:shengxiao:zongxiao,true
+lhc_std,shengxiao,2xiao,2肖,32,xiao,{},lhc_std:shengxiao:2xiao,true
+lhc_std,shengxiao,3xiao,3肖,33,xiao,{},lhc_std:shengxiao:3xiao,true
+lhc_std,shengxiao,4xiao,4肖,34,xiao,{},lhc_std:shengxiao:4xiao,true
+lhc_std,shengxiao,5xiao,5肖,35,xiao,{},lhc_std:shengxiao:5xiao,true
+lhc_std,shengxiao,6xiao,6肖,36,xiao,{},lhc_std:shengxiao:6xiao,true
+lhc_std,shengxiao,1xiao,一肖,37,xiao,{},lhc_std:shengxiao:1xiao,true
+lhc_std,shengxiao,1xiao_bz,一肖不中,38,xiao_bz,{},lhc_std:shengxiao:1xiao_bz,true
+lhc_std,shengxiao,2xiao_z,2肖中,39,xiao_z,{},lhc_std:shengxiao:2xiao_z,true
+lhc_std,shengxiao,3xiao_z,3肖中,40,xiao_z,{},lhc_std:shengxiao:3xiao_z,true
+lhc_std,shengxiao,4xiao_z,4肖中,41,xiao_z,{},lhc_std:shengxiao:4xiao_z,true
+lhc_std,shengxiao,5xiao_z,5肖中,42,xiao_z,{},lhc_std:shengxiao:5xiao_z,true
+lhc_std,shengxiao,2xiao_bz,2肖不中,43,xiao_bz,{},lhc_std:shengxiao:2xiao_bz,true
+lhc_std,shengxiao,3xiao_bz,3肖不中,44,xiao_bz,{},lhc_std:shengxiao:3xiao_bz,true
+lhc_std,shengxiao,4xiao_bz,4肖不中,45,xiao_bz,{},lhc_std:shengxiao:4xiao_bz,true
+lhc_std,shengxiao,5xiao_bz,5肖不中,46,xiao_bz,{},lhc_std:shengxiao:5xiao_bz,true
+lhc_std,weishu,weishu,尾数,47,weishu,{},lhc_std:weishu:weishu,true
+lhc_std,weishu,weishu_bz,尾数不中,48,weishu_bz,{},lhc_std:weishu:weishu_bz,true
+lhc_std,weishu,2wei_z,2尾中,49,wei_z,{},lhc_std:weishu:2wei_z,true
+lhc_std,weishu,3wei_z,3尾中,50,wei_z,{},lhc_std:weishu:3wei_z,true
+lhc_std,weishu,4wei_z,4尾中,51,wei_z,{},lhc_std:weishu:4wei_z,true
+lhc_std,weishu,2wei_bz,2尾不中,52,wei_bz,{},lhc_std:weishu:2wei_bz,true
+lhc_std,weishu,3wei_bz,3尾不中,53,wei_bz,{},lhc_std:weishu:3wei_bz,true
+lhc_std,weishu,4wei_bz,4尾不中,54,wei_bz,{},lhc_std:weishu:4wei_bz,true
+lhc_std,buzhong_xuanyi,5bz,5不中,55,buzhong,{},lhc_std:buzhong_xuanyi:5bz,true
+lhc_std,buzhong_xuanyi,6bz,6不中,56,buzhong,{},lhc_std:buzhong_xuanyi:6bz,true
+lhc_std,buzhong_xuanyi,7bz,7不中,57,buzhong,{},lhc_std:buzhong_xuanyi:7bz,true
+lhc_std,buzhong_xuanyi,8bz,8不中,58,buzhong,{},lhc_std:buzhong_xuanyi:8bz,true
+lhc_std,buzhong_xuanyi,9bz,9不中,59,buzhong,{},lhc_std:buzhong_xuanyi:9bz,true
+lhc_std,buzhong_xuanyi,10bz,10不中,60,buzhong,{},lhc_std:buzhong_xuanyi:10bz,true
+lhc_std,buzhong_xuanyi,11bz,11不中,61,buzhong,{},lhc_std:buzhong_xuanyi:11bz,true
+lhc_std,buzhong_xuanyi,12bz,12不中,62,buzhong,{},lhc_std:buzhong_xuanyi:12bz,true
+lhc_std,buzhong_xuanyi,15bz,15不中,63,buzhong,{},lhc_std:buzhong_xuanyi:15bz,true
+lhc_std,buzhong_xuanyi,5x1,5选中一,64,xuanyi,{},lhc_std:buzhong_xuanyi:5x1,true
+lhc_std,buzhong_xuanyi,6x1,6选中一,65,xuanyi,{},lhc_std:buzhong_xuanyi:6x1,true
+lhc_std,buzhong_xuanyi,7x1,7选中一,66,xuanyi,{},lhc_std:buzhong_xuanyi:7x1,true
+lhc_std,buzhong_xuanyi,8x1,8选中一,67,xuanyi,{},lhc_std:buzhong_xuanyi:8x1,true
+lhc_std,buzhong_xuanyi,9x1,9选中一,68,xuanyi,{},lhc_std:buzhong_xuanyi:9x1,true
+lhc_std,buzhong_xuanyi,10x1,10选中一,69,xuanyi,{},lhc_std:buzhong_xuanyi:10x1,true
+lhc_std,guoguan,guoguan,过关,70,guoguan,{},lhc_std:guoguan:guoguan,true
+lhc_std,tematouwei,tematouwei,特码头尾,71,tematouwei,{},lhc_std:tematouwei:tematouwei,true
+lhc_std,wuxingjiaye,wuxing,五行,72,wuxing,{},lhc_std:wuxingjiaye:wuxing,true
+lhc_std,wuxingjiaye,jiaye,家野,73,jiaye,{},lhc_std:wuxingjiaye:jiaye,true
+lhc_std,bose,bose,波色,74,bose,{},lhc_std:bose:bose,true
+lhc_std,bose,banbo,半波,75,banbo,{},lhc_std:bose:banbo,true
+lhc_std,bose,banbanbo,半半波,76,banbanbo,{},lhc_std:bose:banbanbo,true
+lhc_std,qima,qima,七码,77,qima,{},lhc_std:qima:qima,true
+lhc_std,renzhong,1l_rz,1粒任中,78,renzhong,{},lhc_std:renzhong:1l_rz,true
+lhc_std,renzhong,2l_rz,2粒任中,79,renzhong,{},lhc_std:renzhong:2l_rz,true
+lhc_std,renzhong,3l_rz,3粒任中,80,renzhong,{},lhc_std:renzhong:3l_rz,true
+lhc_std,renzhong,4l_rz,4粒任中,81,renzhong,{},lhc_std:renzhong:4l_rz,true
+lhc_std,renzhong,5l_rz,5粒任中,82,renzhong,{},lhc_std:renzhong:5l_rz,true
+syxw_std,dingwei,dingwei_wan,定位胆 · 万位,1,dingwei,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:dingwei:dingwei_wan,true
+syxw_std,dingwei,dingwei_qian,定位胆 · 千位,2,dingwei,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:dingwei:dingwei_qian,true
+syxw_std,dingwei,dingwei_bai,定位胆 · 百位,3,dingwei,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:dingwei:dingwei_bai,true
+syxw_std,dingwei,dingwei_shi,定位胆 · 十位,4,dingwei,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:dingwei:dingwei_shi,true
+syxw_std,dingwei,dingwei_ge,定位胆 · 个位,5,dingwei,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:dingwei:dingwei_ge,true
+syxw_std,qian3,qian3_zhixuan_fs,前三直选复式,6,fushi,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:qian3:qian3_zhixuan_fs,true
+syxw_std,qian3,qian3_zhixuan_ds,前三直选单式,7,danshi,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:qian3:qian3_zhixuan_ds,true
+syxw_std,qian3,qian3_zuxuan_fs,前三组选复式,8,fushi,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:qian3:qian3_zuxuan_fs,true
+syxw_std,qian3,qian3_zuxuan_ds,前三组选单式,9,danshi,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:qian3:qian3_zuxuan_ds,true
+syxw_std,qian3,qian3_budingwei,前三不定位,10,budingwei,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:qian3:qian3_budingwei,true
+syxw_std,qian2,qian2_zhixuan_fs,前二直选复式,11,fushi,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:qian2:qian2_zhixuan_fs,true
+syxw_std,qian2,qian2_zhixuan_ds,前二直选单式,12,danshi,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:qian2:qian2_zhixuan_ds,true
+syxw_std,qian2,qian2_zuxuan_fs,前二组选复式,13,fushi,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:qian2:qian2_zuxuan_fs,true
+syxw_std,qian2,qian2_zuxuan_ds,前二组选单式,14,danshi,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:qian2:qian2_zuxuan_ds,true
+syxw_std,renxuan_fs,rx_1z1,复式任选一中一,15,fushi,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:renxuan_fs:rx_1z1,true
+syxw_std,renxuan_ds,rx_1z1_ds,单式任选一中一,16,danshi,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:renxuan_ds:rx_1z1_ds,true
+syxw_std,renxuan_fs,rx_2z2,复式任选二中二,17,fushi,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:renxuan_fs:rx_2z2,true
+syxw_std,renxuan_ds,rx_2z2_ds,单式任选二中二,18,danshi,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:renxuan_ds:rx_2z2_ds,true
+syxw_std,renxuan_fs,rx_3z3,复式任选三中三,19,fushi,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:renxuan_fs:rx_3z3,true
+syxw_std,renxuan_ds,rx_3z3_ds,单式任选三中三,20,danshi,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:renxuan_ds:rx_3z3_ds,true
+syxw_std,renxuan_fs,rx_4z4,复式任选四中四,21,fushi,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:renxuan_fs:rx_4z4,true
+syxw_std,renxuan_ds,rx_4z4_ds,单式任选四中四,22,danshi,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:renxuan_ds:rx_4z4_ds,true
+syxw_std,renxuan_fs,rx_5z5,复式任选五中五,23,fushi,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:renxuan_fs:rx_5z5,true
+syxw_std,renxuan_ds,rx_5z5_ds,单式任选五中五,24,danshi,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:renxuan_ds:rx_5z5_ds,true
+syxw_std,renxuan_fs,rx_6z5,复式任选六中五,25,fushi,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:renxuan_fs:rx_6z5,true
+syxw_std,renxuan_ds,rx_6z5_ds,单式任选六中五,26,danshi,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:renxuan_ds:rx_6z5_ds,true
+syxw_std,renxuan_fs,rx_7z5,复式任选七中五,27,fushi,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:renxuan_fs:rx_7z5,true
+syxw_std,renxuan_ds,rx_7z5_ds,单式任选七中五,28,danshi,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:renxuan_ds:rx_7z5_ds,true
+syxw_std,renxuan_fs,rx_8z5,复式任选八中五,29,fushi,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:renxuan_fs:rx_8z5,true
+syxw_std,renxuan_ds,rx_8z5_ds,单式任选八中五,30,danshi,"{""numberPoolMin"": 1, ""numberPoolMax"": 11, ""pickCount"": 5}",syxw_std:renxuan_ds:rx_8z5_ds,true
+pk10_std,dingwei,dingwei_wan,定位胆 · 万位,1,dingwei,{},pk10_std:dingwei:dingwei_wan,true
+pk10_std,dingwei,dingwei_qian,定位胆 · 千位,2,dingwei,{},pk10_std:dingwei:dingwei_qian,true
+pk10_std,dingwei,dingwei_bai,定位胆 · 百位,3,dingwei,{},pk10_std:dingwei:dingwei_bai,true
+pk10_std,dingwei,dingwei_shi,定位胆 · 十位,4,dingwei,{},pk10_std:dingwei:dingwei_shi,true
+pk10_std,dingwei,dingwei_ge,定位胆 · 个位,5,dingwei,{},pk10_std:dingwei:dingwei_ge,true
+pk10_std,longhu,lh_1v10,1-Vs-10,6,longhu,{},pk10_std:longhu:lh_1v10,true
+pk10_std,longhu,lh_2v9,2-Vs-9,7,longhu,{},pk10_std:longhu:lh_2v9,true
+pk10_std,longhu,lh_3v8,3-Vs-8,8,longhu,{},pk10_std:longhu:lh_3v8,true
+pk10_std,longhu,lh_4v7,4-Vs-7,9,longhu,{},pk10_std:longhu:lh_4v7,true
+pk10_std,longhu,lh_5v6,5-Vs-6,10,longhu,{},pk10_std:longhu:lh_5v6,true
+pk10_std,qian1,qian1_zhixuan_fs,前一直选复式,11,fushi,{},pk10_std:qian1:qian1_zhixuan_fs,true
+pk10_std,qian2,qian2_zhixuan_fs,前二直选复式,12,fushi,{},pk10_std:qian2:qian2_zhixuan_fs,true
+pk10_std,qian2,qian2_zhixuan_ds,前二直选单式,13,danshi,{},pk10_std:qian2:qian2_zhixuan_ds,true
+pk10_std,qian3,qian3_zhixuan_fs,前三直选复式,14,fushi,{},pk10_std:qian3:qian3_zhixuan_fs,true
+pk10_std,qian3,qian3_zhixuan_ds,前三直选单式,15,danshi,{},pk10_std:qian3:qian3_zhixuan_ds,true
+pk10_std,qian4,qian4_zhixuan_fs,前四直选复式,16,fushi,{},pk10_std:qian4:qian4_zhixuan_fs,true
+pk10_std,qian4,qian4_zhixuan_ds,前四直选单式,17,danshi,{},pk10_std:qian4:qian4_zhixuan_ds,true
+pk10_std,qian5,qian5_zhixuan_fs,前五直选复式,18,fushi,{},pk10_std:qian5:qian5_zhixuan_fs,true
+pk10_std,qian5,qian5_zhixuan_ds,前五直选单式,19,danshi,{},pk10_std:qian5:qian5_zhixuan_ds,true
+pk10_std,daxiao,dx_gj,冠军大小,20,daxiao,{},pk10_std:daxiao:dx_gj,true
+pk10_std,danshuang,ds_gj,冠军单双,21,danshuang,{},pk10_std:danshuang:ds_gj,true
+pk10_std,daxiao,dx_yj,亚军大小,22,daxiao,{},pk10_std:daxiao:dx_yj,true
+pk10_std,danshuang,ds_yj,亚军单双,23,danshuang,{},pk10_std:danshuang:ds_yj,true
+pk10_std,daxiao,dx_jj,季军大小,24,daxiao,{},pk10_std:daxiao:dx_jj,true
+pk10_std,danshuang,ds_jj,季军单双,25,danshuang,{},pk10_std:danshuang:ds_jj,true
+pk10_std,daxiao,dx_ds4,第四名大小,26,daxiao,{},pk10_std:daxiao:dx_ds4,true
+pk10_std,danshuang,ds_ds4,第四名单双,27,danshuang,{},pk10_std:danshuang:ds_ds4,true
+pk10_std,daxiao,dx_ds5,第五名大小,28,daxiao,{},pk10_std:daxiao:dx_ds5,true
+pk10_std,danshuang,ds_ds5,第五名单双,29,danshuang,{},pk10_std:danshuang:ds_ds5,true
+pk10_std,hezhi,hz_guanya,冠亚和值,30,hezhi,{},pk10_std:hezhi:hz_guanya,true
+pk10_std,hezhi,hz_shouwei,首尾和值,31,hezhi,{},pk10_std:hezhi:hz_shouwei,true
+pk10_std,hezhi,hz_qian3,前三和值,32,hezhi,{},pk10_std:hezhi:hz_qian3,true
+pk10_std,hezhi,hz_hou3,后三和值,33,hezhi,{},pk10_std:hezhi:hz_hou3,true
+pk10_std,dxds_combo,dxds_guanya,冠亚和值大小单双,34,dxds,{},pk10_std:dxds_combo:dxds_guanya,true
+pk10_std,dxds_combo,dxds_qian3,前三大小单双,35,dxds,{},pk10_std:dxds_combo:dxds_qian3,true
+pk10_std,dxds_combo,dxds_hou3,后三大小单双,36,dxds,{},pk10_std:dxds_combo:dxds_hou3,true
+k3_std,hezhi,k3_hezhi,快三和值,1,hezhi,{},k3_std:hezhi:k3_hezhi,true
+k3_std,tonghao,ertong_dan,二同号单选,2,danshi,{},k3_std:tonghao:ertong_dan,true
+k3_std,tonghao,ertong_fu,二同号复选,3,fushi,{},k3_std:tonghao:ertong_fu,true
+k3_std,tonghao,santong,三同号,4,tonghao,{},k3_std:tonghao:santong,true
+k3_std,butonghao,2butong,二不同号,5,butong,{},k3_std:butonghao:2butong,true
+k3_std,butonghao,biaozhun,标准选号,6,fushi,{},k3_std:butonghao:biaozhun,true
+k3_std,butonghao,shoudong,手动输入,7,shoudong,{},k3_std:butonghao:shoudong,true
+k3_std,lianhao_qita,sanlian,三连号,8,lianhao,{},k3_std:lianhao_qita:sanlian,true
+k3_std,lianhao_qita,dantiao,单挑一骰,9,dantiao,{},k3_std:lianhao_qita:dantiao,true
+pc28_std,pc28_20,hezhi,2.0 · 和值,1,hezhi,{},pc28_std:pc28_20:hezhi,true
+pc28_std,pc28_20,dxds,2.0 · 大小单双,2,dxds,{},pc28_std:pc28_20:dxds,true
+pc28_std,pc28_20,teshu,2.0 · 特殊号,3,teshu,{},pc28_std:pc28_20:teshu,true
+pc28_std,pc28_20,longhubao,2.0 · 龙虎豹,4,longhubao,{},pc28_std:pc28_20:longhubao,true
+pc28_std,pc28_28,hezhi,2.8 · 和值,5,hezhi,{},pc28_std:pc28_28:hezhi,true
+pc28_std,pc28_28,dxds,2.8 · 大小单双,6,dxds,{},pc28_std:pc28_28:dxds,true
+pc28_std,pc28_28,teshu,2.8 · 特殊号,7,teshu,{},pc28_std:pc28_28:teshu,true
+pc28_std,pc28_28,longhubao,2.8 · 龙虎豹,8,longhubao,{},pc28_std:pc28_28:longhubao,true

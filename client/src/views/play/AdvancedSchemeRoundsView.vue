@@ -1,7 +1,29 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onActivated, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { ApiError } from '@/api/client'
+import {
+  createClientSchemeTemplate,
+  getClientSchemeTemplate,
+  isNewSchemeTemplateRoute,
+  isSchemeTemplateId,
+  saveClientSchemeTemplate,
+} from '@/api/schemeTemplates'
+import { refreshSchemeTemplatesState } from '@/composables/useSchemeTemplateLibrary'
+import {
+  getSchemeDefinition,
+  isMemberDefinitionId,
+  saveSchemeRounds,
+  type SchemeRoundRule,
+} from '@/api/schemes/betMultiplier'
+import {
+  getDraftAdvancedTemplate,
+  isDraftAdvancedTemplateId,
+  newDraftAdvancedTemplateId,
+  upsertDraftAdvancedTemplate,
+} from '@/utils/draftAdvancedTemplates'
+import { SCHEME_DRAFT_ID, isDraftSchemeId } from '@/utils/schemeDraftStorage'
 
 const route = useRoute()
 const router = useRouter()
@@ -9,6 +31,52 @@ const router = useRouter()
 const schemeTitle = ref(decodeURIComponent(String(route.query.title ?? '') || '方案'))
 const editingTitle = ref(false)
 const tempTitle = ref(schemeTitle.value)
+const templateMemberOwned = ref(false)
+
+function routeParamId(): string {
+  return String(route.params.schemeId ?? '').trim()
+}
+
+function ownerSchemeContext(): string {
+  const fromQuery = route.query.schemeId != null ? String(route.query.schemeId).trim() : ''
+  if (fromQuery) return fromQuery
+  const fromParam = routeParamId()
+  if (fromParam && !isSchemeTemplateId(fromParam) && !isDraftAdvancedTemplateId(fromParam)) {
+    return fromParam
+  }
+  return ''
+}
+
+function isDraftOwner(): boolean {
+  return isDraftSchemeId(ownerSchemeContext())
+}
+
+function ownerDefinitionId(): string {
+  const ctx = ownerSchemeContext()
+  return isMemberDefinitionId(ctx) ? ctx : ''
+}
+
+function templatesFetchDefinitionId(): string {
+  const ctx = ownerSchemeContext()
+  if (isMemberDefinitionId(ctx) || isDraftSchemeId(ctx)) return ctx
+  return ''
+}
+
+function memberDefinitionId(): string {
+  const fromParam = routeParamId()
+  return isMemberDefinitionId(fromParam) ? fromParam : ''
+}
+
+function templateId(): string {
+  const id = routeParamId()
+  if (isNewSchemeTemplateRoute(id)) return ''
+  if (isSchemeTemplateId(id) || isDraftAdvancedTemplateId(id)) return id
+  return ''
+}
+
+function isNewTemplate(): boolean {
+  return isNewSchemeTemplateRoute(routeParamId()) || route.query.newTemplate === '1'
+}
 
 function toggleTitleEdit() {
   editingTitle.value = true
@@ -26,11 +94,6 @@ function cancelTitleEdit() {
   tempTitle.value = schemeTitle.value
 }
 
-interface SchemeRoundRule {
-  mult: number
-  afterHit: number
-  afterMiss: number
-}
 
 function defaultRows(): SchemeRoundRule[] {
   return [
@@ -41,6 +104,57 @@ function defaultRows(): SchemeRoundRule[] {
 }
 
 const rows = ref<SchemeRoundRule[]>(defaultRows())
+
+function normalizeRoundRows(raw: unknown): SchemeRoundRule[] | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null
+  const parsed = raw
+    .map((item) => {
+      if (item == null || typeof item !== 'object') return null
+      const row = item as Record<string, unknown>
+      const mult = Number(row.mult)
+      const afterHit = Number(row.afterHit)
+      const afterMiss = Number(row.afterMiss)
+      if (!Number.isFinite(mult) || !Number.isFinite(afterHit) || !Number.isFinite(afterMiss)) {
+        return null
+      }
+      return { mult, afterHit, afterMiss }
+    })
+    .filter((r): r is SchemeRoundRule => r != null)
+  return parsed.length > 0 ? parsed : null
+}
+
+async function loadDefinitionRounds(definitionId: string) {
+  try {
+    const def = await getSchemeDefinition(definitionId)
+    const loaded = normalizeRoundRows(def.config?.rounds)
+    if (loaded) rows.value = loaded
+  } catch {
+    /* 加载失败保留默认表单 */
+  }
+}
+
+async function loadTemplateRounds(id: string) {
+  if (isDraftAdvancedTemplateId(id)) {
+    const tpl = getDraftAdvancedTemplate(id)
+    if (tpl) {
+      templateMemberOwned.value = true
+      rows.value = tpl.rounds.map((r) => ({ ...r }))
+      schemeTitle.value = tpl.name
+    }
+    return
+  }
+  const definitionId = templatesFetchDefinitionId()
+  if (!definitionId) return
+  try {
+    const tpl = await getClientSchemeTemplate(definitionId, id)
+    templateMemberOwned.value = Boolean(tpl.memberOwned)
+    const loaded = normalizeRoundRows(tpl.config?.rounds)
+    if (loaded) rows.value = loaded
+    if (tpl.name) schemeTitle.value = tpl.name
+  } catch {
+    /* 加载失败保留默认表单 */
+  }
+}
 
 function goBack() {
   if (window.history.length > 1) {
@@ -64,14 +178,128 @@ function removeRow(index: number) {
 
 const MULT_CAP = 200_000
 
-function onSave() {
+async function onSave() {
   const bad = rows.value.some((r) => !Number.isFinite(r.mult) || r.mult > MULT_CAP)
   if (bad) {
     ElMessage.warning(`倍数须在 0～${MULT_CAP} 之间`)
     return
   }
-  ElMessage.success('已保存（演示）')
-  router.back()
+
+  const name = schemeTitle.value.trim() || '新方案'
+  const definitionId = memberDefinitionId()
+  const tplId = templateId()
+
+  if (definitionId) {
+    try {
+      await saveSchemeRounds(definitionId, rows.value)
+    } catch (e) {
+      const message = e instanceof ApiError ? e.message : e instanceof Error ? e.message : '保存失败'
+      ElMessage.error(message)
+      return
+    }
+    ElMessage.success('已保存期次规则')
+    router.back()
+    return
+  }
+
+  if (isNewTemplate()) {
+    if (isDraftOwner()) {
+      const id = newDraftAdvancedTemplateId()
+      const ok = upsertDraftAdvancedTemplate({ id, name, rounds: rows.value.map((r) => ({ ...r })) })
+      if (!ok) {
+        ElMessage.warning('方案草稿丢失，请返回方案编辑页后重试')
+        return
+      }
+      refreshSchemeTemplatesState(SCHEME_DRAFT_ID)
+      ElMessage.success('已创建高级倍投方案')
+      router.back()
+      return
+    }
+    const definitionId = ownerDefinitionId()
+    if (!definitionId) {
+      ElMessage.warning('缺少方案 ID，无法保存')
+      return
+    }
+    try {
+      await createClientSchemeTemplate({
+        name,
+        definitionId,
+        rounds: rows.value,
+      })
+      refreshSchemeTemplatesState(definitionId)
+    } catch (e) {
+      const message = e instanceof ApiError ? e.message : e instanceof Error ? e.message : '保存失败'
+      ElMessage.error(message)
+      return
+    }
+    ElMessage.success('已创建高级倍投方案')
+    router.back()
+    return
+  }
+
+  if (tplId) {
+    if (isDraftAdvancedTemplateId(tplId)) {
+      const ok = upsertDraftAdvancedTemplate({
+        id: tplId,
+        name,
+        rounds: rows.value.map((r) => ({ ...r })),
+      })
+      if (!ok) {
+        ElMessage.warning('方案草稿丢失，请返回方案编辑页后重试')
+        return
+      }
+      refreshSchemeTemplatesState(SCHEME_DRAFT_ID)
+      ElMessage.success('已保存期次规则')
+      router.back()
+      return
+    }
+    if (!templateMemberOwned.value) {
+      ElMessage.warning('平台预置方案不可修改，请使用「新增方案」创建自己的方案')
+      return
+    }
+    const definitionId = ownerDefinitionId()
+    if (!definitionId) {
+      ElMessage.warning('缺少方案 ID，无法保存')
+      return
+    }
+    try {
+      await saveClientSchemeTemplate(definitionId, tplId, {
+        name,
+        brief: undefined,
+        rounds: rows.value,
+      })
+      refreshSchemeTemplatesState(definitionId)
+    } catch (e) {
+      const message = e instanceof ApiError ? e.message : e instanceof Error ? e.message : '保存失败'
+      ElMessage.error(message)
+      return
+    }
+    ElMessage.success('已保存期次规则')
+    router.back()
+    return
+  }
+
+  ElMessage.error('无法保存：方案标识无效')
+}
+
+onMounted(() => {
+  void reloadRounds()
+})
+
+onActivated(() => {
+  void reloadRounds()
+})
+
+function reloadRounds() {
+  rows.value = defaultRows()
+  templateMemberOwned.value = false
+  const definitionId = memberDefinitionId()
+  if (definitionId) {
+    void loadDefinitionRounds(definitionId)
+    return
+  }
+  const tplId = templateId()
+  if (tplId) void loadTemplateRounds(tplId)
 }
 </script>
 
@@ -108,6 +336,7 @@ function onSave() {
     </header>
 
     <p class="ase-hint ase-hint--danger">* 倍数计算上限为 200000 倍为止，超出不计</p>
+    <p class="ase-hint">中后 / 挂后填写目标局数（从 1 开始，对应当前表中的「局数」列）</p>
 
     <main class="ase-main">
       <div class="ase-table-card">
@@ -124,12 +353,12 @@ function onSave() {
           </el-table-column>
           <el-table-column label="中后" :min-width="56" align="center" class-name="ase-cell-input">
             <template #default="{ row }">
-              <el-input-number v-model="row.afterHit" :min="0" size="small" :controls="false" />
+              <el-input-number v-model="row.afterHit" :min="1" size="small" :controls="false" />
             </template>
           </el-table-column>
           <el-table-column label="挂后" :min-width="56" align="center" class-name="ase-cell-input">
             <template #default="{ row }">
-              <el-input-number v-model="row.afterMiss" :min="0" size="small" :controls="false" />
+              <el-input-number v-model="row.afterMiss" :min="1" size="small" :controls="false" />
             </template>
           </el-table-column>
           <el-table-column label="删除" :min-width="44" align="center" class-name="ase-cell-del">

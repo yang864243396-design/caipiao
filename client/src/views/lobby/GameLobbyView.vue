@@ -1,44 +1,84 @@
 <script setup lang="ts">
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import LobbyTabBar from '@/components/lobby/LobbyTabBar.vue'
+import ContentDialog from '@/components/ui/ContentDialog.vue'
+import { useLobbyPageContent } from '@/composables/useLobbyPageContent'
+import { useMaintenanceClient } from '@/composables/useMaintenanceClient'
+const {
+  popupAnnouncement,
+  shouldBlockLobby,
+  shouldShowMaintenancePopup,
+  startSync,
+  stopSync,
+} = useMaintenanceClient()
+
+const NEWS_ICON = '/images/lobby/news-item.png'
+const BENTO_COPY_ICON = '/images/lobby/bento-copy-hall.png'
+const BENTO_CUSTOM_ICON = '/images/lobby/bento-custom-scheme.png'
+const BENTO_DOWNLOAD_ICON = '/images/lobby/bento-scheme-download.png'
+
+const {
+  banners,
+  latestAnnouncement,
+  newsRows,
+  load: loadLobbyContent,
+} = useLobbyPageContent(NEWS_ICON)
+
+const bannerIndex = ref(0)
+let bannerTimer: ReturnType<typeof setInterval> | null = null
+
+function stopBannerTimer() {
+  if (bannerTimer) {
+    clearInterval(bannerTimer)
+    bannerTimer = null
+  }
+}
+
+function startBannerTimer() {
+  stopBannerTimer()
+  if (banners.value.length <= 1) return
+  bannerTimer = setInterval(() => {
+    bannerIndex.value = (bannerIndex.value + 1) % banners.value.length
+  }, 5000)
+}
+
+const maintDialogVisible = ref(false)
+
+onMounted(() => {
+  startSync()
+  void loadLobbyContent().then(() => startBannerTimer())
+  if (shouldShowMaintenancePopup.value) maintDialogVisible.value = true
+})
+
+onUnmounted(() => {
+  stopSync()
+  stopBannerTimer()
+})
+
+watch(banners, () => {
+  bannerIndex.value = 0
+  startBannerTimer()
+})
+
+watch(shouldShowMaintenancePopup, (v) => {
+  if (v) maintDialogVisible.value = true
+})
 
 /**
  * 与 Stitch 导出 / Tailwind 内联 config 1:1（无 tailwind 运行时，纯 scoped CSS 等价）
  */
-const HERO_IMG = '/images/lobby/hero-championship.png'
 const AVATAR_IMG = '/images/lobby/avatar-user.png'
 /** 通知图标：占位 PNG，可自行改为其它路径或资源 */
 const NOTIFY_IMG = '/images/lobby/notify-placeholder.png'
 /** 公告栏左侧图标：占位 PNG，可自行改为其它路径或资源 */
 const ANNOUNCE_IMG = '/images/lobby/announce-placeholder.png'
-/** 通用 UI 图标占位（底栏、bento、动态行等），可自行替换 */
-const ICON_PLACEHOLDER = '/images/lobby/icon-placeholder.png'
 
-const news = [
-  {
-    id: 'n1',
-    iconImg: ICON_PLACEHOLDER,
-    tone: 'blue',
-    title: '充值须知：支付渠道升级提醒',
-    body: '为保障资金安全，请务必查看最新支付指南',
-    time: '10:45 AM',
-  },
-  {
-    id: 'n2',
-    iconImg: ICON_PLACEHOLDER,
-    tone: 'amber',
-    title: '服务器维护：每周例行更新',
-    body: '本周五凌晨 02:00-04:00 进行系统扩容',
-    time: '昨天',
-  },
-  {
-    id: 'n3',
-    iconImg: ICON_PLACEHOLDER,
-    tone: 'green',
-    title: '安全中心：账户保护功能加强',
-    body: '支持物理硬件密钥二次验证，全面提升安全性',
-    time: '3天前',
-  },
-] as const
+function timeGreeting() {
+  const hour = new Date().getHours()
+  if (hour >= 5 && hour < 12) return '早上好'
+  if (hour >= 12 && hour < 18) return '下午好'
+  return '晚上好'
+}
 </script>
 
 <template>
@@ -56,7 +96,7 @@ const news = [
               decoding="async"
             />
           </div>
-          <h1 class="brand">精密终端</h1>
+          <h1 class="brand">{{ timeGreeting() }}</h1>
         </div>
         <div class="top-right">
           <button type="button" class="icon-btn" aria-label="通知">
@@ -74,31 +114,53 @@ const news = [
     </header>
 
     <main class="main">
-      <!-- Hero: aspect-[21/9] + gradient + overlay text -->
-      <section class="section hero-section">
-        <div class="hero-card">
-          <img
-            :src="HERO_IMG"
-            alt="Precision Championship 2024"
-            class="hero-img"
-            width="800"
-            height="343"
-            decoding="async"
-          />
-          <div class="hero-grad">
-            <span class="ongoing">Ongoing</span>
-            <h2 class="hero-title">精密冠军赛 2024</h2>
-            <p class="hero-sub">决战巅峰，赢取丰厚赛季积分</p>
+      <div class="main-hero-group">
+      <!-- 主屏 Banner 轮播：GET /public/banners -->
+      <section v-if="banners.length" class="section hero-section">
+        <div class="hero-carousel" aria-label="大厅主屏轮播">
+          <div class="hero-track" :style="{ transform: `translateX(-${bannerIndex * 100}%)` }">
+            <div v-for="b in banners" :key="b.id" class="hero-slide">
+              <a
+                v-if="b.linkUrl"
+                :href="b.linkUrl"
+                class="hero-link"
+                target="_blank"
+                rel="noopener noreferrer"
+                :aria-label="`打开 Banner 外链`"
+              >
+                <img :src="b.imageUrl" alt="" class="hero-img" width="800" height="343" decoding="async" />
+              </a>
+              <img
+                v-else
+                :src="b.imageUrl"
+                alt=""
+                class="hero-img"
+                width="800"
+                height="343"
+                decoding="async"
+              />
+            </div>
+          </div>
+          <div v-if="banners.length > 1" class="hero-dots">
+            <button
+              v-for="(b, i) in banners"
+              :key="`${b.id}-dot`"
+              type="button"
+              class="hero-dot"
+              :class="{ 'is-active': i === bannerIndex }"
+              :aria-label="`第 ${i + 1} 张 Banner`"
+              @click="bannerIndex = i"
+            />
           </div>
         </div>
       </section>
 
-      <!-- Announcement -->
-      <section class="section">
+      <!-- Announcement: 最新已发布公告 -->
+      <section v-if="latestAnnouncement" class="section">
         <RouterLink
           class="ann-bar ann-bar-link"
-          :to="{ name: 'announcement-detail', params: { id: 'version-2-4' } }"
-          aria-label="查看公告详情"
+          :to="{ name: 'announcement-detail', params: { id: latestAnnouncement.id } }"
+          :aria-label="`查看公告：${latestAnnouncement.title}`"
         >
           <img
             :src="ANNOUNCE_IMG"
@@ -108,9 +170,7 @@ const news = [
             class="ann-ico"
             decoding="async"
           />
-          <p class="ann-txt">
-            公告：精密终端 2.4 版本已上线，新增多维方案分析工具，请各位玩家及时更新。
-          </p>
+          <p class="ann-txt">公告：{{ latestAnnouncement.title }}</p>
           <span class="material m-sm ann-arrow" aria-hidden="true">arrow_forward_ios</span>
         </RouterLink>
       </section>
@@ -125,7 +185,7 @@ const news = [
           <div class="bento-body">
             <div class="bento-icon big">
               <img
-                :src="ICON_PLACEHOLDER"
+                :src="BENTO_COPY_ICON"
                 alt=""
                 width="36"
                 height="36"
@@ -142,7 +202,7 @@ const news = [
         <RouterLink class="bento-s b-left bento-s-link" to="/play/custom-scheme/new">
           <div class="bento-icon terr">
             <img
-              :src="ICON_PLACEHOLDER"
+              :src="BENTO_CUSTOM_ICON"
               alt=""
               width="22"
               height="22"
@@ -153,10 +213,10 @@ const news = [
           <h3 class="bento-h sm">自创方案</h3>
           <p class="bento-p sm">自由定制专属逻辑与参数</p>
         </RouterLink>
-        <div class="bento-s b-right">
+        <RouterLink class="bento-s b-right bento-s-link" :to="{ name: 'scheme-download' }">
           <div class="bento-icon pri">
             <img
-              :src="ICON_PLACEHOLDER"
+              :src="BENTO_DOWNLOAD_ICON"
               alt=""
               width="22"
               height="22"
@@ -166,18 +226,21 @@ const news = [
           </div>
           <h3 class="bento-h sm">方案下载</h3>
           <p class="bento-p sm">离线同步，随时随地查阅</p>
-        </div>
+        </RouterLink>
       </section>
+      </div>
 
-      <!-- 最新动态 -->
-      <section class="section news-block">
+      <!-- 最新动态：公告列表前 3 条 -->
+      <section v-if="newsRows.length" class="section news-block">
         <div class="news-head">
           <h2 class="news-h2">最新动态</h2>
-          <button type="button" class="link-all">查看全部</button>
+          <RouterLink :to="{ name: 'member-announcements' }" class="link-all">
+            查看全部
+          </RouterLink>
         </div>
         <div class="news-card">
           <RouterLink
-            v-for="(n, i) in news"
+            v-for="(n, i) in newsRows"
             :key="n.id"
             :to="{ name: 'announcement-detail', params: { id: n.id } }"
             class="news-row news-row-link"
@@ -196,7 +259,6 @@ const news = [
             </div>
             <div class="news-mid">
               <h4 class="news-title">{{ n.title }}</h4>
-              <p class="news-body">{{ n.body }}</p>
             </div>
             <span class="news-time">{{ n.time }}</span>
           </RouterLink>
@@ -205,6 +267,38 @@ const news = [
     </main>
 
     <LobbyTabBar />
+
+    <!-- 全站维护拦截：与 admin「系统维护」Mock 同源（Cookie/localStorage） -->
+    <div
+      v-if="shouldBlockLobby"
+      class="lobby-maint-overlay"
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="lobby-maint-title"
+    >
+      <div class="lobby-maint-panel">
+        <h2 id="lobby-maint-title" class="lobby-maint-title">系统维护中</h2>
+        <p class="lobby-maint-desc">
+          平台正在进行维护升级，大厅功能暂不可用。请稍后再试，或查看维护公告了解详情。
+        </p>
+        <el-button v-if="popupAnnouncement" type="primary" round @click="maintDialogVisible = true">
+          查看维护公告
+        </el-button>
+      </div>
+    </div>
+
+    <ContentDialog
+      v-model="maintDialogVisible"
+      :title="popupAnnouncement?.title ?? '平台公告'"
+      icon="campaign"
+      confirm-text="知道了"
+      wide
+    >
+      <div
+        v-if="popupAnnouncement"
+        v-html="popupAnnouncement.bodyHtml"
+      />
+    </ContentDialog>
   </div>
 </template>
 
@@ -337,15 +431,20 @@ const news = [
   padding: 0 1.5rem 1.5rem;
   display: flex;
   flex-direction: column;
-  gap: 2rem;
+  gap: 1.5rem;
+}
+.main-hero-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
 }
 .section {
   margin: 0;
 }
 .hero-section {
-  margin-top: 1.5rem;
+  margin-top: 1rem;
 }
-.hero-card {
+.hero-carousel {
   position: relative;
   width: 100%;
   aspect-ratio: 21 / 9;
@@ -353,60 +452,48 @@ const news = [
   border-radius: 1.5rem;
   overflow: hidden;
   box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
-  cursor: pointer;
+}
+.hero-track {
+  display: flex;
+  height: 100%;
+  transition: transform 0.6s ease;
+}
+.hero-slide {
+  flex: 0 0 100%;
+  height: 100%;
+}
+.hero-link {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 .hero-img {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
-  transition: transform 0.7s ease;
 }
-.hero-card:hover .hero-img {
-  transform: scale(1.05);
-}
-.hero-grad {
+.hero-dots {
   position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    to top,
-    rgba(0, 0, 0, 0.8) 0%,
-    rgba(0, 0, 0, 0.2) 45%,
-    transparent 100%
-  );
+  bottom: 0.75rem;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  padding: 2rem;
+  gap: 0.375rem;
+  z-index: 2;
 }
-.ongoing {
-  display: inline-block;
-  width: fit-content;
-  padding: 0.2rem 0.75rem;
-  background: var(--c-primary);
-  color: #fff;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  border-radius: 999px;
-  margin-bottom: 0.75rem;
-  font-family: 'Plus Jakarta Sans', 'Noto Sans SC', system-ui, sans-serif;
+.hero-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.45);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.2s;
 }
-.hero-title {
-  margin: 0;
-  color: #fff;
-  font-family: 'Plus Jakarta Sans', 'Noto Sans SC', system-ui, sans-serif;
-  font-size: clamp(1.875rem, 5vw, 3rem);
-  font-weight: 900;
-  line-height: 1;
-  letter-spacing: -0.02em;
-}
-.hero-sub {
-  margin: 0.5rem 0 0;
-  color: rgba(255, 255, 255, 0.8);
-  font-size: 1rem;
-  font-weight: 500;
+.hero-dot.is-active {
+  background: #fff;
 }
 .ann-bar {
   display: flex;
@@ -651,6 +738,11 @@ const news = [
   padding: 0;
   cursor: pointer;
   font-family: inherit;
+  text-decoration: none;
+}
+
+.link-all:hover {
+  text-decoration: underline;
 }
 .news-card {
   background: var(--c-surface-c-lowest);
@@ -725,5 +817,40 @@ const news = [
   font-weight: 500;
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+.lobby-maint-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+  background: rgb(15 23 42 / 42%);
+  backdrop-filter: blur(20px);
+}
+
+.lobby-maint-panel {
+  width: min(100%, 22rem);
+  padding: 1.5rem;
+  border-radius: 1rem;
+  background: var(--c-surface-c-lowest);
+  box-shadow: 0 24px 48px rgb(26 62 138 / 12%);
+  text-align: center;
+}
+
+.lobby-maint-title {
+  margin: 0 0 0.75rem;
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--c-on-surface);
+}
+
+.lobby-maint-desc {
+  margin: 0 0 1.25rem;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--c-on-surface-variant);
 }
 </style>

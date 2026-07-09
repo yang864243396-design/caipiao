@@ -1,0 +1,1080 @@
+{
+  "name": "六合彩",
+  "groups": [
+    {
+      "name": "特码",
+      "team": [
+        {
+          "name": "特码A",
+          "rule": [
+            {
+              "id": "385",
+              "name": "特码A",
+              "full_name": "特码A",
+              "active": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "正特码",
+      "team": [
+        {
+          "name": "正1特",
+          "rule": [
+            {
+              "id": "271",
+              "name": "正1特",
+              "full_name": "正1特",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "正2特",
+          "rule": [
+            {
+              "id": "272",
+              "name": "正2特",
+              "full_name": "正2特",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "正3特",
+          "rule": [
+            {
+              "id": "273",
+              "name": "正3特",
+              "full_name": "正3特",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "正4特",
+          "rule": [
+            {
+              "id": "274",
+              "name": "正4特",
+              "full_name": "正4特",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "正5特",
+          "rule": [
+            {
+              "id": "275",
+              "name": "正5特",
+              "full_name": "正5特",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "正6特",
+          "rule": [
+            {
+              "id": "276",
+              "name": "正6特",
+              "full_name": "正6特",
+              "active": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "连码",
+      "team": [
+        {
+          "name": "二全中",
+          "rule": [
+            {
+              "id": "277",
+              "name": "复式",
+              "full_name": "二全中复式",
+              "active": true
+            },
+            {
+              "id": "278",
+              "name": "拖头",
+              "full_name": "二全中拖头",
+              "active": true
+            },
+            {
+              "id": "279",
+              "name": "生肖对碰",
+              "full_name": "二全中生肖对碰",
+              "active": true
+            },
+            {
+              "id": "280",
+              "name": "尾数对碰",
+              "full_name": "二全中尾数对碰",
+              "active": true
+            },
+            {
+              "id": "281",
+              "name": "生尾对碰",
+              "full_name": "二全中生尾对碰",
+              "active": true
+            },
+            {
+              "id": "282",
+              "name": "任意对碰",
+              "full_name": "二全中任意对碰",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "二中特",
+          "rule": [
+            {
+              "id": "283",
+              "name": "复式",
+              "full_name": "二中特复式",
+              "active": true
+            },
+            {
+              "id": "284",
+              "name": "拖头",
+              "full_name": "二中特拖头",
+              "active": true
+            },
+            {
+              "id": "285",
+              "name": "生肖对碰",
+              "full_name": "二中特生肖对碰",
+              "active": true
+            },
+            {
+              "id": "286",
+              "name": "尾数对碰",
+              "full_name": "二中特尾数对碰",
+              "active": true
+            },
+            {
+              "id": "287",
+              "name": "生尾对碰",
+              "full_name": "二中特生尾对碰",
+              "active": true
+            },
+            {
+              "id": "288",
+              "name": "任意对碰",
+              "full_name": "二中特任意对碰",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "特串",
+          "rule": [
+            {
+              "id": "289",
+              "name": "复式",
+              "full_name": "特串复式",
+              "active": true
+            },
+            {
+              "id": "290",
+              "name": "拖头",
+              "full_name": "特串拖头",
+              "active": true
+            },
+            {
+              "id": "291",
+              "name": "生肖对碰",
+              "full_name": "特串生肖对碰",
+              "active": true
+            },
+            {
+              "id": "292",
+              "name": "尾数对碰",
+              "full_name": "特串尾数对碰",
+              "active": true
+            },
+            {
+              "id": "293",
+              "name": "生尾对碰",
+              "full_name": "特串生尾对碰",
+              "active": true
+            },
+            {
+              "id": "294",
+              "name": "任意对碰",
+              "full_name": "特串任意对碰",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "三中二",
+          "rule": [
+            {
+              "id": "295",
+              "name": "复式",
+              "full_name": "三中二复式",
+              "active": true
+            },
+            {
+              "id": "296",
+              "name": "拖头",
+              "full_name": "三中二拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "三全中",
+          "rule": [
+            {
+              "id": "297",
+              "name": "复式",
+              "full_name": "三全中复式",
+              "active": true
+            },
+            {
+              "id": "298",
+              "name": "拖头",
+              "full_name": "三全中拖头",
+              "active": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "过关",
+      "team": [
+        {
+          "name": "过关",
+          "rule": [
+            {
+              "id": "299",
+              "name": "过关",
+              "full_name": "过关",
+              "active": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "生肖",
+      "team": [
+        {
+          "name": "特肖",
+          "rule": [
+            {
+              "id": "300",
+              "name": "特肖",
+              "full_name": "生肖特肖",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "总肖",
+          "rule": [
+            {
+              "id": "301",
+              "name": "总肖",
+              "full_name": "生肖总肖",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "二肖",
+          "rule": [
+            {
+              "id": "302",
+              "name": "二肖",
+              "full_name": "生肖二肖",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "三肖",
+          "rule": [
+            {
+              "id": "303",
+              "name": "三肖",
+              "full_name": "生肖三肖",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "四肖",
+          "rule": [
+            {
+              "id": "304",
+              "name": "四肖",
+              "full_name": "生肖四肖",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "五肖",
+          "rule": [
+            {
+              "id": "305",
+              "name": "五肖",
+              "full_name": "生肖五肖",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "六肖",
+          "rule": [
+            {
+              "id": "306",
+              "name": "六肖",
+              "full_name": "生肖六肖",
+              "active": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "特码头尾",
+      "team": [
+        {
+          "name": "特码头尾",
+          "rule": [
+            {
+              "id": "307",
+              "name": "特码头尾",
+              "full_name": "特码头尾",
+              "active": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "五行家野",
+      "team": [
+        {
+          "name": "五行家野",
+          "rule": [
+            {
+              "id": "308",
+              "name": "五行",
+              "full_name": "五行家野五行",
+              "active": true
+            },
+            {
+              "id": "309",
+              "name": "家野",
+              "full_name": "五行家野家野",
+              "active": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "波色",
+      "team": [
+        {
+          "name": "波色",
+          "rule": [
+            {
+              "id": "310",
+              "name": "波色",
+              "full_name": "波色波色",
+              "active": true
+            },
+            {
+              "id": "311",
+              "name": "半波",
+              "full_name": "波色半波",
+              "active": true
+            },
+            {
+              "id": "312",
+              "name": "半半波",
+              "full_name": "波色半半波",
+              "active": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "七码",
+      "team": [
+        {
+          "name": "七码",
+          "rule": [
+            {
+              "id": "313",
+              "name": "七码",
+              "full_name": "七码",
+              "active": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "一肖尾数",
+      "team": [
+        {
+          "name": "一肖",
+          "rule": [
+            {
+              "id": "314",
+              "name": "一肖",
+              "full_name": "一肖尾数一肖",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "一肖不中",
+          "rule": [
+            {
+              "id": "315",
+              "name": "一肖不中",
+              "full_name": "一肖尾数一肖不中",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "尾数",
+          "rule": [
+            {
+              "id": "316",
+              "name": "尾数",
+              "full_name": "一肖尾数尾数",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "尾数不中",
+          "rule": [
+            {
+              "id": "317",
+              "name": "尾数不中",
+              "full_name": "一肖尾数尾数不中",
+              "active": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "生肖连",
+      "team": [
+        {
+          "name": "二肖中",
+          "rule": [
+            {
+              "id": "318",
+              "name": "复式",
+              "full_name": "生肖连二肖中复式",
+              "active": true
+            },
+            {
+              "id": "319",
+              "name": "拖头",
+              "full_name": "生肖连二肖中拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "三肖中",
+          "rule": [
+            {
+              "id": "320",
+              "name": "复式",
+              "full_name": "生肖连三肖中复式",
+              "active": true
+            },
+            {
+              "id": "321",
+              "name": "拖头",
+              "full_name": "生肖连三肖中拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "四肖中",
+          "rule": [
+            {
+              "id": "322",
+              "name": "复式",
+              "full_name": "生肖连四肖中复式",
+              "active": true
+            },
+            {
+              "id": "323",
+              "name": "拖头",
+              "full_name": "生肖连四肖中拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "五肖中",
+          "rule": [
+            {
+              "id": "324",
+              "name": "复式",
+              "full_name": "生肖连五肖中复式",
+              "active": true
+            },
+            {
+              "id": "325",
+              "name": "拖头",
+              "full_name": "生肖连五肖中拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "二肖不中",
+          "rule": [
+            {
+              "id": "326",
+              "name": "复式",
+              "full_name": "生肖连二肖不中复式",
+              "active": true
+            },
+            {
+              "id": "327",
+              "name": "拖头",
+              "full_name": "生肖连二肖不中拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "三肖不中",
+          "rule": [
+            {
+              "id": "328",
+              "name": "复式",
+              "full_name": "生肖连三肖不中复式",
+              "active": true
+            },
+            {
+              "id": "329",
+              "name": "拖头",
+              "full_name": "生肖连三肖不中拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "四肖不中",
+          "rule": [
+            {
+              "id": "330",
+              "name": "复式",
+              "full_name": "生肖连四肖不中复式",
+              "active": true
+            },
+            {
+              "id": "331",
+              "name": "拖头",
+              "full_name": "生肖连四肖不中拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "五肖不中",
+          "rule": [
+            {
+              "id": "332",
+              "name": "复式",
+              "full_name": "生肖连五肖不中复式",
+              "active": true
+            },
+            {
+              "id": "333",
+              "name": "拖头",
+              "full_name": "生肖连五肖不中拖头",
+              "active": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "尾数连",
+      "team": [
+        {
+          "name": "二尾中",
+          "rule": [
+            {
+              "id": "334",
+              "name": "复式",
+              "full_name": "尾数连二尾中复式",
+              "active": true
+            },
+            {
+              "id": "335",
+              "name": "拖头",
+              "full_name": "尾数连二尾中拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "三尾中",
+          "rule": [
+            {
+              "id": "336",
+              "name": "复式",
+              "full_name": "尾数连三尾中复式",
+              "active": true
+            },
+            {
+              "id": "337",
+              "name": "拖头",
+              "full_name": "尾数连三尾中拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "四尾中",
+          "rule": [
+            {
+              "id": "338",
+              "name": "复式",
+              "full_name": "尾数连四尾中复式",
+              "active": true
+            },
+            {
+              "id": "339",
+              "name": "拖头",
+              "full_name": "尾数连四尾中拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "二尾不中",
+          "rule": [
+            {
+              "id": "340",
+              "name": "复式",
+              "full_name": "尾数连二尾不中复式",
+              "active": true
+            },
+            {
+              "id": "341",
+              "name": "拖头",
+              "full_name": "尾数连二尾不中拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "三尾不中",
+          "rule": [
+            {
+              "id": "342",
+              "name": "复式",
+              "full_name": "尾数连三尾不中复式",
+              "active": true
+            },
+            {
+              "id": "343",
+              "name": "拖头",
+              "full_name": "尾数连三尾不中拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "四尾不中",
+          "rule": [
+            {
+              "id": "344",
+              "name": "复式",
+              "full_name": "尾数连四尾不中复式",
+              "active": true
+            },
+            {
+              "id": "345",
+              "name": "拖头",
+              "full_name": "尾数连四尾不中拖头",
+              "active": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "全不中",
+      "team": [
+        {
+          "name": "5不中",
+          "rule": [
+            {
+              "id": "346",
+              "name": "复式",
+              "full_name": "全不中5不中复式",
+              "active": true
+            },
+            {
+              "id": "347",
+              "name": "拖头",
+              "full_name": "全不中5不中拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "6不中",
+          "rule": [
+            {
+              "id": "348",
+              "name": "复式",
+              "full_name": "全不中6不中复式",
+              "active": true
+            },
+            {
+              "id": "349",
+              "name": "拖头",
+              "full_name": "全不中6不中拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "7不中",
+          "rule": [
+            {
+              "id": "350",
+              "name": "复式",
+              "full_name": "全不中7不中复式",
+              "active": true
+            },
+            {
+              "id": "351",
+              "name": "拖头",
+              "full_name": "全不中7不中拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "8不中",
+          "rule": [
+            {
+              "id": "352",
+              "name": "复式",
+              "full_name": "全不中8不中复式",
+              "active": true
+            },
+            {
+              "id": "353",
+              "name": "拖头",
+              "full_name": "全不中8不中拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "9不中",
+          "rule": [
+            {
+              "id": "354",
+              "name": "复式",
+              "full_name": "全不中9不中复式",
+              "active": true
+            },
+            {
+              "id": "355",
+              "name": "拖头",
+              "full_name": "全不中9不中拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "10不中",
+          "rule": [
+            {
+              "id": "356",
+              "name": "复式",
+              "full_name": "全不中10不中复式",
+              "active": true
+            },
+            {
+              "id": "357",
+              "name": "拖头",
+              "full_name": "全不中10不中拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "11不中",
+          "rule": [
+            {
+              "id": "358",
+              "name": "复式",
+              "full_name": "全不中11不中复式",
+              "active": true
+            },
+            {
+              "id": "359",
+              "name": "拖头",
+              "full_name": "全不中11不中拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "12不中",
+          "rule": [
+            {
+              "id": "360",
+              "name": "复式",
+              "full_name": "全不中12不中复式",
+              "active": true
+            },
+            {
+              "id": "361",
+              "name": "拖头",
+              "full_name": "全不中12不中拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "15不中",
+          "rule": [
+            {
+              "id": "362",
+              "name": "复式",
+              "full_name": "全不中15不中复式",
+              "active": true
+            },
+            {
+              "id": "363",
+              "name": "拖头",
+              "full_name": "全不中15不中拖头",
+              "active": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "多选中一",
+      "team": [
+        {
+          "name": "五选中一",
+          "rule": [
+            {
+              "id": "364",
+              "name": "复式",
+              "full_name": "多选中一五选中一复式",
+              "active": true
+            },
+            {
+              "id": "365",
+              "name": "拖头",
+              "full_name": "多选中一五选中一拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "六选中一",
+          "rule": [
+            {
+              "id": "366",
+              "name": "复式",
+              "full_name": "多选中一六选中一复式",
+              "active": true
+            },
+            {
+              "id": "367",
+              "name": "拖头",
+              "full_name": "多选中一六选中一拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "七选中一",
+          "rule": [
+            {
+              "id": "368",
+              "name": "复式",
+              "full_name": "多选中一七选中一复式",
+              "active": true
+            },
+            {
+              "id": "369",
+              "name": "拖头",
+              "full_name": "多选中一七选中一拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "八选中一",
+          "rule": [
+            {
+              "id": "370",
+              "name": "复式",
+              "full_name": "多选中一八选中一复式",
+              "active": true
+            },
+            {
+              "id": "371",
+              "name": "拖头",
+              "full_name": "多选中一八选中一拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "九选中一",
+          "rule": [
+            {
+              "id": "372",
+              "name": "复式",
+              "full_name": "多选中一九选中一复式",
+              "active": true
+            },
+            {
+              "id": "373",
+              "name": "拖头",
+              "full_name": "多选中一九选中一拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "十选中一",
+          "rule": [
+            {
+              "id": "374",
+              "name": "复式",
+              "full_name": "多选中一十选中一复式",
+              "active": true
+            },
+            {
+              "id": "375",
+              "name": "拖头",
+              "full_name": "多选中一十选中一拖头",
+              "active": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "特平中",
+      "team": [
+        {
+          "name": "一粒任中",
+          "rule": [
+            {
+              "id": "376",
+              "name": "复式",
+              "full_name": "特平中一粒任中",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "二粒任中",
+          "rule": [
+            {
+              "id": "377",
+              "name": "复式",
+              "full_name": "特平中二粒任中",
+              "active": true
+            },
+            {
+              "id": "378",
+              "name": "拖头",
+              "full_name": "特平中二粒任中拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "三粒任中",
+          "rule": [
+            {
+              "id": "379",
+              "name": "复式",
+              "full_name": "特平中三粒任中",
+              "active": true
+            },
+            {
+              "id": "380",
+              "name": "拖头",
+              "full_name": "特平中三粒任中拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "四粒任中",
+          "rule": [
+            {
+              "id": "381",
+              "name": "复式",
+              "full_name": "特平中四粒任中",
+              "active": true
+            },
+            {
+              "id": "382",
+              "name": "拖头",
+              "full_name": "特平中四粒任中拖头",
+              "active": true
+            }
+          ]
+        },
+        {
+          "name": "五粒任中",
+          "rule": [
+            {
+              "id": "383",
+              "name": "复式",
+              "full_name": "特平中五粒任中",
+              "active": true
+            },
+            {
+              "id": "384",
+              "name": "拖头",
+              "full_name": "特平中五粒任中拖头",
+              "active": true
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

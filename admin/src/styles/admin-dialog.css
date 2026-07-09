@@ -1,0 +1,150 @@
+/** 管理后台统一弹窗样式（AdminDialog / AdminConfirmDialog） */
+
+.admin-dialog.el-dialog {
+  margin: 0;
+  border-radius: 1rem;
+  box-shadow:
+    0 24px 48px -12px rgba(15, 23, 42, 0.18),
+    0 8px 24px -8px rgba(15, 23, 42, 0.08);
+  overflow: hidden;
+}
+
+.admin-dialog .el-dialog__header {
+  margin-right: 0;
+  padding: 1.15rem 1.25rem 0.75rem;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.admin-dialog .el-dialog__title {
+  font-family: var(--admin-font-display);
+  font-size: 1.0625rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--el-text-color-primary);
+}
+
+.admin-dialog .el-dialog__headerbtn {
+  top: 1rem;
+  right: 1rem;
+  width: 2rem;
+  height: 2rem;
+}
+
+.admin-dialog .el-dialog__body {
+  padding: 1rem 1.25rem 0.5rem;
+  color: var(--el-text-color-regular);
+}
+
+.admin-dialog .el-dialog__footer {
+  padding: 0.75rem 1.25rem 1.15rem;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+.admin-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 4000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(15, 23, 42, 0.42);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.admin-confirm-card {
+  width: 100%;
+  max-width: 22rem;
+  background: #fff;
+  border-radius: 1rem;
+  overflow: hidden;
+  box-shadow:
+    0 24px 48px -12px rgba(15, 23, 42, 0.18),
+    0 8px 24px -8px rgba(15, 23, 42, 0.08);
+}
+
+.admin-confirm-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0.65rem;
+  padding: 1.75rem 1.5rem 0.5rem;
+}
+
+.admin-confirm-icon {
+  display: grid;
+  place-items: center;
+  width: 3rem;
+  height: 3rem;
+  border-radius: 0.85rem;
+  font-size: 1.35rem;
+}
+
+.admin-confirm-icon--primary {
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+
+.admin-confirm-icon--warning {
+  color: #d97706;
+  background: #fef3c7;
+}
+
+.admin-confirm-icon--danger {
+  color: #dc2626;
+  background: #fee2e2;
+}
+
+.admin-confirm-title {
+  margin: 0;
+  font-family: var(--admin-font-display);
+  font-size: 1.0625rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--el-text-color-primary);
+}
+
+.admin-confirm-desc {
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--el-text-color-secondary);
+}
+
+.admin-confirm-input {
+  width: 100%;
+  margin-top: 0.35rem;
+}
+
+.admin-confirm-actions {
+  display: flex;
+  gap: 0.75rem;
+  padding: 1.15rem 1.25rem 1.25rem;
+}
+
+.admin-confirm-actions .el-button {
+  flex: 1;
+  margin: 0;
+  font-weight: 600;
+}
+
+.admin-confirm-btn-danger {
+  --el-button-bg-color: #dc2626;
+  --el-button-border-color: #dc2626;
+  --el-button-hover-bg-color: #ef4444;
+  --el-button-hover-border-color: #ef4444;
+  --el-button-active-bg-color: #b91c1c;
+  --el-button-active-border-color: #b91c1c;
+}
+
+.admin-confirm-fade-enter-active,
+.admin-confirm-fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.admin-confirm-fade-enter-from,
+.admin-confirm-fade-leave-to {
+  opacity: 0;
+}

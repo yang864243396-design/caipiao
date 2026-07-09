@@ -1,0 +1,41 @@
+/**
+ * 与 `client/src/styles/el-table-layout.css` 同步：见 client/DESIGN.md §8「el-table 布局」。
+ */
+
+.el-table:not(.el-table--scroll-x) .el-table__inner-wrapper,
+.el-table:not(.el-table--scroll-x) .el-table__body-wrapper,
+.el-table:not(.el-table--scroll-x) .el-table__header-wrapper,
+.el-table:not(.el-table--scroll-x) .el-table__footer-wrapper {
+  overflow-x: hidden !important;
+}
+
+.el-table:not(.el-table--scroll-x) .el-scrollbar__wrap {
+  overflow-x: hidden !important;
+}
+
+.el-table:not(.el-table--scroll-x) .el-scrollbar__bar.is-horizontal {
+  display: none !important;
+}
+
+.el-table:not(.el-table--scroll-x) th.el-table__cell .cell,
+.el-table:not(.el-table--scroll-x) td.el-table__cell .cell {
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
+.el-table.el-table--scroll-x .el-table__inner-wrapper,
+.el-table.el-table--scroll-x .el-table__body-wrapper,
+.el-table.el-table--scroll-x .el-table__header-wrapper,
+.el-table.el-table--scroll-x .el-table__footer-wrapper {
+  overflow-x: auto !important;
+}
+
+.el-table.el-table--scroll-x .el-scrollbar__wrap {
+  overflow-x: auto !important;
+}
+
+.el-table.el-table--scroll-x .el-scrollbar__bar.is-horizontal {
+  display: block !important;
+}

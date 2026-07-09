@@ -1,52 +1,188 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { confirmDialog } from '@/utils/confirmDialog'
 import OptionPickerModal from '@/components/ui/OptionPickerModal.vue'
 import type { OptionPickerItem } from '@/components/ui/OptionPickerModal.vue'
+import { checkSchemeNameAvailable, deleteSchemeDefinition } from '@/api/schemes/definitions'
+import { clearSchemeDraft } from '@/utils/schemeDraftStorage'
+import { fetchLotterySchemeOptions } from '@/api/schemes/schemeOptions'
+import { fetchPlayTree } from '@/api/games/lotteries'
+import { usePublicLotteries } from '@/composables/usePublicLotteries'
+import { defaultPlaySelection, formatSubPlayLabel } from '@/utils/playConfig'
+import {
+  filterPlayTypesForRunType,
+  filterSubPlaysForRunType,
+  lotteryHasAdvTriggerPlay,
+  syncRunTypePlaySelection,
+  validateRunTypePlaySelection,
+} from '@/utils/runTypeMatrix'
+import type { PlayTypeNode } from '@/types/playCatalog'
+import { ApiError } from '@/api/client'
 
 const router = useRouter()
+const submitting = ref(false)
+const { lotteries, load: loadLotteries } = usePublicLotteries()
 
 type PickerKind = 'lottery' | 'runType' | 'playType' | 'subPlay'
 
 const schemeName = ref('')
-const lotteryId = ref('tencent_ffc')
+const lotteryId = ref('')
 const runTypeId = ref('fixed_rotate')
-const playTypeId = ref('hou4')
-const subPlayId = ref('zhixuan_fs')
+const playTypeId = ref('')
+const subPlayId = ref('')
 
-const lotteryOptions: OptionPickerItem[] = [
-  { label: '腾讯分分彩', value: 'tencent_ffc' },
-  { label: '腾讯十分彩', value: 'tencent_10' },
-  { label: '奇趣腾讯分分彩', value: 'qiqu_tencent' },
-  { label: '美国数据分分彩', value: 'us_ffc' },
-  { label: '重庆时时彩', value: 'cq_ssc' },
-  { label: '新疆时时彩', value: 'xj_ssc' },
-  { label: '天津时时彩', value: 'tj_ssc' },
-  { label: '福彩3D', value: 'fc_3d' },
-]
+const lotteryOptions = computed<OptionPickerItem[]>(() =>
+  lotteries.value.map((l) => ({ label: l.displayName, value: l.code })),
+)
 
-const runTypeOptions: OptionPickerItem[] = [
+/** 运行类型定版 7 种（与后端 internal/schemes/run_types.go、lottery_scheme_option_sets 种子同源） */
+const runTypeOptions = ref<OptionPickerItem[]>([
   { label: '定码轮换', value: 'fixed_rotate' },
   { label: '高级定码轮换', value: 'adv_fixed_rotate' },
+  { label: '高级开某投某', value: 'adv_trigger_bet' },
+  { label: '冷热温出号', value: 'hot_cold_warm' },
   { label: '随机出号', value: 'random_draw' },
-  { label: '批量定码', value: 'batch_fixed' },
-  { label: '动态追号', value: 'dynamic_chase' },
-  { label: '计划跟投', value: 'plan_follow' },
-]
+  { label: '内置计画', value: 'builtin_plan' },
+  { label: '固定号码', value: 'fixed_number' },
+])
 
-const playTypeOptions: OptionPickerItem[] = [
-  { label: '后四', value: 'hou4' },
-  { label: '前三', value: 'qian3' },
-  { label: '中三', value: 'zhong3' },
-  { label: '定位胆', value: 'dingwei' },
-]
+/** 后端已废弃的运行类型枚举，接口若仍返回则前端过滤不展示 */
+const DEPRECATED_RUN_TYPES = new Set(['batch_fixed', 'dynamic_chase', 'plan_follow'])
 
-const subPlayOptions: OptionPickerItem[] = [
-  { label: '直选复式', value: 'zhixuan_fs' },
-  { label: '直选单式', value: 'zhixuan_ds' },
-  { label: '组选复式', value: 'zuxuan_fs' },
-]
+const playTypeOptions = ref<OptionPickerItem[]>([])
+const subPlayOptions = ref<OptionPickerItem[]>([])
+const playTreeTypes = ref<PlayTypeNode[]>([])
+
+const isBuiltinPlan = computed(() => runTypeId.value === 'builtin_plan')
+
+/** 可选运行类型：过滤废弃值；当前彩种不支持高级开某投某时隐藏 */
+const availableRunTypeOptions = computed<OptionPickerItem[]>(() => {
+  let opts = runTypeOptions.value.filter((o) => !DEPRECATED_RUN_TYPES.has(String(o.value)))
+  if (playTreeTypes.value.length > 0 && !lotteryHasAdvTriggerPlay(playTreeTypes.value)) {
+    opts = opts.filter((o) => String(o.value) !== 'adv_trigger_bet')
+  }
+  return opts
+})
+
+const filteredPlayTypeOptions = computed<OptionPickerItem[]>(() =>
+  filterPlayTypesForRunType(runTypeId.value, playTypeOptions.value, playTreeTypes.value),
+)
+
+const filteredSubPlayOptions = computed<OptionPickerItem[]>(() =>
+  filterSubPlaysForRunType(
+    runTypeId.value,
+    subPlayOptions.value,
+    playTypeId.value,
+    playTreeTypes.value,
+  ),
+)
+
+function applyRunTypePlaySync() {
+  if (isBuiltinPlan.value || !playTreeTypes.value.length) return
+  const synced = syncRunTypePlaySelection({
+    runTypeId: runTypeId.value,
+    playTypeId: playTypeId.value,
+    subPlayId: subPlayId.value,
+    playTreeTypes: playTreeTypes.value,
+    playTypeOptions: playTypeOptions.value,
+    subPlayOptions: subPlayOptions.value,
+  })
+  runTypeId.value = synced.runTypeId
+  playTypeId.value = synced.playTypeId
+  subPlayId.value = synced.subPlayId
+}
+
+function ensureSelectedInOptions(
+  options: OptionPickerItem[],
+  selected: { value: string },
+  fallback: string,
+) {
+  if (options.length === 0) return
+  if (!options.some((o) => String(o.value) === selected.value)) {
+    selected.value = String(options[0]?.value ?? fallback)
+  }
+}
+
+async function loadRunTypeOptions(code: string) {
+  try {
+    const data = await fetchLotterySchemeOptions(code)
+    const fresh = data.runTypes.filter((o) => !DEPRECATED_RUN_TYPES.has(String(o.value)))
+    if (fresh.length) {
+      runTypeOptions.value = fresh
+    }
+  } catch {
+    /* 保留默认 7 种运行类型 */
+  }
+}
+
+async function loadPlayTreeOptions(code: string) {
+  if (!code) return
+  try {
+    const tree = await fetchPlayTree(code)
+    playTreeTypes.value = tree.playTypes
+    playTypeOptions.value = tree.playTypes.map((t) => ({
+      label: t.label,
+      value: t.typeId,
+    }))
+    const routeType = playTypeId.value
+    const hasType = tree.playTypes.some((t) => t.typeId === routeType)
+    if (!hasType) {
+      const def = defaultPlaySelection(tree)
+      playTypeId.value = def.typeId
+      subPlayId.value = def.subId
+    }
+    const typeNode = tree.playTypes.find((t) => t.typeId === playTypeId.value)
+    subPlayOptions.value = (typeNode?.subPlays ?? []).map((s) => ({
+      label: formatSubPlayLabel(s.label),
+      value: s.subId,
+    }))
+    ensureSelectedInOptions(subPlayOptions.value, subPlayId, subPlayId.value)
+    applyRunTypePlaySync()
+  } catch (e) {
+    playTreeTypes.value = []
+    playTypeOptions.value = []
+    subPlayOptions.value = []
+    ElMessage.error(e instanceof ApiError ? e.message : '加载玩法树失败')
+  }
+}
+
+watch(playTypeId, (typeId) => {
+  if (!lotteryId.value || !typeId) return
+  void fetchPlayTree(lotteryId.value).then((tree) => {
+    const typeNode = tree.playTypes.find((t) => t.typeId === typeId)
+    subPlayOptions.value = (typeNode?.subPlays ?? []).map((s) => ({
+      label: formatSubPlayLabel(s.label),
+      value: s.subId,
+    }))
+    applyRunTypePlaySync()
+  })
+})
+
+watch(runTypeId, () => {
+  applyRunTypePlaySync()
+})
+
+watch(lotteryId, (code) => {
+  if (!code) return
+  void loadRunTypeOptions(code)
+  void loadPlayTreeOptions(code)
+})
+
+watch(availableRunTypeOptions, (opts) => {
+  if (!opts.length) return
+  if (!opts.some((o) => String(o.value) === runTypeId.value)) {
+    runTypeId.value = 'fixed_rotate'
+  }
+})
+
+onMounted(async () => {
+  await loadLotteries()
+  if (!lotteryId.value && lotteries.value.length) {
+    lotteryId.value = lotteries.value[0].code
+  }
+})
 
 const pickerOpen = ref(false)
 const pickerKind = ref<PickerKind | null>(null)
@@ -69,13 +205,13 @@ const pickerTitle = computed(() => {
 const pickerOptions = computed<OptionPickerItem[]>(() => {
   switch (pickerKind.value) {
     case 'lottery':
-      return lotteryOptions
+      return lotteryOptions.value
     case 'runType':
-      return runTypeOptions
+      return availableRunTypeOptions.value
     case 'playType':
-      return playTypeOptions
+      return filteredPlayTypeOptions.value
     case 'subPlay':
-      return subPlayOptions
+      return filteredSubPlayOptions.value
     default:
       return []
   }
@@ -109,13 +245,16 @@ function onPickerConfirm(val: string | number) {
   else if (k === 'playType') playTypeId.value = v
   else if (k === 'subPlay') subPlayId.value = v
   pickerKind.value = null
+  if (k === 'lottery' || k === 'runType' || k === 'playType') {
+    applyRunTypePlaySync()
+  }
 }
 
 function onPickerCancel() {
   pickerKind.value = null
 }
 
-function labelOf(list: OptionPickerItem[], id: string) {
+function labelOf(list: OptionPickerItem[] | readonly OptionPickerItem[], id: string) {
   return list.find((o) => String(o.value) === id)?.label ?? ''
 }
 
@@ -128,24 +267,85 @@ function onSearchName() {
   ElMessage.info('方案检索将在对接接口后开放')
 }
 
-function onImportScheme() {
-  ElMessage.info('汇入方案：可对接文件 / 剪贴板导入')
-}
-
-function onNext() {
-  const title = schemeName.value.trim() || '新方案'
-  const schemeId = String(Date.now())
-  router.push({
-    name: 'advanced-scheme-edit',
-    params: { schemeId },
-    query: {
-      title: encodeURIComponent(title),
-      lottery: lotteryId.value,
-      runType: runTypeId.value,
-      playType: playTypeId.value,
-      subPlay: subPlayId.value,
-    },
-  })
+async function onNext(): Promise<void> {
+  const title = schemeName.value.trim()
+  if (!title) {
+    await confirmDialog({
+      title: '提示',
+      message: '方案名称不能为空',
+      tone: 'warning',
+      confirmText: '我知道了',
+      showCancel: false,
+    })
+    return
+  }
+  // 内置计画不选彩种与玩法，仅需方案名称
+  if (!isBuiltinPlan.value && (!lotteryId.value || !playTypeId.value || !subPlayId.value)) {
+    ElMessage.warning('请选择彩种与玩法')
+    return
+  }
+  if (!isBuiltinPlan.value) {
+    const matrixErr = validateRunTypePlaySelection(
+      runTypeId.value,
+      playTypeId.value,
+      subPlayId.value,
+      playTreeTypes.value,
+    )
+    if (matrixErr) {
+      ElMessage.warning(matrixErr)
+      return
+    }
+  }
+  submitting.value = true
+  try {
+    const check = await checkSchemeNameAvailable(title)
+    if (!check.available) {
+      if (check.existingDefinitionId && !check.existingHasInstance) {
+        const resume = await confirmDialog({
+          title: '名称已占用',
+          message: `方案「${title}」已存在但未添加至云端。继续编辑该方案，或删除旧草稿后重新新建？`,
+          tone: 'warning',
+          confirmText: '继续编辑',
+          cancelText: '删除重建',
+        })
+        if (resume) {
+          await router.push({
+            name: 'advanced-scheme-edit',
+            params: { schemeId: check.existingDefinitionId },
+            query: { kind: 'custom' },
+          })
+          return
+        }
+        try {
+          await deleteSchemeDefinition(check.existingDefinitionId)
+        } catch (e) {
+          ElMessage.error(e instanceof ApiError ? e.message : '删除旧方案失败')
+          return
+        }
+      } else {
+        ElMessage.error('方案名称已存在，请更换名称')
+        return
+      }
+    }
+    clearSchemeDraft()
+    await router.push({
+      name: 'advanced-scheme-edit',
+      params: { schemeId: 'new' },
+      query: {
+        draft: '1',
+        kind: 'custom',
+        title: encodeURIComponent(title),
+        lottery: isBuiltinPlan.value ? '' : lotteryId.value,
+        runType: runTypeId.value,
+        playType: isBuiltinPlan.value ? '' : playTypeId.value,
+        subPlay: isBuiltinPlan.value ? '' : subPlayId.value,
+      },
+    })
+  } catch (e) {
+    ElMessage.error(e instanceof ApiError ? e.message : '校验方案名称失败')
+  } finally {
+    submitting.value = false
+  }
 }
 </script>
 
@@ -158,11 +358,6 @@ function onNext() {
         </svg>
       </button>
       <h1 class="csn-title">新增方案</h1>
-      <div class="csn-header-right">
-        <el-button type="primary" plain size="small" class="csn-header-import" @click="onImportScheme">
-          汇入方案
-        </el-button>
-      </div>
     </header>
 
     <main class="csn-main">
@@ -190,7 +385,7 @@ function onNext() {
           </div>
         </div>
 
-        <div class="csn-field">
+        <div v-if="!isBuiltinPlan" class="csn-field">
           <span class="csn-lbl" id="csn-lbl-lottery">彩种</span>
           <button
             type="button"
@@ -224,7 +419,7 @@ function onNext() {
             aria-labelledby="csn-lbl-run csn-val-run"
             @click="openPicker('runType')"
           >
-            <span id="csn-val-run" class="csn-picker-val">{{ labelOf(runTypeOptions, runTypeId) }}</span>
+            <span id="csn-val-run" class="csn-picker-val">{{ labelOf(availableRunTypeOptions, runTypeId) }}</span>
             <span class="csn-picker-ico" aria-hidden="true">
               <svg viewBox="0 0 24 24" width="18" height="18" class="csn-gear">
                 <path
@@ -236,7 +431,11 @@ function onNext() {
           </button>
         </div>
 
-        <div class="csn-field">
+        <p v-if="isBuiltinPlan" class="csn-hint">
+          内置计画无需选择彩种与玩法，创建后在方案内容中选择已收藏的跟单大厅方案
+        </p>
+
+        <div v-if="!isBuiltinPlan" class="csn-field">
           <span class="csn-lbl" id="csn-lbl-play">玩法类型</span>
           <button
             type="button"
@@ -246,7 +445,7 @@ function onNext() {
             aria-labelledby="csn-lbl-play csn-val-play"
             @click="openPicker('playType')"
           >
-            <span id="csn-val-play" class="csn-picker-val">{{ labelOf(playTypeOptions, playTypeId) }}</span>
+            <span id="csn-val-play" class="csn-picker-val">{{ labelOf(filteredPlayTypeOptions, playTypeId) }}</span>
             <span class="csn-picker-ico" aria-hidden="true">
               <svg viewBox="0 0 24 24" width="18" height="18" class="csn-gear">
                 <path
@@ -258,7 +457,7 @@ function onNext() {
           </button>
         </div>
 
-        <div class="csn-field">
+        <div v-if="!isBuiltinPlan" class="csn-field">
           <span class="csn-lbl" id="csn-lbl-sub">子玩法</span>
           <button
             type="button"
@@ -268,7 +467,7 @@ function onNext() {
             aria-labelledby="csn-lbl-sub csn-val-sub"
             @click="openPicker('subPlay')"
           >
-            <span id="csn-val-sub" class="csn-picker-val">{{ labelOf(subPlayOptions, subPlayId) }}</span>
+            <span id="csn-val-sub" class="csn-picker-val">{{ labelOf(filteredSubPlayOptions, subPlayId) }}</span>
             <span class="csn-picker-ico" aria-hidden="true">
               <svg viewBox="0 0 24 24" width="18" height="18" class="csn-gear">
                 <path
@@ -281,7 +480,7 @@ function onNext() {
         </div>
       </div>
 
-      <el-button type="primary" class="csn-next-main" size="large" @click="onNext">
+      <el-button type="primary" class="csn-next-main" size="large" :loading="submitting" @click="onNext">
         <span class="csn-next-main-txt">下一步</span>
         <span class="csn-next-main-ico" aria-hidden="true">&gt;</span>
       </el-button>
@@ -360,18 +559,6 @@ function onNext() {
   text-align: center;
 }
 
-.csn-header-right {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  justify-self: end;
-  min-width: 0;
-}
-
-.csn-header-import {
-  font-weight: 600;
-}
-
 .csn-main {
   flex: 1;
   padding: 1rem 1rem 1.5rem;
@@ -404,6 +591,13 @@ function onNext() {
   font-weight: 500;
   color: #475569;
   margin-bottom: 0.5rem;
+}
+
+.csn-hint {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--el-text-color-secondary);
 }
 
 .csn-name-row {
@@ -439,9 +633,7 @@ function onNext() {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition:
-    background 0.15s,
-    color 0.15s;
+  transition: background 0.15s, color 0.15s;
 }
 
 .csn-search-btn:hover {
