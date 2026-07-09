@@ -1,7 +1,7 @@
 import { ref } from 'vue'
 import { fetchPlayTree } from '@/api/playCatalog'
 import type { PlayTypeNode } from '@/types/lottery'
-import { resolvePlayTypeLabel } from '@client/utils/playTypeLabels'
+import { resolvePlayTypeLabel } from '../../../client/src/utils/playTypeLabels'
 
 function isBarePlayToken(value?: string): boolean {
   const t = String(value ?? '').trim()

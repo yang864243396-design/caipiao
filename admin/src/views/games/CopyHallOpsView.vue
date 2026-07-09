@@ -102,7 +102,14 @@ function findInCatalog(schemeId: string) {
 }
 
 function playLabelForSlot(row: { schemeId?: string; playMethod?: string; playTypeId?: string; subPlayId?: string }) {
-  return rankSlotPlayLabel(row, findInCatalog(row.schemeId ?? ''))
+  return rankSlotPlayLabel(
+    {
+      playMethod: row.playMethod ?? '',
+      playTypeId: row.playTypeId,
+      subPlayId: row.subPlayId,
+    },
+    findInCatalog(row.schemeId ?? ''),
+  )
 }
 
 async function onMoveSlot(rank: number, direction: 'up' | 'down') {

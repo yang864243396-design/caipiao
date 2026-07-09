@@ -1,4 +1,4 @@
-import { resolvePlayTypeLabel } from '@client/utils/playTypeLabels'
+import { resolvePlayTypeLabel } from '../../../client/src/utils/playTypeLabels'
 import type { CopyHallRankSlot } from '@shared/mock/copyHallRankings'
 import type { CopyHallSchemeCandidate } from '@shared/mock/copyHallSchemeCatalog'
 

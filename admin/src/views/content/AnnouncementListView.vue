@@ -91,7 +91,7 @@ async function onTogglePin(row: Announcement) {
     const ok = await adminConfirmDialog({
       title: '确认置顶',
       message: `置顶后该公告将展示在会员端 Banner 下方，并替换当前置顶公告。`,
-      tone: 'info',
+      tone: 'primary',
     })
     if (!ok) return
   }

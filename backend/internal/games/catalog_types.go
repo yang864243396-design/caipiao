@@ -15,5 +15,5 @@ var LegacyLotteryCodes = []string{
 
 const (
 	expectedCatalogSeedCount = 46
-	expectedSubPlayCount     = 360 // 6 套 play_template 均已对齐 rules/v2
+	expectedSubPlayCount     = 493 // 00111 guaji_prod_rules_v2_sync 后 6 套 play_template 总量
 )
