@@ -6,14 +6,16 @@ import {
   SessionExpiredError,
 } from './authSession'
 import { ApiError, getAccessToken } from './client'
+import { compressImageFile } from '@/utils/compressImage'
 
 export interface CmsUploadResult {
   url: string
 }
 
 export async function uploadCmsImage(file: File): Promise<string> {
+  const compressed = await compressImageFile(file)
   const form = new FormData()
-  form.append('file', file)
+  form.append('file', compressed)
   const headers: Record<string, string> = {}
   const token = getAccessToken()
   if (token) headers.Authorization = `Bearer ${token}`
