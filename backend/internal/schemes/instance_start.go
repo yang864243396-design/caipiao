@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"caipiao/backend/internal/db/sqlcdb"
+	"caipiao/backend/internal/guajibet"
 	"caipiao/backend/internal/member"
 )
 
@@ -61,6 +62,17 @@ func (s *Service) startInstance(ctx context.Context, account, instanceID string)
 		return Instance{}, ErrInvalidInstanceAction
 	}
 
+	// 真实投注：本平台无可用授权时拒绝开启，避免后续 worker 再调第三方。
+	if !cur.SimBet && s.authChecker != nil {
+		healthy, aerr := s.authChecker.HasHealthyAuthForMember(ctx, account)
+		if aerr != nil {
+			return Instance{}, aerr
+		}
+		if !healthy {
+			return Instance{}, guajibet.ErrNoActiveAuth
+		}
+	}
+
 	def, err := s.q.GetSchemeDefinitionByID(ctx, cur.DefinitionID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -77,6 +89,10 @@ func (s *Service) startInstance(ctx context.Context, account, instanceID string)
 		}
 	}
 	if err := validateSchemeEndTimeNotReached(def.Config, now); err != nil {
+		return Instance{}, err
+	}
+	currency := s.memberPrimaryCurrency(ctx, m.ID)
+	if err := validateSchemeMinBetAmount(def.Config, def.Kind, currency, cur.Multiplier); err != nil {
 		return Instance{}, err
 	}
 

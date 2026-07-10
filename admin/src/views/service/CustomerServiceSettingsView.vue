@@ -103,7 +103,6 @@ async function onDelete(row: CustomerServiceAgent) {
       <h1 class="admin-page-title">客服设置</h1>
       <el-button type="primary" @click="openNew">新增客服</el-button>
     </div>
-    <p class="admin-page-desc">配置会员端「联系客服」弹窗展示的客服人员；Telegram 可填完整链接或 @用户名。</p>
 
     <el-table v-loading="loading" :data="rows" stripe class="admin-table">
       <el-table-column prop="name" label="姓名" min-width="120" />

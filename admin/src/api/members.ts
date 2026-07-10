@@ -13,7 +13,7 @@ export interface AdminMemberRow {
   displayName: string
   guajiBalances: AdminGuajiBalances
   balanceYuan?: number
-  status: '正常' | '冻结'
+  status: '正常' | '禁用'
   registeredAt: string
   lastLoginAt: string
 }
@@ -57,6 +57,48 @@ export async function fetchMembers(params: FetchMembersParams = {}): Promise<Adm
 
 export async function fetchMemberDetail(memberId: string): Promise<AdminMemberRow> {
   return mapMember(await requestApi<AdminMemberRow>(`/admin/members/${encodeURIComponent(memberId)}`))
+}
+
+export type MemberStatusCode = 'active' | 'frozen'
+
+export interface CreateMemberPayload {
+  account: string
+  password: string
+  status: MemberStatusCode
+}
+
+export interface UpdateMemberPayload {
+  password?: string
+  status: MemberStatusCode
+}
+
+export async function createMember(payload: CreateMemberPayload): Promise<AdminMemberRow> {
+  return mapMember(await requestApi<AdminMemberRow>('/admin/members', { method: 'POST', body: payload }))
+}
+
+export async function updateMember(
+  memberId: string,
+  payload: UpdateMemberPayload,
+): Promise<AdminMemberRow> {
+  return mapMember(
+    await requestApi<AdminMemberRow>(`/admin/members/${encodeURIComponent(memberId)}`, {
+      method: 'PUT',
+      body: payload,
+    }),
+  )
+}
+
+export interface ClearGuajiAuthResult {
+  pausedSchemes: number
+  clearedAuths: number
+  message?: string
+}
+
+export async function clearMemberGuajiAuth(memberId: string): Promise<ClearGuajiAuthResult> {
+  return requestApi<ClearGuajiAuthResult>(
+    `/admin/members/${encodeURIComponent(memberId)}/clear-guaji-auth`,
+    { method: 'POST' },
+  )
 }
 
 export interface FetchMemberFundRecordsParams {

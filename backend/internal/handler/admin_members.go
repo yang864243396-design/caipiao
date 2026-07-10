@@ -165,11 +165,126 @@ func (h *Handler) AdminMemberOp(w http.ResponseWriter, r *http.Request) {
 	}
 	label := map[string]string{
 		"reset_login_password": "重置登录密码",
-		"toggle_freeze":        "冻结/解冻",
+		"toggle_freeze":        "禁用/启用",
 	}[result.Action]
 	if label == "" {
 		label = result.Action
 	}
 	h.writeAudit(r, fmt.Sprintf("会员 %d · %s", memberID, label))
 	apix.OK(w, result)
+}
+
+type adminMemberCreateRequest struct {
+	Account  string `json:"account"`
+	Password string `json:"password"`
+	Status   string `json:"status"`
+}
+
+func (h *Handler) AdminCreateMember(w http.ResponseWriter, r *http.Request) {
+	if h.members == nil {
+		apix.Fail(w, http.StatusServiceUnavailable, apix.CodeInternal, "数据库未就绪")
+		return
+	}
+	var req adminMemberCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		apix.Validation(w, "请求体须为 JSON")
+		return
+	}
+	item, err := h.members.AdminCreateMember(r.Context(), member.AdminMemberCreateInput{
+		Account:  req.Account,
+		Password: req.Password,
+		Status:   req.Status,
+	})
+	if err != nil {
+		h.handleAdminMemberWriteErr(w, err)
+		return
+	}
+	h.enrichAdminMemberGuajiBalances(r.Context(), &item)
+	h.writeAudit(r, fmt.Sprintf("新增会员 %s（%s）", item.Account, item.ID))
+	apix.OK(w, item)
+}
+
+type adminMemberUpdateRequest struct {
+	Password string `json:"password"`
+	Status   string `json:"status"`
+}
+
+func (h *Handler) AdminUpdateMember(w http.ResponseWriter, r *http.Request) {
+	if h.members == nil {
+		apix.Fail(w, http.StatusServiceUnavailable, apix.CodeInternal, "数据库未就绪")
+		return
+	}
+	memberID, err := member.ParseMemberID(r.PathValue("memberId"))
+	if err != nil {
+		if errors.Is(err, member.ErrNotFound) {
+			apix.Fail(w, http.StatusNotFound, apix.CodeNotFound, "会员不存在")
+			return
+		}
+		apix.Validation(w, err.Error())
+		return
+	}
+	var req adminMemberUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		apix.Validation(w, "请求体须为 JSON")
+		return
+	}
+	item, err := h.members.AdminUpdateMember(r.Context(), memberID, member.AdminMemberUpdateInput{
+		Password: req.Password,
+		Status:   req.Status,
+	})
+	if err != nil {
+		h.handleAdminMemberWriteErr(w, err)
+		return
+	}
+	h.enrichAdminMemberGuajiBalances(r.Context(), &item)
+	h.writeAudit(r, fmt.Sprintf("编辑会员 %d", memberID))
+	apix.OK(w, item)
+}
+
+func (h *Handler) AdminClearMemberGuajiAuth(w http.ResponseWriter, r *http.Request) {
+	if h.guajiAccounts == nil {
+		apix.Fail(w, http.StatusServiceUnavailable, apix.CodeInternal, "服务未就绪")
+		return
+	}
+	memberID, err := member.ParseMemberID(r.PathValue("memberId"))
+	if err != nil {
+		if errors.Is(err, member.ErrNotFound) {
+			apix.Fail(w, http.StatusNotFound, apix.CodeNotFound, "会员不存在")
+			return
+		}
+		apix.Validation(w, err.Error())
+		return
+	}
+	paused, cleared, err := h.guajiAccounts.AdminClearAllAuth(r.Context(), memberID)
+	if err != nil {
+		if errors.Is(err, member.ErrNotFound) {
+			apix.Fail(w, http.StatusNotFound, apix.CodeNotFound, "会员不存在")
+			return
+		}
+		apix.Internal(w)
+		return
+	}
+	h.writeAudit(r, fmt.Sprintf("会员 %d · 清空授权（暂停方案 %d，清除授权 %d）", memberID, paused, cleared))
+	apix.OK(w, map[string]any{
+		"pausedSchemes": paused,
+		"clearedAuths":  cleared,
+		"message":       fmt.Sprintf("已停止 %d 个方案并清空 %d 条授权", paused, cleared),
+	})
+}
+
+func (h *Handler) handleAdminMemberWriteErr(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, member.ErrNotFound):
+		apix.Fail(w, http.StatusNotFound, apix.CodeNotFound, "会员不存在")
+	case errors.Is(err, member.ErrDuplicateAccount):
+		apix.Validation(w, "会员账号已存在")
+	case errors.Is(err, member.ErrPasswordTooShort):
+		apix.Validation(w, "密码至少 6 位")
+	case errors.Is(err, member.ErrInvalidInput):
+		apix.Validation(w, err.Error())
+	case errors.Is(err, member.ErrUnavailable):
+		apix.Fail(w, http.StatusServiceUnavailable, apix.CodeInternal, "数据库未就绪")
+	default:
+		apix.Internal(w)
+	}
 }

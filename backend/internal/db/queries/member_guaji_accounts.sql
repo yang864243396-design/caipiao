@@ -105,6 +105,10 @@ WHERE id = $1 AND member_id = $2;
 DELETE FROM member_guaji_accounts
 WHERE id = $1 AND member_id = $2;
 
+-- name: DeleteAllMemberGuajiAccountsByMemberID :execrows
+DELETE FROM member_guaji_accounts
+WHERE member_id = $1;
+
 -- name: ListMemberGuajiAccountsAdmin :many
 SELECT
     id, member_id, guaji_username, is_active, bound_at, last_sync_at,

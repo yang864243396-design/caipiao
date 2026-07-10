@@ -170,13 +170,13 @@ func (s *Service) adminToggleFreeze(ctx context.Context, memberID int64) (AdminM
 
 	next := "frozen"
 
-	msg := "已冻结账号"
+	msg := "已禁用账号"
 
 	if cur.Status == "frozen" {
 
 		next = "active"
 
-		msg = "已解冻账号"
+		msg = "已启用账号"
 
 		rows, err := s.q.AdminUpdateMemberStatus(ctx, sqlcdb.AdminUpdateMemberStatusParams{
 
@@ -274,9 +274,9 @@ func (s *Service) adminToggleFreeze(ctx context.Context, memberID int64) (AdminM
 
 	if n := len(paused); n > 0 {
 
-		msg = fmt.Sprintf("已冻结账号，已暂停 %d 个方案", n)
+		msg = fmt.Sprintf("已禁用账号，已暂停 %d 个方案", n)
 
-		slog.Info("member frozen, schemes paused", "memberId", memberID, "account", cur.Account, "count", n)
+		slog.Info("member disabled, schemes paused", "memberId", memberID, "account", cur.Account, "count", n)
 
 	}
 

@@ -12,6 +12,7 @@ import (
 	"caipiao/backend/internal/apix"
 	"caipiao/backend/internal/cloud/instances"
 	"caipiao/backend/internal/cloud/lookback"
+	"caipiao/backend/internal/guajibet"
 	"caipiao/backend/internal/member"
 	"caipiao/backend/internal/schemes"
 	"caipiao/backend/internal/ws"
@@ -361,7 +362,7 @@ func (h *Handler) handleCloudInstanceErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, instances.ErrNotFound), errors.Is(err, schemes.ErrDefinitionNotFound):
 		apix.Fail(w, http.StatusNotFound, apix.CodeNotFound, "实例不存在")
-	case errors.Is(err, schemes.ErrStartTimeNotAfterNow), errors.Is(err, schemes.ErrEndTimeReached):
+	case errors.Is(err, schemes.ErrStartTimeNotAfterNow), errors.Is(err, schemes.ErrEndTimeReached), errors.Is(err, schemes.ErrMinBetAmountTooLow):
 		apix.Fail(w, http.StatusOK, apix.CodeValidation, err.Error())
 	case errors.Is(err, schemes.ErrMaintenanceResumeBlocked):
 		apix.Fail(w, http.StatusOK, apix.CodeValidation, err.Error())
@@ -369,6 +370,10 @@ func (h *Handler) handleCloudInstanceErr(w http.ResponseWriter, err error) {
 		apix.Fail(w, http.StatusOK, apix.CodeValidation, "当前状态不允许此操作")
 	case errors.Is(err, schemes.ErrInstanceRunningSimBet):
 		apix.Fail(w, http.StatusConflict, apix.CodeValidation, "方案运行中不可修改模拟投注")
+	case errors.Is(err, guajibet.ErrNoActiveAuth):
+		apix.Fail(w, http.StatusOK, apix.CodeForbidden, "无启用中的授权账号，请先启用授权")
+	case errors.Is(err, guajibet.ErrTokenInvalid):
+		apix.Fail(w, http.StatusOK, apix.CodeUnauthorized, "授权已失效，请在授权列表页重新授权")
 	case errors.Is(err, schemes.ErrUnavailable):
 		apix.Fail(w, http.StatusServiceUnavailable, apix.CodeInternal, "数据库未就绪")
 	case errors.Is(err, member.ErrNotFound):

@@ -481,6 +481,43 @@ ORDER BY is_active DESC, bound_at DESC`, memberID)
 	return out, rows.Err()
 }
 
+// AdminClearAllAuth 停止该会员全部运行中/待开启方案，并清空全部第三方授权。
+func (s *Service) AdminClearAllAuth(ctx context.Context, memberID int64) (pausedCount int, clearedCount int64, err error) {
+	if s == nil || s.pool == nil {
+		return 0, 0, ErrUnavailable
+	}
+	if memberID <= 0 {
+		return 0, 0, member.ErrNotFound
+	}
+	var exists int64
+	err = s.pool.QueryRow(ctx, `SELECT id FROM members WHERE id = $1`, memberID).Scan(&exists)
+	if err != nil {
+		if isNoRows(err) {
+			return 0, 0, member.ErrNotFound
+		}
+		return 0, 0, err
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	pausedCount, err = s.pauseRunningPending(ctx, tx, memberID)
+	if err != nil {
+		return 0, 0, err
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM member_guaji_accounts WHERE member_id = $1`, memberID)
+	if err != nil {
+		return 0, 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, 0, err
+	}
+	return pausedCount, tag.RowsAffected(), nil
+}
+
 func (s *Service) memberID(ctx context.Context, account string) (int64, error) {
 	var id int64
 	err := s.pool.QueryRow(ctx, `SELECT id FROM members WHERE account = $1`, account).Scan(&id)

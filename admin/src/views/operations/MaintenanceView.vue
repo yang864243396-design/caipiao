@@ -40,9 +40,6 @@ async function onPopupChange() {
 <template>
   <div v-loading="loading">
     <h1 class="admin-page-title">系统维护</h1>
-    <p class="admin-page-desc">
-      §2.1 / §24-Q116：全站维护优先于彩种级；保存后会员端通过 <code>GET /public/maintenance</code> 读取状态与弹窗公告。
-    </p>
     <el-card shadow="never">
       <div class="maint-form">
         <div class="maint-row">
@@ -57,21 +54,9 @@ async function onPopupChange() {
           <p class="maint-hint">
             从已发布公告中选择一条，供会员端大厅弹层展示（公开接口会附带公告正文）。
           </p>
-          <el-select
-            v-model="popupAnnouncementId"
-            clearable
-            filterable
-            :loading="saving"
-            placeholder="选择公告（或清空为不指定）"
-            style="width: min(100%, 420px)"
-            @change="onPopupChange"
-          >
-            <el-option
-              v-for="a in publishedAnn"
-              :key="a.id"
-              :label="`${a.id} · ${a.title}`"
-              :value="a.id"
-            />
+          <el-select v-model="popupAnnouncementId" clearable filterable :loading="saving" placeholder="选择公告（或清空为不指定）"
+            style="width: min(100%, 420px)" @change="onPopupChange">
+            <el-option v-for="a in publishedAnn" :key="a.id" :label="`${a.id} · ${a.title}`" :value="a.id" />
           </el-select>
         </div>
       </div>
@@ -85,21 +70,25 @@ async function onPopupChange() {
   font-size: 13px;
   color: var(--el-text-color-secondary);
 }
+
 .maint-form {
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
 }
+
 .maint-row {
   display: flex;
   align-items: center;
   gap: 1rem;
   flex-wrap: wrap;
 }
+
 .maint-label {
   font-weight: 600;
   margin-bottom: 0.5rem;
 }
+
 .maint-hint {
   margin: 0 0 0.75rem;
   font-size: 13px;

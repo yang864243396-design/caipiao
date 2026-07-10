@@ -228,13 +228,13 @@ function applyMemberRow(row: MemberRow) {
 
 async function onToggleFreeze() {
   if (!member.value) return
-  const next = member.value.status === '冻结' ? '解冻' : '冻结'
+  const next = member.value.status === '禁用' ? '启用' : '禁用'
   const ok = await adminConfirmDialog({
     title: `${next}账号`,
     message:
-      next === '冻结'
-        ? '确认冻结该会员？将同时暂停其所有运行中/待开启的方案。'
-        : '确认解冻该会员？',
+      next === '禁用'
+        ? '确认禁用该会员？将同时停止其所有运行中/待开启的方案。'
+        : '确认启用该会员？',
     tone: 'warning',
   })
   if (!ok) return
@@ -321,7 +321,7 @@ async function onSoftStop(row: { id: string; status: string }) {
 
             <div style="display: flex; flex-wrap: wrap; gap: 0.5rem">
 
-              <el-button size="small" type="warning" @click="onToggleFreeze">冻结 / 解冻</el-button>
+              <el-button size="small" type="warning" @click="onToggleFreeze">禁用 / 启用</el-button>
 
             </div>
 

@@ -18,9 +18,15 @@ import (
 var ErrUnavailable = errors.New("schemes service unavailable")
 
 type Service struct {
-	q          *sqlcdb.Queries
-	pool       *db.Pool
-	periodSync *periodsync.Syncer
+	q           *sqlcdb.Queries
+	pool        *db.Pool
+	periodSync  *periodsync.Syncer
+	authChecker memberAuthChecker
+}
+
+// memberAuthChecker 由 accountsvc 注入，开启真实投注方案前校验本平台授权。
+type memberAuthChecker interface {
+	HasHealthyAuthForMember(ctx context.Context, memberAccount string) (bool, error)
 }
 
 func NewService(pool *db.Pool, periodSync *periodsync.Syncer) *Service {
@@ -28,6 +34,13 @@ func NewService(pool *db.Pool, periodSync *periodsync.Syncer) *Service {
 		return nil
 	}
 	return &Service{q: sqlcdb.New(pool), pool: pool, periodSync: periodSync}
+}
+
+func (s *Service) SetMemberAuthChecker(c memberAuthChecker) {
+	if s == nil {
+		return
+	}
+	s.authChecker = c
 }
 
 type ShareSnapshot struct {

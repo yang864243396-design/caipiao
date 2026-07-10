@@ -107,7 +107,6 @@ async function onTogglePin(row: Announcement) {
 <template>
   <div>
     <h1 class="admin-page-title">公告管理</h1>
-    <p class="admin-page-desc">维护平台公告标题、发布状态与正文；置顶公告展示在会员端 Banner 下方，同时仅允许一条置顶。</p>
 
     <div class="toolbar">
       <el-button type="primary" @click="openNew">新建公告</el-button>
@@ -133,12 +132,8 @@ async function onTogglePin(row: Announcement) {
       <el-table-column label="操作" min-width="220" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
-          <el-button
-            link
-            :type="row.pinned ? 'warning' : 'primary'"
-            :disabled="!row.pinned && row.status !== '已发布'"
-            @click="onTogglePin(row)"
-          >
+          <el-button link :type="row.pinned ? 'warning' : 'primary'" :disabled="!row.pinned && row.status !== '已发布'"
+            @click="onTogglePin(row)">
             {{ row.pinned ? '取消置顶' : '置顶' }}
           </el-button>
           <el-button link type="danger" @click="onDelete(row)">删除</el-button>
@@ -147,12 +142,8 @@ async function onTogglePin(row: Announcement) {
     </el-table>
 
     <div class="pager">
-      <el-pagination
-        v-model:current-page="currentPage"
-        :page-size="pageSize"
-        layout="total, prev, pager, next"
-        :total="announcements.length"
-      />
+      <el-pagination v-model:current-page="currentPage" :page-size="pageSize" layout="total, prev, pager, next"
+        :total="announcements.length" />
     </div>
 
     <AdminDialog v-model="dialogVisible" title="编辑公告" width="720px" destroy-on-close @closed="editing = null">
@@ -186,14 +177,17 @@ async function onTogglePin(row: Announcement) {
   font-size: 13px;
   color: var(--el-text-color-secondary);
 }
+
 .toolbar {
   margin-bottom: 12px;
 }
+
 .pager {
   display: flex;
   justify-content: flex-end;
   margin-top: 1rem;
 }
+
 .text-muted {
   color: var(--el-text-color-secondary);
 }

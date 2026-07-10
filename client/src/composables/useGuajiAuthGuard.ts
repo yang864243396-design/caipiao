@@ -33,6 +33,34 @@ export function guajiGateToastMessage(status: GuajiAuthStatus): string {
   return '请先启用授权账号'
 }
 
+/** 识别本平台「无可用授权」类业务错误（非第三方原文） */
+export function isGuajiAuthRequiredError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err ?? '')
+  return /无启用中的授权|请先启用授权|请先绑定第三方|授权已失效/.test(msg)
+}
+
+/**
+ * 无可用授权时跳转绑定/列表页；返回 true 表示已处理跳转。
+ * 调用方在 catch 中优先使用，避免继续后续第三方相关操作。
+ */
+export async function redirectToGuajiAuthIfNeeded(
+  err: unknown,
+  navigate: (path: string) => unknown,
+): Promise<boolean> {
+  if (!isGuajiAuthRequiredError(err)) return false
+  invalidateGuajiAuthCache()
+  try {
+    const status = await resolveGuajiAuthStatus(true)
+    setPendingGuajiGateToast(guajiGateToastMessage(status))
+    const target = status.bindingCount === 0 ? GUAJI_AUTH_BIND : GUAJI_AUTH_LIST
+    await Promise.resolve(navigate(target))
+  } catch {
+    setPendingGuajiGateToast('请先绑定第三方授权账号')
+    await Promise.resolve(navigate(GUAJI_AUTH_BIND))
+  }
+  return true
+}
+
 export async function resolveGuajiAuthStatus(force = false): Promise<GuajiAuthStatus> {
   if (!force && cached && Date.now() - cached.at < CACHE_TTL_MS) {
     return cached.status

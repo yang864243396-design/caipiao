@@ -158,7 +158,7 @@ func normalizeMemberSearchField(raw string) string {
 
 func statusLabel(status string) string {
 	if status == "frozen" {
-		return "冻结"
+		return "禁用"
 	}
 	return "正常"
 }

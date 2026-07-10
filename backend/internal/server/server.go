@@ -93,6 +93,7 @@ func New(cfg config.Config) (*Server, error) {
 	guajiAccounts := accountsvc.NewService(pool, guajiClient, cfg.Guaji.CredentialsKey, cfg.JWTSecret)
 	periodSyncer := periodsync.NewSyncer(pool, guajiClient, guajiAccounts)
 	schemesSvc := schemes.NewService(pool, periodSyncer)
+	schemesSvc.SetMemberAuthChecker(guajiAccounts)
 	gamesSvc := games.NewService(pool)
 	if guajiAccounts != nil {
 		gamesSvc.SetGuajiBetPlacer(guajiAccounts)
@@ -187,9 +188,12 @@ func (s *Server) registerRoutes(wsSrv *ws.Server) {
 	api.Handle("GET /admin/dashboard/kpi", adminAuth(http.HandlerFunc(s.handler.AdminDashboardKpi)))
 
 	api.Handle("GET /admin/members", adminAuth(http.HandlerFunc(s.handler.AdminListMembers)))
+	api.Handle("POST /admin/members", adminAuth(http.HandlerFunc(s.handler.AdminCreateMember)))
 	api.Handle("GET /admin/members/{memberId}", adminAuth(http.HandlerFunc(s.handler.AdminGetMember)))
+	api.Handle("PUT /admin/members/{memberId}", adminAuth(http.HandlerFunc(s.handler.AdminUpdateMember)))
 	api.Handle("GET /admin/members/{memberId}/fund-records", adminAuth(http.HandlerFunc(s.handler.AdminMemberFundRecords)))
 	api.Handle("POST /admin/members/{memberId}/ops", adminAuth(http.HandlerFunc(s.handler.AdminMemberOp)))
+	api.Handle("POST /admin/members/{memberId}/clear-guaji-auth", adminAuth(http.HandlerFunc(s.handler.AdminClearMemberGuajiAuth)))
 
 	api.Handle("GET /admin/orders/bets", adminAuth(http.HandlerFunc(s.handler.AdminListBetOrders)))
 	api.Handle("GET /admin/orders/chases", adminAuth(http.HandlerFunc(s.handler.AdminListChaseOrders)))

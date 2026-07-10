@@ -1,11 +1,16 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import {
+  clearMemberGuajiAuth,
+  createMember,
   fetchMemberDetail,
   fetchMemberFundRecords,
   fetchMembers,
+  updateMember,
   type AdminMemberRow,
+  type CreateMemberPayload,
   type FetchMemberFundRecordsParams,
+  type UpdateMemberPayload,
 } from '@/api/members'
 import type { MemberFundRecordRow } from '@/types/members'
 
@@ -48,6 +53,22 @@ export const useMembersStore = defineStore('members', () => {
     return fetchMemberFundRecords(memberId, params)
   }
 
+  async function create(payload: CreateMemberPayload) {
+    return createMember(payload)
+  }
+
+  async function update(memberId: string, payload: UpdateMemberPayload) {
+    const row = await updateMember(memberId, payload)
+    detailCache.value[memberId] = row
+    const idx = list.value.findIndex((m) => m.id === memberId)
+    if (idx >= 0) list.value[idx] = row
+    return row
+  }
+
+  async function clearGuajiAuth(memberId: string) {
+    return clearMemberGuajiAuth(memberId)
+  }
+
   return {
     list,
     total,
@@ -56,5 +77,8 @@ export const useMembersStore = defineStore('members', () => {
     loadList,
     loadDetail,
     loadFundRecords,
+    create,
+    update,
+    clearGuajiAuth,
   }
 })

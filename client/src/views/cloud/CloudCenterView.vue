@@ -9,6 +9,9 @@ import { ApiError } from '@/api/client'
 import { deleteSchemeDefinition, getSchemeDefinition } from '@/api/schemes/definitions'
 import { confirmDialog } from '@/utils/confirmDialog'
 import { normalizeSchemeTimePairFromConfig, schemeStartTimeOpenError } from '@/utils/schemeDateTime'
+import { minBetOpenMessage, schemeMinBetOpenError } from '@/utils/schemeMinBet'
+import { fetchPrimaryCurrency } from '@/api/guaji/accounts'
+import { redirectToGuajiAuthIfNeeded, isGuajiAuthRequiredError } from '@/composables/useGuajiAuthGuard'
 import {
   fetchCloudGlobalSettings,
   fetchCloudCenterStats,
@@ -348,15 +351,21 @@ watch(multiplierDialogVisible, (open) => {
   if (!open) multiplierEditScheme.value = null
 })
 
+/** 编辑中只保留数字，允许清空以便改成其他正整数；确认时再规范 */
 function onMultiplierDraftChange(v: string | number) {
-  multiplierDraft.value = normalizeSchemeMultiplier(v)
+  multiplierDraft.value = String(v ?? '').replace(/[^\d]/g, '')
 }
 
 async function confirmMultiplierDialog() {
   const s = multiplierEditScheme.value
   if (!s || multiplierSavingId.value !== null) return
 
-  const normalized = normalizeSchemeMultiplier(multiplierDraft.value)
+  const digits = multiplierDraft.value.replace(/[^\d]/g, '')
+  if (!digits || Number.parseInt(digits, 10) < 1) {
+    ElMessage.warning('请输入不小于 1 的正整数')
+    return
+  }
+  const normalized = normalizeSchemeMultiplier(digits)
   multiplierDraft.value = normalized
   const baseline = multiplierSaved.value[s.id] ?? s.multiplier
   if (normalized === baseline) {
@@ -482,13 +491,24 @@ async function enableAllSchemes() {
   const failed: string[] = []
   try {
     for (const s of targets) {
-      if (!(await validateStartTimeBeforeOpen(s))) continue
+      if (!(await validateBeforeOpen(s))) continue
       try {
         const updated = await startCloudInstance(s.id)
         patchSchemeCard(updated)
         okCount++
       } catch (e) {
-        const msg = e instanceof ApiError && e.message.includes('预计开启时间') ? START_TIME_OPEN_MSG : e instanceof Error ? e.message : '失败'
+        if (isGuajiAuthRequiredError(e)) {
+          await redirectToGuajiAuthIfNeeded(e, (path) => router.push(path))
+          return
+        }
+        const msg =
+          e instanceof ApiError && e.message.includes('预计开启时间')
+            ? START_TIME_OPEN_MSG
+            : e instanceof ApiError && (e.message.includes('单次投注金额') || e.message.includes('低于0.1'))
+              ? minBetOpenMessage('CNY')
+              : e instanceof Error
+                ? e.message
+                : '失败'
         failed.push(`${s.schemeName}：${msg}`)
       }
     }
@@ -531,7 +551,7 @@ function openSchemeDetail(s: CloudSchemeCard) {
 
 const START_TIME_OPEN_MSG = '预计开启时间小于现在时间 请修改后再执行开启'
 
-async function validateStartTimeBeforeOpen(s: CloudSchemeCard): Promise<boolean> {
+async function validateBeforeOpen(s: CloudSchemeCard): Promise<boolean> {
   if (!s.definitionId) return true
   try {
     const def = await getSchemeDefinition(s.definitionId)
@@ -539,11 +559,27 @@ async function validateStartTimeBeforeOpen(s: CloudSchemeCard): Promise<boolean>
       def.config?.startTime,
       def.config?.endTime,
     )
-    const err = schemeStartTimeOpenError(times.start)
-    if (err) {
+    const timeErr = schemeStartTimeOpenError(times.start)
+    if (timeErr) {
       await confirmDialog({
         title: '无法开启',
-        message: err,
+        message: timeErr,
+        tone: 'warning',
+        confirmText: '我知道了',
+        showCancel: false,
+      })
+      return false
+    }
+    const currency = await fetchPrimaryCurrency().catch(() => 'CNY')
+    const minBetErr = schemeMinBetOpenError(
+      (def.config ?? {}) as Record<string, unknown>,
+      s.multiplier,
+      currency,
+    )
+    if (minBetErr) {
+      await confirmDialog({
+        title: '无法开启',
+        message: minBetErr,
         tone: 'warning',
         confirmText: '我知道了',
         showCancel: false,
@@ -557,27 +593,41 @@ async function validateStartTimeBeforeOpen(s: CloudSchemeCard): Promise<boolean>
 }
 
 function showStartOpenError(e: unknown): void {
-  const msg =
-    e instanceof ApiError && e.message.includes('预计开启时间')
-      ? START_TIME_OPEN_MSG
-      : e instanceof Error
-        ? e.message
-        : '操作失败'
-  if (msg.includes('预计开启时间')) {
-    void confirmDialog({
-      title: '无法开启',
-      message: START_TIME_OPEN_MSG,
-      tone: 'warning',
-      confirmText: '我知道了',
-      showCancel: false,
-    })
-    return
-  }
-  ElMessage.error(msg)
+  void (async () => {
+    if (await redirectToGuajiAuthIfNeeded(e, (path) => router.push(path))) return
+    const raw = e instanceof Error ? e.message : '操作失败'
+    const isStartTime =
+      (e instanceof ApiError && raw.includes('预计开启时间')) || raw.includes('预计开启时间')
+    const isMinBet =
+      (e instanceof ApiError && (raw.includes('单次投注金额') || raw.includes('低于'))) ||
+      raw.includes('单次投注金额')
+    if (isStartTime) {
+      void confirmDialog({
+        title: '无法开启',
+        message: START_TIME_OPEN_MSG,
+        tone: 'warning',
+        confirmText: '我知道了',
+        showCancel: false,
+      })
+      return
+    }
+    if (isMinBet) {
+      void confirmDialog({
+        title: '无法开启',
+        message: raw.includes('单次投注金额') ? raw : minBetOpenMessage('CNY'),
+        tone: 'warning',
+        confirmText: '我知道了',
+        showCancel: false,
+      })
+      return
+    }
+    ElMessage.error(raw)
+  })()
 }
 
+
 async function startScheme(s: CloudSchemeCard) {
-  if (!(await validateStartTimeBeforeOpen(s))) return
+  if (!(await validateBeforeOpen(s))) return
   try {
     const updated = await startCloudInstance(s.id)
     patchSchemeCard(updated)

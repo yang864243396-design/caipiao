@@ -225,3 +225,12 @@ UPDATE members
 SET password_hash = $2,
     updated_at = now()
 WHERE id = $1;
+
+-- name: AdminInsertMember :one
+INSERT INTO members (account, password_hash, display_name, status)
+VALUES ($1, $2, $3, $4)
+RETURNING id, account, display_name, status, registered_at, last_login_at;
+
+-- name: AdminInsertMemberWallet :exec
+INSERT INTO member_wallets (member_id, balance, frozen_balance, currency)
+VALUES ($1, 0, 0, 'CNY');

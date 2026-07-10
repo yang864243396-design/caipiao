@@ -114,6 +114,19 @@ func (q *Queries) DeleteMemberGuajiAccount(ctx context.Context, arg DeleteMember
 	return result.RowsAffected(), nil
 }
 
+const deleteAllMemberGuajiAccountsByMemberID = `-- name: DeleteAllMemberGuajiAccountsByMemberID :execrows
+DELETE FROM member_guaji_accounts
+WHERE member_id = $1
+`
+
+func (q *Queries) DeleteAllMemberGuajiAccountsByMemberID(ctx context.Context, memberID int64) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteAllMemberGuajiAccountsByMemberID, memberID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getActiveMemberGuajiAccount = `-- name: GetActiveMemberGuajiAccount :one
 SELECT
     id, member_id, guaji_username, password_enc, mfa_material_enc,

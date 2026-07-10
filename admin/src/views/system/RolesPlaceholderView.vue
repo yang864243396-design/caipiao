@@ -110,9 +110,6 @@ async function remove(row: AdminRole) {
 <template>
   <div>
     <h1 class="admin-page-title">角色管理</h1>
-    <p class="admin-page-desc">
-      通过树形勾选配置可见菜单；勾选「全部菜单」等同于 menuPaths 为「/」。账号与角色在「Admin 账号」页绑定，登录后自动生效。
-    </p>
 
     <div class="toolbar">
       <el-button type="primary" @click="openNew">新增角色</el-button>
@@ -144,15 +141,8 @@ async function remove(row: AdminRole) {
         </el-form-item>
         <el-form-item label="可见菜单">
           <div class="route-tree-wrap">
-            <el-tree
-              ref="treeRef"
-              :data="ADMIN_MENU_ROUTE_TREE"
-              show-checkbox
-              node-key="id"
-              default-expand-all
-              :props="{ label: 'label', children: 'children' }"
-              @check="onTreeCheck"
-            />
+            <el-tree ref="treeRef" :data="ADMIN_MENU_ROUTE_TREE" show-checkbox node-key="id" default-expand-all
+              :props="{ label: 'label', children: 'children' }" @check="onTreeCheck" />
           </div>
         </el-form-item>
       </el-form>

@@ -72,7 +72,6 @@ async function onDelete(row: FaqArticle) {
 <template>
   <div>
     <h1 class="admin-page-title">常见问题</h1>
-    <p class="admin-page-desc">维护问题标题与正文内容。</p>
 
     <div class="toolbar">
       <el-button type="primary" @click="openNew">新建问题</el-button>
@@ -89,12 +88,8 @@ async function onDelete(row: FaqArticle) {
     </el-table>
 
     <div class="pager">
-      <el-pagination
-        v-model:current-page="currentPage"
-        :page-size="pageSize"
-        layout="total, prev, pager, next"
-        :total="faqArticles.length"
-      />
+      <el-pagination v-model:current-page="currentPage" :page-size="pageSize" layout="total, prev, pager, next"
+        :total="faqArticles.length" />
     </div>
 
     <AdminDialog v-model="dialogVisible" title="编辑问题" width="720px" destroy-on-close @closed="editing = null">
@@ -122,9 +117,11 @@ async function onDelete(row: FaqArticle) {
   font-size: 13px;
   color: var(--el-text-color-secondary);
 }
+
 .toolbar {
   margin-bottom: 12px;
 }
+
 .pager {
   display: flex;
   justify-content: flex-end;

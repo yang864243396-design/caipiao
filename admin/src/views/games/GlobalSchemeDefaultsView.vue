@@ -252,22 +252,8 @@ async function toggleEnabled(row: SchemeTemplateRow, enabled: boolean) {
 
     <h1 class="admin-page-title">方案模板库</h1>
 
-    <p style="margin: 0 0 1rem; font-size: 13px; color: var(--el-text-color-secondary)">
-
-      维护平台高级倍投方案，与客户端倍投设定 · 高级倍投使用相同参数（局数 / 倍数 / 中后 / 挂后）。
-
-    </p>
-
-
-
     <div class="toolbar">
-      <el-input
-        v-model="keyword"
-        placeholder="方案名称"
-        clearable
-        style="width: 220px"
-        @keyup.enter="onSearch"
-      />
+      <el-input v-model="keyword" placeholder="方案名称" clearable style="width: 220px" @keyup.enter="onSearch" />
       <el-button type="primary" @click="onSearch">查询</el-button>
       <div class="toolbar-spacer" />
       <el-button type="primary" @click="openCreate">创建模板</el-button>
@@ -314,26 +300,12 @@ async function toggleEnabled(row: SchemeTemplateRow, enabled: boolean) {
     </el-table>
 
     <div class="pager">
-      <el-pagination
-        v-model:current-page="page"
-        :page-size="pageSize"
-        layout="total, prev, pager, next"
-        :total="total"
-        @current-change="reloadList"
-      />
+      <el-pagination v-model:current-page="page" :page-size="pageSize" layout="total, prev, pager, next" :total="total"
+        @current-change="reloadList" />
     </div>
 
-    <AdminDialog
-
-      v-model="dialogVisible"
-
-      :title="editingId ? '编辑高级倍投方案' : '创建高级倍投方案'"
-
-      width="min(100%, 640px)"
-
-      destroy-on-close
-
-    >
+    <AdminDialog v-model="dialogVisible" :title="editingId ? '编辑高级倍投方案' : '创建高级倍投方案'" width="min(100%, 640px)"
+      destroy-on-close>
 
       <el-form label-position="top">
 
@@ -387,19 +359,8 @@ async function toggleEnabled(row: SchemeTemplateRow, enabled: boolean) {
 
               <template #default="{ row }">
 
-                <el-input-number
-
-                  v-model="row.mult"
-
-                  :min="0"
-
-                  :max="SCHEME_ROUND_MULT_CAP"
-
-                  size="small"
-
-                  :controls="false"
-
-                />
+                <el-input-number v-model="row.mult" :min="0" :max="SCHEME_ROUND_MULT_CAP" size="small"
+                  :controls="false" />
 
               </template>
 
@@ -429,19 +390,8 @@ async function toggleEnabled(row: SchemeTemplateRow, enabled: boolean) {
 
               <template #default="{ $index }">
 
-                <el-button
-
-                  link
-
-                  type="danger"
-
-                  size="small"
-
-                  :disabled="draftRounds.length <= 1"
-
-                  @click="removeRound($index)"
-
-                >
+                <el-button link type="danger" size="small" :disabled="draftRounds.length <= 1"
+                  @click="removeRound($index)">
 
                   删除
 
@@ -478,9 +428,11 @@ async function toggleEnabled(row: SchemeTemplateRow, enabled: boolean) {
   margin-bottom: 1rem;
   align-items: center;
 }
+
 .toolbar-spacer {
   flex: 1;
 }
+
 .pager {
   display: flex;
   justify-content: flex-end;

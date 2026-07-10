@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { formatClientApiError } from '@/utils/guajiError'
+import { redirectToGuajiAuthIfNeeded } from '@/composables/useGuajiAuthGuard'
 import {
   contraryBet,
   shareAddToCloud,
@@ -850,8 +851,9 @@ async function refreshDockBalance() {
   try {
     const b = await fetchGuajiBalance()
     dockBalance.value = { currency: b.currency, amount: b.amount }
-  } catch {
+  } catch (e) {
     dockBalance.value = null
+    if (await redirectToGuajiAuthIfNeeded(e, (path) => router.push(path))) return
   }
 }
 
@@ -1068,6 +1070,7 @@ function goBack() {
 }
 
 async function handleBetError(e: unknown, fallback = '投注失败'): Promise<void> {
+  if (await redirectToGuajiAuthIfNeeded(e, (path) => router.push(path))) return
   ElMessage.error(formatClientApiError(e, fallback))
 }
 

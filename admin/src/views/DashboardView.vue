@@ -75,9 +75,6 @@ onUnmounted(() => {
 <template>
   <div v-loading="loading">
     <h1 class="admin-page-title">仪表盘</h1>
-    <p class="admin-page-desc">
-      KPI 来自 <code>GET /admin/dashboard/kpi</code>；提现/方案变更时 WS 自动刷新（降级 15s 轮询）。
-    </p>
 
     <div class="admin-kpi-grid">
       <div v-for="k in kpis" :key="k.key" class="admin-kpi-card">

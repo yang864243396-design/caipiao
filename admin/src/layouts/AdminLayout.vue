@@ -45,7 +45,7 @@ async function onLogout() {
   <div class="admin-shell">
     <el-container class="admin-shell-inner" direction="horizontal">
       <el-aside class="admin-aside">
-        <div class="admin-brand">管理后台 · Mock</div>
+        <div class="admin-brand">管理后台</div>
         <el-menu :default-active="activeMenu" unique-opened router class="admin-el-menu">
           <el-menu-item v-if="canAccess('/dashboard')" index="/dashboard">
             <el-icon>
@@ -115,10 +115,7 @@ async function onLogout() {
               </el-icon>
               <span>站点与内容</span>
             </template>
-            <el-menu-item
-              v-if="canAccessSome(['/content/banners', '/content/lobby'])"
-              index="/content/banners"
-            >
+            <el-menu-item v-if="canAccessSome(['/content/banners', '/content/lobby'])" index="/content/banners">
               Banner 管理
             </el-menu-item>
             <el-menu-item v-if="canAccess('/content/announcements')" index="/content/announcements">公告管理</el-menu-item>
@@ -135,8 +132,7 @@ async function onLogout() {
             <el-menu-item index="/service/customer-service">客服设置</el-menu-item>
           </el-sub-menu>
 
-          <el-sub-menu
-            v-if="canAccessSome(['/system/roles', '/system/admin-users', '/system/audit'])"
+          <el-sub-menu v-if="canAccessSome(['/system/roles', '/system/admin-users', '/system/audit'])"
             index="system-group">
             <template #title>
               <el-icon>

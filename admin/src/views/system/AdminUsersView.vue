@@ -125,9 +125,6 @@ async function remove(row: AdminUser) {
 <template>
   <div>
     <h1 class="admin-page-title">Admin 账号管理</h1>
-    <p style="margin: 0 0 1rem; font-size: 13px; color: var(--el-text-color-secondary)">
-      后台登录账号与角色绑定；登录后菜单按角色 menuPaths 过滤。内置账号 <code>admin</code> 不可删除。
-    </p>
 
     <div style="margin-bottom: 1rem">
       <el-button type="primary" @click="openNew">新增账号</el-button>

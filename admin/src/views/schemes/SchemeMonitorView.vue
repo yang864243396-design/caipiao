@@ -355,13 +355,6 @@ async function onDeleteShareSnapshot(row: SchemeShareSnapshotRow) {
 
     <h1 class="admin-page-title">全站方案监控</h1>
 
-    <p style="margin: 0 0 1rem; font-size: 13px; color: var(--el-text-color-secondary)">
-
-      用户 Tab：会员云端实例；分享池 Tab：仅自创快照（D80）。运营不可改会员私池配置，仅可维护分享池与强停/解封。
-
-    </p>
-
-
 
     <el-tabs v-model="monitorTab" style="margin-bottom: 1rem">
 
@@ -551,35 +544,23 @@ async function onDeleteShareSnapshot(row: SchemeShareSnapshotRow) {
 
     <template v-else>
 
-      <div
-        style="
+      <div style="
           display: flex;
           flex-wrap: nowrap;
           gap: 0.75rem;
           margin-bottom: 1rem;
           align-items: center;
-        "
-      >
+        ">
         <el-select v-model="shareSearchField" style="width: 128px; flex-shrink: 0">
           <el-option label="方案名称" value="schemeName" />
           <el-option label="快照 ID" value="snapshotId" />
         </el-select>
 
-        <el-input
-          v-model="shareKeyword"
-          clearable
-          :placeholder="shareKeywordPlaceholder"
-          style="width: 240px; flex-shrink: 0"
-          @keyup.enter="onShareSearch"
-        />
+        <el-input v-model="shareKeyword" clearable :placeholder="shareKeywordPlaceholder"
+          style="width: 240px; flex-shrink: 0" @keyup.enter="onShareSearch" />
 
-        <el-select
-          v-model="shareLotteryCode"
-          clearable
-          filterable
-          placeholder="彩种"
-          style="width: 160px; flex-shrink: 0"
-        >
+        <el-select v-model="shareLotteryCode" clearable filterable placeholder="彩种"
+          style="width: 160px; flex-shrink: 0">
           <el-option v-for="lot in lotteryOptions" :key="lot.code" :label="lot.displayName" :value="lot.code">
             <span :class="{ 'monitor-lottery-maint': lot.saleStatus !== 'on_sale' }">
               {{ lot.displayName }}

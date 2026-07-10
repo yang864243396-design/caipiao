@@ -189,7 +189,7 @@ func (h *Handler) AdminLogin(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, auth.ErrInvalidCredentials):
 			apix.Fail(w, http.StatusOK, apix.CodeUnauthorized, "账号或密码错误")
 		case errors.Is(err, auth.ErrAccountFrozen):
-			apix.Fail(w, http.StatusOK, apix.CodeForbidden, "账号已冻结")
+			apix.Fail(w, http.StatusOK, apix.CodeForbidden, "账号已禁用")
 		default:
 			apix.Internal(w)
 		}
@@ -238,7 +238,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request, fn loginFn) {
 		case errors.Is(err, auth.ErrInvalidCredentials):
 			apix.Fail(w, http.StatusOK, apix.CodeUnauthorized, "账号或密码错误")
 		case errors.Is(err, auth.ErrAccountFrozen):
-			apix.Fail(w, http.StatusOK, apix.CodeForbidden, "账号已冻结")
+			apix.Fail(w, http.StatusOK, apix.CodeForbidden, "账号已禁用")
 		default:
 			apix.Internal(w)
 		}

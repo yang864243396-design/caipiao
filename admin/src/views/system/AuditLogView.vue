@@ -21,9 +21,6 @@ const pagedRows = computed(() => {
 <template>
   <div>
     <h1 class="admin-page-title">操作审计</h1>
-    <p style="margin: 0 0 1rem; font-size: 13px; color: var(--el-text-color-secondary)">
-      §5 P4 / §30.5：与审批、方案强停/改参/设置变更等写操作并列留痕；方案运营动作实时追加至列表顶部。
-    </p>
     <el-table :data="pagedRows" stripe style="width: 100%">
       <el-table-column prop="id" label="审计ID" min-width="100" />
       <el-table-column prop="time" label="时间" min-width="160" />
@@ -33,12 +30,8 @@ const pagedRows = computed(() => {
     </el-table>
 
     <div style="display: flex; justify-content: flex-end; margin-top: 1rem">
-      <el-pagination
-        v-model:current-page="currentPage"
-        :page-size="pageSize"
-        layout="total, prev, pager, next"
-        :total="list.length"
-      />
+      <el-pagination v-model:current-page="currentPage" :page-size="pageSize" layout="total, prev, pager, next"
+        :total="list.length" />
     </div>
   </div>
 </template>

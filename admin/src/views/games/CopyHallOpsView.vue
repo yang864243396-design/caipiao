@@ -124,19 +124,14 @@ async function onMoveSlot(rank: number, direction: 'up' | 'down') {
 <template>
   <div>
     <h1 class="admin-page-title">跟单大厅运营</h1>
-    <p style="margin: 0 0 1rem; font-size: 13px; color: var(--el-text-color-secondary)">
-      分享池方案与<strong>全站方案监控 · 分享池</strong>同源；全站共用大神榜 / 反买榜 Top 10，保存后同步至会员端。
-    </p>
 
-    <div
-      style="
+    <div style="
         display: flex;
         flex-wrap: nowrap;
         gap: 0.75rem;
         margin-bottom: 1rem;
         align-items: center;
-      "
-    >
+      ">
       <el-radio-group v-model="activeBoard" style="flex-shrink: 0">
         <el-radio-button value="master">大神榜 Top 10</el-radio-button>
         <el-radio-button value="contrary">反买榜 Top 10</el-radio-button>
@@ -145,12 +140,7 @@ async function onMoveSlot(rank: number, direction: 'up' | 'down') {
 
     <h2 style="margin: 0 0 0.75rem; font-size: 15px; font-weight: 600">当前榜单</h2>
 
-    <el-table
-      :key="activeBoard"
-      :data="currentSlots"
-      stripe
-      style="width: 100%; margin-bottom: 1.5rem"
-    >
+    <el-table :key="activeBoard" :data="currentSlots" stripe style="width: 100%; margin-bottom: 1.5rem">
       <template #empty>
         <span style="font-size: 13px; color: var(--el-text-color-secondary)">
           暂无榜单数据
@@ -174,9 +164,9 @@ async function onMoveSlot(rank: number, direction: 'up' | 'down') {
         <template #default="{ row }">
           {{
             row.lotteryLabel ||
-              findInCatalog(row.schemeId)?.lotteryLabel ||
-              row.lotteryCode ||
-              '—'
+            findInCatalog(row.schemeId)?.lotteryLabel ||
+            row.lotteryCode ||
+            '—'
           }}
         </template>
       </el-table-column>
@@ -215,71 +205,42 @@ async function onMoveSlot(rank: number, direction: 'up' | 'down') {
       <el-table-column label="操作" min-width="180" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" @click="openPicker(row.rank)">更换方案</el-button>
-          <el-button
-            link
-            type="primary"
-            :disabled="row.rank <= 1"
-            @click="onMoveSlot(row.rank, 'up')"
-          >
+          <el-button link type="primary" :disabled="row.rank <= 1" @click="onMoveSlot(row.rank, 'up')">
             上移
           </el-button>
-          <el-button
-            link
-            type="primary"
-            :disabled="row.rank >= 10"
-            @click="onMoveSlot(row.rank, 'down')"
-          >
+          <el-button link type="primary" :disabled="row.rank >= 10" @click="onMoveSlot(row.rank, 'down')">
             下移
           </el-button>
         </template>
       </el-table-column>
     </el-table>
 
-    <AdminDialog
-      v-model="pickerVisible"
-      :title="`选择方案 · 第 ${pickingRank ?? '—'} 名`"
-      width="min(100%, 720px)"
-      destroy-on-close
-    >
+    <AdminDialog v-model="pickerVisible" :title="`选择方案 · 第 ${pickingRank ?? '—'} 名`" width="min(100%, 720px)"
+      destroy-on-close>
       <p style="margin: 0 0 0.75rem; font-size: 12px; color: var(--el-text-color-secondary)">
         数据来源：全站方案监控 · 分享池（全彩种）
       </p>
 
-      <div
-        style="
+      <div style="
           display: flex;
           flex-wrap: wrap;
           gap: 0.75rem;
           margin-bottom: 0.75rem;
           align-items: center;
-        "
-      >
+        ">
         <el-select v-model="pickerSearchField" style="width: 128px">
           <el-option label="方案名称" value="schemeName" />
           <el-option label="快照 ID" value="snapshotId" />
         </el-select>
 
-        <el-input
-          v-model="pickerKeyword"
-          clearable
-          :placeholder="pickerKeywordPlaceholder"
-          style="flex: 1; min-width: 160px"
-          @keyup.enter="onPickerSearch"
-        />
+        <el-input v-model="pickerKeyword" clearable :placeholder="pickerKeywordPlaceholder"
+          style="flex: 1; min-width: 160px" @keyup.enter="onPickerSearch" />
 
         <el-button type="primary" @click="onPickerSearch">查询</el-button>
       </div>
 
-      <el-table
-        v-loading="poolLoading"
-        :data="pickerSchemes"
-        stripe
-        style="width: 100%"
-        max-height="360"
-        highlight-current-row
-        :row-class-name="pickerRowClassName"
-        @row-click="onPickerRowClick"
-      >
+      <el-table v-loading="poolLoading" :data="pickerSchemes" stripe style="width: 100%" max-height="360"
+        highlight-current-row :row-class-name="pickerRowClassName" @row-click="onPickerRowClick">
         <el-table-column prop="schemeId" label="快照ID" min-width="108" show-overflow-tooltip />
         <el-table-column prop="schemeName" label="方案名称" min-width="140" />
         <el-table-column prop="lotteryLabel" label="彩种" min-width="108" />

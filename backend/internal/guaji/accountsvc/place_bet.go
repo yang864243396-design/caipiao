@@ -36,20 +36,16 @@ func (s *Service) PlaceRealBet(ctx context.Context, memberAccount string, req gu
 		}
 		return guajibet.Result{}, err
 	}
+	// 本平台无可用授权时直接返回，禁止继续探测/调用第三方。
+	if !s.tokenHealthy(row) {
+		return guajibet.Result{}, guajibet.ErrTokenInvalid
+	}
 	token, err := guaji.DecryptSecret(s.credKey, row.accessTokenEnc.String)
 	if err != nil {
 		return guajibet.Result{}, err
 	}
-	if !s.tokenHealthy(row) {
-		if _, err := s.guaji.UserInfo(ctx, token); err != nil {
-			fault := guaji.ClassifyUpstreamError(err)
-			if fault.IsTokenInvalid {
-				_ = s.markTokenError(ctx, m, row.id, fault.UserMessage)
-				return guajibet.Result{}, guajibet.ErrTokenInvalid
-			}
-			return guajibet.Result{}, guajibet.ErrUpstream
-		}
-		_ = s.clearTokenError(ctx, m, row.id)
+	if strings.TrimSpace(token) == "" {
+		return guajibet.Result{}, guajibet.ErrNoActiveAuth
 	}
 
 	info, err := s.guaji.UserInfo(ctx, token)
