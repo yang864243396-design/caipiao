@@ -177,13 +177,9 @@ func splitDingweiPositionLines(content string) []string {
 }
 
 func evaluateZhixuanFushi(rule playRule, balls []string, groupContent string) betEvaluation {
-	seg := drawSegment(balls, rule.SegmentStart, rule.SegmentLen)
-	if len(seg) != rule.SegmentLen {
-		return betEvaluation{BetUnits: 1, Odds: oddsZhixuan(rule.SegmentLen)}
-	}
 	lines := splitGroupLines(groupContent)
 	var pools [][]string
-	if len(lines) >= rule.SegmentLen {
+	if len(lines) >= rule.SegmentLen && rule.SegmentLen > 0 {
 		pools = make([][]string, rule.SegmentLen)
 		for i := 0; i < rule.SegmentLen; i++ {
 			pools[i] = parsePickTokensForRule(rule, lines[i])
@@ -193,7 +189,11 @@ func evaluateZhixuanFushi(rule playRule, balls []string, groupContent string) be
 		if len(pool) == 0 {
 			pool = []string{"0"}
 		}
-		pools = make([][]string, rule.SegmentLen)
+		n := rule.SegmentLen
+		if n <= 0 {
+			n = 1
+		}
+		pools = make([][]string, n)
 		for i := range pools {
 			pools[i] = pool
 		}
@@ -205,6 +205,11 @@ func evaluateZhixuanFushi(rule playRule, balls []string, groupContent string) be
 			n = 1
 		}
 		units *= n
+	}
+	seg := drawSegment(balls, rule.SegmentStart, rule.SegmentLen)
+	if len(seg) != rule.SegmentLen {
+		// 无开奖号时仍返回正确注数（预览/资金校验）
+		return betEvaluation{BetUnits: units, Odds: oddsZhixuan(rule.SegmentLen)}
 	}
 	hit := true
 	for i, digit := range seg {
@@ -225,6 +230,9 @@ func evaluateZhixuanDanshi(rule playRule, balls []string, groupContent string) b
 	if len(tokens) == 0 {
 		tokens = parseNumberTokens(groupContent, rule.SegmentLen)
 	}
+	if len(tokens) == 0 && rule.SegmentLen > 0 {
+		tokens = chunkDigitString(groupContent, rule.SegmentLen)
+	}
 	units := len(tokens)
 	if units <= 0 {
 		units = 1
@@ -239,6 +247,27 @@ func evaluateZhixuanDanshi(rule playRule, balls []string, groupContent string) b
 	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(rule.SegmentLen)}
 }
 
+func chunkDigitString(raw string, segLen int) []string {
+	if segLen <= 0 {
+		return nil
+	}
+	var b strings.Builder
+	for _, r := range raw {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	digits := b.String()
+	if len(digits) < segLen || len(digits)%segLen != 0 {
+		return nil
+	}
+	out := make([]string, 0, len(digits)/segLen)
+	for i := 0; i+segLen <= len(digits); i += segLen {
+		out = append(out, digits[i:i+segLen])
+	}
+	return out
+}
+
 func evaluateZuxuanFushi(rule playRule, balls []string, groupContent string) betEvaluation {
 	seg := drawSegment(balls, rule.SegmentStart, rule.SegmentLen)
 	if len(seg) != rule.SegmentLen {
@@ -251,7 +280,7 @@ func evaluateZuxuanFushi(rule playRule, balls []string, groupContent string) bet
 			pool = parseDigitTokens(groupContent)
 		}
 		hit := zuxuanPoolHit(seg, pool)
-		units := zuxuanPoolUnits(pool, rule.SegmentLen)
+		units := zuxuanPoolUnitsForRule(rule, pool)
 		if units <= 0 {
 			units = 1
 		}
@@ -417,9 +446,12 @@ func zuxuanPoolUnits(pool []string, segLen int) int {
 		return 1
 	}
 	if segLen == 3 {
-		// 组六 C(n,3) + 组三 n*(n-1) 近似
+		// 通用组选复式：组三 n*(n-1) + 组六 C(n,3)
 		if n < 3 {
-			return n
+			if n < 2 {
+				return n
+			}
+			return n * (n - 1)
 		}
 		return n*(n-1) + n*(n-1)*(n-2)/6
 	}
@@ -427,6 +459,19 @@ func zuxuanPoolUnits(pool []string, segLen int) int {
 		return n * (n - 1) / 2
 	}
 	return n
+}
+
+// zuxuanPoolUnitsForRule 按 betMode/catalog 区分组三、组六与通用组选复式。
+func zuxuanPoolUnitsForRule(rule playRule, pool []string) int {
+	mode := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	cat := strings.ToLower(rule.CatalogSubID + " " + rule.SubPlayID)
+	if mode == "zu6" || (strings.Contains(cat, "zu6") && !strings.Contains(cat, "zu60") && !strings.Contains(cat, "zu120")) {
+		return zu6PoolUnits(pool)
+	}
+	if mode == "zu3" || strings.Contains(cat, "zu3") {
+		return zu3PoolUnits(pool)
+	}
+	return zuxuanPoolUnits(pool, rule.SegmentLen)
 }
 
 func sortDigits(seg []string) string {
@@ -442,6 +487,12 @@ func sortStringDigits(s string) string {
 }
 
 const oddsDingwei = 9.0
+
+// 组选包胆单注派奖（1 元模式近似第三方；结算时 pnl≈单注奖金，非全单金额×赔率）
+const (
+	oddsBaodanZu6 = 161.666
+	oddsBaodanZu3 = 323.333
+)
 
 func oddsZhixuan(segLen int) float64 {
 	switch segLen {

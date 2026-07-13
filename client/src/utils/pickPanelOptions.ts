@@ -27,18 +27,24 @@ export function schemeGroupUsesPickPanel(config: PlayConfig): boolean {
 export function digitOptionsForConfig(config: PlayConfig): string[] {
   const min = config.numberPoolMin ?? 0
   const max = config.numberPoolMax ?? 9
+  // 11选5/PK10 等从 1 起且 max≥11 时补零；和值 0–18 等保持单位数展示（对齐第三方）
+  const pad = max >= 11 && min >= 1
   const out: string[] = []
   for (let i = min; i <= max; i++) {
-    out.push(max >= 11 ? String(i).padStart(2, '0') : String(i))
+    out.push(pad ? String(i).padStart(2, '0') : String(i))
   }
   return out.length ? out : ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
 }
 
 function inferTextPickFromLabels(config: PlayConfig): string[] {
   const subLabel = config.playMethodLabel?.trim() ?? ''
-  if (subLabel === '大小单双') return ['大', '小', '单', '双']
+  if (subLabel === '大小单双' || subLabel.includes('大小单双')) return ['大', '小', '单', '双']
   if (subLabel === '龙虎豹') return ['龙', '虎', '豹']
-  if (subLabel === '特殊号') return ['豹子', '对子', '顺子', '极大', '极小']
+  if (subLabel === '特殊号' || subLabel.includes('特殊号')) {
+    if (config.playTemplate === 'pc28_std') return ['豹子', '对子', '顺子', '极大', '极小']
+    return ['豹子', '对子', '顺子']
+  }
+  if (subLabel.includes('幸运庄闲') || subLabel.includes('庄闲')) return ['庄', '闲']
   if (subLabel === '和值' && isPc28ModeConfigLike(config)) return []
   return []
 }
@@ -59,8 +65,12 @@ export function textPickOptionsForConfig(config: PlayConfig): string[] {
       return ['单', '双']
     case 'dxds':
       return ['大', '小', '单', '双']
+    case 'zhuangxian':
+      return ['庄', '闲']
     case 'teshu':
-      return ['豹子', '对子', '顺子', '极大', '极小']
+      return config.playTemplate === 'pc28_std'
+        ? ['豹子', '对子', '顺子', '极大', '极小']
+        : ['豹子', '对子', '顺子']
     case 'longhubao':
       return ['龙', '虎', '豹']
     default:

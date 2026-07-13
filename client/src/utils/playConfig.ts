@@ -1,7 +1,20 @@
 import type { PlayTypeNode, SubPlayNode } from '@/types/playCatalog'
 import type { PlayConfig } from '@/utils/betPayload'
 import {
+  hezhiPoolRange,
+  hezhiDigitLenFromText,
+  kuaduPoolRange,
+  lhcInputModeFromBetMode,
+  pk10SegmentLen,
+  PK10_POSITION_LABELS,
+  syxwSegmentLen,
+  SYXW_POSITION_LABELS,
+  weishuPoolRange,
+} from '@/utils/playInputProfile'
+import {
+  guajiFullNameFromSegment,
   guajiGroupFromSegment,
+  guajiTeamFromSegment,
   inferBetModeFromCatalog,
   isDingweiStarType,
   isLonghuPlayType,
@@ -100,22 +113,29 @@ function renPickCount(subId: string): number {
   return 2
 }
 
-function budingweiOrDxdsSegment(typeId: string, subId: string): { start: number; len: number } {
-  const s = subId.toLowerCase()
-  if (typeId === 'budingwei') {
-    if (s.startsWith('qian3')) return { start: 0, len: 3 }
-    if (s.startsWith('zhong3')) return { start: 1, len: 3 }
-    if (s.startsWith('hou3')) return { start: 2, len: 3 }
-    if (s.startsWith('qian4')) return { start: 0, len: 4 }
-    if (s.startsWith('hou4')) return { start: 1, len: 4 }
-    if (s.startsWith('wuxing')) return { start: 0, len: 5 }
+function budingweiOrDxdsSegment(
+  typeId: string,
+  subId: string,
+  subLabel = '',
+  fullName = '',
+): { start: number; len: number } {
+  const text = `${subId} ${subLabel} ${fullName}`.toLowerCase()
+  const raw = `${subId} ${subLabel} ${fullName}`
+  if (typeId === 'budingwei' || typeId === 'g009' || raw.includes('不定位')) {
+    if (raw.includes('前三') || text.startsWith('qian3')) return { start: 0, len: 3 }
+    if (raw.includes('中三') || text.startsWith('zhong3')) return { start: 1, len: 3 }
+    if (raw.includes('后三') || text.startsWith('hou3')) return { start: 2, len: 3 }
+    if (raw.includes('前四') || text.startsWith('qian4')) return { start: 0, len: 4 }
+    if (raw.includes('后四') || text.startsWith('hou4')) return { start: 1, len: 4 }
+    if (raw.includes('五星') || text.startsWith('wuxing')) return { start: 0, len: 5 }
     return { start: 0, len: 3 }
   }
-  if (s.startsWith('qian2')) return { start: 0, len: 2 }
-  if (s.startsWith('hou2')) return { start: 3, len: 2 }
-  if (s.startsWith('qian3')) return { start: 0, len: 3 }
-  if (s.startsWith('hou3')) return { start: 2, len: 3 }
-  if (s.startsWith('wuxing')) return { start: 0, len: 5 }
+  if (raw.includes('和值单双') || raw.includes('和值大小')) return { start: 0, len: 1 }
+  if (raw.includes('前二') || text.startsWith('qian2')) return { start: 0, len: 2 }
+  if (raw.includes('后二') || text.startsWith('hou2')) return { start: 3, len: 2 }
+  if (raw.includes('前三') || text.startsWith('qian3')) return { start: 0, len: 3 }
+  if (raw.includes('后三') || text.startsWith('hou3')) return { start: 2, len: 3 }
+  if (raw.includes('五星') || text.startsWith('wuxing')) return { start: 0, len: 5 }
   return { start: 0, len: 2 }
 }
 
@@ -158,26 +178,129 @@ function sscSegmentRange(typeId: string): { start: number; len: number } {
     case 'qian3':
     case 'qianzhonghou3':
     case 'qianhou3':
+    case 'g001':
+    case 'g007':
+    case 'g012':
       return { start: 0, len: 3 }
     case 'zhong3':
+    case 'g002':
       return { start: 1, len: 3 }
     case 'hou3':
+    case 'g003':
       return { start: 2, len: 3 }
     case 'qian2':
+    case 'g004':
       return { start: 0, len: 2 }
     case 'hou2':
+    case 'g005':
       return { start: 3, len: 2 }
     case 'sixing':
+    case 'g013':
       return { start: 1, len: 4 }
+    case 'g014':
+      return { start: 0, len: 4 }
     case 'wuxing':
+    case 'g015':
       return { start: 0, len: 5 }
     case 'combo24':
+    case 'g008':
       return { start: 0, len: 2 }
     case 'dingwei':
+    case 'g006':
       return { start: 0, len: 1 }
     default:
       return { start: 0, len: 1 }
   }
+}
+
+/** 对齐后端 guajibet.segmentRange：优先 guajiGroup / label，再回退 typeId */
+function resolveSscSegmentMeta(input: {
+  group: string
+  typeLabel: string
+  typeId: string
+  subLabel: string
+  fullName: string
+  team: string
+}): { start: number; len: number } {
+  const { group, typeLabel, typeId, subLabel, fullName, team } = input
+  const text = `${group} ${typeLabel} ${fullName} ${subLabel} ${team}`
+
+  switch (group) {
+    case '前中后三':
+    case '前后三':
+      return { start: 0, len: 3 }
+    case '前后二':
+      return { start: 0, len: 2 }
+    case '前后四':
+      return { start: 0, len: 4 }
+    case '四星':
+      return { start: 1, len: 4 }
+    case '五星':
+      return { start: 0, len: 5 }
+    case '任选':
+      return { start: 0, len: renxuanSegmentLenFromText(`${team} ${fullName} ${subLabel}`) }
+    case '不定位':
+    case '大小单双':
+      return budingweiOrDxdsSegment(typeId, '', subLabel, fullName)
+  }
+
+  if (text.includes('前中后三')) return { start: 0, len: 3 }
+  if (text.includes('前后四')) return { start: 0, len: 4 }
+  if (text.includes('前后三')) return { start: 0, len: 3 }
+  if (text.includes('前后二')) return { start: 0, len: 2 }
+  if (text.includes('五星')) return { start: 0, len: 5 }
+  if (text.includes('四星')) return { start: 1, len: 4 }
+  if (text.includes('前三')) return { start: 0, len: 3 }
+  if (text.includes('中三')) return { start: 1, len: 3 }
+  if (text.includes('后三')) return { start: 2, len: 3 }
+  if (text.includes('前二')) return { start: 0, len: 2 }
+  if (text.includes('后二')) return { start: 3, len: 2 }
+  if (text.includes('后四')) return { start: 1, len: 4 }
+  if (text.includes('前四')) return { start: 0, len: 4 }
+  return sscSegmentRange(typeId)
+}
+
+function renxuanSegmentLenFromText(text: string): number {
+  if (text.includes('任选四') || text.includes('任四') || text.toLowerCase().includes('ren4')) return 4
+  if (text.includes('任选三') || text.includes('任三') || text.toLowerCase().includes('ren3')) return 3
+  return 2
+}
+
+/** 第三方位标签：前后三=万百个，四星=千百十个，等 */
+function sscSegmentLabelsForMeta(
+  group: string,
+  typeLabel: string,
+  typeId: string,
+  start: number,
+  len: number,
+  subLabel = '',
+): string[] {
+  const g = group || typeLabel
+  switch (g) {
+    case '前后三':
+    case 'qianhou3':
+      return ['万', '百', '个']
+    case '前后二':
+      return ['万', '个']
+    case '前后四':
+      return ['万', '千', '十', '个']
+    case '四星':
+    case 'sixing':
+    case 'g013':
+      return ['千', '百', '十', '个']
+    case '前中后三':
+      return ['万', '千', '百']
+    case '大小单双':
+    case 'dxds':
+    case 'g016': {
+      if (subLabel.includes('和值')) return ['选号']
+      const seg = budingweiOrDxdsSegment(typeId, '', subLabel)
+      return POSITION_LABELS.slice(seg.start, seg.start + seg.len)
+    }
+  }
+  if (typeId === 'qianhou3') return ['万', '百', '个']
+  if (typeId === 'combo24') return POSITION_LABELS.slice(start, start + len)
+  return POSITION_LABELS.slice(start, start + len)
 }
 
 const CATALOG_PLAY_TYPE_IDS = new Set([
@@ -213,9 +336,14 @@ function combo24SegmentPositions(subId: string): number[] {
 
 function legacySubMode(subId: string, betMode: string): string {
   const s = subId.toLowerCase()
-  if (s.includes('zhixuan_ds') || betMode === 'danshi') return 'zhixuan_ds'
+  if (s.includes('zhixuan_ds') || betMode === 'danshi' || betMode === 'zuxuan_ds') {
+    return betMode === 'zuxuan_ds' ? 'zuxuan_ds' : 'zhixuan_ds'
+  }
   if (s.includes('zhixuan_fs') || betMode === 'fushi') return 'zhixuan_fs'
-  if (['zu24', 'zu12', 'zu60', 'zu30', 'zu120'].includes(betMode)) return betMode
+  if (betMode === 'zuxuan_fs') return 'zuxuan_fs'
+  if (['zu24', 'zu12', 'zu60', 'zu30', 'zu120', 'zu20', 'zu10', 'zu5', 'zu4'].includes(betMode)) {
+    return betMode
+  }
   if (
     s.includes('zu3') ||
     s.includes('zu6') ||
@@ -239,13 +367,20 @@ function legacySubMode(subId: string, betMode: string): string {
       'zu60',
       'zu30',
       'zu120',
+      'zu20',
+      'zu10',
+      'zu5',
+      'zu4',
       'hezhi',
       'kuadu',
       'longhu',
+      'longhuhe',
       'budingwei',
       'dxds',
       'daxiao',
       'danshuang',
+      'zuxuan_fs',
+      'zuxuan_ds',
     ].includes(betMode)
   ) {
     return betMode
@@ -290,38 +425,38 @@ function inputModeFromBetMode(
   subPlayId: string,
   segmentLen: number,
 ): PlayConfig['inputMode'] {
-  if (betMode === 'danshi' || subPlayId === 'zhixuan_ds') return 'danshi'
-  if (betMode === 'fushi' && segmentLen > 1) return 'multiline'
-  if (betMode === 'fushi' || subPlayId === 'zuxuan_fs' || subPlayId === 'zhixuan_fs') {
+  if (betMode === 'danshi' || subPlayId === 'zhixuan_ds' || betMode === 'zuxuan_ds' || subPlayId === 'zuxuan_ds') {
+    return 'danshi'
+  }
+  // 组选复式：单行号池（非按位）
+  if (betMode === 'zuxuan_fs' || subPlayId === 'zuxuan_fs') return 'pool'
+  if (betMode === 'fushi' || subPlayId === 'zhixuan_fs') {
     return segmentLen > 1 ? 'multiline' : 'pool'
   }
   if (betMode === 'dingwei' || subPlayId === 'dingwei') {
     return segmentLen > 1 ? 'multiline' : 'dingwei'
   }
   if (betMode === 'longhu' || betMode === 'longhuhe') return 'pool'
-  // 和值/跨度/龙虎/组合/包胆/尾数/特殊号等：textarea 手输
+  // 大小单双：按位选 大/小/单/双（后二=2 行）
+  if (betMode === 'dxds') return segmentLen > 1 ? 'multiline' : 'pool'
+  if (betMode === 'daxiao' || betMode === 'danshuang' || betMode === 'zhuangxian') return 'pool'
+  // 和值/跨度/尾数/包胆/特殊号/不定位/组选类：号池 chip（对齐第三方）
   if (
-    [
-      'hezhi',
-      'kuadu',
-      'danshuang',
-      'daxiao',
-      'budingwei',
-      'teshu',
-      'hunhe',
-      'zuhe',
-      'baodan',
-      'weishu',
-      'zu24',
-      'zu12',
-      'zu60',
-      'zu30',
-      'zu120',
-    ].includes(betMode)
+    betMode === 'hezhi' ||
+    betMode === 'kuadu' ||
+    betMode === 'weishu' ||
+    betMode === 'baodan' ||
+    betMode === 'teshu' ||
+    betMode === 'budingwei' ||
+    betMode === 'zu3' ||
+    betMode === 'zu6' ||
+    ['zu24', 'zu12', 'zu60', 'zu30', 'zu120', 'zu20', 'zu10', 'zu5', 'zu4'].includes(betMode)
   ) {
-    return 'danshi'
+    return 'pool'
   }
-  if (betMode === 'zu3' || betMode === 'zu6') return 'pool'
+  // 混合组选/组合：手输或号池；组合多为按位，混合为单式文本
+  if (betMode === 'hunhe') return 'danshi'
+  if (betMode === 'zuhe') return segmentLen > 1 ? 'multiline' : 'pool'
   return segmentLen > 1 ? 'multiline' : 'dingwei'
 }
 
@@ -414,104 +549,275 @@ export function resolvePlayConfigFromTree(
   const subPlayId = legacySubMode(subId, betMode)
   const pool = segmentRulePool(subNode) ?? defaultPoolByTemplate(playTemplate)
   const guajiGroup = guajiGroupFromSegment(subNode.segmentRule)
+  const guajiFullName = guajiFullNameFromSegment(subNode.segmentRule)
+  const guajiTeam = guajiTeamFromSegment(subNode.segmentRule)
 
   let segmentStart = 0
   let segmentLen = 1
   let segmentLabels: string[]
+  let numberPoolMin = pool?.min
+  let numberPoolMax = pool?.max
 
-  if (typeId === 'dingwei' || isDingweiStarType(typeLabel, typeId, subLabel) || guajiGroup === '一星') {
+  if (playTemplate === 'lhc_std') {
+    const lhcMode = lhcInputModeFromBetMode(betMode, typeId, typeLabel) as PlayConfig['inputMode']
+    return finishConfig({
+      playTemplate, typeId, subId, betMode, typeLabel, subLabel,
+      subPlayId: betMode || subPlayId, segmentLen: 1,
+      segmentLabels: [formatSubPlayLabel(subLabel) || '选号'],
+      inputMode: lhcMode, numberPoolMin: 1, numberPoolMax: 49, guajiGroup,
+    })
+  }
+
+  if (playTemplate === 'pk10_std') {
+    if (betMode === 'longhu' || guajiGroup === '龙虎' || typeLabel === '龙虎') {
+      segmentLen = 1
+      segmentLabels = ['龙虎']
+    } else if (betMode === 'daxiao' || betMode === 'danshuang' || typeLabel === '大小' || typeLabel === '单双') {
+      segmentLen = 1
+      segmentLabels = [formatSubPlayLabel(subLabel) || '选号']
+    } else if (betMode === 'hezhi' || (betMode === 'dxds' && guajiGroup === '和值')) {
+      segmentLen = 1
+      segmentLabels = ['选号']
+      const hz = hezhiPoolRange(playTemplate, guajiGroup, subLabel, 2)
+      numberPoolMin = hz.min
+      numberPoolMax = hz.max
+    } else if (betMode === 'dingwei' || typeId === 'g001' || guajiGroup === '一星') {
+      segmentLen = 10
+      segmentLabels = [...PK10_POSITION_LABELS]
+    } else {
+      segmentLen = pk10SegmentLen(typeId, typeLabel, subLabel, guajiGroup)
+      segmentLabels = PK10_POSITION_LABELS.slice(0, segmentLen)
+    }
+    let inputMode = inputModeFromBetMode(betMode, subPlayId, segmentLen)
+    if (betMode === 'daxiao' || betMode === 'danshuang' || betMode === 'hezhi' || betMode === 'longhu') inputMode = 'pool'
+    if (betMode === 'dxds' && guajiGroup === '和值') inputMode = 'pool'
+    return finishConfig({
+      playTemplate, typeId, subId, betMode, typeLabel, subLabel, subPlayId,
+      segmentLen, segmentLabels, inputMode,
+      numberPoolMin: numberPoolMin ?? 1, numberPoolMax: numberPoolMax ?? 10, guajiGroup,
+    })
+  }
+
+  if (playTemplate === 'syxw_std') {
+    if (typeId === 'g005' || typeId === 'renxuan_fs' || guajiGroup === '任选复式') {
+      return finishConfig({
+        playTemplate, typeId, subId, betMode: betMode || 'fushi', typeLabel, subLabel, subPlayId,
+        segmentLen: 1, segmentLabels: ['选号'], inputMode: 'pool',
+        numberPoolMin: 1, numberPoolMax: 11, guajiGroup,
+      })
+    }
+    if (typeId === 'g006' || typeId === 'renxuan_ds' || guajiGroup === '任选单式') {
+      return finishConfig({
+        playTemplate, typeId, subId, betMode: betMode || 'danshi', typeLabel, subLabel, subPlayId,
+        segmentLen: 1, segmentLabels: ['选号'], inputMode: 'danshi',
+        numberPoolMin: 1, numberPoolMax: 11, guajiGroup,
+      })
+    }
+    if (betMode === 'dingwei' || typeId === 'g003' || guajiGroup === '一星') {
+      segmentLen = 5
+      segmentLabels = [...SYXW_POSITION_LABELS]
+    } else if (betMode === 'budingwei' || typeId === 'g004' || guajiGroup === '不定位') {
+      segmentLen = 1
+      segmentLabels = ['选号']
+    } else if (betMode === 'zuxuan_fs' || betMode === 'zuxuan_ds') {
+      segmentLen = 1
+      segmentLabels = ['选号']
+    } else {
+      segmentLen = syxwSegmentLen(typeId, typeLabel, guajiGroup)
+      segmentLabels = SYXW_POSITION_LABELS.slice(0, segmentLen)
+    }
+    let inputMode = inputModeFromBetMode(betMode, subPlayId, segmentLen)
+    if (betMode === 'budingwei' || betMode === 'zuxuan_fs') inputMode = 'pool'
+    if (betMode === 'zuxuan_ds' || betMode === 'danshi') inputMode = 'danshi'
+    return finishConfig({
+      playTemplate, typeId, subId, betMode, typeLabel, subLabel, subPlayId,
+      segmentLen, segmentLabels, inputMode, numberPoolMin: 1, numberPoolMax: 11, guajiGroup,
+    })
+  }
+
+  if (playTemplate === 'k3_std') {
+    segmentLen = 1
+    segmentLabels = [formatSubPlayLabel(subLabel) || '选号']
+    let inputMode: PlayConfig['inputMode'] = 'pool'
+    if (betMode === 'danshi' || subLabel.includes('手动') || subLabel.includes('三连号')) inputMode = 'danshi'
+    if (betMode === 'hezhi' || typeId === 'g001' || typeLabel === '和值') {
+      const hz = hezhiPoolRange(playTemplate, guajiGroup, subLabel, 3)
+      numberPoolMin = hz.min
+      numberPoolMax = hz.max
+      inputMode = 'pool'
+    } else {
+      numberPoolMin = 1
+      numberPoolMax = 6
+    }
+    return finishConfig({
+      playTemplate, typeId, subId, betMode: betMode || 'fushi', typeLabel, subLabel, subPlayId,
+      segmentLen, segmentLabels, inputMode, numberPoolMin, numberPoolMax, guajiGroup,
+    })
+  }
+
+  // SSC / fast_ssc / 默认
+  if (typeId === 'dingwei' || (isSSCPlayTemplate(playTemplate) && (isDingweiStarType(typeLabel, typeId, subLabel) || guajiGroup === '一星'))) {
     if (isDingweiFivePositionScheme(playTemplate, typeLabel, typeId, subLabel, subId, guajiGroup)) {
       segmentLen = 5
       segmentLabels = [...POSITION_LABELS]
     } else {
       segmentStart = dingweiPositionIndex(subId)
       segmentLen = 1
-      segmentLabels = [
-        dingweiPositionLabel(subLabel) ?? POSITION_LABELS[segmentStart] ?? formatSubPlayLabel(subLabel),
-      ]
+      segmentLabels = [dingweiPositionLabel(subLabel) ?? POSITION_LABELS[segmentStart] ?? formatSubPlayLabel(subLabel)]
     }
-  } else if (typeId === 'qianhou3') {
-    segmentLen = 3
-    segmentLabels = ['万', '百', '个']
-  } else if (typeId === 'renxuan' || typeId === 'renxuan_fs' || typeId === 'renxuan_ds') {
-    segmentLen = 5
-    segmentLabels = [...POSITION_LABELS]
+  } else if (typeId === 'renxuan' || typeId === 'g011' || guajiGroup === '任选' || typeLabel === '任选') {
+    if (betMode === 'fushi' || subPlayId === 'zhixuan_fs') {
+      segmentLen = 5
+      segmentLabels = [...POSITION_LABELS]
+    } else {
+      segmentLen = 1
+      segmentLabels = ['选号']
+    }
   } else if (typeId === 'combo24') {
     const pos = combo24SegmentPositions(subId)
     segmentLen = pos.length
     segmentLabels = pos.map((i) => POSITION_LABELS[i])
-  } else if (typeId === 'budingwei' || typeId === 'dxds') {
-    const seg = budingweiOrDxdsSegment(typeId, subId)
+  } else if (
+    typeId === 'budingwei' || typeId === 'dxds' || typeId === 'g009' || typeId === 'g016' ||
+    guajiGroup === '不定位' || guajiGroup === '大小单双' || typeLabel === '不定位' || typeLabel === '大小单双'
+  ) {
+    const seg = budingweiOrDxdsSegment(typeId, subId, subLabel, guajiFullName)
     segmentStart = seg.start
     segmentLen = seg.len
-    segmentLabels = POSITION_LABELS.slice(segmentStart, segmentStart + segmentLen)
+    segmentLabels = sscSegmentLabelsForMeta(guajiGroup || typeLabel, typeLabel, typeId, segmentStart, segmentLen, subLabel)
   } else if (typeId === 'pc28_20' || typeId === 'pc28_28' || isPc28ModeType(typeLabel, typeId)) {
     segmentLen = 1
     segmentLabels = [formatSubPlayLabel(subLabel) || '和值']
   } else if (typeId === 'longhu' || isLonghuPlayType(typeLabel, typeId) || guajiGroup === '龙虎') {
     segmentLen = 1
     segmentLabels = ['龙虎']
+  } else if (typeLabel === '哈希玩法' || typeId === 'g017') {
+    segmentLen = 1
+    segmentLabels = ['选号']
+  } else if (isSSCPlayTemplate(playTemplate)) {
+    const seg = resolveSscSegmentMeta({ group: guajiGroup, typeLabel, typeId, subLabel, fullName: guajiFullName, team: guajiTeam })
+    segmentStart = seg.start
+    segmentLen = seg.len
+    segmentLabels = sscSegmentLabelsForMeta(guajiGroup || typeLabel, typeLabel, typeId, segmentStart, segmentLen, subLabel)
   } else {
     const seg = catalogSegmentRange(playTemplate, typeId)
     segmentStart = seg.start
     segmentLen = seg.len
     segmentLabels = POSITION_LABELS.slice(segmentStart, segmentStart + segmentLen)
   }
+
+  if ((betMode === 'danshuang' || betMode === 'daxiao' || betMode === 'zhuangxian') &&
+      (subLabel.includes('和值') || subLabel.includes('尾数') || subLabel.includes('庄闲') || guajiFullName.includes('和值'))) {
+    segmentLen = 1
+    segmentLabels = ['选号']
+  }
+
   const panelType = typeNode.panelType ?? ''
-  let inputMode =
-    inputModeFromPanelType(panelType, betMode, subPlayId, segmentLen) ??
-    inputModeFromBetMode(betMode, subPlayId, segmentLen)
-  if (playTemplate === 'syxw_std' && (typeId === 'renxuan_fs' || typeId === 'renxuan_ds')) {
-    if (betMode === 'danshi' || subId.endsWith('_ds')) {
-      inputMode = 'danshi'
-    } else {
-      inputMode = 'pool'
-      segmentLen = 1
-      segmentLabels = ['选号']
-    }
+  let inputMode = inputModeFromPanelType(panelType, betMode, subPlayId, segmentLen) ?? inputModeFromBetMode(betMode, subPlayId, segmentLen)
+
+  if ((guajiGroup === '任选' || typeLabel === '任选' || typeId === 'g011') &&
+      (betMode === 'zuxuan_fs' || betMode === 'zu3' || betMode === 'zu6' || betMode === 'hezhi')) {
+    inputMode = 'pool'
+    segmentLen = 1
+    segmentLabels = ['选号']
   }
-  if (betMode === 'tuotou' || betMode.endsWith('_dp')) {
+  if ((guajiGroup === '任选' || typeLabel === '任选' || typeId === 'g011') &&
+      (betMode === 'danshi' || betMode === 'zuxuan_ds' || betMode === 'hunhe')) {
     inputMode = 'danshi'
+    segmentLen = 1
+    segmentLabels = ['选号']
   }
-  if (betMode === 'zongxiao') {
-    inputMode = 'lhc_attr'
-  }
-  if (betMode === 'tematouwei') {
-    inputMode = 'lhc_attr'
-  }
-  if (betMode === 'qima') {
-    inputMode = 'lhc_attr'
-  }
+  if (betMode === 'tuotou' || betMode.endsWith('_dp')) inputMode = 'danshi'
   if (typeId === 'longhu' || isLonghuPlayType(typeLabel, typeId) || guajiGroup === '龙虎' || betMode === 'longhu' || betMode === 'longhuhe') {
     segmentLen = 1
     segmentLabels = ['龙虎']
     inputMode = 'pool'
   }
 
-  let numberPoolMin = pool?.min
-  let numberPoolMax = pool?.max
-  // PC28 和值：号池 0–27，用 chip 面板选号（rules/v2 同步后 bet_mode 常为空，靠 label 推断）
+  if (betMode === 'hezhi' || (playTemplate === 'pc28_std' && (subLabel === '和值' || subId === 'hezhi'))) {
+    inputMode = 'pool'
+    const hzText = `${guajiGroup} ${guajiTeam} ${guajiFullName} ${subLabel}`
+    const hzLen =
+      segmentLen > 1
+        ? segmentLen
+        : hezhiDigitLenFromText(hzText, renxuanSegmentLenFromText(hzText))
+    const hz = hezhiPoolRange(playTemplate, guajiGroup, subLabel, hzLen, guajiFullName || guajiTeam)
+    numberPoolMin = hz.min
+    numberPoolMax = hz.max
+    segmentLen = 1
+    segmentLabels = ['和值']
+  }
+  if (betMode === 'kuadu') {
+    inputMode = 'pool'
+    const kd = kuaduPoolRange()
+    numberPoolMin = kd.min
+    numberPoolMax = kd.max
+    segmentLen = 1
+    segmentLabels = ['跨度']
+  }
+  if (betMode === 'weishu') {
+    inputMode = 'pool'
+    const ws = weishuPoolRange()
+    numberPoolMin = ws.min
+    numberPoolMax = ws.max
+    segmentLen = 1
+    segmentLabels = ['尾数']
+  }
+  if (betMode === 'baodan') {
+    inputMode = 'pool'
+    numberPoolMin = 0
+    numberPoolMax = 9
+    segmentLen = 1
+    segmentLabels = ['包胆']
+  }
+  if (betMode === 'teshu') {
+    inputMode = 'pool'
+    segmentLen = 1
+    segmentLabels = ['特殊号']
+  }
   if (playTemplate === 'pc28_std' && (betMode === 'hezhi' || subLabel === '和值' || subId === 'hezhi')) {
     inputMode = 'pool'
     numberPoolMin = 0
     numberPoolMax = 27
   }
 
+  return finishConfig({
+    playTemplate, typeId, subId, betMode, typeLabel, subLabel, subPlayId,
+    segmentLen, segmentLabels, inputMode, numberPoolMin, numberPoolMax, guajiGroup,
+  })
+}
+
+function finishConfig(input: {
+  playTemplate: string
+  typeId: string
+  subId: string
+  betMode: string
+  typeLabel: string
+  subLabel: string
+  subPlayId: string
+  segmentLen: number
+  segmentLabels: string[]
+  inputMode: PlayConfig['inputMode']
+  numberPoolMin?: number
+  numberPoolMax?: number
+  guajiGroup: string
+}): PlayTreePlayConfig {
   return {
-    playTemplate,
-    typeId,
-    subId,
-    betMode,
-    playTypeLabel: typeLabel,
-    playMethodLabel: formatSubPlayLabel(subLabel),
-    playTypeId: typeId,
-    subPlayId,
-    catalogSubId: subId,
-    segmentLen,
-    segmentLabels,
-    inputMode,
-    numberPoolMin,
-    numberPoolMax,
+    playTemplate: input.playTemplate,
+    typeId: input.typeId,
+    subId: input.subId,
+    betMode: input.betMode,
+    playTypeLabel: input.typeLabel,
+    playMethodLabel: formatSubPlayLabel(input.subLabel),
+    playTypeId: input.typeId,
+    subPlayId: input.subPlayId,
+    catalogSubId: input.subId,
+    segmentLen: input.segmentLen,
+    segmentLabels: input.segmentLabels,
+    inputMode: input.inputMode,
+    numberPoolMin: input.numberPoolMin,
+    numberPoolMax: input.numberPoolMax,
+    guajiGroup: input.guajiGroup || undefined,
   }
 }
 

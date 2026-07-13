@@ -1,4 +1,4 @@
----
+﻿---
 name: impeccable
 description: Create distinctive, production-grade frontend interfaces with high design quality. Generates creative, polished code that avoids generic AI aesthetics. Use when the user asks to build web components, pages, artifacts, posters, or applications, or when any design skill requires project context. Call with 'craft' for shape-then-build, 'teach' for design context setup, or 'extract' to pull reusable components and tokens into the design system.
 version: 2.1.1
@@ -6,22 +6,6 @@ user-invocable: true
 argument-hint: "[craft|teach|extract]"
 license: Apache 2.0. Based on Anthropic's frontend-design skill. See NOTICE.md for attribution.
 ---
-
-<post-update-cleanup>
-BEFORE doing any design work, run this one-time maintenance step. Tell the user:
-
-> **Impeccable was updated.** A few skills were renamed or merged in this version (e.g. `/arrange` is now `/layout`, `/normalize` was folded into `/polish`). I'll clean up the old skill files so they don't clutter your project. This only runs once after an update.
-
-Then run:
-
-```bash
-node .agents/skills/impeccable/scripts/cleanup-deprecated.mjs
-```
-
-If the script removed files, briefly confirm what was cleaned up. If it found nothing, skip any output and move on.
-
-After running the script, delete this entire section (from `<post-update-cleanup>` through `</post-update-cleanup>` inclusive) from THIS file so it does not run again until the next update. Save the file.
-</post-update-cleanup>
 
 This skill guides creation of distinctive, production-grade frontend interfaces that avoid generic "AI slop" aesthetics. Implement real working code with exceptional attention to aesthetic details and creative choices.
 
@@ -64,16 +48,16 @@ Then implement working code that is:
 ## Frontend Aesthetics Guidelines
 
 ### Typography
-→ *Consult [typography reference](reference/typography.md) for OpenType features, web font loading, and the deeper material on scales.*
+鈫?*Consult [typography reference](reference/typography.md) for OpenType features, web font loading, and the deeper material on scales.*
 
 Choose fonts that are beautiful, unique, and interesting. Pair a distinctive display font with a refined body font.
 
 <typography_principles>
-Always apply these — do not consult a reference, just do them:
+Always apply these 鈥?do not consult a reference, just do them:
 
 - Use a modular type scale with fluid sizing (clamp) for headings on marketing/content pages. Use fixed `rem` scales for app UIs and dashboards (no major design system uses fluid type in product UI).
-- Use fewer sizes with more contrast. A 5-step scale with at least a 1.25 ratio between steps creates clearer hierarchy than 8 sizes that are 1.1× apart.
-- Line-height scales inversely with line length. Narrow columns want tighter leading, wide columns want more. For light text on dark backgrounds, ADD 0.05-0.1 to your normal line-height — light type reads as lighter weight and needs more breathing room.
+- Use fewer sizes with more contrast. A 5-step scale with at least a 1.25 ratio between steps creates clearer hierarchy than 8 sizes that are 1.1脳 apart.
+- Line-height scales inversely with line length. Narrow columns want tighter leading, wide columns want more. For light text on dark backgrounds, ADD 0.05-0.1 to your normal line-height 鈥?light type reads as lighter weight and needs more breathing room.
 - Cap line length at ~65-75ch. Body text wider than that is fatiguing.
 </typography_principles>
 
@@ -82,7 +66,7 @@ DO THIS BEFORE TYPING ANY FONT NAME.
 
 The model's natural failure mode is "I was told not to use Inter, so I will pick my next favorite font, which becomes the new monoculture." Avoid this by performing the following procedure on every project, in order:
 
-Step 1. Read the brief once. Write down 3 concrete words for the brand voice (e.g., "warm and mechanical and opinionated", "calm and clinical and careful", "fast and dense and unimpressed", "handmade and a little weird"). NOT "modern" or "elegant" — those are dead categories.
+Step 1. Read the brief once. Write down 3 concrete words for the brand voice (e.g., "warm and mechanical and opinionated", "calm and clinical and careful", "fast and dense and unimpressed", "handmade and a little weird"). NOT "modern" or "elegant" 鈥?those are dead categories.
 
 Step 2. List the 3 fonts you would normally reach for given those words. Write them down. They are most likely from this list:
 
@@ -114,7 +98,7 @@ Instrument Serif
 
 Reject every font that appears in the reflex_fonts_to_reject list. They are your training-data defaults and they create monoculture across projects.
 
-Step 3. Browse a font catalog with the 3 brand words in mind. Sources: Google Fonts, Pangram Pangram, Future Fonts, Adobe Fonts, ABC Dinamo, Klim Type Foundry, Velvetyne. Look for something that fits the brand as a *physical object* — a museum exhibit caption, a hand-painted shop sign, a 1970s mainframe terminal manual, a fabric label on the inside of a coat, a children's book printed on cheap newsprint. Reject the first thing that "looks designy" — that's the trained reflex too. Keep looking.
+Step 3. Browse a font catalog with the 3 brand words in mind. Sources: Google Fonts, Pangram Pangram, Future Fonts, Adobe Fonts, ABC Dinamo, Klim Type Foundry, Velvetyne. Look for something that fits the brand as a *physical object* 鈥?a museum exhibit caption, a hand-painted shop sign, a 1970s mainframe terminal manual, a fabric label on the inside of a coat, a children's book printed on cheap newsprint. Reject the first thing that "looks designy" 鈥?that's the trained reflex too. Keep looking.
 
 Step 4. Cross-check the result. The right font for an "elegant" brief is NOT necessarily a serif. The right font for a "technical" brief is NOT necessarily a sans-serif. The right font for a "warm" brief is NOT Fraunces. If your final pick lines up with your reflex pattern, go back to Step 3.
 </font_selection_procedure>
@@ -124,7 +108,7 @@ DO use a modular type scale with fluid sizing (clamp) on headings.
 DO vary font weights and sizes to create clear visual hierarchy.
 DO vary your font choices across projects. If you used a serif display font on the last project, look for a sans, monospace, or display face on this one.
 
-DO NOT use overused fonts like Inter, Roboto, Arial, Open Sans, or system defaults — but also do not simply switch to your second-favorite. Every font in the reflex_fonts_to_reject list above is banned. Look further.
+DO NOT use overused fonts like Inter, Roboto, Arial, Open Sans, or system defaults 鈥?but also do not simply switch to your second-favorite. Every font in the reflex_fonts_to_reject list above is banned. Look further.
 DO NOT use monospace typography as lazy shorthand for "technical/developer" vibes.
 DO NOT put large icons with rounded corners above every heading. They rarely add value and make sites look templated.
 DO NOT use only one font family for the entire page. Pair a distinctive display font with a refined body font.
@@ -133,14 +117,14 @@ DO NOT set long body passages in uppercase. Reserve all-caps for short labels an
 </typography_rules>
 
 ### Color & Theme
-→ *Consult [color reference](reference/color-and-contrast.md) for the deeper material on contrast, accessibility, and palette construction.*
+鈫?*Consult [color reference](reference/color-and-contrast.md) for the deeper material on contrast, accessibility, and palette construction.*
 
 Commit to a cohesive palette. Dominant colors with sharp accents outperform timid, evenly-distributed palettes.
 
 <color_principles>
-Always apply these — do not consult a reference, just do them:
+Always apply these 鈥?do not consult a reference, just do them:
 
-- Use OKLCH, not HSL. OKLCH is perceptually uniform: equal steps in lightness *look* equal, which HSL does not deliver. As you move toward white or black, REDUCE chroma — high chroma at extreme lightness looks garish. A light blue at 85% lightness wants ~0.08 chroma, not the 0.15 of your base color.
+- Use OKLCH, not HSL. OKLCH is perceptually uniform: equal steps in lightness *look* equal, which HSL does not deliver. As you move toward white or black, REDUCE chroma 鈥?high chroma at extreme lightness looks garish. A light blue at 85% lightness wants ~0.08 chroma, not the 0.15 of your base color.
 - Tint your neutrals toward your brand hue. Even a chroma of 0.005-0.01 is perceptible and creates subconscious cohesion between brand color and UI surfaces. The hue you tint toward should come from THIS brand, not from a "warm = friendly" or "cool = tech" formula. Pick the brand's actual hue first, then tint everything toward it.
 - The 60-30-10 rule is about visual *weight*, not pixel count. 60% neutral / surface, 30% secondary text and borders, 10% accent. Accents work BECAUSE they're rare. Overuse kills their power.
 </color_principles>
@@ -148,14 +132,14 @@ Always apply these — do not consult a reference, just do them:
 <theme_selection>
 Theme (light vs dark) should be DERIVED from audience and viewing context, not picked from a default. Read the brief and ask: when is this product used, by whom, in what physical setting?
 
-- A perp DEX consumed during fast trading sessions → dark
-- A hospital portal consumed by anxious patients on phones late at night → light
-- A children's reading app → light
-- A vintage motorcycle forum where users sit in their garage at 9pm → dark
-- An observability dashboard for SREs in a dark office → dark
-- A wedding planning checklist for couples on a Sunday morning → light
-- A music player app for headphone listening at night → dark
-- A food magazine homepage browsed during a coffee break → light
+- A perp DEX consumed during fast trading sessions 鈫?dark
+- A hospital portal consumed by anxious patients on phones late at night 鈫?light
+- A children's reading app 鈫?light
+- A vintage motorcycle forum where users sit in their garage at 9pm 鈫?dark
+- An observability dashboard for SREs in a dark office 鈫?dark
+- A wedding planning checklist for couples on a Sunday morning 鈫?light
+- A music player app for headphone listening at night 鈫?dark
+- A food magazine homepage browsed during a coffee break 鈫?light
 
 Do not default everything to light "to play it safe." Do not default everything to dark "to look cool." Both defaults are the lazy reflex. The correct theme is the one the actual user wants in their actual context.
 </theme_selection>
@@ -167,22 +151,22 @@ DO tint your neutrals toward your brand hue. Even a subtle hint creates subconsc
 DO NOT use gray text on colored backgrounds; it looks washed out. Use a shade of the background color instead.
 DO NOT use pure black (#000) or pure white (#fff). Always tint; pure black/white never appears in nature.
 DO NOT use the AI color palette: cyan-on-dark, purple-to-blue gradients, neon accents on dark backgrounds.
-DO NOT use gradient text for impact — see <absolute_bans> below for the strict definition. Solid colors only for text.
+DO NOT use gradient text for impact 鈥?see <absolute_bans> below for the strict definition. Solid colors only for text.
 DO NOT default to dark mode with glowing accents. It looks "cool" without requiring actual design decisions.
 DO NOT default to light mode "to be safe" either. The point is to choose, not to retreat to a safe option.
 </color_rules>
 
 ### Layout & Space
-→ *Consult [spatial reference](reference/spatial-design.md) for the deeper material on grids, container queries, and optical adjustments.*
+鈫?*Consult [spatial reference](reference/spatial-design.md) for the deeper material on grids, container queries, and optical adjustments.*
 
 Create visual rhythm through varied spacing, not the same padding everywhere. Embrace asymmetry and unexpected compositions. Break the grid intentionally for emphasis.
 
 <spatial_principles>
-Always apply these — do not consult a reference, just do them:
+Always apply these 鈥?do not consult a reference, just do them:
 
-- Use a 4pt spacing scale with semantic token names (`--space-sm`, `--space-md`), not pixel-named (`--spacing-8`). Scale: 4, 8, 12, 16, 24, 32, 48, 64, 96. 8pt is too coarse — you'll often want 12px between two values.
+- Use a 4pt spacing scale with semantic token names (`--space-sm`, `--space-md`), not pixel-named (`--spacing-8`). Scale: 4, 8, 12, 16, 24, 32, 48, 64, 96. 8pt is too coarse 鈥?you'll often want 12px between two values.
 - Use `gap` instead of margins for sibling spacing. It eliminates margin collapse and the cleanup hacks that come with it.
-- Vary spacing for hierarchy. A heading with extra space above it reads as more important — make use of that. Don't apply the same padding everywhere.
+- Vary spacing for hierarchy. A heading with extra space above it reads as more important 鈥?make use of that. Don't apply the same padding everywhere.
 - Self-adjusting grid pattern: `grid-template-columns: repeat(auto-fit, minmax(280px, 1fr))` is the breakpoint-free responsive grid for card-style content.
 - Container queries are for components, viewport queries are for page layout. A card in a sidebar should adapt to the sidebar's width, not the viewport's.
 </spatial_principles>
@@ -198,7 +182,7 @@ DO NOT use identical card grids (same-sized cards with icon + heading + text, re
 DO NOT use the hero metric layout template (big number, small label, supporting stats, gradient accent).
 DO NOT center everything. Left-aligned text with asymmetric layouts feels more designed.
 DO NOT use the same spacing everywhere. Without rhythm, layouts feel monotonous.
-DO NOT let body text wrap beyond ~80 characters per line. Add a max-width like 65–75ch so the eye can track easily.
+DO NOT let body text wrap beyond ~80 characters per line. Add a max-width like 65鈥?5ch so the eye can track easily.
 </spatial_rules>
 
 ### Visual Details
@@ -228,7 +212,7 @@ DO NOT: Use rounded rectangles with generic drop shadows. Safe, forgettable, cou
 DO NOT: Use modals unless there's truly no better alternative. Modals are lazy.
 
 ### Motion
-→ *Consult [motion reference](reference/motion-design.md) for timing, easing, and reduced motion.*
+鈫?*Consult [motion reference](reference/motion-design.md) for timing, easing, and reduced motion.*
 
 Focus on high-impact moments: one well-orchestrated page load with staggered reveals creates more delight than scattered micro-interactions.
 
@@ -239,7 +223,7 @@ Focus on high-impact moments: one well-orchestrated page load with staggered rev
 **DON'T**: Use bounce or elastic easing. They feel dated and tacky; real objects decelerate smoothly
 
 ### Interaction
-→ *Consult [interaction reference](reference/interaction-design.md) for forms, focus, and loading patterns.*
+鈫?*Consult [interaction reference](reference/interaction-design.md) for forms, focus, and loading patterns.*
 
 Make interactions feel fast. Use optimistic UI: update immediately, sync later.
 
@@ -250,14 +234,14 @@ Make interactions feel fast. Use optimistic UI: update immediately, sync later.
 **DON'T**: Make every button primary. Use ghost buttons, text links, secondary styles; hierarchy matters
 
 ### Responsive
-→ *Consult [responsive reference](reference/responsive-design.md) for mobile-first, fluid design, and container queries.*
+鈫?*Consult [responsive reference](reference/responsive-design.md) for mobile-first, fluid design, and container queries.*
 
 **DO**: Use container queries (@container) for component-level responsiveness
 **DO**: Adapt the interface for different contexts, not just shrink it
 **DON'T**: Hide critical functionality on mobile. Adapt the interface, don't amputate it
 
 ### UX Writing
-→ *Consult [ux-writing reference](reference/ux-writing.md) for labels, errors, and empty states.*
+鈫?*Consult [ux-writing reference](reference/ux-writing.md) for labels, errors, and empty states.*
 
 **DO**: Make every word earn its place
 **DON'T**: Repeat information users can already see

@@ -5,7 +5,6 @@ import (
 	"strings"
 )
 
-// RuleMeta 来自 sub_plays.segment_rule（guaji-rules-sync 写入）。
 type RuleMeta struct {
 	PlayTemplate string
 	TypeID       string
@@ -68,10 +67,15 @@ func (m RuleMeta) combinedText() string {
 // InferBetMode 按 label / guajiGroup 推断 bet_mode（对齐 client runTypeMatrix + seeds bet_mode）。
 func InferBetMode(meta RuleMeta) string {
 	label := strings.TrimSpace(meta.Label)
+	if label == "" {
+		label = strings.TrimSpace(meta.FullName)
+	}
 	text := meta.combinedText()
+	group := strings.TrimSpace(meta.Group)
 
 	switch {
-	case strings.Contains(label, "定位胆") || meta.Group == "一星" || strings.Contains(text, "定位胆"):
+	// 仅看子玩法 label / guajiGroup，避免 TypeLabel 默认「定位胆」污染（见 resolvePlayTypeLabel）。
+	case strings.Contains(label, "定位胆") || group == "一星":
 		return "dingwei"
 	case meta.TypeID == "g010":
 		if meta.PlayTemplate == "pk10_std" {
@@ -195,6 +199,10 @@ func InferBetMode(meta RuleMeta) string {
 		if strings.Contains(label, "手动输入") || strings.Contains(label, "三连号") {
 			return "danshi"
 		}
+	}
+	// 兼容：仅当子玩法未给出明确信号时，才用 TypeLabel 判断定位胆
+	if group == "" && label == "" && strings.Contains(meta.TypeLabel, "定位胆") {
+		return "dingwei"
 	}
 	return ""
 }

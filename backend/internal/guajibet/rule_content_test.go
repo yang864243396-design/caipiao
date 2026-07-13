@@ -39,6 +39,52 @@ func TestFormatBetContentForRule_qian3Fushi(t *testing.T) {
 	}
 }
 
+func TestFormatBetContentForRule_qian3DanshiKeepsComma(t *testing.T) {
+	seg, _ := json.Marshal(map[string]string{
+		"guajiGroup": "前三码", "guajiRuleId": "2",
+	})
+	meta := ParseRuleMeta("ssc_std", "g001", "2", "前三直选单式", "前三码", seg, "2")
+	got := FormatBetContentForRule(meta, "012,345")
+	if got != "012,345" {
+		t.Fatalf("wire=%q want 012,345 (must keep comma)", got)
+	}
+	if n := CountBetNums(meta, got); n != 2 {
+		t.Fatalf("betsNums=%d want 2", n)
+	}
+	chunked := FormatBetContentForRule(meta, "012345")
+	if chunked != "012,345" {
+		t.Fatalf("chunked wire=%q want 012,345", chunked)
+	}
+}
+
+func TestFormatBetContentForRule_qian3Zuhe(t *testing.T) {
+	seg, _ := json.Marshal(map[string]string{
+		"guajiGroup": "前三码", "guajiRuleId": "5",
+	})
+	meta := ParseRuleMeta("ssc_std", "g001", "5", "前三组合", "前三码", seg, "5")
+	got := FormatBetContentForRule(meta, "0,1,3\n0\n0")
+	if got != "013,0,0" {
+		t.Fatalf("wire=%q want 013,0,0", got)
+	}
+	if n := CountBetNums(meta, got); n != 9 {
+		t.Fatalf("betsNums=%d want 9 (3×1×1×3)", n)
+	}
+	two := FormatBetContentForRule(meta, "0,1\n2\n3")
+	if two != "01,2,3" {
+		t.Fatalf("wire=%q want 01,2,3", two)
+	}
+	if n := CountBetNums(meta, two); n != 6 {
+		t.Fatalf("betsNums=%d want 6 (2×1×1×3)", n)
+	}
+	flat := FormatBetContentForRule(meta, "1,2,3")
+	if flat != "1,2,3" {
+		t.Fatalf("flat wire=%q want 1,2,3", flat)
+	}
+	if n := CountBetNums(meta, flat); n != 3 {
+		t.Fatalf("flat betsNums=%d want 3", n)
+	}
+}
+
 func TestFormatBetContentForRule_dingwei(t *testing.T) {
 	meta := dingweiMeta()
 	got := FormatBetContentForRule(meta, "7")
@@ -53,12 +99,26 @@ func TestFormatBetContentForRule_dingwei(t *testing.T) {
 	}
 }
 
-func TestSampleGroupContent_minSingleBet(t *testing.T) {
+func TestInferBetMode_qian3NotPollutedByDingweiTypeLabel(t *testing.T) {
 	meta := qian3FushiMeta()
-	content := SampleGroupContent(meta)
-	wire := FormatBetContentForRule(meta, content)
-	if n := CountBetNums(meta, wire); n != 1 {
-		t.Fatalf("sample betsNums=%d want 1 content=%q wire=%q", n, content, wire)
+	meta.TypeLabel = "定位胆" // resolvePlayTypeLabel 旧默认值
+	if got := InferBetMode(meta); got != "fushi" {
+		t.Fatalf("mode=%q want fushi (TypeLabel 定位胆不得覆盖前三直选复式)", got)
+	}
+	wire := FormatBetContentForRule(meta, "0,1,3\n0\n0")
+	if wire != "013,0,0" {
+		t.Fatalf("wire=%q want 013,0,0", wire)
+	}
+}
+
+func TestNeedsSoloForRule_qian3FushiPaddedWireNotDingwei(t *testing.T) {
+	meta := qian3FushiMeta()
+	padded := "013,0,0,,"
+	if !IsSSCDingweiBetContent(padded) {
+		t.Fatal("precondition: padded wire looks like dingwei")
+	}
+	if !NeedsSoloForRule(meta, padded) {
+		t.Fatal("前三直选复式误垫五位时仍应 solo")
 	}
 }
 
@@ -845,5 +905,52 @@ func TestFormatBetContentForRule_pk10DxdsCombo(t *testing.T) {
 	}
 	if MatrixSkipReason(meta221) != "" {
 		t.Fatalf("221 不应 skip: %q", MatrixSkipReason(meta221))
+	}
+}
+
+func TestCountBetNums_qian3Hunhe(t *testing.T) {
+	seg, _ := json.Marshal(map[string]string{
+		"guajiGroup":    "前三码",
+		"guajiTeam":     "前三组选",
+		"guajiFullName": "前三混合组选",
+		"guajiRuleId":   "10",
+	})
+	meta := ParseRuleMeta("ssc_std", "g001", "10", "前三混合组选", "前三码", seg, "10")
+	if mode := InferBetMode(meta); mode != "hunhe" {
+		t.Fatalf("mode=%q want hunhe", mode)
+	}
+	// 第三方：排除豹子，组选形态去重 → 123/321 计 1，232 计 1，542 计 1
+	content := "123,321,232,222,333,444,542"
+	if n := CountBetNums(meta, content); n != 3 {
+		t.Fatalf("betsNums=%d want 3 for %q", n, content)
+	}
+	if n := countSSCHunheBetNums(content, 3); n != 3 {
+		t.Fatalf("countSSCHunheBetNums=%d want 3", n)
+	}
+	if n := countSSCHunheBetNums("222,333", 3); n != 0 {
+		t.Fatalf("all baozi should be 0, got %d", n)
+	}
+	if n := countSSCHunheBetNums("123", 3); n != 1 {
+		t.Fatalf("single zu6=%d want 1", n)
+	}
+}
+
+func TestCountBetNums_qian3Teshu(t *testing.T) {
+	seg, _ := json.Marshal(map[string]string{
+		"guajiGroup":    "前三码",
+		"guajiTeam":     "前三其他",
+		"guajiFullName": "前三特殊号",
+		"guajiRuleId":   "12",
+	})
+	meta := ParseRuleMeta("ssc_std", "g001", "12", "前三特殊号", "前三码", seg, "12")
+	if mode := InferBetMode(meta); mode != "teshu" {
+		t.Fatalf("mode=%q want teshu", mode)
+	}
+	content := "豹子,对子,顺子"
+	if n := CountBetNums(meta, content); n != 3 {
+		t.Fatalf("betsNums=%d want 3 for %q", n, content)
+	}
+	if n := CountBetNums(meta, "豹子"); n != 1 {
+		t.Fatalf("single=%d want 1", n)
 	}
 }

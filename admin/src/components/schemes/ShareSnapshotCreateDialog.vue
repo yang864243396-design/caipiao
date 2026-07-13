@@ -619,7 +619,7 @@ watch(resolvedSubPlayOptions, (opts) => {
                 删除组
               </el-button>
             </div>
-            <SchemeGroupPickPanel v-model="schemeGroups[idx]" :config="playConfig" />
+            <SchemeGroupPickPanel v-if="schemeUsesPickPanel" v-model="schemeGroups[idx]" :config="playConfig" />
             <el-input
               v-if="!schemeUsesPickPanel"
               v-model="schemeGroups[idx]"

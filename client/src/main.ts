@@ -10,6 +10,10 @@ import './styles/global.css'
 import './styles/cms-rich-html.css'
 import './styles/member-subpage-shell.css'
 import './styles/detail-tab-rg.css'
+import './styles/layout-web.css'
+import { initLayoutMode } from '@/composables/useLayoutMode'
+
+initLayoutMode()
 
 const app = createApp(App)
 app.use(router)

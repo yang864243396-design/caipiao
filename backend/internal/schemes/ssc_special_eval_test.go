@@ -60,9 +60,16 @@ func TestEvaluateWeishuQian3(t *testing.T) {
 
 func TestEvaluateZuheQian3(t *testing.T) {
 	rule := resolveSSCPlayRule("qian3", "qian3_zuhe", "zuhe")
-	ev := evaluatePlayHit(rule, []string{"1", "2", "5", "0", "0"}, "12", false, "", 0)
+	ev := evaluatePlayHit(rule, []string{"1", "2", "5", "0", "0"}, "1\n2\n5", false, "", 0)
 	if !ev.Hit {
 		t.Fatalf("want zuhe hit, ev=%+v", ev)
+	}
+	if ev.BetUnits != 3 {
+		t.Fatalf("BetUnits=%d want 3 (1×1×1×3)", ev.BetUnits)
+	}
+	ev2 := evaluatePlayHit(rule, []string{"1", "2", "5", "0", "0"}, "0,1\n2\n5", false, "", 0)
+	if !ev2.Hit || ev2.BetUnits != 6 {
+		t.Fatalf("want hit units=6, ev=%+v", ev2)
 	}
 }
 

@@ -2,6 +2,9 @@
  * 设计令牌（与 Stitch 项目「精密终端」暗色/大厅浅色对齐，便于后续换肤）
  */
 :root {
+  /* 桌面 Web 布局：顶栏高度（layout-web.css / LobbyTabBar） */
+  --layout-web-nav-height: 3.75rem;
+
   /* Dark shell（跟单、玩法详情） */
   --color-surface: #0c1324;
   --color-surface-low: #151b2d;

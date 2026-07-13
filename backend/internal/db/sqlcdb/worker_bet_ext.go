@@ -259,16 +259,17 @@ RETURNING id`,
 	return id > 0, nil
 }
 
-// UpdateCloudBetRecordGuajiMeta 第三方接单后回写注单号与接单期号（记录已由 Reserve 占位）。
-func (q *Queries) UpdateCloudBetRecordGuajiMeta(ctx context.Context, schemeID, periodNo string, thirdPartyBetID, betOrderNo, thirdPartyPeriod pgtype.Text, pnl pgtype.Numeric, status string) error {
+// UpdateCloudBetRecordGuajiMeta 第三方接单后回写注单号、接单期号与对齐后的金额。
+func (q *Queries) UpdateCloudBetRecordGuajiMeta(ctx context.Context, schemeID, periodNo string, thirdPartyBetID, betOrderNo, thirdPartyPeriod pgtype.Text, pnl pgtype.Numeric, status string, amount pgtype.Numeric) error {
 	_, err := q.db.Exec(ctx, `
 UPDATE cloud_bet_records
 SET third_party_bet_id = $3,
     bet_order_no = $4,
     third_party_period = $5,
     pnl = $6,
-    status = $7
-WHERE scheme_id = $1 AND period_no = $2`, schemeID, periodNo, thirdPartyBetID, betOrderNo, thirdPartyPeriod, pnl, status)
+    status = $7,
+    amount = $8
+WHERE scheme_id = $1 AND period_no = $2`, schemeID, periodNo, thirdPartyBetID, betOrderNo, thirdPartyPeriod, pnl, status, amount)
 	return err
 }
 

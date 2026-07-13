@@ -51,6 +51,42 @@ func TestLookupSubPlayFromRows_g006DingweiByPosition(t *testing.T) {
 	}
 }
 
+func TestLookupSubPlayFromRows_zhixuanFsVsZuxuan(t *testing.T) {
+	rows := []sqlcdb.GetSubPlayRow{
+		guajiSubPlayRow("g008", "119", "前后二组选复式", 1),
+		guajiSubPlayRow("g008", "120", "前后二直选复式", 2),
+	}
+	got, err := lookupSubPlayFromRows("ssc_std", rows, "g008", "zhixuan_fs", "fushi", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SubID != "120" {
+		t.Fatalf("sub_id = %q want 120 (直选复式)", got.SubID)
+	}
+	gotZu, err := lookupSubPlayFromRows("ssc_std", rows, "g008", "zuxuan_fs", "zuxuan_fs", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotZu.SubID != "119" {
+		t.Fatalf("sub_id = %q want 119 (组选复式)", gotZu.SubID)
+	}
+}
+
+func TestLookupSubPlayFromRows_zhixuanDs(t *testing.T) {
+	rows := []sqlcdb.GetSubPlayRow{
+		guajiSubPlayRow("g001", "1", "前三直选复式", 1),
+		guajiSubPlayRow("g001", "2", "前三直选单式", 2),
+		guajiSubPlayRow("g001", "5", "前三组选复式", 3),
+	}
+	got, err := lookupSubPlayFromRows("ssc_std", rows, "g001", "zhixuan_ds", "danshi", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SubID != "2" {
+		t.Fatalf("sub_id = %q want 2", got.SubID)
+	}
+}
+
 func guajiSubPlayRow(typeID, subID, label string, sort int32) sqlcdb.GetSubPlayRow {
 	seg, _ := json.Marshal(map[string]string{
 		"guajiGroup":  "一星",

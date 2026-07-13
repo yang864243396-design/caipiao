@@ -285,25 +285,6 @@ watch(
   },
 )
 
-/** 各面板状态随玩法位数 / 运行类型就绪 */
-watch(
-  [
-    positionCount,
-    runTypeId,
-    isLonghuPlay,
-    () => schemePlayConfig.value.betMode,
-    () => schemePlayConfig.value.subPlayId,
-    () => schemePlayConfig.value.catalogSubId,
-    () => schemePlayConfig.value.playMethodLabel,
-  ],
-  () => {
-    if (runTypeId.value === 'adv_trigger_bet') ensureTriggerRows()
-    if (runTypeId.value === 'hot_cold_warm') ensureHcwPools()
-    if (runTypeId.value === 'random_draw') ensureRdCounts()
-  },
-  { immediate: true },
-)
-
 const TRIGGER_MODE_OPTIONS = [
   { label: '一直正投', value: 'always_pos' },
   { label: '一直反投', value: 'always_neg' },
@@ -557,6 +538,25 @@ function ensureRdCounts(): void {
   const n = positionCount.value
   while (rdCounts.value.length < n) rdCounts.value.push(1)
 }
+
+/** 各面板状态随玩法位数 / 运行类型就绪（须在 ensureHcwPools / ensureRdCounts 声明之后） */
+watch(
+  [
+    positionCount,
+    runTypeId,
+    isLonghuPlay,
+    () => schemePlayConfig.value.betMode,
+    () => schemePlayConfig.value.subPlayId,
+    () => schemePlayConfig.value.catalogSubId,
+    () => schemePlayConfig.value.playMethodLabel,
+  ],
+  () => {
+    if (runTypeId.value === 'adv_trigger_bet') ensureTriggerRows()
+    if (runTypeId.value === 'hot_cold_warm') ensureHcwPools()
+    if (runTypeId.value === 'random_draw') ensureRdCounts()
+  },
+  { immediate: true },
+)
 
 function applyRandomDrawFromConfig(raw: unknown): void {
   if (!raw || typeof raw !== 'object') return
@@ -1170,30 +1170,72 @@ async function onSaveCloud() {
     await warn('倍数系数只能为整数')
     return
   }
-  if (groups.every((g) => g === '')) {
-    await warn('方案内容不能为空')
-    return
-  }
-  if (groups.some((g) => g === '')) {
-    await warn('存在空的方案分组，请填写内容或删除该组')
-    return
-  }
 
-  const groupCheck = validateSchemeGroups(schemePlayConfig.value, schemeGroups.value)
-  if (!groupCheck.ok) {
-    for (const idx of groupCheck.invalidIndexes) {
-      schemeGroups.value[idx] = ''
+  const rt = runTypeId.value
+  if (rt === 'adv_fixed_rotate') {
+    if (!jushuList.value.length) {
+      await warn('请至少添加一局投注号码')
+      return
     }
-    await confirmDialog({
-      title: '输入不合法',
-      message: `${groupCheck.message}。请按「${playModeSummary.value}」规则重新填写。`,
-      tone: 'warning',
-      confirmText: '我知道了',
-      showCancel: false,
+    // 与局数内容对齐，供仍读取 schemeGroups 的下游兜底
+    schemeGroups.value = jushuList.value.map((r) => r.content)
+  } else if (rt === 'adv_trigger_bet') {
+    const filled = triggerRows.value.some(
+      (r) => r.enabled && (String(r.pos).trim() !== '' || String(r.neg).trim() !== ''),
+    )
+    if (!filled) {
+      await warn('请填写开某投某映射（可用「全部随机」）')
+      return
+    }
+    const sample = triggerRows.value.find((r) => r.enabled && String(r.pos).trim())
+    schemeGroups.value = [sample ? String(sample.pos).trim() : '0']
+  } else if (rt === 'hot_cold_warm') {
+    ensureHcwPools()
+    if (hcwEstimatedUnits.value <= 0) {
+      await warn('请至少选择一个冷热温号码')
+      return
+    }
+    schemeGroups.value = Array.from(
+      { length: positionCount.value },
+      (_, i) => (hcwPools.value[i] ?? []).join(','),
+    )
+  } else if (rt === 'random_draw') {
+    ensureRdCounts()
+    if (!rdPreview.value.length || rdPreview.value.every((row) => !row.length)) {
+      generateRdPreview()
+    }
+    schemeGroups.value = Array.from({ length: positionCount.value }, (_, i) => {
+      const prev = rdPreview.value[i] ?? []
+      if (prev.length) return prev.join(',')
+      const count = Math.min(10, Math.max(1, rdCounts.value[i] ?? 1))
+      return Array.from({ length: count }, (_, j) => String(j % 10)).join(',')
     })
-    return
+  } else {
+    if (groups.every((g) => g === '')) {
+      await warn('方案内容不能为空')
+      return
+    }
+    if (groups.some((g) => g === '')) {
+      await warn('存在空的方案分组，请填写内容或删除该组')
+      return
+    }
+
+    const groupCheck = validateSchemeGroups(schemePlayConfig.value, schemeGroups.value)
+    if (!groupCheck.ok) {
+      for (const idx of groupCheck.invalidIndexes) {
+        schemeGroups.value[idx] = ''
+      }
+      await confirmDialog({
+        title: '输入不合法',
+        message: `${groupCheck.message}。请按「${playModeSummary.value}」规则重新填写。`,
+        tone: 'warning',
+        confirmText: '我知道了',
+        showCancel: false,
+      })
+      return
+    }
+    schemeGroups.value = groupCheck.normalized
   }
-  schemeGroups.value = groupCheck.normalized
 
   cloudBusy.value = true
   flushPersistDraft()
@@ -1664,7 +1706,7 @@ function onTimeDialogOpened() {
               </div>
             </div>
             <div class="scf-textarea-wrap">
-              <SchemeGroupPickPanel v-model="schemeGroups[idx]" :config="schemePlayConfig" />
+              <SchemeGroupPickPanel v-if="schemeUsesPickPanel" v-model="schemeGroups[idx]" :config="schemePlayConfig" />
               <el-input v-if="!schemeUsesPickPanel" v-model="schemeGroups[idx]" type="textarea" :rows="5" resize="none"
                 class="scf-area" :placeholder="groupInputPlaceholder" />
               <div class="scf-area-meta">
@@ -1946,7 +1988,7 @@ function onTimeDialogOpened() {
         </div>
         <div class="scf-field">
           <span class="scf-lbl">投注号码</span>
-          <SchemeGroupPickPanel v-model="jushuForm.content" :config="schemePlayConfig" />
+          <SchemeGroupPickPanel v-if="schemeUsesPickPanel" v-model="jushuForm.content" :config="schemePlayConfig" />
           <el-input v-if="!schemeUsesPickPanel" v-model="jushuForm.content" type="textarea" :rows="4" resize="none"
             class="scf-area" :placeholder="groupInputPlaceholder" />
         </div>

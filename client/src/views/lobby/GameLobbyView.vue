@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch } from 'vue'
-import LobbyTabBar from '@/components/lobby/LobbyTabBar.vue'
 import ContentDialog from '@/components/ui/ContentDialog.vue'
 import { useLobbyPageContent } from '@/composables/useLobbyPageContent'
 import { useMaintenanceClient } from '@/composables/useMaintenanceClient'
@@ -265,8 +264,6 @@ function timeGreeting() {
         </div>
       </section>
     </main>
-
-    <LobbyTabBar />
 
     <!-- 全站维护拦截：与 admin「系统维护」Mock 同源（Cookie/localStorage） -->
     <div

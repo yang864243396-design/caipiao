@@ -4,11 +4,27 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 
 	"caipiao/backend/internal/guaji"
 	"caipiao/backend/internal/guajibet"
 )
+
+// roundLottBetAmount 计算第三方 bet_amount（unit×注数×倍数），保留最多 4 位小数（覆盖厘 0.001）。
+// 避免 float 乘积变成 0.449999…，被上游校验为「投注金额错误」。
+func roundLottBetAmount(unit float64, betsNums, mult int) float64 {
+	if unit <= 0 {
+		unit = 2
+	}
+	if betsNums <= 0 {
+		betsNums = 1
+	}
+	if mult <= 0 {
+		mult = 1
+	}
+	return math.Round(unit*float64(betsNums)*float64(mult)*10000) / 10000
+}
 
 // Enabled 报告第三方对接是否启用（guajibet.Placer）。
 func (s *Service) Enabled() bool {
@@ -83,7 +99,7 @@ func (s *Service) PlaceRealBet(ctx context.Context, memberAccount string, req gu
 	if betsNums <= 0 {
 		betsNums = 1
 	}
-	betAmount := unit * float64(betsNums) * float64(mult)
+	betAmount := roundLottBetAmount(unit, betsNums, mult)
 	solo := guajibet.ResolveSolo(req.RuleMeta, req.Content, betsNums)
 	res, err := s.guaji.PlaceLottBet(ctx, token, guaji.LottBetRequest{
 		AutoType: "platform",

@@ -55,6 +55,12 @@ const lhcPickOptions = computed((): readonly string[] => {
 })
 
 function syncFromModel(content: string) {
+  // 单式等走 textarea 时不挂载选号态，避免把「123」解析成个位号池再回写清空
+  if (!showPanel.value) {
+    pickDigits.value = []
+    pickLines.value = []
+    return
+  }
   const parsed = parseGroupPicks(props.config, content)
   pickDigits.value = parsed.digits
   if (props.config.inputMode === 'multiline') {
@@ -63,6 +69,8 @@ function syncFromModel(content: string) {
 }
 
 function emitContent() {
+  // 未展示选号面板时禁止回写，否则会覆盖同绑定的 textarea（直选单式等）
+  if (!showPanel.value) return
   const next = buildGroupContent(props.config, {
     digits: pickDigits.value,
     lines: pickLines.value,
@@ -81,6 +89,7 @@ watch(
       props.config.subPlayId,
       props.config.numberPoolMin,
       props.config.numberPoolMax,
+      showPanel.value,
     ] as const,
   () => syncFromModel(props.modelValue),
   { immediate: true },
@@ -89,6 +98,7 @@ watch(
 watch(
   () => props.modelValue,
   (value) => {
+    if (!showPanel.value) return
     const rebuilt = buildGroupContent(props.config, {
       digits: pickDigits.value,
       lines: pickLines.value,
@@ -127,7 +137,24 @@ function isLineDigitSelected(lineIndex: number, d: string) {
 
 <template>
   <div v-if="showPanel" class="sgp-panel">
-    <template v-if="textPickOptions.length">
+    <template v-if="textPickOptions.length && config.inputMode === 'multiline'">
+      <div v-for="(label, li) in config.segmentLabels" :key="label" class="sgp-row">
+        <span class="sgp-pos">{{ label }}</span>
+        <div class="sgp-chips" :class="{ 'sgp-chips--single-row': singleRowChips }">
+          <button
+            v-for="d in textPickOptions"
+            :key="`${label}-${d}`"
+            type="button"
+            class="sgp-chip"
+            :class="{ 'is-active': isLineDigitSelected(li, d) }"
+            @click="toggleLineDigit(li, d)"
+          >
+            {{ d }}
+          </button>
+        </div>
+      </div>
+    </template>
+    <template v-else-if="textPickOptions.length">
       <div class="sgp-chips" :class="{ 'sgp-chips--single-row': singleRowChips }">
         <button
           v-for="d in textPickOptions"
@@ -220,10 +247,13 @@ function isLineDigitSelected(lineIndex: number, d: string) {
 }
 
 .sgp-pos {
-  flex: 0 0 1.25rem;
+  flex: 0 0 auto;
+  min-width: 2rem;
   font-size: 12px;
   color: var(--el-text-color-regular);
   line-height: 2rem;
+  text-align: center;
+  white-space: nowrap;
 }
 
 .sgp-chips {

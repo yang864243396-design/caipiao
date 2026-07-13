@@ -1462,6 +1462,23 @@ async function handleBetError(e: unknown, fallback = '投注失败'): Promise<vo
               </button>
             </div>
           </template>
+          <template v-else-if="playConfig.inputMode === 'multiline' && textPickOptions.length">
+            <div v-for="(label, li) in playConfig.segmentLabels" :key="label" class="dock-pick-row">
+              <span class="dock-pick-pos">{{ label }}</span>
+              <div class="dock-pick-chips">
+                <button
+                  v-for="d in textPickOptions"
+                  :key="`${label}-${d}`"
+                  type="button"
+                  class="dock-pick-chip"
+                  :class="{ 'is-active': isLineDigitSelected(li, d) }"
+                  @click="toggleLineDigit(li, d)"
+                >
+                  {{ d }}
+                </button>
+              </div>
+            </div>
+          </template>
           <template v-else-if="playConfig.inputMode === 'multiline'">
             <div v-for="(label, li) in playConfig.segmentLabels" :key="label" class="dock-pick-row">
               <span class="dock-pick-pos">{{ label }}</span>
@@ -1477,6 +1494,20 @@ async function handleBetError(e: unknown, fallback = '投注失败'): Promise<vo
                   {{ d }}
                 </button>
               </div>
+            </div>
+          </template>
+          <template v-else-if="textPickOptions.length">
+            <div class="dock-pick-chips">
+              <button
+                v-for="d in textPickOptions"
+                :key="d"
+                type="button"
+                class="dock-pick-chip"
+                :class="{ 'is-active': pickDigits.includes(d) }"
+                @click="togglePickDigit(d)"
+              >
+                {{ d }}
+              </button>
             </div>
           </template>
           <template v-else>

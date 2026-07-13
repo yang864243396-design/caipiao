@@ -2,7 +2,6 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import LobbyTabBar from '@/components/lobby/LobbyTabBar.vue'
 import { logoutClient } from '@/api/auth'
 import { fetchMemberProfile } from '@/api/member/profile'
 import {
@@ -467,8 +466,6 @@ const personalFeatureCount = computed(() => personalFeaturesAll.value.length)
         </ul>
       </section>
     </main>
-
-    <LobbyTabBar />
 
     <el-dialog
       v-model="csDialogVisible"

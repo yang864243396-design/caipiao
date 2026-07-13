@@ -160,11 +160,11 @@ func betModeLabelKeywords(mode string) []string {
 	case "dingwei":
 		return []string{"定位胆"}
 	case "fushi", "zhixuan_fs":
-		return []string{"复式"}
+		return []string{"直选复式", "复式"}
 	case "danshi", "zhixuan_ds":
-		return []string{"单式"}
+		return []string{"直选单式", "单式"}
 	case "zuxuan_fs", "zu3", "zu6":
-		return []string{"组选", "组三", "组六"}
+		return []string{"组选复式", "组三", "组六", "组选"}
 	case "hezhi":
 		return []string{"和值"}
 	case "longhu", "longhuhe":
@@ -176,6 +176,18 @@ func betModeLabelKeywords(mode string) []string {
 	default:
 		return nil
 	}
+}
+
+func isSemanticPlayToken(s string) bool {
+	s = strings.ToLower(strings.TrimSpace(s))
+	switch s {
+	case "zhixuan_fs", "zhixuan_ds", "zuxuan_fs", "zuxuan_ds", "dingwei",
+		"fushi", "danshi", "hezhi", "kuadu", "baodan", "hunhe", "zuhe",
+		"zu3", "zu6", "budingwei", "dxds", "longhu", "longhuhe", "teshu", "weishu":
+		return true
+	}
+	return strings.Contains(s, "zhixuan") || strings.Contains(s, "zuxuan") ||
+		strings.HasPrefix(s, "dingwei_") || strings.HasPrefix(s, "sub_")
 }
 
 func pickSubPlayCandidate(candidates []sqlcdb.GetSubPlayRow, mode string, positionIdx int) (sqlcdb.GetSubPlayRow, bool) {
@@ -191,7 +203,8 @@ func pickSubPlayCandidate(candidates []sqlcdb.GetSubPlayRow, mode string, positi
 		}
 		return candidates[i].SortOrder < candidates[j].SortOrder
 	})
-	if mode == "dingwei" || strings.HasPrefix(strings.ToLower(mode), "dingwei") {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "dingwei" || strings.HasPrefix(mode, "dingwei") {
 		idx := positionIdx
 		if idx < 0 {
 			idx = 0
@@ -206,7 +219,113 @@ func pickSubPlayCandidate(candidates []sqlcdb.GetSubPlayRow, mode string, positi
 		}
 		return candidates[idx], true
 	}
+	if narrowed := narrowSubPlayByModeLabel(candidates, mode); len(narrowed) == 1 {
+		return narrowed[0], true
+	} else if len(narrowed) > 1 {
+		candidates = narrowed
+	}
+	if best, ok := bestSubPlayByModeScore(candidates, mode); ok {
+		return best, true
+	}
 	return sqlcdb.GetSubPlayRow{}, false
+}
+
+func narrowSubPlayByModeLabel(candidates []sqlcdb.GetSubPlayRow, mode string) []sqlcdb.GetSubPlayRow {
+	want, avoid := modeLabelPreferAvoid(mode)
+	if len(want) == 0 && len(avoid) == 0 {
+		return nil
+	}
+	var preferred []sqlcdb.GetSubPlayRow
+	for _, r := range candidates {
+		label := strings.TrimSpace(r.Label)
+		if labelHasAny(label, avoid) && !labelHasAny(label, want) {
+			continue
+		}
+		if labelHasAny(label, want) {
+			preferred = append(preferred, r)
+		}
+	}
+	if len(preferred) > 0 {
+		return preferred
+	}
+	var filtered []sqlcdb.GetSubPlayRow
+	for _, r := range candidates {
+		if labelHasAny(r.Label, avoid) {
+			continue
+		}
+		filtered = append(filtered, r)
+	}
+	return filtered
+}
+
+func modeLabelPreferAvoid(mode string) (want, avoid []string) {
+	switch mode {
+	case "zhixuan_fs", "fushi":
+		return []string{"直选复式"}, []string{"组选"}
+	case "zhixuan_ds", "danshi":
+		return []string{"直选单式"}, []string{"组选"}
+	case "zuxuan_fs":
+		return []string{"组选复式", "组选"}, nil
+	case "zu3":
+		return []string{"组三"}, []string{"组六"}
+	case "zu6":
+		return []string{"组六"}, []string{"组三"}
+	default:
+		return nil, nil
+	}
+}
+
+func labelHasAny(label string, keys []string) bool {
+	for _, k := range keys {
+		if k != "" && strings.Contains(label, k) {
+			return true
+		}
+	}
+	return false
+}
+
+func bestSubPlayByModeScore(candidates []sqlcdb.GetSubPlayRow, mode string) (sqlcdb.GetSubPlayRow, bool) {
+	if len(candidates) == 0 {
+		return sqlcdb.GetSubPlayRow{}, false
+	}
+	bestIdx := -1
+	bestScore := -1
+	for i, r := range candidates {
+		score := subPlayModeScore(r.Label, mode)
+		if score > bestScore {
+			bestScore = score
+			bestIdx = i
+		}
+	}
+	if bestIdx < 0 || bestScore <= 0 {
+		return sqlcdb.GetSubPlayRow{}, false
+	}
+	return candidates[bestIdx], true
+}
+
+func subPlayModeScore(label, mode string) int {
+	label = strings.TrimSpace(label)
+	if label == "" || mode == "" {
+		return 0
+	}
+	score := 0
+	want, avoid := modeLabelPreferAvoid(mode)
+	for _, w := range want {
+		if strings.Contains(label, w) {
+			score += 10
+		}
+	}
+	for _, a := range avoid {
+		if strings.Contains(label, a) {
+			score -= 5
+		}
+	}
+	for _, kw := range betModeLabelKeywords(mode) {
+		if kw != "" && strings.Contains(label, kw) {
+			score += 1
+		}
+	}
+	return score
 }
 
 func dingweiLabelMatchesPosition(label string, positionIdx int) bool {

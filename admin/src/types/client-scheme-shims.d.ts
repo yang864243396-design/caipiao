@@ -12,6 +12,7 @@ declare module '@client/utils/betPayload' {
     playTypeLabel?: string
     playMethodLabel?: string
     playTemplate?: string
+    guajiGroup?: string
   }
 
   export interface SchemeGroupsValidation {

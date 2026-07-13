@@ -76,14 +76,16 @@ for (const b of bindings) {
         const ruleName = String(rule.name || '').trim()
         if (!ruleID || !ruleName) continue
         subOrder++
+        const fullName = String(rule.full_name || '').trim()
+        const label = fullName || ruleName
         const seg = {
           guajiGroup: groupName,
           guajiTeam: teamName,
-          guajiFullName: String(rule.full_name || '').trim(),
+          guajiFullName: fullName,
           guajiRuleId: ruleID,
         }
         lines.push(
-          `INSERT INTO sub_plays (template_code, type_id, sub_id, label, sort_order, segment_rule, outbound_play_code, enabled) VALUES ('${b.template}', '${typeID}', '${esc(ruleID)}', '${esc(ruleName)}', ${subOrder}, '${jsonEsc(seg)}'::jsonb, '${esc(ruleID)}', true);`,
+          `INSERT INTO sub_plays (template_code, type_id, sub_id, label, sort_order, segment_rule, outbound_play_code, enabled) VALUES ('${b.template}', '${typeID}', '${esc(ruleID)}', '${esc(label)}', ${subOrder}, '${jsonEsc(seg)}'::jsonb, '${esc(ruleID)}', true);`,
         )
       }
     }

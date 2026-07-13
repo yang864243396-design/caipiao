@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import LobbyTabBar from '@/components/lobby/LobbyTabBar.vue'
 import OptionPickerModal from '@/components/ui/OptionPickerModal.vue'
 import {
   startCopyHallRankingsSync,
@@ -332,8 +331,6 @@ onUnmounted(stopCopyHallRankingsSync)
         当前玩法暂无方案
       </p>
     </main>
-
-    <LobbyTabBar />
   </div>
 </template>
 

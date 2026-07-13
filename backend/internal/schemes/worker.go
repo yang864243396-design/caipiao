@@ -523,6 +523,9 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 			}
 			return stopErr
 		}
+		if betMeta.Amount > 0 {
+			amount = betMeta.Amount
+		}
 		guajiAccepted = true
 	}
 
@@ -542,6 +545,7 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 			pgtype.Text{String: betMeta.OrderNo, Valid: betMeta.OrderNo != ""},
 			guajiPeriodsPgtext(betMeta.Periods),
 			numericFromFloat(0), "pending",
+			numericFromFloat(amount),
 		); err != nil {
 			return err
 		}

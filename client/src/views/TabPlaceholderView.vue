@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
-import LobbyTabBar from '@/components/lobby/LobbyTabBar.vue'
 
 const router = useRouter()
 
@@ -33,7 +32,6 @@ function goLobby() {
     </div>
     <el-empty :description="`${title} · 此页为占位，后续按设计逐屏对接。`" class="ph-empty" />
     <el-button type="primary" round @click="goLobby">返回游戏大厅</el-button>
-    <LobbyTabBar />
   </div>
 </template>
 
@@ -76,5 +74,9 @@ function goLobby() {
   font-size: 0.9rem;
   max-width: 18rem;
   line-height: 1.5;
+}
+
+html.layout-web .ph {
+  padding-bottom: 2rem;
 }
 </style>

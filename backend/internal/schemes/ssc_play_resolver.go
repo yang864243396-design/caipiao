@@ -135,19 +135,25 @@ func dingweiPositionIndex(subID string) int {
 
 func sscSegmentRange(typeID string) (start, length int) {
 	switch typeID {
-	case "qian3", "qianzhonghou3", "qianhou3":
+	case "g001", "qian3", "qianzhonghou3", "qianhou3":
 		return 0, 3
-	case "zhong3":
+	case "g002", "zhong3":
 		return 1, 3
-	case "hou3":
+	case "g003", "hou3":
 		return 2, 3
-	case "qian2":
+	case "g004", "qian2":
 		return 0, 2
-	case "hou2":
+	case "g005", "hou2":
 		return 3, 2
+	case "g007", "g012":
+		return 0, 3
+	case "g008":
+		return 0, 2
+	case "g013", "g014":
+		return 0, 4
 	case "sixing":
 		return 1, 4
-	case "wuxing":
+	case "g015", "wuxing":
 		return 0, 5
 	case "combo24":
 		return 0, 2

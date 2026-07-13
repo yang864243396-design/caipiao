@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
+import { useLayoutMode } from '@/composables/useLayoutMode'
+import { demoAppBrand } from '@/demo/demoAccount'
 
 /** 底栏三项图标 */
 const TAB_ICONS = {
@@ -10,68 +12,86 @@ const TAB_ICONS = {
 } as const
 
 const route = useRoute()
+const { isWeb } = useLayoutMode()
 
-/** 仅主 Tab 页展示底栏；会员中心次级页隐藏 */
+/**
+ * H5：仅主 Tab 展示底栏。
+ * Web：对齐第三方桌面顶栏，登录页外常驻。
+ */
 const visible = computed(() => {
+  if (route.path === '/login') return false
+  if (isWeb.value) return true
   const path = route.path
-  if (path === '/' || path === '/cloud' || path === '/member') return true
-  return false
+  return path === '/' || path === '/cloud' || path === '/member'
 })
 
 const key = computed(() => {
   if (route.path.startsWith('/cloud')) return 'cloud'
   if (route.path.startsWith('/member')) return 'member'
+  if (route.path === '/' || route.path.startsWith('/copy') || route.path.startsWith('/scheme') || route.path.startsWith('/play')) {
+    return 'lobby'
+  }
   return 'lobby'
 })
+
+const navLabel = computed(() => (isWeb.value ? '主导航' : '底部导航'))
 </script>
 
 <template>
-  <nav v-if="visible" class="bottom" aria-label="底部导航">
-    <RouterLink
-      to="/"
-      class="nav-item"
-      :class="{ active: key === 'lobby' }"
-    >
-      <img
-        :src="TAB_ICONS.lobby"
-        alt=""
-        width="24"
-        height="24"
-        class="nav-ico"
-        decoding="async"
-      />
-      <span class="nav-lbl">游戏大厅</span>
-    </RouterLink>
-    <RouterLink
-      to="/cloud"
-      class="nav-item"
-      :class="{ active: key === 'cloud' }"
-    >
-      <img
-        :src="TAB_ICONS.cloud"
-        alt=""
-        width="24"
-        height="24"
-        class="nav-ico"
-        decoding="async"
-      />
-      <span class="nav-lbl">云端中心</span>
-    </RouterLink>
-    <RouterLink
-      to="/member"
-      class="nav-item"
-      :class="{ active: key === 'member' }"
-    >
-      <img
-        :src="TAB_ICONS.member"
-        alt=""
-        width="24"
-        height="24"
-        class="nav-ico"
-        decoding="async"
-      />
-      <span class="nav-lbl">会员中心</span>
-    </RouterLink>
+  <nav v-if="visible" class="bottom" :class="{ 'bottom--web': isWeb }" :aria-label="navLabel">
+    <div class="nav-inner">
+      <div v-if="isWeb" class="nav-brand" aria-hidden="true">
+        <span class="nav-brand-mark">{{ demoAppBrand.slice(0, 1) }}</span>
+        <span class="nav-brand-name">{{ demoAppBrand }}</span>
+      </div>
+      <div class="nav-links">
+        <RouterLink
+          to="/"
+          class="nav-item"
+          :class="{ active: key === 'lobby' }"
+        >
+          <img
+            :src="TAB_ICONS.lobby"
+            alt=""
+            width="24"
+            height="24"
+            class="nav-ico"
+            decoding="async"
+          />
+          <span class="nav-lbl">游戏大厅</span>
+        </RouterLink>
+        <RouterLink
+          to="/cloud"
+          class="nav-item"
+          :class="{ active: key === 'cloud' }"
+        >
+          <img
+            :src="TAB_ICONS.cloud"
+            alt=""
+            width="24"
+            height="24"
+            class="nav-ico"
+            decoding="async"
+          />
+          <span class="nav-lbl">云端中心</span>
+        </RouterLink>
+      </div>
+      <RouterLink
+        to="/member"
+        class="nav-item nav-item--member"
+        :class="{ active: key === 'member' }"
+      >
+        <img
+          :src="TAB_ICONS.member"
+          alt=""
+          width="24"
+          height="24"
+          class="nav-ico"
+          decoding="async"
+        />
+        <span class="nav-lbl">会员中心</span>
+      </RouterLink>
+    </div>
   </nav>
 </template>
 
@@ -91,6 +111,15 @@ const key = computed(() => {
   -webkit-backdrop-filter: blur(12px);
   box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.04);
   border-radius: 1rem 1rem 0 0;
+}
+.nav-inner {
+  display: contents;
+}
+.nav-brand {
+  display: none;
+}
+.nav-links {
+  display: contents;
 }
 .nav-ico {
   width: 1.5rem;
@@ -138,5 +167,105 @@ const key = computed(() => {
 .nav-lbl {
   margin-top: 0.25rem;
   line-height: 1.2;
+}
+
+/**
+ * Web 顶栏：背景通栏，菜单内容与页面壳同宽居中
+ */
+html.layout-web .bottom,
+html.layout-web .bottom--web {
+  top: 0;
+  bottom: auto;
+  left: 0;
+  right: 0;
+  width: 100%;
+  height: var(--layout-web-nav-height, 3.75rem);
+  flex-direction: row;
+  justify-content: center;
+  align-items: center;
+  gap: 0;
+  padding: 0 var(--layout-web-gutter, 1.5rem);
+  border-radius: 0;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
+  box-shadow: 0 10px 36px rgba(15, 23, 42, 0.06);
+}
+html.layout-web .nav-inner {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  max-width: var(--layout-web-shell, 75rem);
+  height: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+html.layout-web .nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0;
+  margin: 0 1.75rem 0 0;
+  flex-shrink: 0;
+}
+html.layout-web .nav-brand-mark {
+  width: 2.1rem;
+  height: 2.1rem;
+  border-radius: 0.65rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-family: 'Plus Jakarta Sans', 'Noto Sans SC', system-ui, sans-serif;
+  font-weight: 800;
+  font-size: 0.95rem;
+  color: #fff;
+  background: linear-gradient(180deg, #0066ff 0%, #0050cb 100%);
+  box-shadow: 0 10px 24px -12px rgba(0, 80, 203, 0.55);
+}
+html.layout-web .nav-brand-name {
+  font-family: 'Plus Jakarta Sans', 'Noto Sans SC', system-ui, sans-serif;
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #0f172a;
+  line-height: 1.2;
+}
+html.layout-web .nav-links {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+html.layout-web .nav-item {
+  flex-direction: row;
+  justify-content: center;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  height: 2.5rem;
+  padding: 0 1rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  border-radius: 0.75rem;
+}
+html.layout-web .nav-item:active {
+  transform: none;
+}
+html.layout-web .nav-item.active {
+  padding: 0 1rem;
+  background: rgba(0, 80, 203, 0.08);
+  color: #0050cb;
+}
+html.layout-web .nav-item--member {
+  margin-left: auto;
+}
+html.layout-web .nav-lbl {
+  margin-top: 0;
+}
+html.layout-web .nav-ico {
+  width: 1.2rem;
+  height: 1.2rem;
 }
 </style>

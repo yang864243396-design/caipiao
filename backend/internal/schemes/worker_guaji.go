@@ -21,6 +21,7 @@ type schemeGuajiBetMeta struct {
 	OrderNo         string
 	ThirdPartyBetID string
 	Periods         string
+	Amount          float64 // 与第三方 bets_nums×单位×倍数对齐后的实扣金额
 }
 
 func (w *Worker) SetGuajiBetPlacer(p guajiBetPlacer) {
@@ -92,6 +93,8 @@ func (w *Worker) placeGuajiSchemeBet(
 	if betsNums <= 0 {
 		betsNums = 1
 	}
+	// 本端 evaluate 注数偶发偏少（如单式未按逗号切分）；以 wire 注数为准同步金额，避免账本少扣、对账差一倍。
+	amount = calcBetAmount(betsNums, float64(multInt), amountUnit)
 
 	periodNo := strings.TrimSpace(draw.IssueNo)
 	if !guajiBetPeriodMatches(inst.LotteryCode, periodNo) {
@@ -167,6 +170,7 @@ func (w *Worker) placeGuajiSchemeBet(
 		OrderNo:         orderNo,
 		ThirdPartyBetID: strings.TrimSpace(betRes.ThirdPartyBetID),
 		Periods:         returned,
+		Amount:          amount,
 	}, nil
 }
 
@@ -183,9 +187,10 @@ func resolveOutboundPlayCode(ctx context.Context, q *sqlcdb.Queries, cfg parsedS
 		tpl = strings.TrimSpace(template)
 	}
 	typeID := strings.TrimSpace(cfg.Play.PlayTypeID)
-	subID := strings.TrimSpace(cfg.Play.SubPlayID)
+	// 优先 catalog 数字 subId（如 "120"）；语义 zhixuan_fs 仅作回退。
+	subID := strings.TrimSpace(cfg.Play.CatalogSubID)
 	if subID == "" {
-		subID = strings.TrimSpace(cfg.Play.CatalogSubID)
+		subID = strings.TrimSpace(cfg.Play.SubPlayID)
 	}
 	betMode := strings.TrimSpace(cfg.Play.BetMode)
 	if subID == "" {

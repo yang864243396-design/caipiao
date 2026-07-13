@@ -13,6 +13,15 @@ func evaluateSSCByBetMode(rule playRule, balls []string, content string) (betEva
 	switch mode {
 	case "longhu", "longhuhe":
 		return evaluateLonghu(rule, balls, content), true
+	case "danshi", "zhixuan_ds":
+		return evaluateZhixuanDanshi(rule, balls, content), true
+	case "fushi", "zhixuan_fs":
+		if rule.SegmentLen == 1 {
+			return evaluateDingwei(rule, balls, content), true
+		}
+		return evaluateZhixuanFushi(rule, balls, content), true
+	case "zuxuan_fs", "zuxuan_ds":
+		return evaluateZuxuanFushi(rule, balls, content), true
 	case "hezhi":
 		return evaluateHezhi(rule, balls, content), true
 	case "kuadu":

@@ -2,7 +2,6 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import LobbyTabBar from '@/components/lobby/LobbyTabBar.vue'
 import ContentDialog from '@/components/ui/ContentDialog.vue'
 import { startCloudRunningSync, cloudRunningPollMs } from '@/composables/useCloudRunningPoll'
 import { ApiError } from '@/api/client'
@@ -934,8 +933,6 @@ function statusBadgeClass(s: CloudSchemeCard): string {
         </p>
       </section>
     </main>
-
-    <LobbyTabBar />
 
     <el-dialog v-model="searchDialogVisible" title="搜索方案" width="min(22rem, 88vw)" align-center append-to-body
       class="cc-search-dialog">

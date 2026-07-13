@@ -57,7 +57,8 @@ type SyncPlan struct {
 // 对应关系（以台湾5分彩 / ssc_std / type_id=1 为例）：
 //   - 彩种类型名 = data["1"].name（时时彩）→ play_templates.label
 //   - 玩法类型   = groups[i].name（前三码）→ play_types.label
-//   - 子玩法     = team 下每条 rule.name（直选复式）→ sub_plays.label
+//   - 子玩法     = rule.full_name（前三直选复式）→ sub_plays.label
+//     无 full_name 时回退 rule.name；segment_rule 仍保留 guajiFullName。
 //   - 对外 rule_id = rule.id → sub_plays.outbound_play_code
 func BuildPlan(templateCode, rulesTypeID string, tpl RulesTemplate) (SyncPlan, error) {
 	templateCode = strings.TrimSpace(templateCode)
@@ -100,16 +101,21 @@ func BuildPlan(templateCode, rulesTypeID string, tpl RulesTemplate) (SyncPlan, e
 					continue
 				}
 				subOrder++
+				fullName := strings.TrimSpace(rule.FullName)
+				label := fullName
+				if label == "" {
+					label = ruleName
+				}
 				seg, _ := json.Marshal(map[string]string{
 					"guajiGroup":    groupName,
 					"guajiTeam":     teamName,
-					"guajiFullName": strings.TrimSpace(rule.FullName),
+					"guajiFullName": fullName,
 					"guajiRuleId":   ruleID,
 				})
 				plan.SubPlays = append(plan.SubPlays, SubPlayRow{
 					TypeID:           typeID,
 					SubID:            ruleID,
-					Label:            ruleName,
+					Label:            label,
 					SortOrder:        subOrder,
 					OutboundPlayCode: ruleID,
 					SegmentRule:      seg,

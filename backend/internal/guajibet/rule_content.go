@@ -1,6 +1,7 @@
 package guajibet
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -393,7 +394,8 @@ func FormatBetContentForRule(meta RuleMeta, groupContent string) string {
 			_, segLen := segmentRange(meta)
 			return formatPaddedDanshiDigits(meta.PlayTemplate, segLen, groupContent)
 		}
-		return normalizePickDigits(groupContent)
+		_, segLen := segmentRange(meta)
+		return formatSSCDanshiDigits(segLen, groupContent)
 	case "danshi":
 		if meta.PlayTemplate == "k3_std" {
 			return normalizePickDigits(groupContent)
@@ -402,7 +404,8 @@ func FormatBetContentForRule(meta RuleMeta, groupContent string) string {
 			_, segLen := segmentRange(meta)
 			return formatPaddedDanshiDigits(meta.PlayTemplate, segLen, groupContent)
 		}
-		return normalizePickDigits(groupContent)
+		_, segLen := segmentRange(meta)
+		return formatSSCDanshiDigits(segLen, groupContent)
 	case "hezhi", "kuadu", "weishu", "baodan", "hunhe", "budingwei":
 		if mode == "hezhi" && usesPaddedDigits(meta.PlayTemplate) {
 			return formatPaddedPickDigits(meta.PlayTemplate, groupContent)
@@ -417,7 +420,11 @@ func FormatBetContentForRule(meta RuleMeta, groupContent string) string {
 		}
 		return formatWuxingZuWire(mode, groupContent)
 	case "zuhe":
-		return formatCommaPickDigits(groupContent)
+		_, segStart, segLen := classifyRule(meta)
+		if usesPaddedDigits(meta.PlayTemplate) {
+			return formatPositionWire(meta.PlayTemplate, segStart, segLen, groupContent)
+		}
+		return formatSSCZuheContent(segStart, segLen, groupContent)
 	case "teshu", "longhu", "longhuhe", "zhuangxian":
 		return formatTextTokens(groupContent)
 	}
@@ -437,7 +444,7 @@ func FormatBetContentForRule(meta RuleMeta, groupContent string) string {
 			_, segLen := segmentRange(meta)
 			return formatPaddedDanshiDigits(meta.PlayTemplate, segLen, groupContent)
 		}
-		return normalizePickDigits(groupContent)
+		return formatSSCDanshiDigits(segLen, groupContent)
 	case KindTextTokens:
 		return formatTextTokens(groupContent)
 	case KindNumberTokens:
@@ -586,19 +593,20 @@ func CountBetNums(meta RuleMeta, wireContent string) int {
 		}
 		return 0
 	case "zuhe":
-		tokens := splitPickDigits(wireContent)
-		if len(tokens) > 0 {
-			return applySegmentMultiplier(meta, len(tokens))
+		// 直选组合：与复式同形「各位数字串」；注数 = 位积 × 段长（三星×3）
+		product := countSSCFushiProduct(wireContent)
+		if product <= 0 {
+			return 0
 		}
-		return applySegmentMultiplier(meta, len(parseZuhePairs(wireContent)))
+		if segLen <= 0 {
+			_, segLen = segmentRange(meta)
+		}
+		if segLen <= 0 {
+			segLen = 1
+		}
+		return applySegmentMultiplier(meta, product*segLen)
 	case "hunhe":
-		parts := splitCommaParts(wireContent)
-		n := 0
-		if len(parts) > 0 {
-			n = len(parts)
-		} else if len(normalizePickDigits(wireContent)) >= segLen && segLen > 0 {
-			n = 1
-		}
+		n := countSSCHunheBetNums(wireContent, segLen)
 		return applySegmentMultiplier(meta, n)
 	case "teshu", "longhu", "longhuhe", "dxds", "daxiao", "danshuang":
 		if isPositionDxds(meta) {
@@ -754,9 +762,9 @@ func NeedsSoloForRule(meta RuleMeta, wireContent string) bool {
 			return false
 		}
 	}
-	if IsSSCDingweiBetContent(wireContent) && CountDingweiBetsNums(wireContent) > 0 {
-		return NeedsSoloBet(wireContent)
-	}
+	// 注意：不可用 IsSSCDingweiBetContent 反推 solo。前三复式若被误格式成
+	// "013,0,0,,"（五段）会命中定位胆 wire，导致 solo=false → 单挑参数错误。
+	// 定位胆已在上方 mode=="dingwei" 分支返回 false。
 	return true
 }
 
@@ -1526,6 +1534,26 @@ func formatSSCFushiContent(start, length int, groupContent string) string {
 	return strings.Join(parts, ",")
 }
 
+// formatSSCZuheContent 三/四/五星直选组合：wire 与直选复式同形。
+// 多行按位；无换行时「1,2,3」表示三位各 1 码（勿压成 123,123,123）。
+func formatSSCZuheContent(start, length int, groupContent string) string {
+	if length <= 0 {
+		length = 1
+	}
+	if strings.ContainsAny(groupContent, "\n\r") {
+		return formatSSCFushiContent(start, length, groupContent)
+	}
+	tokens := splitPickTokens(groupContent)
+	if len(tokens) == length {
+		parts := make([]string, length)
+		for i := 0; i < length; i++ {
+			parts[i] = normalizePickDigits(tokens[i])
+		}
+		return strings.Join(parts, ",")
+	}
+	return formatSSCFushiContent(start, length, groupContent)
+}
+
 func countSSCFushiProduct(wireContent string) int {
 	parts := splitCommaParts(wireContent)
 	if len(parts) == 0 {
@@ -1602,6 +1630,59 @@ func splitCommaParts(s string) []string {
 		}
 	}
 	return out
+}
+
+// countSSCHunheBetNums 三星混合组选注数（对齐第三方）：
+// 排除豹子，按组选形态去重（123 与 321 计 1 注）。
+// 例：123,321,232,222,333,444,542 → 3
+func countSSCHunheBetNums(wireContent string, segLen int) int {
+	if segLen <= 0 {
+		segLen = 3
+	}
+	parts := splitCommaParts(wireContent)
+	if len(parts) == 0 {
+		digits := normalizePickDigits(wireContent)
+		if len(digits) == segLen && !isBaoziDigits(digits) {
+			return 1
+		}
+		return 0
+	}
+	seen := make(map[string]struct{}, len(parts))
+	n := 0
+	for _, p := range parts {
+		digits := normalizePickDigits(p)
+		if len(digits) != segLen {
+			continue
+		}
+		if isBaoziDigits(digits) {
+			continue
+		}
+		key := sortDigitRunes(digits)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		n++
+	}
+	return n
+}
+
+func isBaoziDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		if s[i] != s[0] {
+			return false
+		}
+	}
+	return true
+}
+
+func sortDigitRunes(s string) string {
+	runes := []rune(s)
+	sort.Slice(runes, func(i, j int) bool { return runes[i] < runes[j] })
+	return string(runes)
 }
 
 const guajiSoloMaxBets = 28

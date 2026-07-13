@@ -293,7 +293,13 @@ func resolvePlayTypeLabel(cfg map[string]interface{}) string {
 		}
 	}
 	playLabels := map[string]string{
-		"dingwei": "定位胆", "g006": "定位胆", "hou4": "后四", "qian3": "前三", "zhong3": "中三",
+		"dingwei": "定位胆", "g006": "定位胆",
+		"g001": "前三码", "g002": "中三码", "g003": "后三码",
+		"g004": "前二码", "g005": "后二码",
+		"g007": "前中后三", "g008": "前后二", "g009": "不定位",
+		"g010": "龙虎", "g011": "任选", "g012": "前后三",
+		"g013": "四星", "g014": "前后四", "g015": "五星",
+		"hou4": "后四", "qian3": "前三", "zhong3": "中三",
 	}
 	subLabels := map[string]string{
 		"zhixuan_fs": "直选复式", "zhixuan_ds": "直选单式", "zuxuan_fs": "组选复式",
@@ -303,7 +309,7 @@ func resolvePlayTypeLabel(cfg map[string]interface{}) string {
 		label = playTypeID
 	}
 	if sub := subLabels[subPlayID]; sub != "" {
-		if label != "" {
+		if label != "" && !isBarePlayToken(label) {
 			return label + sub
 		}
 		return sub
@@ -314,7 +320,11 @@ func resolvePlayTypeLabel(cfg map[string]interface{}) string {
 	if betMode == "dingwei" || playTypeID == "g006" {
 		return "定位胆"
 	}
-	return "定位胆"
+	// 未知 typeId 时不要默认「定位胆」，避免污染 guajibet.InferBetMode
+	if label != "" {
+		return label
+	}
+	return ""
 }
 
 // PlayMethodDisplay 将库内 play_method / playTypeId / subPlayId 解析为中文玩法展示名。

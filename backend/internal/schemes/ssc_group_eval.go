@@ -25,29 +25,28 @@ func evaluateZu6(rule playRule, balls []string, content string) betEvaluation {
 }
 
 func evaluateZuhe(rule playRule, balls []string, content string) betEvaluation {
-	seg := drawSegmentForRule(rule, balls)
-	pairs := parseZuhePicks(content)
-	units := len(pairs)
+	// 直选组合：按位复式选号，注数 = 位积 × 段长（三星×3）
+	segLen := rule.SegmentLen
+	if segLen <= 0 {
+		segLen = 3
+	}
+	ev := evaluateZhixuanFushi(rule, balls, content)
+	units := ev.BetUnits * segLen
 	if units <= 0 {
-		units = 1
+		units = segLen
 	}
-	hit := false
-	for _, p := range pairs {
-		if len(p) == 2 && combo2Hit(seg, p[0], p[1]) {
-			hit = true
-			break
-		}
-	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(rule.SegmentLen)}
+	return betEvaluation{Hit: ev.Hit, BetUnits: units, Odds: oddsZhixuan(segLen)}
 }
 
 func evaluateBaodan(rule playRule, balls []string, content string) betEvaluation {
 	seg := drawSegmentForRule(rule, balls)
 	picks := parseDigitTokens(content)
-	units := len(picks)
-	if units <= 0 {
-		units = 1
+	pickCount := len(picks)
+	if pickCount <= 0 {
+		pickCount = 1
 	}
+	// 与 guajibet 一致：每胆覆盖组六+组三全部组合（三码 54 注）
+	units := pickCount * baodanUnitsPerDanLocal(rule.SegmentLen)
 	hit := false
 	for _, dan := range picks {
 		if containsDigit(seg, dan) {
@@ -55,7 +54,37 @@ func evaluateBaodan(rule playRule, balls []string, content string) betEvaluation
 			break
 		}
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(rule.SegmentLen)}
+	// calcPnLWithOdds(amount,hit,odds)=amount*odds 记的是净盈亏；
+	// 包胆只中 1 注：net≈(amount/units)*prizeOdds - amount ⇒ odds = prizeOdds/units - 1
+	odds := oddsZuxuan(rule.SegmentLen)
+	if hit && rule.SegmentLen == 3 && units > 1 {
+		prize := oddsBaodanZu6
+		if isZu3Pattern(seg) {
+			prize = oddsBaodanZu3
+		}
+		odds = prize/float64(units) - 1
+	}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: odds}
+}
+
+func baodanUnitsPerDanLocal(segLen int) int {
+	if segLen < 2 {
+		return 1
+	}
+	if segLen == 2 {
+		return 9
+	}
+	if segLen == 4 {
+		return 84 // C(9,3)
+	}
+	// 三码：C(9,2)+9*2 = 36+18 = 54
+	zu6 := 1
+	n, k := 9, segLen-1
+	for i := 0; i < k; i++ {
+		zu6 = zu6 * (n - i) / (i + 1)
+	}
+	zu3 := 9 * (segLen - 1)
+	return zu6 + zu3
 }
 
 func evaluateHunhe(rule playRule, balls []string, content string) betEvaluation {
@@ -65,15 +94,22 @@ func evaluateHunhe(rule playRule, balls []string, content string) betEvaluation 
 	}
 	tokens := parseNumberTokens(content, rule.SegmentLen)
 	if len(tokens) > 0 {
+		units := countUniqueHunheTokens(tokens)
+		if units <= 0 {
+			units = 1
+		}
 		drawnSorted := sortDigits(seg)
 		hit := false
 		for _, t := range tokens {
+			if isBaoziToken(t) {
+				continue
+			}
 			if sortStringDigits(t) == drawnSorted {
 				hit = true
 				break
 			}
 		}
-		return betEvaluation{Hit: hit, BetUnits: len(tokens), Odds: oddsZuxuan(rule.SegmentLen)}
+		return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(rule.SegmentLen)}
 	}
 	pool := parseDigitTokens(content)
 	units := zuxuanPoolUnits(pool, rule.SegmentLen)
@@ -82,6 +118,36 @@ func evaluateHunhe(rule playRule, balls []string, content string) betEvaluation 
 	}
 	hit := zuxuanPoolHit(seg, pool)
 	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(rule.SegmentLen)}
+}
+
+// countUniqueHunheTokens 排除豹子并按组选形态去重。
+func countUniqueHunheTokens(tokens []string) int {
+	seen := make(map[string]struct{}, len(tokens))
+	n := 0
+	for _, t := range tokens {
+		if isBaoziToken(t) {
+			continue
+		}
+		key := sortStringDigits(t)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		n++
+	}
+	return n
+}
+
+func isBaoziToken(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		if s[i] != s[0] {
+			return false
+		}
+	}
+	return true
 }
 
 func evaluateWeishu(rule playRule, balls []string, content string) betEvaluation {
@@ -367,6 +433,22 @@ func teshuPatternHit(subID string, seg []string) bool {
 func teshuPickHit(subID string, seg []string, pick string) bool {
 	pick = strings.TrimSpace(pick)
 	switch pick {
+	case "豹子":
+		return len(seg) >= 3 && len(digitCounts(seg)) == 1
+	case "对子":
+		return isZu3Pattern(seg)
+	case "顺子":
+		return sscIsStraight(seg)
+	case "极大":
+		if len(seg) < 3 {
+			return false
+		}
+		return atoiBall(seg[0])+atoiBall(seg[1])+atoiBall(seg[2]) >= 22
+	case "极小":
+		if len(seg) < 3 {
+			return false
+		}
+		return atoiBall(seg[0])+atoiBall(seg[1])+atoiBall(seg[2]) <= 5
 	case "一帆风顺", "yifan":
 		return teshuPatternHit("yifan", seg)
 	case "好事成双", "haoshi":
@@ -380,4 +462,25 @@ func teshuPickHit(subID string, seg []string, pick string) bool {
 		return containsDigit(seg, pick)
 	}
 	return teshuPatternHit(subID, seg)
+}
+
+// sscIsStraight 三星顺子：排序后连号，或 089 / 019 环绕顺子。
+func sscIsStraight(seg []string) bool {
+	if len(seg) != 3 || len(digitCounts(seg)) != 3 {
+		return false
+	}
+	vals := []int{atoiBall(seg[0]), atoiBall(seg[1]), atoiBall(seg[2])}
+	for i := 0; i < 2; i++ {
+		for j := i + 1; j < 3; j++ {
+			if vals[j] < vals[i] {
+				vals[i], vals[j] = vals[j], vals[i]
+			}
+		}
+	}
+	if vals[1] == vals[0]+1 && vals[2] == vals[1]+1 {
+		return true
+	}
+	// 089、019
+	return vals[0] == 0 && vals[1] == 8 && vals[2] == 9 ||
+		vals[0] == 0 && vals[1] == 1 && vals[2] == 9
 }

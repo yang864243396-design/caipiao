@@ -18,3 +18,11 @@ backend/**/dist
 # ui-ux-pro-max 本地 Python
 **/__pycache__/
 *.pyc
+
+# 自创方案矩阵 E2E
+tests/e2e_scheme_matrix/.env
+tests/e2e_scheme_matrix/.venv/
+tests/e2e_scheme_matrix/progress.json
+tests/e2e_scheme_matrix/v6_storage_state.json
+tests/e2e_scheme_matrix/reports/*
+!tests/e2e_scheme_matrix/reports/.gitkeep

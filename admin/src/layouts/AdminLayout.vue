@@ -32,7 +32,7 @@ const activeMenu = computed(() => {
 async function onLogout() {
   const ok = await adminConfirmDialog({
     title: '退出登录',
-    message: '确认退出演示账号？',
+    message: '确认退出当前账号？',
     tone: 'primary',
   })
   if (!ok) return
@@ -159,7 +159,6 @@ async function onLogout() {
             <el-tag v-if="activeRole" type="info" effect="plain" size="small">
               {{ activeRole.name }}
             </el-tag>
-            <el-tag type="success" effect="plain" size="small">Bearer</el-tag>
             <el-button type="primary" plain :icon="SwitchButton" @click="onLogout">
               退出
             </el-button>

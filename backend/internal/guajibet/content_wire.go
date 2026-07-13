@@ -223,13 +223,61 @@ func formatPaddedPickDigits(template, groupContent string) string {
 	return strings.Join(parts, ",")
 }
 
+// formatSSCDanshiDigits 直选/组选单式：保留「N 位一注、逗号分隔」。
+// 勿把 "012,345" 压成 "012345"（第三方会报投注数字格式不正确）。
+func formatSSCDanshiDigits(segLen int, groupContent string) string {
+	if segLen <= 0 {
+		segLen = 1
+	}
+	tokens := splitPickTokens(groupContent)
+	if len(tokens) == 0 {
+		return strings.TrimSpace(groupContent)
+	}
+	complete := make([]string, 0, len(tokens))
+	allComplete := true
+	for _, t := range tokens {
+		d := digitsOnly(t)
+		if len(d) != segLen {
+			allComplete = false
+			break
+		}
+		complete = append(complete, d)
+	}
+	if allComplete {
+		return strings.Join(complete, ",")
+	}
+	raw := digitsOnly(strings.Join(tokens, ""))
+	if len(raw) < segLen {
+		return raw
+	}
+	if len(raw)%segLen == 0 {
+		parts := make([]string, 0, len(raw)/segLen)
+		for i := 0; i+segLen <= len(raw); i += segLen {
+			parts = append(parts, raw[i:i+segLen])
+		}
+		return strings.Join(parts, ",")
+	}
+	// 无法按位宽切分时保持逗号分隔（避免 silent 丢分隔符）
+	return formatCommaPickDigits(groupContent)
+}
+
+func digitsOnly(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 func formatPaddedDanshiDigits(template string, segLen int, groupContent string) string {
 	if segLen <= 0 {
 		segLen = 1
 	}
 	width := digitPadWidth(template)
 	if width <= 1 {
-		return normalizePickDigits(groupContent)
+		return formatSSCDanshiDigits(segLen, groupContent)
 	}
 	raw := normalizePickDigits(groupContent)
 	if len(raw) >= segLen {

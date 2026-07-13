@@ -36,7 +36,6 @@ async function onSubmit() {
       <template #header>
         <div class="login-card-header">
           <span class="login-title">管理后台</span>
-          <el-tag type="info" size="small">账号绑定角色</el-tag>
         </div>
       </template>
 
@@ -45,26 +44,13 @@ async function onSubmit() {
           <el-input v-model="username" autocomplete="username" :prefix-icon="User" />
         </el-form-item>
         <el-form-item label="密码">
-          <el-input
-            v-model="password"
-            type="password"
-            show-password
-            autocomplete="current-password"
-            @keyup.enter="onSubmit"
-          />
+          <el-input v-model="password" type="password" show-password autocomplete="current-password"
+            @keyup.enter="onSubmit" />
         </el-form-item>
         <el-button type="primary" class="login-btn" :loading="loading" native-type="submit">
           登录
         </el-button>
       </el-form>
-
-      <p class="login-hint">
-        演示账号（密码均为 <strong>admin123</strong>）：
-        <strong>admin</strong> 超级管理员 ·
-        <strong>fin_approve</strong> 财务审批 ·
-        <strong>fin_payout</strong> 财务出纳。
-        角色由服务端绑定，登录后菜单按账号权限显示。
-      </p>
     </el-card>
   </div>
 </template>

@@ -2,7 +2,6 @@
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import LobbyTabBar from '@/components/lobby/LobbyTabBar.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import { fetchShareCatalogRows } from '@/api/schemes/shareCatalog'
 import { shareAddToCloud } from '@/api/schemes/shareAddToCloud'
@@ -154,8 +153,6 @@ onMounted(() => {
         </p>
       </section>
     </main>
-
-    <LobbyTabBar />
 
     <ConfirmDialog
       v-model="successVisible"

@@ -5,6 +5,14 @@ import {
   resolvePlayConfigFromCatalogIds,
 } from '@/utils/playConfig'
 import {
+  countHunheZuxuanUnits,
+  countOrderedSpanCombinations,
+  countOrderedSumCombinations,
+  countZuxuanSumCombinations,
+  hunheDigitLenFromConfig,
+} from '@/utils/playInputProfile'
+import { segmentBetMultiplier } from '@/utils/runTypeMatrix'
+import {
   isLonghuPlayConfig,
   longhuPickHint,
   longhuPickOptionsForConfig,
@@ -36,6 +44,8 @@ export interface PlayConfig {
   /** rules/v2 同步后来自 sub_plays.label */
   playMethodLabel?: string
   playTemplate?: string
+  /** rules/v2 segment_rule.guajiGroup，用于前中后三等注数倍增 */
+  guajiGroup?: string
 }
 const POSITION_LABELS = ['万', '千', '百', '十', '个'] as const
 
@@ -245,16 +255,27 @@ export function parseGroupPicks(
       lines: [],
     }
   }
-  const textModes = ['daxiao', 'danshuang', 'dxds', 'teshu', 'longhubao'] as const
+  const textModes = ['daxiao', 'danshuang', 'dxds', 'teshu', 'longhubao', 'zhuangxian'] as const
   if (config.betMode && (textModes as readonly string[]).includes(config.betMode)) {
     const opts: Record<string, string[]> = {
       daxiao: ['大', '小'],
       danshuang: ['单', '双'],
       dxds: ['大', '小', '单', '双'],
-      teshu: ['豹子', '对子', '顺子', '极大', '极小'],
+      teshu:
+        config.playTemplate === 'pc28_std'
+          ? ['豹子', '对子', '顺子', '极大', '极小']
+          : ['豹子', '对子', '顺子'],
       longhubao: ['龙', '虎', '豹'],
+      zhuangxian: ['庄', '闲'],
     }
-    return { digits: parseTextPickTokens(trimmed, opts[config.betMode] ?? []), lines: [] }
+    const allowed = opts[config.betMode] ?? []
+    if (config.inputMode === 'multiline' && config.segmentLen > 1) {
+      return {
+        digits: [],
+        lines: splitGroupLines(trimmed).map((line) => parseTextPickTokens(line, allowed)),
+      }
+    }
+    return { digits: parseTextPickTokens(trimmed, allowed), lines: [] }
   }
   const pool = poolFromConfig(config)
   if (config.inputMode === 'multiline') {
@@ -293,8 +314,12 @@ export function buildGroupContent(
   if (isLonghuPlayConfig(config)) {
     return (picks.digits ?? []).join(',')
   }
-  const textModes = ['daxiao', 'danshuang', 'dxds', 'teshu', 'longhubao'] as const
+  const textModes = ['daxiao', 'danshuang', 'dxds', 'teshu', 'longhubao', 'zhuangxian'] as const
   if (config.betMode && (textModes as readonly string[]).includes(config.betMode)) {
+    if (config.inputMode === 'multiline' && config.segmentLen > 1) {
+      const lines = picks.lines ?? []
+      return Array.from({ length: config.segmentLen }, (_, i) => (lines[i] ?? []).join(',')).join('\n')
+    }
     return (picks.digits ?? []).join(',')
   }
   if (config.inputMode === 'danshi') {
@@ -343,13 +368,89 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
   if (!content) return 0
 
   if (config.betMode === 'hezhi' || (config.playTemplate === 'pc28_std' && config.playMethodLabel?.trim() === '和值')) {
-    const pool = { min: 0, max: 27 }
+    const pool = poolFromConfig(config) ?? { min: 0, max: 27 }
     const tokens = parsePickTokens(content, pool)
-    return tokens.length || (content ? 1 : 0)
+    if (!tokens.length) return content ? 1 : 0
+    // PC28 / K3 / PK10：选几个和值即几注
+    if (
+      config.playTemplate === 'pc28_std' ||
+      config.playTemplate === 'k3_std' ||
+      config.playTemplate === 'pk10_std'
+    ) {
+      return tokens.length
+    }
+    // SSC：按位组合数求和
+    const segLen = inferHezhiSegmentLen(config)
+    const zuxuan = (config.playMethodLabel ?? '').includes('组选')
+    let total = 0
+    for (const t of tokens) {
+      const sum = Number(t)
+      if (!Number.isFinite(sum)) continue
+      total += zuxuan
+        ? countZuxuanSumCombinations(sum, segLen)
+        : countOrderedSumCombinations(sum, segLen)
+    }
+    return applySegmentBetMultiplier(config, total || tokens.length)
+  }
+
+  if (config.betMode === 'kuadu') {
+    const pool = poolFromConfig(config) ?? { min: 0, max: 9 }
+    const tokens = parsePickTokens(content, pool)
+    if (!tokens.length) return 0
+    const segLen = inferHezhiSegmentLen(config)
+    let total = 0
+    for (const t of tokens) {
+      const span = Number(t)
+      if (!Number.isFinite(span)) continue
+      total += countOrderedSpanCombinations(span, segLen)
+    }
+    return applySegmentBetMultiplier(config, total || tokens.length)
+  }
+
+  if (config.betMode === 'weishu' || config.betMode === 'baodan') {
+    const pool = poolFromConfig(config) ?? { min: 0, max: 9 }
+    const tokens = parsePickTokens(content, pool)
+    if (config.betMode === 'baodan') {
+      // 三星包胆约 54 注/胆；二星 9 注
+      const n = tokens.length
+      if (!n) return 0
+      const segLen = inferHezhiSegmentLen(config)
+      const per = segLen === 2 ? 9 : 54
+      return applySegmentBetMultiplier(config, n * per)
+    }
+    return tokens.length
   }
 
   if (isLonghuPlayConfig(config)) {
     return parseGroupPicks(config, content).digits.length
+  }
+
+  // 特殊号 / 大小单双等文字选项：选几个计几注（对齐第三方）
+  const textBetModes = ['daxiao', 'danshuang', 'dxds', 'teshu', 'longhubao', 'zhuangxian'] as const
+  if (config.betMode && (textBetModes as readonly string[]).includes(config.betMode)) {
+    const picks = parseGroupPicks(config, content).digits
+    if (picks.length > 0) {
+      return applySegmentBetMultiplier(config, picks.length)
+    }
+    const raw = content
+      .split(/[\s,，\n]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+    return applySegmentBetMultiplier(config, raw.length)
+  }
+
+  // 混合组选：排除豹子，按组选形态去重（对齐第三方）
+  if (config.betMode === 'hunhe') {
+    const digitLen = hunheDigitLenFromConfig(config)
+    return applySegmentBetMultiplier(config, countHunheZuxuanUnits(content, digitLen))
+  }
+
+  // SSC 任选直选复式：按 C(5,n) 位组合计注（对齐后端 evaluateRenxuanZhixuan / 第三方）
+  if (isSscRenxuanConfig(config) && isRenxuanZhixuanFushi(config)) {
+    const pickN = renPickCountFromConfig(config)
+    const lines = splitGroupLinesPad(content, 5)
+    const units = countRenxuanZhixuanUnits(lines, pickN, poolFromConfig(config))
+    return applySegmentBetMultiplier(config, units)
   }
 
   if (config.inputMode === 'danshi' && isLhcDanshiBetMode(config.betMode ?? '')) {
@@ -382,12 +483,44 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
     return content.split(',').filter((t) => t.length === config.segmentLen).length || 0
   }
 
+  // 直选组合：按位乘积 × 段长（三星×3，对齐第三方「组合」）
+  if (
+    config.inputMode === 'multiline' &&
+    config.segmentLen > 1 &&
+    (config.betMode === 'zuhe' ||
+      config.subPlayId === 'zuhe' ||
+      /(^|[^组选])组合/.test(config.playMethodLabel ?? '') ||
+      (config.playMethodLabel ?? '').endsWith('组合') ||
+      (config.playMethodLabel ?? '').includes('直选组合'))
+  ) {
+    const lines = splitGroupLines(content)
+    let units = 1
+    for (let i = 0; i < config.segmentLen; i++) {
+      const n = parsePickTokens(lines[i] ?? '').length
+      if (!n) return 0
+      units *= n
+    }
+    return applySegmentBetMultiplier(config, units * config.segmentLen)
+  }
+
   if (config.subPlayId === 'zhixuan_fs' && config.inputMode === 'multiline') {
     const lines = content.split('\n').filter(Boolean)
     if (lines.length < config.segmentLen) return 0
     let units = 1
     for (let i = 0; i < config.segmentLen; i++) {
       const n = parsePickTokens(lines[i] ?? '').length || 1
+      units *= n
+    }
+    return applySegmentBetMultiplier(config, units)
+  }
+
+  if (config.betMode === 'dxds' && config.inputMode === 'multiline' && config.segmentLen > 1) {
+    const lines = splitGroupLines(content)
+    const allowed = ['大', '小', '单', '双']
+    let units = 1
+    for (let i = 0; i < config.segmentLen; i++) {
+      const n = parseTextPickTokens(lines[i] ?? '', allowed).length
+      if (!n) return 0
       units *= n
     }
     return units
@@ -421,21 +554,129 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
   const pool = parsePickTokens(content, poolCfg)
   if (!pool.length) {
     // 和值/跨度等特殊玩法：有内容即计 1 注
-    if (!config.subPlayId) return 1
+    if (!config.subPlayId) return applySegmentBetMultiplier(config, 1)
     return 0
   }
 
   if (config.subPlayId === 'zhixuan_fs' && config.segmentLen > 1) {
-    return pool.length ** config.segmentLen
+    return applySegmentBetMultiplier(config, pool.length ** config.segmentLen)
   }
 
-  if (config.subPlayId === 'zuxuan_fs' && config.segmentLen === 3) {
+  // 三星组选号池：组三 / 组六 / 通用组选复式分别计注（对齐第三方；勿把组三+组六混算）
+  const zuxuanText = `${config.betMode ?? ''} ${config.subPlayId} ${config.catalogSubId ?? ''} ${config.playMethodLabel ?? ''}`
+  const isZuPool =
+    config.segmentLen === 3 &&
+    (config.subPlayId === 'zuxuan_fs' ||
+      config.betMode === 'zu3' ||
+      config.betMode === 'zu6' ||
+      config.betMode === 'zuxuan_fs' ||
+      /组三|组六|组选复式/.test(zuxuanText))
+  if (isZuPool) {
     const n = pool.length
-    if (n < 3) return n
-    return n * (n - 1) + (n * (n - 1) * (n - 2)) / 6
+    const isZu6Only =
+      config.betMode === 'zu6' ||
+      ((/组六|zu6/i.test(zuxuanText) && !/组选6|组选60|组选120|zu60|zu120/i.test(zuxuanText)))
+    const isZu3Only =
+      !isZu6Only &&
+      (config.betMode === 'zu3' || /组三|zu3/i.test(zuxuanText))
+    if (isZu6Only) {
+      if (n < 3) return 0
+      return applySegmentBetMultiplier(config, (n * (n - 1) * (n - 2)) / 6)
+    }
+    if (isZu3Only) {
+      if (n < 2) return 0
+      return applySegmentBetMultiplier(config, n * (n - 1))
+    }
+    // 通用组选复式：组三注 + 组六注
+    if (n < 2) return 0
+    if (n < 3) return applySegmentBetMultiplier(config, n * (n - 1))
+    return applySegmentBetMultiplier(config, n * (n - 1) + (n * (n - 1) * (n - 2)) / 6)
   }
 
-  return pool.length || 1
+  return applySegmentBetMultiplier(config, pool.length || 1)
+}
+
+function applySegmentBetMultiplier(config: PlayConfig, units: number): number {
+  if (units <= 0) return units
+  const m = segmentBetMultiplier(config.guajiGroup ?? config.playTypeLabel ?? '')
+  return m > 1 ? units * m : units
+}
+
+function isSscRenxuanConfig(config: PlayConfig): boolean {
+  return (
+    config.playTypeId === 'renxuan' ||
+    config.guajiGroup === '任选' ||
+    (config.playTypeLabel ?? '') === '任选'
+  )
+}
+
+function isRenxuanZhixuanFushi(config: PlayConfig): boolean {
+  const text = `${config.betMode ?? ''} ${config.subPlayId} ${config.catalogSubId ?? ''} ${config.playMethodLabel ?? ''}`
+  if (/单式|组选|和值|组三|组六|zu\d|hunhe|混合/i.test(text)) return false
+  return (
+    config.inputMode === 'multiline' ||
+    /直选复式|zhixuan_fs|fushi/i.test(text) ||
+    (config.betMode === 'fushi' && !/组选/.test(text))
+  )
+}
+
+function renPickCountFromConfig(config: PlayConfig): number {
+  const s = `${config.catalogSubId ?? ''} ${config.subPlayId} ${config.playMethodLabel ?? ''}`
+  if (/ren4|任选四|任四/i.test(s)) return 4
+  if (/ren3|任选三|任三/i.test(s)) return 3
+  if (/ren2|任选二|任二/i.test(s)) return 2
+  return 2
+}
+
+function combinationsIndices(n: number, k: number): number[][] {
+  const out: number[][] = []
+  const buf: number[] = []
+  const dfs = (start: number) => {
+    if (buf.length === k) {
+      out.push([...buf])
+      return
+    }
+    for (let i = start; i < n; i++) {
+      buf.push(i)
+      dfs(i + 1)
+      buf.pop()
+    }
+  }
+  dfs(0)
+  return out
+}
+
+/** 与后端 evaluateRenxuanZhixuan 一致：五位号池，对 C(5,pickCount) 各位积求和 */
+function countRenxuanZhixuanUnits(
+  lines: string[],
+  pickCount: number,
+  pool?: { min: number; max: number } | null,
+): number {
+  const n = pickCount > 0 && pickCount <= 5 ? pickCount : 2
+  const pools = Array.from({ length: 5 }, (_, i) => parsePickTokens(lines[i] ?? '', pool ?? undefined))
+  let units = 0
+  for (const combo of combinationsIndices(5, n)) {
+    let u = 1
+    for (const pos of combo) {
+      const len = pools[pos]?.length ?? 0
+      if (!len) {
+        u = 0
+        break
+      }
+      u *= len
+    }
+    units += u
+  }
+  return units
+}
+
+function inferHezhiSegmentLen(config: PlayConfig): number {
+  const label = `${config.guajiGroup ?? ''} ${config.playTypeLabel ?? ''} ${config.playMethodLabel ?? ''}`
+  if (label.includes('五星')) return 5
+  if (label.includes('四星') || label.includes('前后四')) return 4
+  if (label.includes('前二') || label.includes('后二') || label.includes('前后二')) return 2
+  if (config.segmentLen > 1 && config.segmentLen <= 5) return config.segmentLen
+  return 3
 }
 
 export function buildGameBetPayload(
@@ -474,6 +715,13 @@ export function splitGroupLines(content: string): string[] {
     .filter(Boolean)
 }
 
+/** 保留空行并补齐到 len（任选五位号池按位对齐） */
+export function splitGroupLinesPad(content: string, len: number): string[] {
+  const lines = content.split('\n').map((l) => l.trim())
+  while (lines.length < len) lines.push('')
+  return lines.slice(0, Math.max(len, lines.length))
+}
+
 /** 直选单式：提取指定位数的数字串 */
 export function parseNumberTokens(raw: string, expectLen: number): string[] {
   const parts = raw.split(/[,，\s\n]+/).map((s) => s.trim()).filter(Boolean)
@@ -507,6 +755,35 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
   if (!content) return { ok: false, message: '方案内容不能为空' }
 
   const sub = config.subPlayId
+
+  // 任选直选复式：允许部分位为空，至少填满 n 个位（须在通用 zhixuan_fs 校验之前）
+  if (isSscRenxuanConfig(config) && isRenxuanZhixuanFushi(config)) {
+    const pickN = renPickCountFromConfig(config)
+    const rawLines = splitGroupLinesPad(content, 5)
+    const normalizedLines: string[] = []
+    let filled = 0
+    for (let i = 0; i < 5; i++) {
+      const line = rawLines[i] ?? ''
+      if (!line) {
+        normalizedLines.push('')
+        continue
+      }
+      if (!isValidDigitPoolLine(line)) {
+        const pos = config.segmentLabels[i] ?? `第 ${i + 1} 位`
+        return { ok: false, message: `${pos}选号格式不合法，请使用 0-9 并以逗号分隔` }
+      }
+      const digits = parsePickTokens(line)
+      if (digits.length) filled++
+      normalizedLines.push([...new Set(digits)].join(','))
+    }
+    if (filled < pickN) {
+      return { ok: false, message: `任选至少在 ${pickN} 个位置选号` }
+    }
+    const normalized = normalizedLines.join('\n')
+    const betUnits = countBetUnits(config, normalized)
+    if (betUnits <= 0) return { ok: false, message: '选号无效' }
+    return { ok: true, normalized, betUnits }
+  }
 
   if (sub === 'zhixuan_ds') {
     const parts = content.split(/[,，\s\n]+/).map((s) => s.trim()).filter(Boolean)
@@ -636,7 +913,24 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
     'zu120',
   ])
   if (config.betMode && specialBetModes.has(config.betMode)) {
-    return { ok: true, normalized: content, betUnits: countBetUnits(config, content) || 1 }
+    const betUnits = countBetUnits(config, content)
+    if (config.betMode === 'hunhe') {
+      if (betUnits <= 0) {
+        const digitLen = hunheDigitLenFromConfig(config)
+        return {
+          ok: false,
+          message: `混合组选：每注 ${digitLen} 位，不含豹子；组选形态相同只计 1 注（如 123 与 321）`,
+        }
+      }
+      return { ok: true, normalized: content, betUnits }
+    }
+    if (config.betMode === 'teshu') {
+      if (betUnits <= 0) {
+        return { ok: false, message: '特殊号：请选择豹子、对子、顺子等，多选以逗号分隔' }
+      }
+      return { ok: true, normalized: content, betUnits }
+    }
+    return { ok: true, normalized: content, betUnits: betUnits || 1 }
   }
 
   if (config.playTemplate === 'pc28_std' && config.playMethodLabel?.trim() === '和值') {
@@ -797,8 +1091,12 @@ export function groupContentPlaceholder(config: PlayConfig): string {
   if (config.betMode === 'hezhi') {
     return '和值：输入和值数字，逗号分隔（快三 3–18，PC28 0–27）'
   }
+  if (config.betMode === 'hunhe') {
+    const digitLen = hunheDigitLenFromConfig(config)
+    return `混合组选：每注 ${digitLen} 位，不含豹子；组选形态相同只计 1 注（如 123,321 计 1 注）`
+  }
   if (config.betMode === 'teshu') {
-    return '特殊号：豹子、对子、顺子、极大、极小，逗号分隔'
+    return '特殊号：豹子、对子、顺子（PC28 另含极大/极小），多选各计 1 注'
   }
   if (config.betMode === 'longhubao') {
     return '龙虎豹：龙、虎、豹，逗号分隔'
