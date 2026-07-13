@@ -17,6 +17,7 @@ const clientScopedAliases: Array<{ find: string | RegExp; replacement: string }>
   { find: '@/utils/betPayload', replacement: `${clientSrc}/utils/betPayload` },
   { find: '@/utils/pickPanelOptions', replacement: `${clientSrc}/utils/pickPanelOptions` },
   { find: '@/utils/playConfig', replacement: `${clientSrc}/utils/playConfig` },
+  { find: '@/utils/playInputProfile', replacement: `${clientSrc}/utils/playInputProfile` },
   { find: '@/utils/runTypeMatrix', replacement: `${clientSrc}/utils/runTypeMatrix` },
   { find: '@/utils/longhuPickOptions', replacement: `${clientSrc}/utils/longhuPickOptions` },
   { find: '@/utils/playTypeLabels', replacement: `${clientSrc}/utils/playTypeLabels` },
