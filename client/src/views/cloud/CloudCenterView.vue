@@ -1144,12 +1144,6 @@ function statusBadgeClass(s: CloudSchemeCard): string {
   box-shadow: 0 20px 40px -24px rgba(0, 80, 203, 0.45);
 }
 
-@media (min-width: 640px) {
-  .cc-head {
-    border-radius: 0 0 2.5rem 2.5rem;
-  }
-}
-
 .cc-head-top {
   display: flex;
   align-items: center;
@@ -1172,8 +1166,8 @@ function statusBadgeClass(s: CloudSchemeCard): string {
 }
 
 .cc-icon-btn {
-  width: 2.25rem;
-  height: 2.25rem;
+  width: var(--page-titlebar-action-size);
+  height: var(--page-titlebar-action-size);
   border: none;
   border-radius: 0.75rem;
   background: rgba(255, 255, 255, 0.12);
@@ -1190,7 +1184,7 @@ function statusBadgeClass(s: CloudSchemeCard): string {
 }
 
 .cc-icon-btn .cc-ms {
-  font-size: 1.375rem;
+  font-size: var(--page-titlebar-icon-size);
 }
 
 .cc-stats {

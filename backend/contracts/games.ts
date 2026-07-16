@@ -75,6 +75,8 @@ export interface GameDetail {
   drawnNumbers: string[]
   planInverseDigits: string
   planInverseBetCount: number
+  /** 当前玩法是否适用计划反集；false 时前端隐藏「计划反集」Tab */
+  planContrarySupported: boolean
   bettingRows: GameBettingRow[]
   betRecords: GameBetRecordRow[]
   planTrendGroupBets: number

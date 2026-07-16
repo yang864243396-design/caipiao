@@ -11,12 +11,14 @@ func resolveLHCPlayRule(typeID, subID, betMode string) playRule {
 		betMode = inferLHCBetMode(typeID, subID)
 	}
 	return playRule{
-		PlayTemplate: "lhc_std",
-		PlayTypeID:   typeID,
-		SubPlayID:    betMode,
-		BetMode:      betMode,
-		CatalogSubID: subID,
-		SegmentLen:   7,
+		PlayTemplate:  "lhc_std",
+		PlayTypeID:    typeID,
+		SubPlayID:     betMode,
+		BetMode:       betMode,
+		CatalogSubID:  subID,
+		SegmentLen:    7,
+		NumberPoolMin: 1,
+		NumberPoolMax: 49,
 	}
 }
 

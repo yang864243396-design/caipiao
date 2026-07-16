@@ -87,15 +87,7 @@ func SampleGroupContent(meta RuleMeta) string {
 		return string(digits)
 	case "danshi":
 		if isRenxuanMeta(meta) {
-			k := renxuanSegmentLen(meta)
-			if k <= 0 {
-				k = 2
-			}
-			digits := make([]byte, k)
-			for i := range digits {
-				digits[i] = byte('1' + i)
-			}
-			return string(digits)
+			return sampleRenxuanDanshiContent(meta)
 		}
 		if isSyxwRenxuanMeta(meta) {
 			return sampleSyxwRenxuanContent(meta)
@@ -395,7 +387,8 @@ func FormatBetContentForRule(meta RuleMeta, groupContent string) string {
 			return formatPaddedDanshiDigits(meta.PlayTemplate, segLen, groupContent)
 		}
 		_, segLen := segmentRange(meta)
-		return formatSSCDanshiDigits(segLen, groupContent)
+		// 组选单式：排除对子/豹子，并按组选形态去重（12 与 21 同一注）
+		return formatSSCZuxuanDanshiDigits(segLen, groupContent)
 	case "danshi":
 		if meta.PlayTemplate == "k3_std" {
 			return normalizePickDigits(groupContent)
@@ -412,6 +405,9 @@ func FormatBetContentForRule(meta RuleMeta, groupContent string) string {
 		}
 		if mode == "budingwei" && meta.PlayTemplate == "syxw_std" {
 			return formatPaddedPickDigits(meta.PlayTemplate, groupContent)
+		}
+		if mode == "budingwei" {
+			return formatBudingweiContent(meta, groupContent)
 		}
 		return formatCommaPickDigits(groupContent)
 	case "zu24", "zu12", "zu4", "zu120", "zu60", "zu30", "zu20", "zu10", "zu5":
@@ -528,13 +524,8 @@ func CountBetNums(meta RuleMeta, wireContent string) int {
 		}
 		return applySegmentMultiplier(meta, countZuxuanFushiBetNums(len(splitPickDigits(wireContent)), segLen))
 	case "zuxuan_ds":
-		parts := splitCommaParts(wireContent)
-		n := 0
-		if len(parts) > 1 {
-			n = len(parts)
-		} else if len(normalizePickDigits(wireContent)) > 0 {
-			n = 1
-		}
+		// 与混合组选一致：排除对子/豹子，按排序形态去重（对齐第三方预览）
+		n := countSSCHunheBetNums(wireContent, segLen)
 		return applySegmentMultiplier(meta, n)
 	case "hezhi":
 		if meta.PlayTemplate == "k3_std" {
@@ -634,7 +625,7 @@ func CountBetNums(meta RuleMeta, wireContent string) int {
 		}
 		return countPositionProductForTemplate(meta.PlayTemplate, wireContent, positions)
 	case KindSSCDanshiDigits:
-		parts := splitCommaParts(wireContent)
+		parts := uniqueStringsPreserve(splitCommaParts(wireContent))
 		n := 0
 		if len(parts) == 0 {
 			if len(normalizePickDigits(wireContent)) >= segLen && segLen > 0 {
@@ -679,11 +670,27 @@ func NeedsSoloForRule(meta RuleMeta, wireContent string) bool {
 	if mode == "weishu" || mode == "teshu" || mode == "baodan" {
 		return false
 	}
+	// 前后三/前中后三混合组选：实测 solo=true →「单挑参数错误」
+	if mode == "hunhe" {
+		text := meta.Group + " " + meta.TypeLabel + " " + meta.Label + " " + meta.FullName
+		if strings.Contains(text, "前后三") || strings.Contains(text, "前中后三") {
+			return false
+		}
+	}
 	if meta.PlayTemplate == "pc28_std" && mode == "hezhi" {
 		return false
 	}
-	if mode == "zuhe" && (meta.Group == "四星" || meta.Group == "五星" || meta.Group == "前后四" || guajiGroupRequiresSoloFalse(meta)) {
-		return false
+	if mode == "zuhe" {
+		// 直选组合：多区位玩法实测须 solo=false（与直选单式/组三不同）
+		g := strings.TrimSpace(meta.Group)
+		switch g {
+		case "四星", "五星", "前后四", "前中后三", "前后三":
+			return false
+		}
+		if strings.Contains(meta.Group+meta.TypeLabel+meta.Label, "前中后三") ||
+			strings.Contains(meta.Group+meta.TypeLabel+meta.Label, "前后三") {
+			return false
+		}
 	}
 	if mode == "longhu" || mode == "longhuhe" || mode == "zhuangxian" {
 		return false
@@ -695,6 +702,10 @@ func NeedsSoloForRule(meta RuleMeta, wireContent string) bool {
 		return false
 	}
 	if mode == "zu6" && (meta.Group == "四星" || meta.Group == "前后四" || meta.TypeID == "g013" || meta.TypeID == "g014") {
+		return false
+	}
+	// SSC 前二/后二组选复式：勿走末尾默认 solo=true
+	if sscErxingZuxuanFsForcesSoloFalse(meta) {
 		return false
 	}
 	if meta.PlayTemplate == "lhc_std" {
@@ -799,10 +810,51 @@ func ResolveSolo(meta RuleMeta, wireContent string, betsNums int) bool {
 	if betsNums > guajiSoloMaxBets {
 		return false
 	}
+	// 前后二/前后四：实测任意注数 solo=true →「单挑参数错误」，必须 solo=false。
+	if guajiGroupRequiresSoloFalse(meta) {
+		return false
+	}
+	// SSC 前二/后二组选复式：实测任意注数 solo=true →「单挑参数错误」（与直选复式单注不同）。
+	if sscErxingZuxuanFsForcesSoloFalse(meta) {
+		return false
+	}
+	// 前二/后二：实测多注仍带 solo=true → guaji 40000「单挑参数错误」；仅单注可 solo。
+	if erxingDuoZhuForcesSoloFalse(meta) && betsNums > 1 {
+		return false
+	}
 	if strings.TrimSpace(meta.PlayTemplate) != "" {
 		return NeedsSoloForRule(meta, wireContent)
 	}
 	return NeedsSoloBet(wireContent)
+}
+
+// sscErxingZuxuanFsForcesSoloFalse 时时彩前二/后二组选复式须 solo=false。
+func sscErxingZuxuanFsForcesSoloFalse(meta RuleMeta) bool {
+	tpl := strings.TrimSpace(meta.PlayTemplate)
+	if tpl != "" && tpl != "ssc_std" && tpl != "fast_ssc_std" {
+		return false
+	}
+	mode := InferBetMode(meta)
+	if mode != "zuxuan_fs" {
+		return false
+	}
+	return erxingDuoZhuForcesSoloFalse(meta)
+}
+
+// erxingDuoZhuForcesSoloFalse 二星（前二/后二）多注不可 solo。
+func erxingDuoZhuForcesSoloFalse(meta RuleMeta) bool {
+	g := strings.TrimSpace(meta.Group)
+	switch g {
+	case "前二码", "后二码", "前二", "后二":
+		return true
+	case "前后二", "前后四":
+		return false
+	}
+	text := meta.Group + " " + meta.TypeLabel + " " + meta.Label + " " + meta.TeamLabel + " " + meta.FullName
+	if strings.Contains(text, "前后二") || strings.Contains(text, "前后四") {
+		return false
+	}
+	return strings.Contains(text, "前二") || strings.Contains(text, "后二")
 }
 
 func classifyRule(meta RuleMeta) (ContentKind, int, int) {
@@ -833,14 +885,25 @@ func applySegmentMultiplier(meta RuleMeta, n int) int {
 	return n
 }
 
-// guajiGroupRequiresSoloFalse 第三方要求 solo=false（前中后三/前后三类玩法）。
+// guajiGroupRequiresSoloFalse 第三方要求 solo=false 的区位组合玩法。
+// 实测：前后二/前后四任意注数 solo=true →「单挑参数错误」。
+// 注意：前中后三/前后三相反，须 solo=true（勿列入此处）。
 func guajiGroupRequiresSoloFalse(meta RuleMeta) bool {
-	switch strings.TrimSpace(meta.Group) {
-	case "前中后三", "前后三":
+	// rules/v2：g008=前后二、g014=前后四（segment 偶发缺 guajiGroup 文案）
+	switch strings.TrimSpace(meta.TypeID) {
+	case "g008", "g014":
 		return true
-	default:
+	}
+	g := strings.TrimSpace(meta.Group)
+	switch g {
+	case "前后二", "前后四":
+		return true
+	}
+	text := meta.Group + " " + meta.TypeLabel + " " + meta.Label + " " + meta.TeamLabel + " " + meta.FullName
+	if strings.Contains(text, "前中后三") || strings.Contains(text, "前后三") {
 		return false
 	}
+	return strings.Contains(text, "前后二") || strings.Contains(text, "前后四")
 }
 
 func classifyRuleKind(meta RuleMeta) ContentKind {
@@ -1588,6 +1651,18 @@ func formatCommaPickDigits(groupContent string) string {
 	return strings.Join(tokens, ",")
 }
 
+// formatBudingweiContent 不定位选号：逗号分隔；一码最多 2 个号（第三方限制）。
+func formatBudingweiContent(meta RuleMeta, groupContent string) string {
+	tokens := uniqueStringsPreserve(splitPickTokens(groupContent))
+	if len(tokens) == 0 {
+		return strings.TrimSpace(groupContent)
+	}
+	if budingweiPickCount(meta) == 1 && len(tokens) > 2 {
+		tokens = tokens[:2]
+	}
+	return strings.Join(tokens, ",")
+}
+
 func formatZuheContent(groupContent string) string {
 	groupContent = strings.TrimSpace(groupContent)
 	if groupContent == "" {
@@ -1632,9 +1707,30 @@ func splitCommaParts(s string) []string {
 	return out
 }
 
-// countSSCHunheBetNums 三星混合组选注数（对齐第三方）：
-// 排除豹子，按组选形态去重（123 与 321 计 1 注）。
-// 例：123,321,232,222,333,444,542 → 3
+// uniqueStringsPreserve 保序去重（单式注数对齐第三方）。
+func uniqueStringsPreserve(items []string) []string {
+	if len(items) <= 1 {
+		return items
+	}
+	seen := make(map[string]struct{}, len(items))
+	out := make([]string, 0, len(items))
+	for _, raw := range items {
+		t := strings.TrimSpace(raw)
+		if t == "" {
+			continue
+		}
+		if _, ok := seen[t]; ok {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	return out
+}
+
+// countSSCHunheBetNums 混合组选 / 组选单式注数（对齐第三方）：
+// 排除对子/豹子（各位相同），按组选形态去重（123 与 321、12 与 21 计 1 注）。
+// 例：123,321,232,222,333,444,542 → 3；11,12,22,13 → 2
 func countSSCHunheBetNums(wireContent string, segLen int) int {
 	if segLen <= 0 {
 		segLen = 3
@@ -1764,16 +1860,8 @@ func budingweiMinPoolSize(meta RuleMeta) int {
 }
 
 func budingweiNeedsSolo(meta RuleMeta) bool {
-	label := meta.Label
-	if strings.Contains(label, "二码") {
-		if strings.Contains(label, "四") || strings.Contains(label, "五星") {
-			return false
-		}
-		return true
-	}
-	if strings.Contains(label, "后三") {
-		return true
-	}
+	// 实测一码/二码不定位：solo=true →「单挑参数错误」，须 solo=false。
+	_ = meta
 	return false
 }
 
@@ -1787,7 +1875,18 @@ func countBudingweiBetNums(meta RuleMeta, wireContent string) int {
 		return combin(len(parts), need)
 	}
 	if need == 1 {
-		return 1
+		// 一码：选几个号计几注；第三方最多允许 2 个号（超过报「不可超过两位」）
+		n := len(parts)
+		if n == 0 {
+			if len(normalizePickDigits(wireContent)) > 0 {
+				return 1
+			}
+			return 0
+		}
+		if n > 2 {
+			n = 2
+		}
+		return n
 	}
 	if need == 2 && len(parts) == 2 && !strings.Contains(meta.Label, "五星") {
 		return 1

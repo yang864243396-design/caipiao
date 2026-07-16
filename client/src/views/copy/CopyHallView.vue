@@ -12,7 +12,6 @@ import type { CopyHallBoardKind, CopyHallRankSlot } from '@shared/mock/copyHallR
 
 /** 工具栏 / 列表图标 */
 const ICON_BACK = '/images/lobby/icon-back.png'
-const ICON_SEARCH = '/images/lobby/icon-search.png'
 const ICON_SCHEME = '/images/lobby/icon-scheme.png'
 const ICON_FILTER = '/images/lobby/icon-filter.png'
 const ICON_CHEVRON = '/images/lobby/icon-chevron-down.png'
@@ -151,14 +150,14 @@ onUnmounted(stopCopyHallRankingsSync)
     <header class="topbar">
       <div class="topbar-inner">
         <RouterLink to="/" class="icon-btn topbar-side" aria-label="返回">
-          <img
-            :src="ICON_BACK"
-            alt=""
-            width="24"
-            height="24"
-            class="toolbar-ico"
-            decoding="async"
-          />
+<img
+              :src="ICON_BACK"
+              alt=""
+              width="30"
+              height="30"
+              class="toolbar-ico"
+              decoding="async"
+            />
         </RouterLink>
         <div class="topbar-center">
           <button
@@ -176,16 +175,8 @@ onUnmounted(stopCopyHallRankingsSync)
             </svg>
           </button>
         </div>
-        <button type="button" class="icon-btn topbar-side" aria-label="搜索">
-          <img
-            :src="ICON_SEARCH"
-            alt=""
-            width="24"
-            height="24"
-            class="toolbar-ico"
-            decoding="async"
-          />
-        </button>
+        <!-- 搜索未对接接口，占位保持顶栏三列居中 -->
+        <span class="topbar-side" aria-hidden="true" />
       </div>
     </header>
 
@@ -379,11 +370,12 @@ onUnmounted(stopCopyHallRankingsSync)
 }
 .topbar-inner {
   display: grid;
-  grid-template-columns: 2.5rem 1fr 2.5rem;
+  grid-template-columns: var(--page-titlebar-action-size) 1fr var(--page-titlebar-action-size);
   align-items: center;
-  gap: 0.75rem;
-  height: 4rem;
-  padding: 0 1rem;
+  gap: 0.5rem;
+  height: var(--page-titlebar-height);
+  min-height: var(--page-titlebar-height);
+  padding: 0 var(--page-titlebar-pad-x);
   max-width: 42rem;
   margin: 0 auto;
   box-sizing: border-box;
@@ -438,8 +430,8 @@ onUnmounted(stopCopyHallRankingsSync)
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 2.5rem;
-  height: 2.5rem;
+  width: var(--page-titlebar-action-size);
+  height: var(--page-titlebar-action-size);
   border-radius: 999px;
   border: none;
   background: transparent;
@@ -456,14 +448,14 @@ onUnmounted(stopCopyHallRankingsSync)
   transform: scale(0.95);
 }
 .toolbar-ico {
-  width: 1.5rem;
-  height: 1.5rem;
+  width: var(--page-titlebar-icon-size);
+  height: var(--page-titlebar-icon-size);
   object-fit: contain;
   display: block;
   pointer-events: none;
 }
 .main {
-  padding: 5rem 1rem 2rem;
+  padding: calc(var(--page-titlebar-height) + 0.75rem) 1rem 2rem;
   max-width: 42rem;
   margin: 0 auto;
   display: flex;
@@ -507,7 +499,7 @@ onUnmounted(stopCopyHallRankingsSync)
 .rank-card {
   background: var(--surface-lowest);
   border-radius: 1rem;
-  padding: 1rem;
+  padding: 0.55rem 0.75rem;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.04);
   border: 1px solid rgba(194, 198, 216, 0.1);
 }
@@ -531,8 +523,8 @@ onUnmounted(stopCopyHallRankingsSync)
 }
 .rank-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 1.5rem 0.5rem;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.5rem 0.4rem;
 }
 .rank-cell {
   display: flex;
@@ -543,6 +535,8 @@ onUnmounted(stopCopyHallRankingsSync)
   cursor: pointer;
   border-radius: 0.5rem;
   padding: 0.25rem;
+  min-width: 0;
+  overflow: hidden;
   transition: transform 0.15s, background 0.15s;
 }
 .rank-cell:hover {
@@ -555,7 +549,7 @@ onUnmounted(stopCopyHallRankingsSync)
   position: relative;
   width: 3rem;
   height: 3rem;
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.3rem;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -589,6 +583,9 @@ onUnmounted(stopCopyHallRankingsSync)
   line-height: 1.25;
   color: var(--on-surface);
   max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .filter-bar {
   display: flex;
@@ -652,7 +649,7 @@ onUnmounted(stopCopyHallRankingsSync)
 }
 .scheme-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.5rem;
 }
 .scheme-item {
@@ -668,6 +665,8 @@ onUnmounted(stopCopyHallRankingsSync)
   text-align: left;
   text-decoration: none;
   color: inherit;
+  min-width: 0;
+  overflow: hidden;
   transition:
     box-shadow 0.3s,
     transform 0.15s;
@@ -728,13 +727,14 @@ onUnmounted(stopCopyHallRankingsSync)
 }
 .scheme-name {
   margin: 0;
+  flex: 1 1 0;
+  min-width: 0;
   font-size: 12px;
   font-weight: 700;
   color: var(--on-surface);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  min-width: 0;
 }
 .scheme-filter-empty {
   margin: 0;

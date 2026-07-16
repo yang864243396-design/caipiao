@@ -23,6 +23,28 @@ func TestLookupSubPlayFromRows_g006Dingwei(t *testing.T) {
 	}
 }
 
+func TestLookupSubPlayFromRows_renxuanAliasG011(t *testing.T) {
+	// 方案存 playTypeId=renxuan，库为 g011 + 数字 subId
+	rows := []sqlcdb.GetSubPlayRow{
+		guajiSubPlayRow("g011", "77", "任二组选复式", 1),
+		guajiSubPlayRow("g011", "80", "任三直选复式", 2),
+	}
+	got, err := lookupSubPlayFromRows("ssc_std", rows, "renxuan", "77", "zuxuan_fs", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SubID != "77" || got.TypeID != "g011" {
+		t.Fatalf("got type/sub=%s/%s want g011/77", got.TypeID, got.SubID)
+	}
+	got3, err := lookupSubPlayFromRows("ssc_std", rows, "renxuan", "80", "fushi", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got3.SubID != "80" {
+		t.Fatalf("sub_id=%q want 80", got3.SubID)
+	}
+}
+
 func TestLookupSubPlayFromRows_legacyDingweiWan(t *testing.T) {
 	rows := []sqlcdb.GetSubPlayRow{
 		legacyDingweiRow("dingwei_wan", "一星定位胆 · 万位", 1),

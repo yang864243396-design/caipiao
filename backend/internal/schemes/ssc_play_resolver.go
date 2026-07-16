@@ -3,10 +3,16 @@ package schemes
 import "strings"
 
 // resolveSSCPlayRule maps ssc_std catalog typeId/subId to settlement playRule.
-func resolveSSCPlayRule(typeID, subID, betMode string) playRule {
+// playMethod 可选：中文玩法名（如前四一码不定位），用于数字 subId 时解析区位/码数。
+func resolveSSCPlayRule(typeID, subID, betMode string, playMethod ...string) playRule {
 	typeID = strings.TrimSpace(typeID)
 	subID = strings.TrimSpace(subID)
 	betMode = strings.TrimSpace(betMode)
+	method := ""
+	if len(playMethod) > 0 {
+		method = strings.TrimSpace(playMethod[0])
+	}
+	labelHint := strings.TrimSpace(method + " " + subID)
 
 	rule := playRule{
 		PlayTemplate: "ssc_std",
@@ -14,6 +20,14 @@ func resolveSSCPlayRule(typeID, subID, betMode string) playRule {
 		SubPlayID:    legacySubMode(subID, betMode),
 		BetMode:      betMode,
 		CatalogSubID: subID,
+	}
+	if labelHint != "" && (typeID == "budingwei" || typeID == "g009" || strings.Contains(method, "不定位")) {
+		// 数字 guaji rule id 无法表达前四/二码等，合并 playMethod 供结算解析
+		rule.CatalogSubID = labelHint
+	}
+	if labelHint != "" && (typeID == "dxds" || strings.Contains(method, "大小单双") ||
+		strings.Contains(method, "和值大小") || strings.Contains(method, "和值单双")) {
+		rule.CatalogSubID = labelHint
 	}
 	if rule.SubPlayID == "" && subID != "" {
 		// guaji 同步后子玩法为数字 id（如 13）；勿用误存的 betMode（如 "1"）覆盖。
@@ -26,16 +40,25 @@ func resolveSSCPlayRule(typeID, subID, betMode string) playRule {
 		rule.SegmentStart = rule.PositionIdx
 		return rule
 	}
-	if typeID == "budingwei" {
-		rule.SegmentStart, rule.SegmentLen = budingweiSegmentRange(subID)
+	if typeID == "budingwei" || typeID == "g009" {
+		rule.SegmentStart, rule.SegmentLen = budingweiSegmentRange(labelHint)
 		return rule
 	}
 	if typeID == "dxds" {
-		rule.SegmentStart, rule.SegmentLen = dxdsSegmentRange(subID)
+		rule.SegmentStart, rule.SegmentLen = dxdsSegmentRange(labelHint)
 		return rule
 	}
-	if typeID == "renxuan" {
-		rule.SegmentLen = renPickCount(subID)
+	if typeID == "renxuan" || typeID == "g011" {
+		// 统一语义 id，便于 evaluateSSCByBetMode 走任选专用评估
+		rule.PlayTypeID = "renxuan"
+		// 数字 subId（如 76）无法表达任二/任三；合并 playMethod
+		if labelHint != "" {
+			rule.CatalogSubID = labelHint
+		}
+		rule.SegmentLen = renPickCount(rule.CatalogSubID)
+		if rule.SegmentLen <= 0 {
+			rule.SegmentLen = renPickCount(subID)
+		}
 		return rule
 	}
 
@@ -46,11 +69,6 @@ func resolveSSCPlayRule(typeID, subID, betMode string) playRule {
 			return rule
 		}
 	}
-	if pos := sscSegmentPositions(typeID); len(pos) > 0 {
-		rule.SegmentPos = pos
-		rule.SegmentLen = len(pos)
-		return rule
-	}
 	start, length := sscSegmentRange(typeID)
 	rule.SegmentStart = start
 	rule.SegmentLen = length
@@ -59,19 +77,20 @@ func resolveSSCPlayRule(typeID, subID, betMode string) playRule {
 
 func budingweiSegmentRange(subID string) (int, int) {
 	s := strings.ToLower(subID)
+	raw := subID
 	switch {
-	case strings.HasPrefix(s, "qian3"):
-		return 0, 3
-	case strings.HasPrefix(s, "zhong3"):
-		return 1, 3
-	case strings.HasPrefix(s, "hou3"):
-		return 2, 3
-	case strings.HasPrefix(s, "qian4"):
+	case strings.Contains(raw, "前四") || strings.HasPrefix(s, "qian4"):
 		return 0, 4
-	case strings.HasPrefix(s, "hou4"):
+	case strings.Contains(raw, "后四") || strings.HasPrefix(s, "hou4"):
 		return 1, 4
-	case strings.HasPrefix(s, "wuxing"):
+	case strings.Contains(raw, "五星") || strings.HasPrefix(s, "wuxing"):
 		return 0, 5
+	case strings.Contains(raw, "前三") || strings.HasPrefix(s, "qian3"):
+		return 0, 3
+	case strings.Contains(raw, "中三") || strings.HasPrefix(s, "zhong3"):
+		return 1, 3
+	case strings.Contains(raw, "后三") || strings.HasPrefix(s, "hou3"):
+		return 2, 3
 	default:
 		return 0, 3
 	}
@@ -79,26 +98,34 @@ func budingweiSegmentRange(subID string) (int, int) {
 
 func dxdsSegmentRange(subID string) (int, int) {
 	s := strings.ToLower(subID)
+	raw := subID
 	switch {
-	case strings.HasPrefix(s, "qian2"):
-		return 0, 2
-	case strings.HasPrefix(s, "hou2"):
-		return 3, 2
-	case strings.HasPrefix(s, "qian3"):
-		return 0, 3
-	case strings.HasPrefix(s, "hou3"):
-		return 2, 3
-	case strings.HasPrefix(s, "wuxing"):
+	case strings.Contains(raw, "五星") || strings.Contains(s, "wuxing") ||
+		strings.Contains(raw, "和值大小") || strings.Contains(raw, "和值单双"):
 		return 0, 5
+	case strings.Contains(raw, "前三") || strings.HasPrefix(s, "qian3"):
+		return 0, 3
+	case strings.Contains(raw, "后三") || strings.HasPrefix(s, "hou3"):
+		return 2, 3
+	case strings.Contains(raw, "前二") || strings.HasPrefix(s, "qian2"):
+		return 0, 2
+	case strings.Contains(raw, "后二") || strings.HasPrefix(s, "hou2"):
+		return 3, 2
 	default:
 		return 0, 2
 	}
 }
 
-func sscSegmentPositions(typeID string) []int {
-	switch typeID {
-	case "qianhou3":
-		return []int{0, 2, 4}
+// multiZoneSegmentStarts 返回同一组选号覆盖的各区位起点（段长见 rule.SegmentLen）。
+// 前中后三：前三(0)/中三(1)/后三(2)；前后三：前三(0)/后三(2)；前后二：前二(0)/后二(3)。
+func multiZoneSegmentStarts(rule playRule) []int {
+	switch strings.TrimSpace(rule.PlayTypeID) {
+	case "qianzhonghou3", "g007":
+		return []int{0, 1, 2}
+	case "qianhou3", "g012":
+		return []int{0, 2}
+	case "g008": // rules/v2 前后二
+		return []int{0, 3}
 	default:
 		return nil
 	}

@@ -42,6 +42,20 @@ func TestWebBetToSettlementLose(t *testing.T) {
 	}
 }
 
+func TestWebBetToSettlementTieRefundIsLose(t *testing.T) {
+	// 龙虎和局退本：net=0、payout=本金 → 应记挂，不能因 payout>0 判赢
+	s := webBetToSettlement(&WebBetRecord{
+		ID:           3,
+		BetAmount:    4,
+		NetAmount:    0,
+		PayoutAmount: 4,
+		Settled:      true,
+	})
+	if s.Status != "lose" || s.Pnl != 0 {
+		t.Fatalf("tie refund settlement=%+v", s)
+	}
+}
+
 func TestDecodeWebBetListStringCode(t *testing.T) {
 	raw := []byte(`{"data":[{"id":398515,"game_id":29,"periods":"p1","bet_amount":10,"settled":true}],"code":"0"}`)
 	var env envelope

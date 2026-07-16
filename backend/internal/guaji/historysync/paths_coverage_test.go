@@ -59,6 +59,9 @@ func TestHistoryAPIPathCoversSeedOnSale(t *testing.T) {
 
 	var missing []string
 	for _, code := range onSale {
+		if IsWSOnlyHistory(code) {
+			continue
+		}
 		if HistoryAPIPathForCode(code) == "" {
 			missing = append(missing, code)
 		}
@@ -66,5 +69,5 @@ func TestHistoryAPIPathCoversSeedOnSale(t *testing.T) {
 	if len(missing) > 0 {
 		t.Fatalf("seed on_sale=%d missing history API for: %v", len(onSale), missing)
 	}
-	t.Logf("seed on_sale=%d all covered", len(onSale))
+	t.Logf("seed on_sale=%d all covered (ws-only skipped)", len(onSale))
 }

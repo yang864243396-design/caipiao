@@ -85,18 +85,23 @@ func (s *Syncer) ForceRefreshForMember(ctx context.Context, lotteryCode, memberA
 		return err
 	}
 	mu := s.fallbackMuFor(lotteryCode)
-	mu.Lock()
+	// TryLock：避免与 worker/列表互相堵死（持锁期间 HTTP 可达数十秒）。
+	if !mu.TryLock() {
+		return nil
+	}
 	defer mu.Unlock()
 	return s.fetchAndApplyWithToken(ctx, lotteryCode, workerNumPeriods, token)
 }
 
-// ForceRefresh 方案开启等关键路径：无条件拉取第三方 periods 并写入缓存。
+// ForceRefresh 拉取第三方 periods 并写入缓存。锁被占用时立即返回，绝不阻塞 API。
 func (s *Syncer) ForceRefresh(ctx context.Context, lotteryCode string) error {
 	if s == nil {
 		return nil
 	}
 	mu := s.fallbackMuFor(lotteryCode)
-	mu.Lock()
+	if !mu.TryLock() {
+		return nil
+	}
 	defer mu.Unlock()
 	return s.fetchAndApply(ctx, lotteryCode, workerNumPeriods)
 }
@@ -113,39 +118,23 @@ func (s *Syncer) EnsureFreshIfStale(ctx context.Context, lotteryCode string) err
 	return s.fallbackFetch(ctx, lotteryCode)
 }
 
-// StartSkipPeriod 读本地缓存；缺失/过期时兜底拉取一次。
-func (s *Syncer) StartSkipPeriod(ctx context.Context, lotteryCode string) (string, bool, error) {
-	if p, ok := lottery.StartSkipPeriodFromCache(lotteryCode); ok {
-		return p, true, nil
-	}
-	if s == nil {
-		return "", false, nil
-	}
-	if err := s.EnsureFreshIfStale(ctx, lotteryCode); err != nil {
-		return "", false, err
-	}
+// StartSkipPeriod 仅读本地缓存（开启路径绝不同步拉第三方）。
+func (s *Syncer) StartSkipPeriod(_ context.Context, lotteryCode string) (string, bool, error) {
 	p, ok := lottery.StartSkipPeriodFromCache(lotteryCode)
 	return p, ok, nil
 }
 
-// StartSkipSnapshot 读开启跳过期号与封盘时刻快照（用于写入 scheme_instances）。
-func (s *Syncer) StartSkipSnapshot(ctx context.Context, lotteryCode string) (period string, closeAt time.Time, ok bool, err error) {
-	if p, ca, ok := lottery.StartSkipSnapshotFromCache(lotteryCode); ok {
-		return p, ca, true, nil
-	}
-	if s == nil {
-		return "", time.Time{}, false, nil
-	}
-	if err := s.EnsureFreshIfStale(ctx, lotteryCode); err != nil {
-		return "", time.Time{}, false, err
-	}
+// StartSkipSnapshot 仅读本地缓存（开启路径绝不同步拉第三方，避免被 ForceRefresh 锁拖死）。
+func (s *Syncer) StartSkipSnapshot(_ context.Context, lotteryCode string) (period string, closeAt time.Time, ok bool, err error) {
 	p, ca, ok := lottery.StartSkipSnapshotFromCache(lotteryCode)
 	return p, ca, ok, nil
 }
 
 func (s *Syncer) fallbackFetch(ctx context.Context, lotteryCode string) error {
 	mu := s.fallbackMuFor(lotteryCode)
-	mu.Lock()
+	if !mu.TryLock() {
+		return nil
+	}
 	defer mu.Unlock()
 	if !lottery.PeriodsScheduleNeedsRefresh(lotteryCode, time.Now()) {
 		return nil

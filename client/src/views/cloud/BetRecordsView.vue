@@ -164,7 +164,7 @@ function onRefresh() {
 
       <button type="button" class="br-back-btn br-back" aria-label="返回" @click="goBack">
 
-        <img :src="BACK_ICO" alt="" width="24" height="24" class="br-back-img" decoding="async" />
+        <img :src="BACK_ICO" alt="" width="30" height="30" class="br-back-img" decoding="async" />
 
       </button>
 

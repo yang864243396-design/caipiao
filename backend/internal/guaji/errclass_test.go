@@ -32,6 +32,14 @@ func TestClassifyUpstreamError_apiCode(t *testing.T) {
 	}
 }
 
+func TestClassifyUpstreamError_apiCode40010(t *testing.T) {
+	err := &APIError{Code: CodeTokenInvalidBiz, Message: "无效的令牌, 请重新登录."}
+	f := ClassifyUpstreamError(err)
+	if !f.IsTokenInvalid || f.UserMessage != "授权已失效，请重新授权" {
+		t.Fatalf("40010 should be token invalid: %+v", f)
+	}
+}
+
 func TestClassifyUpstreamError_friendlyPassthrough(t *testing.T) {
 	err := errors.New("重新授权失败")
 	f := ClassifyUpstreamError(err)

@@ -10,11 +10,13 @@ export function isLonghuPlayConfig(
   return isLonghuPlayConfigLike(config)
 }
 
-/** 龙虎「和」子玩法：betMode=longhuhe 或 subId 含 _he（如 lh_wanqian_he） */
+/** 龙虎「和」子玩法：betMode=longhuhe、subId 含 _he，或中文名含龙虎和 */
 export function isLonghuHeSubPlay(config: PlayConfig): boolean {
   if (config.betMode === 'longhuhe') return true
   const sub = (config.catalogSubId ?? config.subPlayId ?? '').toLowerCase()
-  return sub.endsWith('_he')
+  if (sub.endsWith('_he') || sub.includes('_he_') || sub.includes('longhuhe')) return true
+  const label = `${config.playMethodLabel ?? ''} ${config.playTypeLabel ?? ''}`
+  return label.includes('龙虎和')
 }
 
 export function longhuPickOptionsForConfig(config: PlayConfig): string[] {

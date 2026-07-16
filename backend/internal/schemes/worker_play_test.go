@@ -3,6 +3,7 @@ package schemes
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -60,6 +61,15 @@ func TestEvaluateQian3ZhixuanDanshi(t *testing.T) {
 	ev := evaluatePlayHit(rule, balls, "392,123,456", false, "", 0)
 	if !ev.Hit || ev.BetUnits != 3 {
 		t.Fatalf("got %+v", ev)
+	}
+}
+
+func TestEvaluateQian2ZhixuanDanshiDedup(t *testing.T) {
+	rule := playRule{PlayTypeID: "qian2", SubPlayID: "zhixuan_ds", SegmentStart: 0, SegmentLen: 2}
+	balls := []string{"1", "2", "3", "4", "5"}
+	ev := evaluatePlayHit(rule, balls, "12,13,14,12", false, "", 0)
+	if !ev.Hit || ev.BetUnits != 3 {
+		t.Fatalf("want hit units=3 for 12,13,14,12 got %+v", ev)
 	}
 }
 
@@ -273,16 +283,98 @@ func TestSynthDrawBallsDeterministic(t *testing.T) {
 	}
 }
 
+func TestComplementPlanContent_SSCDingweiMulti(t *testing.T) {
+	rule := playRule{PlayTemplate: "ssc_std", BetMode: "dingwei", SegmentLen: 1, PositionIdx: 0, NumberPoolMin: 0, NumberPoolMax: 9}
+	got := complementPlanContent(rule, "1,3,7")
+	want := "0,2,4,5,6,8,9"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	eval := evaluateContraryHit(rule, nil, "1,3,7", 0)
+	if eval.BetUnits != 7 {
+		t.Fatalf("betUnits = %d want 7", eval.BetUnits)
+	}
+}
+
+func TestComplementPlanContent_PK10(t *testing.T) {
+	rule := playRule{PlayTemplate: "pk10_std", BetMode: "dingwei", SegmentLen: 1, PositionIdx: 0, NumberPoolMin: 1, NumberPoolMax: 10}
+	got := complementPlanContent(rule, "2,5,8")
+	want := "1,3,4,6,7,9,10"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestComplementPlanContent_SYXW(t *testing.T) {
+	rule := playRule{PlayTemplate: "syxw_std", BetMode: "dingwei", SegmentLen: 1, NumberPoolMin: 1, NumberPoolMax: 11}
+	got := complementPlanContent(rule, "01,05,08")
+	want := "02,03,04,06,07,09,10,11"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestComplementPlanContent_Longhu(t *testing.T) {
+	rule := playRule{PlayTemplate: "ssc_std", PlayTypeID: "longhu", BetMode: "longhu", CatalogSubID: "lh_wanqian_dou"}
+	if got := complementPlanContent(rule, "龙"); got != "虎" {
+		t.Fatalf("龙 → %q want 虎", got)
+	}
+	if got := complementPlanContent(rule, "虎"); got != "龙" {
+		t.Fatalf("虎 → %q want 龙", got)
+	}
+	if got := complementPlanContent(rule, "和"); got != "龙,虎" {
+		t.Fatalf("和 → %q want 龙,虎", got)
+	}
+}
+
+func TestComplementPlanContent_LHCTema(t *testing.T) {
+	rule := playRule{PlayTemplate: "lhc_std", BetMode: "tema", NumberPoolMin: 1, NumberPoolMax: 49}
+	got := complementPlanContent(rule, "1,3,7")
+	parts := strings.Split(got, ",")
+	if len(parts) != 46 {
+		t.Fatalf("len=%d want 46, got %q", len(parts), got)
+	}
+	for _, x := range []string{"1", "3", "7"} {
+		for _, p := range parts {
+			if p == x {
+				t.Fatalf("forbidden %s still in inverse", x)
+			}
+		}
+	}
+}
+
+func TestComplementPlanContent_HezhiUnsupported(t *testing.T) {
+	rule := playRule{PlayTemplate: "ssc_std", BetMode: "hezhi", SegmentLen: 3}
+	if got := complementPlanContent(rule, "10,11,12"); got != "" {
+		t.Fatalf("hezhi should not support contrary, got %q", got)
+	}
+}
+
+func TestSupportsPlanContrary(t *testing.T) {
+	cases := []struct {
+		name string
+		rule playRule
+		want bool
+	}{
+		{"dingwei", playRule{BetMode: "dingwei", SegmentLen: 1}, true},
+		{"longhu", playRule{PlayTypeID: "longhu", BetMode: "longhu"}, true},
+		{"hezhi", playRule{BetMode: "hezhi", SegmentLen: 3}, false},
+		{"kuadu", playRule{BetMode: "kuadu"}, false},
+		{"dxds", playRule{BetMode: "dxds"}, false},
+		{"zu3", playRule{BetMode: "zu3"}, false},
+		{"danshi", playRule{BetMode: "danshi"}, false},
+	}
+	for _, c := range cases {
+		got := SupportsPlanContrary(c.rule)
+		if got != c.want {
+			t.Errorf("%s: SupportsPlanContrary=%v want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestEvaluatePositionHit(t *testing.T) {
 	balls := []string{"3", "9", "2", "7", "5"}
 	if !evaluatePositionHit(balls, 0, []string{"3", "1"}) {
 		t.Fatal("expected hit on 万位 3")
-	}
-}
-
-func TestParseContraryPicks(t *testing.T) {
-	picks := parseContraryPicks("1,3,7,2,5", 0)
-	if len(picks) != 9 {
-		t.Fatalf("expected 9 picks, got %d", len(picks))
 	}
 }

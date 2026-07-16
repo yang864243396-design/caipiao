@@ -107,13 +107,14 @@ export function hezhiPoolRange(
   const len =
     segmentLen > 1 ? segmentLen : hezhiDigitLenFromText(text, 3)
   if (isZuxuan) {
-    // 任二/前二组选和值：第三方面板为 0–18（与直选和值同档）
-    if (len === 2) return { min: 0, max: 18 }
+    // 二星组选和值（前/后二、任二）：两不同数字之和 → 1–17（不含 0=0+0、18=9+9 对子）
+    if (len === 2) return { min: 1, max: 17 }
     // 三星组选和值：1–26（不含豹子）
     if (len === 3) return { min: 1, max: 26 }
     if (len === 4) return { min: 1, max: 35 }
     return { min: 1, max: Math.min(44, len * 9 - 1) }
   }
+  // 二星直选和值：0–18
   if (len === 2) return { min: 0, max: 18 }
   if (len === 4) return { min: 0, max: 36 }
   if (len === 5) return { min: 0, max: 45 }

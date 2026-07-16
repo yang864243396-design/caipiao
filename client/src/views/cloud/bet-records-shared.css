@@ -19,7 +19,7 @@
 
 .br-ms {
   font-family: 'Material Symbols Outlined', sans-serif;
-  font-size: 1.5rem;
+  font-size: var(--page-titlebar-icon-size);
   line-height: 1;
   font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
   display: inline-block;
@@ -34,7 +34,10 @@
   grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 0.5rem;
-  padding: max(0.75rem, env(safe-area-inset-top)) 0.75rem 0.875rem;
+  height: calc(var(--page-titlebar-height) + env(safe-area-inset-top));
+  min-height: calc(var(--page-titlebar-height) + env(safe-area-inset-top));
+  box-sizing: border-box;
+  padding: env(safe-area-inset-top) var(--page-titlebar-pad-x) 0;
   background: rgba(255, 255, 255, 0.82);
   backdrop-filter: blur(28px);
   -webkit-backdrop-filter: blur(28px);
@@ -50,8 +53,8 @@
 }
 
 .br-back-btn {
-  width: 2.25rem;
-  height: 2.25rem;
+  width: var(--page-titlebar-action-size);
+  height: var(--page-titlebar-action-size);
   padding: 0;
   border: none;
   border-radius: 0.75rem;
@@ -81,16 +84,16 @@
 }
 
 .br-back-img {
-  width: 1.5rem;
-  height: 1.5rem;
+  width: var(--page-titlebar-icon-size);
+  height: var(--page-titlebar-icon-size);
   object-fit: contain;
   display: block;
   pointer-events: none;
 }
 
 .br-icon-btn {
-  width: 2.25rem;
-  height: 2.25rem;
+  width: var(--page-titlebar-action-size);
+  height: var(--page-titlebar-action-size);
   border: none;
   border-radius: 0.75rem;
   background: transparent;

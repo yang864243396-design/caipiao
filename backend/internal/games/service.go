@@ -98,6 +98,8 @@ type GameDetail struct {
 	DrawnNumbers        []string              `json:"drawnNumbers"`
 	PlanInverseDigits      string                `json:"planInverseDigits"`
 	PlanInverseBetCount    int                   `json:"planInverseBetCount"`
+	// PlanContrarySupported 是否展示「计划反集」Tab：玩法支持且当前有可展示反集号码
+	PlanContrarySupported  bool                  `json:"planContrarySupported"`
 	SchemeBetUnit          float64               `json:"schemeBetUnit,omitempty"`
 	SchemeBetMultiplier    float64               `json:"schemeBetMultiplier,omitempty"`
 	SchemeBetUnits         int                   `json:"schemeBetUnits,omitempty"`
@@ -206,7 +208,7 @@ func (s *Service) Detail(ctx context.Context, q DetailQuery) (GameDetail, error)
 		return GameDetail{}, err
 	}
 
-	planInverseDigits, planInverseBetCount := s.loadPlanInverse(ctx, q, lhc, countdownPeriod, currentIssue)
+	planInverseDigits, planInverseBetCount, planContrarySupported := s.loadPlanInverse(ctx, q, lhc, countdownPeriod, currentIssue)
 
 	previewExtras, err := s.loadDetailPreviewExtras(ctx, q, countdownPeriod, currentIssue, playMethod)
 	if err != nil {
@@ -225,6 +227,10 @@ func (s *Service) Detail(ctx context.Context, q DetailQuery) (GameDetail, error)
 	}
 
 	schemeDock := s.loadSchemeDock(ctx, q, countdownPeriod, currentIssue)
+	if !planContrarySupported {
+		schemeDock.ContraryBetUnits = 0
+		schemeDock.ContraryEstimatedPrize = 0
+	}
 
 	return GameDetail{
 		LotteryCode:            code,
@@ -243,6 +249,7 @@ func (s *Service) Detail(ctx context.Context, q DetailQuery) (GameDetail, error)
 		DrawnNumbers:           drawnNumbers,
 		PlanInverseDigits:      planInverseDigits,
 		PlanInverseBetCount:    planInverseBetCount,
+		PlanContrarySupported:  planContrarySupported,
 		SchemeBetUnit:          schemeDock.BetUnitYuan,
 		SchemeBetMultiplier:    schemeDock.BetMultiplier,
 		SchemeBetUnits:         schemeDock.PlanBetUnits,

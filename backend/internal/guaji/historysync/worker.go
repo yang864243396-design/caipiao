@@ -115,12 +115,22 @@ func (w *Worker) syncTargets(ctx context.Context, targets []lotteryTarget) {
 		}
 		byPath[path] = append(byPath[path], tgt)
 	}
+	dialFails := 0
 	for apiPath, lotteries := range byPath {
+		if dialFails >= 2 {
+			slog.Warn("guaji history draw sync abort remaining paths after dial failures", "fails", dialFails)
+			return
+		}
 		logs, err := w.client.FetchHistoryDrawLogs(ctx, apiPath, 1, w.pageSize)
 		if err != nil {
 			slog.Warn("guaji history draw sync fetch failed", "path", apiPath, "err", err)
+			s := strings.ToLower(err.Error())
+			if strings.Contains(s, "dial ") || strings.Contains(s, "i/o timeout") || strings.Contains(s, "all ips failed") {
+				dialFails++
+			}
 			continue
 		}
+		dialFails = 0
 		inserted := 0
 		for _, row := range logs {
 			for _, tgt := range lotteries {

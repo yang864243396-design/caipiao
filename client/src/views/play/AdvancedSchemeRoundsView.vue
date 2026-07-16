@@ -308,7 +308,7 @@ function reloadRounds() {
     <header class="ase-header">
       <div class="ase-header-bar">
         <button type="button" class="ase-back" aria-label="返回" @click="goBack">
-          <svg class="ase-back-ico" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+          <svg class="ase-back-ico" viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">
             <path fill="currentColor" d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
           </svg>
         </button>
@@ -408,13 +408,16 @@ function reloadRounds() {
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 0.5rem;
-  padding: max(0.75rem, env(safe-area-inset-top)) 0.75rem 0.75rem;
+  height: calc(var(--page-titlebar-height) + env(safe-area-inset-top));
+  min-height: calc(var(--page-titlebar-height) + env(safe-area-inset-top));
+  box-sizing: border-box;
+  padding: env(safe-area-inset-top) var(--page-titlebar-pad-x) 0;
 }
 
 .ase-back {
   justify-self: start;
-  width: 2.25rem;
-  height: 2.25rem;
+  width: var(--page-titlebar-action-size);
+  height: var(--page-titlebar-action-size);
   padding: 0;
   border: none;
   border-radius: 0.5rem;
@@ -424,6 +427,12 @@ function reloadRounds() {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.ase-back-ico {
+  display: block;
+  width: var(--page-titlebar-icon-size);
+  height: var(--page-titlebar-icon-size);
 }
 
 .ase-title-wrap {

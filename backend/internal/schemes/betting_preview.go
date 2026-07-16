@@ -122,7 +122,13 @@ func previewInstState(s simPickState) sqlcdb.SchemeInstance {
 
 func resolvePickPreview(cfg parsedSchemeConfig, state simPickState, issueNo string, prevBalls []string) pickDecision {
 	inst := previewInstState(state)
-	if cfg.Contrary || cfg.Kind != "custom" || cfg.RunTypeID == "" {
+	if cfg.Contrary {
+		if inv := strings.TrimSpace(cfg.ContraryPlan); inv != "" {
+			return pickDecision{Content: inv}
+		}
+		return pickDecision{Content: cfg.GroupContent}
+	}
+	if cfg.Kind != "custom" || cfg.RunTypeID == "" {
 		return pickDecision{Content: cfg.GroupContent}
 	}
 	switch cfg.RunTypeID {

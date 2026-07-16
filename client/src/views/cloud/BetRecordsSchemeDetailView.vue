@@ -116,7 +116,7 @@ function goBack() {
   <div class="br br-detail" data-page="bet-records-scheme">
     <header class="br-head" role="banner">
       <button type="button" class="br-back-btn br-back" aria-label="返回" @click="goBack">
-        <img :src="BACK_ICO" alt="" width="24" height="24" class="br-back-img" decoding="async" />
+        <img :src="BACK_ICO" alt="" width="30" height="30" class="br-back-img" decoding="async" />
       </button>
       <h1 class="br-title">{{ schemeName }}</h1>
       <span class="br-head-spacer" aria-hidden="true" />
@@ -191,8 +191,8 @@ function goBack() {
 
 <style scoped>
 .br-head-spacer {
-  width: 2.25rem;
-  height: 2.25rem;
+  width: var(--page-titlebar-action-size);
+  height: var(--page-titlebar-action-size);
   justify-self: end;
 }
 

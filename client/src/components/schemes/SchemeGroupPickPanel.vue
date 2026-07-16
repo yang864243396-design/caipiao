@@ -13,8 +13,10 @@ import {
 } from '@/utils/betPayload'
 import {
   digitOptionsForConfig,
+  poolMaxPicksForConfig,
   schemeGroupUsesPickPanel,
   textPickOptionsForConfig,
+  togglePoolPick,
   useCompactPickChips,
 } from '@/utils/pickPanelOptions'
 
@@ -63,7 +65,11 @@ function syncFromModel(content: string) {
     return
   }
   const parsed = parseGroupPicks(props.config, content)
-  pickDigits.value = parsed.digits
+  const max = poolMaxPicksForConfig(props.config)
+  pickDigits.value =
+    max != null && max > 0 && parsed.digits.length > max
+      ? parsed.digits.slice(0, max)
+      : parsed.digits
   if (props.config.inputMode === 'multiline') {
     pickLines.value = parsed.lines
   }
@@ -90,6 +96,7 @@ watch(
       props.config.subPlayId,
       props.config.numberPoolMin,
       props.config.numberPoolMax,
+      props.config.poolMaxPicks,
       showPanel.value,
     ] as const,
   () => syncFromModel(props.modelValue),
@@ -113,10 +120,7 @@ watch(
 watch([pickDigits, pickLines], emitContent, { deep: true })
 
 function togglePickDigit(d: string) {
-  const set = new Set(pickDigits.value)
-  if (set.has(d)) set.delete(d)
-  else set.add(d)
-  pickDigits.value = [...set].sort()
+  pickDigits.value = togglePoolPick(pickDigits.value, d, poolMaxPicksForConfig(props.config))
 }
 
 function toggleLineDigit(lineIndex: number, d: string) {

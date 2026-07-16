@@ -18,6 +18,8 @@ const (
 	defaultSyncInterval = 3 * time.Second
 	targetsCacheTTL     = 15 * time.Second
 	tokenCacheTTL       = 60 * time.Second
+	maxRefreshPerTick   = 4
+	dialFailBackoff     = 20 * time.Second
 )
 
 // Worker 周期性拉取第三方 /api/web_bets/lott/periods，更新封盘倒计时缓存。
@@ -32,6 +34,7 @@ type Worker struct {
 	tokenUntil    time.Time
 	targetsCache  []syncTarget
 	targetsUntil  time.Time
+	backoffUntil  time.Time
 }
 
 func NewWorker(pool *db.Pool, client *guaji.Client, accounts *accountsvc.Service) *Worker {
@@ -65,6 +68,14 @@ func (w *Worker) Run(ctx context.Context) {
 }
 
 func (w *Worker) tick(ctx context.Context) {
+	now := time.Now()
+	w.mu.Lock()
+	if now.Before(w.backoffUntil) {
+		w.mu.Unlock()
+		return
+	}
+	w.mu.Unlock()
+
 	targets, err := w.syncTargets(ctx)
 	if err != nil {
 		slog.Warn("guaji period sync list targets failed", "err", err)
@@ -80,8 +91,12 @@ func (w *Worker) tick(ctx context.Context) {
 		return
 	}
 
-	now := time.Now()
+	refreshed := 0
+	dialFails := 0
 	for _, tgt := range targets {
+		if refreshed >= maxRefreshPerTick {
+			break
+		}
 		if !lottery.PeriodsScheduleNeedsRefresh(tgt.lotteryCode, now) {
 			continue
 		}
@@ -89,9 +104,35 @@ func (w *Worker) tick(ctx context.Context) {
 			if guaji.ClassifyUpstreamError(err).IsTokenInvalid {
 				w.invalidateToken()
 			}
+			if isDialOrTimeoutErr(err) {
+				dialFails++
+			}
 			slog.Warn("guaji period sync failed", "lottery", tgt.lotteryCode, "gameId", tgt.gameID, "err", err)
+			continue
 		}
+		refreshed++
+		dialFails = 0
 	}
+	// 连续拨号失败：全局退避，避免 30+ 彩种轮询堵死可用 CDN IP。
+	if dialFails >= 2 {
+		until := time.Now().Add(dialFailBackoff)
+		w.mu.Lock()
+		w.backoffUntil = until
+		w.mu.Unlock()
+		slog.Warn("guaji period sync dial backoff", "until", until.Format(time.RFC3339), "fails", dialFails)
+	}
+}
+
+func isDialOrTimeoutErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "dial ") ||
+		strings.Contains(s, "i/o timeout") ||
+		strings.Contains(s, "connection refused") ||
+		strings.Contains(s, "no such host") ||
+		strings.Contains(s, "all ips failed")
 }
 
 type syncTarget struct {
@@ -151,12 +192,19 @@ func (w *Worker) invalidateToken() {
 }
 
 func (w *Worker) listSyncTargets(ctx context.Context) ([]syncTarget, error) {
+	// 运行中方案的彩种优先，避免全量目录同步时饿死挂机下注所需的 periods。
 	rows, err := w.pool.Query(ctx, `
-SELECT code,
-       COALESCE(NULLIF(TRIM(outbound_lottery_code), ''), code) AS game_key
-FROM lottery_catalog
-WHERE sale_status = 'on_sale'
-  AND on_sale = true`)
+SELECT c.code,
+       COALESCE(NULLIF(TRIM(c.outbound_lottery_code), ''), c.code) AS game_key
+FROM lottery_catalog c
+LEFT JOIN (
+  SELECT DISTINCT lottery_code
+  FROM scheme_instances
+  WHERE status = 'running'
+) r ON r.lottery_code = c.code
+WHERE c.sale_status = 'on_sale'
+  AND c.on_sale = true
+ORDER BY (r.lottery_code IS NOT NULL) DESC, c.code`)
 	if err != nil {
 		return nil, err
 	}

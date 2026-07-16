@@ -2,13 +2,27 @@ package historysync
 
 import "strings"
 
+// wsOnlyHistoryCodes：仅 WS 入库、无可靠 REST 历史线（跳过 historysync）。
+var wsOnlyHistoryCodes = map[string]bool{
+	"tron_ffc_3s": true, // WS lottery_v2_broadcast / block_num；旧 lottery_logs 会污染 1014*
+}
+
 // HistoryAPIPathForCode 返回第三方历史开奖 REST 路径（不含 /api/ 前缀）。
-// 映射依据接口文档 §5（_tmp_guaji_parsed.md）与 hash.iyes.dev 实测。
+// 映射依据接口文档 §5（_tmp_guaji_parsed.md）与 v6hs1 实测。
 func HistoryAPIPathForCode(lotteryCode string) string {
-	if p, ok := historyAPIByCode[strings.TrimSpace(lotteryCode)]; ok {
+	code := strings.TrimSpace(lotteryCode)
+	if wsOnlyHistoryCodes[code] {
+		return ""
+	}
+	if p, ok := historyAPIByCode[code]; ok {
 		return p
 	}
 	return ""
+}
+
+// IsWSOnlyHistory 是否仅依赖 WS 开奖、不做 REST 回补。
+func IsWSOnlyHistory(lotteryCode string) bool {
+	return wsOnlyHistoryCodes[strings.TrimSpace(lotteryCode)]
 }
 
 // historyAPIByCode：平台彩种 code → GET /api/{path}
@@ -41,16 +55,20 @@ var historyAPIByCode = map[string]string{
 	// §5.5 lottery_log05s：波场极速彩
 	"tron_jisu": "lottery_log05s",
 
-	// §5.6 lottery_logs：哈希1分（00115 对换后 tron 系）、秒级波场分分彩共用区块线
-	"tron_ffc_1m":   "lottery_logs",
-	"tron_ffc_3s":   "lottery_logs",
-	"tron_ffc_6s":   "lottery_logs",
-	"tron_ffc_15s":  "lottery_logs",
+	// §5.6 lottery_logs：波场1分彩（00115 对换后 tron 系，期号 1014*）
+	"tron_ffc_1m": "lottery_logs",
 
-	// §5.7 lottery_log3s：哈希3分（00115 对换后 tron 系）
+	// 波场秒彩：与 WS 线对齐（实测 2026-07-14）
+	// 6秒 WS lottery_log101 ↔ REST lottery_log101s（期号 1011*）
+	// 15秒 WS lottery_log125 ↔ REST lottery_log125s（期号 1251*）
+	// 3秒仅 WS lottery_v2_broadcast（block_num），无独立 REST → 见 wsOnlyHistoryCodes
+	"tron_ffc_6s":  "lottery_log101s",
+	"tron_ffc_15s": "lottery_log125s",
+
+	// §5.7 lottery_log3s：波场3分彩（00115 对换后 tron 系）
 	"tron_ffc_3m": "lottery_log3s",
 
-	// §5.8 lottery_log5s：哈希5分（00115 对换后 tron 系）
+	// §5.8 lottery_log5s：波场5分彩（00115 对换后 tron 系）
 	"tron_ffc_5m": "lottery_log5s",
 
 	// §5.9 eth_block_logs：以太坊极速

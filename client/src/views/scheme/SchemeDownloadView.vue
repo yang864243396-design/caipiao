@@ -84,7 +84,7 @@ onMounted(() => {
     <header class="sdw-header" role="banner">
       <div class="sdw-header-top">
         <button type="button" class="sdw-back" aria-label="返回" @click="goBack">
-          <svg class="sdw-back-ico" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+          <svg class="sdw-back-ico" viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">
             <path fill="currentColor" d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
           </svg>
         </button>
@@ -183,7 +183,7 @@ onMounted(() => {
 
 .sdw-header {
   flex-shrink: 0;
-  padding-top: max(0.875rem, env(safe-area-inset-top));
+  padding-top: env(safe-area-inset-top);
   background: rgba(255, 255, 255, 0.92);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
@@ -195,13 +195,16 @@ onMounted(() => {
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 0.5rem;
-  padding: 0 0.75rem 0.875rem;
+  height: var(--page-titlebar-height);
+  min-height: var(--page-titlebar-height);
+  box-sizing: border-box;
+  padding: 0 var(--page-titlebar-pad-x);
 }
 
 .sdw-back {
   justify-self: start;
-  width: 2.25rem;
-  height: 2.25rem;
+  width: var(--page-titlebar-action-size);
+  height: var(--page-titlebar-action-size);
   padding: 0;
   border: none;
   border-radius: 0.5rem;
@@ -218,6 +221,12 @@ onMounted(() => {
   outline-offset: 2px;
 }
 
+.sdw-back-ico {
+  display: block;
+  width: var(--page-titlebar-icon-size);
+  height: var(--page-titlebar-icon-size);
+}
+
 .sdw-title {
   margin: 0;
   justify-self: center;
@@ -230,7 +239,7 @@ onMounted(() => {
 
 .sdw-header-spacer {
   justify-self: end;
-  width: 2.25rem;
+  width: var(--page-titlebar-action-size);
 }
 
 .sdw-main {

@@ -87,3 +87,29 @@ export function useCompactPickChips(config: PlayConfig): boolean {
     (config.numberPoolMax ?? 0) >= 11
   )
 }
+
+/** 号池多选上限；包胆 / 龙虎（和）对齐第三方仅单选 */
+export function poolMaxPicksForConfig(config: PlayConfig): number | null {
+  if (config.poolMaxPicks != null && config.poolMaxPicks > 0) return config.poolMaxPicks
+  if (config.betMode === 'baodan') return 1
+  if (config.betMode === 'longhu' || config.betMode === 'longhuhe') return 1
+  if (isLonghuPlayConfigLike(config)) return 1
+  const method = config.playMethodLabel ?? ''
+  if (method.includes('包胆')) return 1
+  return null
+}
+
+/** 在上限内切换号池选中（max=1 时点选替换，行为同单选） */
+export function togglePoolPick(selected: string[], digit: string, maxPicks: number | null): string[] {
+  const set = new Set(selected)
+  if (set.has(digit)) {
+    set.delete(digit)
+    return [...set].sort()
+  }
+  if (maxPicks === 1) return [digit]
+  if (maxPicks != null && maxPicks > 0 && set.size >= maxPicks) {
+    return [digit]
+  }
+  set.add(digit)
+  return [...set].sort()
+}

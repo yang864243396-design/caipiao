@@ -17,6 +17,15 @@ var expectedWSKey = map[string]string{
 	"bnb_k3_1m":   "bsc_lottery_log01",
 	"bnb_syxw":    "bsc_lottery_log01",
 
+	// 波场分分彩 00 区块（独立 type）；03 线 lottery_log103/303/503 见 hash / 衍生
+	"tron_ffc_1m": "lottery1_wsds",
+	"tron_ffc_3m": "lottery3_wsds",
+	"tron_ffc_5m": "lottery5_wsds",
+	// 波场秒彩
+	"tron_ffc_3s":  "lottery_v2_broadcast",
+	"tron_ffc_6s":  "lottery_log101",
+	"tron_ffc_15s": "lottery_log125",
+
 	"tron_k3_1m":   "lottery_log103",
 	"tron_lhc_1m":  "lottery_log103",
 	"tron_syxw":    "lottery_log103",
@@ -38,14 +47,7 @@ var expectedWSKey = map[string]string{
 }
 
 // knownPending 尚无可靠 WS 或未配置 key；live 审计跳过，不记 FAIL。
-var knownPending = map[string]string{
-	"tron_ffc_1m":  "REST lottery_logs(1014*) WS 无 lottery_logs",
-	"tron_ffc_3m":  "REST lottery_log3s(3014*) WS 无对应 key",
-	"tron_ffc_5m":  "REST lottery_log5s(5014*) WS 无对应 key",
-	"tron_ffc_3s":  "guaji_ws_key 未配置",
-	"tron_ffc_6s":  "guaji_ws_key 未配置",
-	"tron_ffc_15s": "guaji_ws_key 未配置",
-}
+var knownPending = map[string]string{}
 
 func wsKeyCandidates(wsKey, restPath string) []string {
 	seen := map[string]bool{}
@@ -70,6 +72,10 @@ func wsKeyCandidates(wsKey, restPath string) []string {
 		add("lottery_log303")
 	case "lottery_log503s":
 		add("lottery_log503")
+	case "lottery_log101s":
+		add("lottery_log101")
+	case "lottery_log125s":
+		add("lottery_log125")
 	case "bsc_lottery_logs":
 		add("bsc_lottery_log01")
 	case "bsc_lottery_log3s":

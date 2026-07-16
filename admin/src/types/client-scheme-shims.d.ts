@@ -78,8 +78,20 @@ declare module '@client/utils/betMultiplierPlan' {
     margin: string
   }
 
+  export type CalcType = 'rate' | 'fixed' | 'step' | 'free'
+  export type AdvanceMode = 'on_lose' | 'on_win'
+
+  export const DEFAULT_SIDES_PRESET: readonly number[]
+  export const AGGRESSIVE_PRESET: readonly number[]
+
   export function canGenerateNewbiePlan(input: Record<string, unknown>): string | null
   export function canGenerateOneclickPlan(input: Record<string, unknown>): string | null
   export function generateNewbiePlan(input: Record<string, unknown>): PlanTableRow[] | null
   export function generateOneclickPlan(input: Record<string, unknown>): PlanTableRow[] | null
+  export function applyPresetTimes(
+    preset: readonly number[],
+    money: number,
+    number: number,
+    mode: number,
+  ): PlanTableRow[]
 }

@@ -10,10 +10,21 @@ const defaultPoolMin = 0
 const defaultPoolMax = 9
 
 func ruleNumberPool(rule playRule) (min, max int) {
-	if rule.NumberPoolMax > 0 {
-		min = rule.NumberPoolMin
-		max = rule.NumberPoolMax
-		return min, max
+	if rule.NumberPoolMax > 0 && rule.NumberPoolMax >= rule.NumberPoolMin {
+		return rule.NumberPoolMin, rule.NumberPoolMax
+	}
+	switch strings.TrimSpace(rule.PlayTemplate) {
+	case "lhc_std":
+		return 1, 49
+	case "pk10_std":
+		return 1, 10
+	case "syxw_std":
+		return 1, 11
+	case "k3_std":
+		return 1, 6
+	}
+	if isLHCTypeID(rule.PlayTypeID) {
+		return 1, 49
 	}
 	return defaultPoolMin, defaultPoolMax
 }

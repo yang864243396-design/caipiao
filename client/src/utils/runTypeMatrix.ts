@@ -262,20 +262,26 @@ export function filterPlayTypesForRunType<T extends { value: string | number }>(
     case 'adv_trigger_bet':
       return filterAdvTriggerPlayTypes(all, playTreeTypes)
     case 'hot_cold_warm':
+    case 'random_draw':
       return filterHotColdWarmPlayTypes(all, playTreeTypes)
     default:
       return all
   }
 }
 
-export function filterSubPlaysForRunType<T extends { value: string | number }>(
+export function filterSubPlaysForRunType<T extends { value: string | number; label?: string }>(
   runTypeId: string,
   all: T[],
   playTypeId: string,
   playTreeTypes: PlayTypeNode[],
 ): T[] {
-  if (runTypeId !== 'adv_trigger_bet') return all
-  return filterAdvTriggerSubPlays(all, playTypeId, playTreeTypes)
+  if (runTypeId === 'adv_trigger_bet') {
+    return filterAdvTriggerSubPlays(all, playTypeId, playTreeTypes)
+  }
+  if (runTypeId === 'hot_cold_warm' || runTypeId === 'random_draw') {
+    return filterPositionSourceSubPlays(all, playTypeId, playTreeTypes)
+  }
+  return all
 }
 
 export function filterAdvTriggerPlayTypes<T extends { value: string | number }>(
@@ -319,7 +325,54 @@ export function filterHotColdWarmPlayTypes<T extends { value: string | number }>
     const id = String(o.value)
     const node = findPlayTypeNode(playTreeTypes, id)
     if (!node) return id !== 'longhu'
-    return !isLonghuPlayType(node.label, id)
+    if (isLonghuPlayType(node.label, id)) return false
+    const lab = node.label.trim()
+    if (lab === '大小单双' || lab === '不定位') return false
+    const subs = node.subPlays ?? []
+    if (!subs.length) return true
+    return subs.some((s) => supportsPositionSourceSubPlay(s.label, lab))
+  })
+}
+
+/**
+ * 冷热温 / 随机出号仅支持「按位产号」子玩法：
+ * 直选复式、直选组合、定位胆、任选直选复式。
+ * 单式/和值/组三组六/包胆/不定位/属性等须用定码轮换。
+ */
+export function supportsPositionSourceSubPlay(
+  subLabel: string,
+  playTypeLabel = '',
+): boolean {
+  const sub = (subLabel || '').trim()
+  const play = (playTypeLabel || '').trim()
+  if (!sub) return false
+  if (play === '龙虎' || sub.includes('龙虎')) return false
+  if (play === '大小单双' || /大小单双|和值单双|和值大小/.test(sub)) return false
+  if (play === '不定位' || sub.includes('不定位')) return false
+  if (/单式|混合组选/.test(sub) || (sub.includes('混合') && !sub.includes('组合'))) return false
+  if (/和值|跨度|包胆|组三|组六|特殊号/.test(sub)) return false
+  if (sub.includes('组选') && !sub.includes('组合')) return false
+  if (play === '任选') {
+    return sub.includes('直选复式') || (sub.includes('直选') && sub.includes('复式'))
+  }
+  if (sub.includes('组合') && !sub.includes('组选')) return true
+  if (sub.includes('直选复式') || (sub.includes('复式') && sub.includes('直选'))) return true
+  if (sub.includes('定位') || play === '一星') return true
+  return false
+}
+
+export function filterPositionSourceSubPlays<T extends { value: string | number; label?: string }>(
+  all: T[],
+  playTypeId: string,
+  playTreeTypes: PlayTypeNode[],
+): T[] {
+  const typeNode = findPlayTypeNode(playTreeTypes, playTypeId)
+  const playLabel = typeNode?.label?.trim() ?? ''
+  return all.filter((o) => {
+    const subId = String(o.value)
+    const sub = findSubPlayNode(typeNode, subId)
+    const label = (sub?.label ?? o.label ?? '').trim()
+    return supportsPositionSourceSubPlay(label, playLabel)
   })
 }
 
@@ -346,8 +399,15 @@ export function validateRunTypePlaySelection(
       }
       break
     case 'hot_cold_warm':
+    case 'random_draw':
       if (typeNode && isLonghuPlayType(typeNode.label, playTypeId)) {
-        return '冷热温出号不支持龙虎玩法'
+        return '冷热温/随机出号不支持龙虎玩法'
+      }
+      if (
+        subNode &&
+        !supportsPositionSourceSubPlay(subNode.label, typeNode?.label ?? '')
+      ) {
+        return '冷热温/随机出号仅支持直选复式、直选组合、定位胆及任选直选复式'
       }
       break
   }

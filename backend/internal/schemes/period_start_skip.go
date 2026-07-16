@@ -21,18 +21,14 @@ func readStartSkipPeriod(ctx context.Context, syncer *periodsync.Syncer, lottery
 	return snap.Period, true, nil
 }
 
-// markSchemeStartPeriodSkipped 无条件跳过最近一期（快照期号 + 封盘时刻写入 DB）。
+// markSchemeStartPeriodSkipped 跳过最近一期（快照期号 + 封盘时刻写入 DB）。
+// 仅读本地 periods 缓存：开启接口绝不同步等待第三方 ForceRefresh（其全局锁会被 worker 拉单拖死）。
 func markSchemeStartPeriodSkipped(
 	ctx context.Context,
 	q *sqlcdb.Queries,
 	syncer *periodsync.Syncer,
 	instanceID, lotteryCode string,
 ) (skipPeriod string, ok bool, err error) {
-	if syncer != nil {
-		if refreshErr := syncer.ForceRefresh(ctx, lotteryCode); refreshErr != nil {
-			slog.Warn("scheme start force refresh periods failed", "instanceId", instanceID, "lottery", lotteryCode, "err", refreshErr)
-		}
-	}
 	snap, ok, err := readStartSkipSnapshot(ctx, syncer, lotteryCode)
 	if err != nil || !ok || strings.TrimSpace(snap.Period) == "" || snap.CloseAt.IsZero() {
 		return "", false, err

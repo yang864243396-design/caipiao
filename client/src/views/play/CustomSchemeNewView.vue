@@ -70,14 +70,21 @@ const filteredPlayTypeOptions = computed<OptionPickerItem[]>(() =>
   filterPlayTypesForRunType(runTypeId.value, playTypeOptions.value, playTreeTypes.value),
 )
 
-const filteredSubPlayOptions = computed<OptionPickerItem[]>(() =>
-  filterSubPlaysForRunType(
+/** 始终按当前玩法类型从树推导，避免 playType 切换后 subPlayOptions 异步未就绪时展示错配 */
+const filteredSubPlayOptions = computed<OptionPickerItem[]>(() => {
+  const typeNode = playTreeTypes.value.find((t) => t.typeId === playTypeId.value)
+  const fromTree = (typeNode?.subPlays ?? []).map((s) => ({
+    label: formatSubPlayLabel(s.label),
+    value: s.subId,
+  }))
+  const source = fromTree.length > 0 ? fromTree : subPlayOptions.value
+  return filterSubPlaysForRunType(
     runTypeId.value,
-    subPlayOptions.value,
+    source,
     playTypeId.value,
     playTreeTypes.value,
-  ),
-)
+  )
+})
 
 function applyRunTypePlaySync() {
   if (isBuiltinPlan.value || !playTreeTypes.value.length) return
@@ -150,8 +157,25 @@ async function loadPlayTreeOptions(code: string) {
 
 watch(playTypeId, (typeId) => {
   if (!lotteryId.value || !typeId) return
+  // 优先同步用已加载的玩法树，避免快速切换时异步 fetch 回写造成子玩法错配
+  const local = playTreeTypes.value.find((t) => t.typeId === typeId)
+  if (local) {
+    subPlayOptions.value = (local.subPlays ?? []).map((s) => ({
+      label: formatSubPlayLabel(s.label),
+      value: s.subId,
+    }))
+    applyRunTypePlaySync()
+    return
+  }
+  const wantType = typeId
   void fetchPlayTree(lotteryId.value).then((tree) => {
-    const typeNode = tree.playTypes.find((t) => t.typeId === typeId)
+    if (playTypeId.value !== wantType) return
+    playTreeTypes.value = tree.playTypes
+    playTypeOptions.value = tree.playTypes.map((t) => ({
+      label: t.label,
+      value: t.typeId,
+    }))
+    const typeNode = tree.playTypes.find((t) => t.typeId === wantType)
     subPlayOptions.value = (typeNode?.subPlays ?? []).map((s) => ({
       label: formatSubPlayLabel(s.label),
       value: s.subId,
@@ -353,7 +377,7 @@ async function onNext(): Promise<void> {
   <div class="csn">
     <header class="csn-header">
       <button type="button" class="csn-back" aria-label="返回" @click="goBack">
-        <svg class="csn-back-ico" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+        <svg class="csn-back-ico" viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">
           <path fill="currentColor" d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
         </svg>
       </button>
@@ -517,7 +541,10 @@ async function onNext(): Promise<void> {
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 0.5rem;
-  padding: max(0.75rem, env(safe-area-inset-top)) 0.75rem 0.875rem;
+  height: calc(var(--page-titlebar-height) + env(safe-area-inset-top));
+  min-height: calc(var(--page-titlebar-height) + env(safe-area-inset-top));
+  box-sizing: border-box;
+  padding: env(safe-area-inset-top) var(--page-titlebar-pad-x) 0;
   background: rgba(255, 255, 255, 0.92);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
@@ -526,8 +553,8 @@ async function onNext(): Promise<void> {
 
 .csn-back {
   justify-self: start;
-  width: 2.25rem;
-  height: 2.25rem;
+  width: var(--page-titlebar-action-size);
+  height: var(--page-titlebar-action-size);
   padding: 0;
   border: none;
   border-radius: 0.5rem;
@@ -546,6 +573,8 @@ async function onNext(): Promise<void> {
 
 .csn-back-ico {
   display: block;
+  width: var(--page-titlebar-icon-size);
+  height: var(--page-titlebar-icon-size);
 }
 
 .csn-title {
@@ -561,10 +590,10 @@ async function onNext(): Promise<void> {
 
 .csn-main {
   flex: 1;
-  padding: 1rem 1rem 1.5rem;
+  padding: 0.85rem 1rem 1.25rem;
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 0.85rem;
   max-width: 28rem;
   margin: 0 auto;
   width: 100%;
@@ -573,12 +602,17 @@ async function onNext(): Promise<void> {
 .csn-card {
   background: #fff;
   border-radius: 1rem;
-  padding: 1.25rem 1rem;
+  padding: 0.9rem 1rem;
   box-shadow: 0 12px 40px rgba(25, 28, 30, 0.06);
 }
 
 .csn-field {
-  margin-bottom: 1.125rem;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.65rem;
+  margin-bottom: 0.7rem;
+  min-width: 0;
 }
 
 .csn-field:last-child {
@@ -587,16 +621,19 @@ async function onNext(): Promise<void> {
 
 .csn-lbl {
   display: block;
+  flex-shrink: 0;
+  min-width: 4.25rem;
   font-size: 0.8125rem;
   font-weight: 500;
   color: #475569;
-  margin-bottom: 0.5rem;
+  margin-bottom: 0;
+  line-height: 1.3;
 }
 
 .csn-hint {
-  margin: 0;
+  margin: 0 0 0.35rem;
   font-size: 0.8125rem;
-  line-height: 1.6;
+  line-height: 1.55;
   color: var(--el-text-color-secondary);
 }
 
@@ -604,6 +641,8 @@ async function onNext(): Promise<void> {
   display: flex;
   align-items: stretch;
   gap: 0.5rem;
+  flex: 1;
+  min-width: 0;
 }
 
 .csn-inp {
@@ -641,13 +680,15 @@ async function onNext(): Promise<void> {
 }
 
 .csn-picker {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
+  width: auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  min-height: 2.75rem;
-  padding: 0.5rem 0.65rem 0.5rem 0.875rem;
+  min-height: 2.5rem;
+  padding: 0.4rem 0.55rem 0.4rem 0.75rem;
   border: none;
   border-radius: 0.625rem;
   background: #f1f5f9;

@@ -25,17 +25,88 @@ func evaluateZu6(rule playRule, balls []string, content string) betEvaluation {
 }
 
 func evaluateZuhe(rule playRule, balls []string, content string) betEvaluation {
-	// 直选组合：按位复式选号，注数 = 位积 × 段长（三星×3）
+	// 直选组合：按位复式选号，注数 = 位积 × 段长（三星=三星+后二+后一）。
+	// 开奖按「最长后缀」嵌套派奖：全中用三星赔率；仅后二/后一中则记对应档净奖金。
 	segLen := rule.SegmentLen
 	if segLen <= 0 {
 		segLen = 3
 	}
-	ev := evaluateZhixuanFushi(rule, balls, content)
-	units := ev.BetUnits * segLen
+	pools, product := zuhePositionPools(rule, content, segLen)
+	units := product * segLen
 	if units <= 0 {
 		units = segLen
 	}
-	return betEvaluation{Hit: ev.Hit, BetUnits: units, Odds: oddsZhixuan(segLen)}
+	seg := drawSegmentForRule(rule, balls)
+	if len(seg) != segLen || len(pools) != segLen {
+		return betEvaluation{BetUnits: units, Odds: oddsZhixuan(segLen)}
+	}
+	hitLen := 0
+	for n := segLen; n >= 1; n-- {
+		ok := true
+		for i := 0; i < n; i++ {
+			pos := segLen - n + i
+			if !containsDigit(pools[pos], seg[pos]) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			hitLen = n
+			break
+		}
+	}
+	if hitLen <= 0 {
+		return betEvaluation{Hit: false, BetUnits: units, Odds: oddsZhixuan(segLen)}
+	}
+	if hitLen == segLen {
+		// 全中：整区按直选赔率（多区位折算仍走 Odds*BetUnits）
+		return betEvaluation{Hit: true, BetUnits: units, Odds: oddsZhixuan(segLen)}
+	}
+	// 仅中后二/后一：PrizeNet=该档净奖金（1 元尺度）；Odds 供单区/无多区位时使用
+	prizeNet := oddsZuheNestedPrize(hitLen)
+	odds := prizeNet / float64(units)
+	return betEvaluation{Hit: true, BetUnits: units, Odds: odds, PrizeNet: prizeNet}
+}
+
+// oddsZuheNestedPrize 直选组合嵌套档净奖金（1 元单注尺度）。
+// 一星用 9.65：与 v6hs1 哈希彩实测 net_amount 对齐（旧 9.0 会在 E2E 对比里差 0.65）。
+func oddsZuheNestedPrize(hitLen int) float64 {
+	switch hitLen {
+	case 1:
+		return 9.65
+	case 2:
+		return oddsZhixuan(2)
+	default:
+		return oddsZhixuan(hitLen)
+	}
+}
+
+// zuhePositionPools 解析直选组合各位号池，并返回位积。
+func zuhePositionPools(rule playRule, content string, segLen int) ([][]string, int) {
+	lines := splitGroupLines(content)
+	pools := make([][]string, segLen)
+	if len(lines) >= segLen {
+		for i := 0; i < segLen; i++ {
+			pools[i] = parsePickTokensForRule(rule, lines[i])
+		}
+	} else {
+		pool := parsePickTokensForRule(rule, content)
+		if len(pool) == 0 {
+			pool = []string{"0"}
+		}
+		for i := range pools {
+			pools[i] = pool
+		}
+	}
+	product := 1
+	for _, p := range pools {
+		n := len(p)
+		if n <= 0 {
+			n = 1
+		}
+		product *= n
+	}
+	return pools, product
 }
 
 func evaluateBaodan(rule playRule, balls []string, content string) betEvaluation {

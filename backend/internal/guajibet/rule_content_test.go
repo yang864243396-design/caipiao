@@ -189,6 +189,26 @@ func TestFormatBetContentForRule_zuxuanDs(t *testing.T) {
 	}
 }
 
+func TestCountBetNums_qian2ZuxuanDanshiExcludeDuizi(t *testing.T) {
+	meta := ParseRuleMeta("ssc_std", "g004", "43", "前二组选单式", "前二码", nil, "43")
+	raw := "11,12,13,14,15,16,17,22,24,25"
+	// 第三方：排除对子 11/22 → 8 注；wire 也应去掉对子
+	wantWire := "12,13,14,15,16,17,24,25"
+	if got := FormatBetContentForRule(meta, raw); got != wantWire {
+		t.Fatalf("wire=%q want %q", got, wantWire)
+	}
+	if n := CountBetNums(meta, raw); n != 8 {
+		t.Fatalf("CountBetNums raw=%d want 8", n)
+	}
+	if n := CountBetNums(meta, wantWire); n != 8 {
+		t.Fatalf("CountBetNums wire=%d want 8", n)
+	}
+	// 组选形态去重：12 与 21 计 1；对子不计
+	if n := CountBetNums(meta, "12,21,11"); n != 1 {
+		t.Fatalf("CountBetNums form-dedup=%d want 1", n)
+	}
+}
+
 func TestCountBetNums_baodanQian2(t *testing.T) {
 	meta := ParseRuleMeta("ssc_std", "g004", "45", "组选包胆", "前二", nil, "45")
 	if n := CountBetNums(meta, "3"); n != 9 {
@@ -240,8 +260,8 @@ func TestCountBetNums_qianzhonghou3Fushi(t *testing.T) {
 	if n := CountBetNums(meta, wire); n != 3 {
 		t.Fatalf("betsNums=%d want 3", n)
 	}
-	if NeedsSoloForRule(meta, wire) {
-		t.Fatal("前中后三不应 solo")
+	if !NeedsSoloForRule(meta, wire) {
+		t.Fatal("前中后三直选复式最小注应 solo（实测 solo=false→单挑参数错误）")
 	}
 }
 
@@ -252,8 +272,8 @@ func TestCountBetNums_qianhou3Fushi(t *testing.T) {
 	if n := CountBetNums(meta, wire); n != 2 {
 		t.Fatalf("betsNums=%d want 2", n)
 	}
-	if NeedsSoloForRule(meta, wire) {
-		t.Fatal("前后三不应 solo")
+	if !NeedsSoloForRule(meta, wire) {
+		t.Fatal("前后三直选复式最小注应 solo（实测 solo=false→单挑参数错误）")
 	}
 }
 
@@ -264,8 +284,8 @@ func TestCountBetNums_qianhou2Fushi(t *testing.T) {
 	if n := CountBetNums(meta, wire); n != 2 {
 		t.Fatalf("betsNums=%d want 2", n)
 	}
-	if !NeedsSoloForRule(meta, wire) {
-		t.Fatal("前后二最小注应 solo")
+	if NeedsSoloForRule(meta, wire) {
+		t.Fatal("前后二应 solo=false（实测 solo=true→单挑参数错误）")
 	}
 }
 
@@ -301,30 +321,65 @@ func TestCountBetNums_renxuanRen2(t *testing.T) {
 		t.Fatalf("ren2 betsNums=%d want 10", n)
 	}
 	if NeedsSoloForRule(meta, "1,2,3,4,5") {
-		t.Fatal("任二直选复式不应 solo")
+		t.Fatal("任二直选复式多注不应 solo")
+	}
+	// 单注（两位各 1 码 → C 位组合后 1 注）须 solo=true
+	if !NeedsSoloForRule(meta, "1,,,,2") && !NeedsSoloForRule(meta, "0,1") {
+		// wire 形态因 Format 而异；以 CountBetNums==1 的样本为准
+		wire := FormatBetContentForRule(meta, "1\n\n\n\n2")
+		if CountBetNums(meta, wire) == 1 && !NeedsSoloForRule(meta, wire) {
+			t.Fatalf("任二直选复式单注应 solo, wire=%q", wire)
+		}
 	}
 }
 
 func TestNeedsSolo_budingweiTwoCode(t *testing.T) {
+	// 实测一码/二码不定位 solo=true →「单挑参数错误」，一律 solo=false
 	meta := ParseRuleMeta("ssc_std", "g009", "114", "前三二码不定位", "不定位", nil, "114")
-	if !NeedsSoloForRule(meta, "1,2") {
-		t.Fatal("三星二码不定位应 solo")
+	if NeedsSoloForRule(meta, "1,2") {
+		t.Fatal("三星二码不定位不应 solo")
 	}
 	meta1 := ParseRuleMeta("ssc_std", "g009", "113", "前三一码不定位", "不定位", nil, "113")
 	if NeedsSoloForRule(meta1, "3") {
 		t.Fatal("前三一码不定位不应 solo")
 	}
 	metaHou3 := ParseRuleMeta("ssc_std", "g009", "117", "后三一码不定位", "不定位", nil, "117")
-	if !NeedsSoloForRule(metaHou3, "3") {
-		t.Fatal("后三一码不定位应 solo")
+	if NeedsSoloForRule(metaHou3, "3") {
+		t.Fatal("后三一码不定位不应 solo")
+	}
+	if ResolveSolo(meta, "1,2", 1) {
+		t.Fatal("二码不定位 ResolveSolo 应为 false")
 	}
 	metaQian4 := ParseRuleMeta("ssc_std", "g009", "147", "前四二码不定位", "不定位", nil, "147")
 	if NeedsSoloForRule(metaQian4, "1,2") {
 		t.Fatal("前四二码不定位不应 solo")
 	}
-	meta3 := ParseRuleMeta("ssc_std", "g009", "152", "五星三码不定位", "不定位", nil, "152")
-	if NeedsSoloForRule(meta3, "1,2,3,4") {
+	metaWuxing3 := ParseRuleMeta("ssc_std", "g009", "152", "五星三码不定位", "不定位", nil, "152")
+	if NeedsSoloForRule(metaWuxing3, "1,2,3,4") {
 		t.Fatal("五星三码不定位不应 solo")
+	}
+}
+
+func TestResolveSolo_qianzhonghou3AndQianhou2(t *testing.T) {
+	seg3, _ := json.Marshal(map[string]string{"guajiGroup": "前中后三"})
+	meta3 := ParseRuleMeta("ssc_std", "g007", "102", "直选单式", "前中后三", seg3, "102")
+	if !ResolveSolo(meta3, "012,345", 6) {
+		t.Fatal("前中后三直选单式多注应 solo=true")
+	}
+	seg2, _ := json.Marshal(map[string]string{"guajiGroup": "前后二"})
+	meta2 := ParseRuleMeta("ssc_std", "g008", "119", "直选复式", "前后二", seg2, "119")
+	if ResolveSolo(meta2, "013,0", 6) {
+		t.Fatal("前后二直选复式应 solo=false")
+	}
+}
+
+func TestCountBudingwei_yimaMaxTwo(t *testing.T) {
+	meta := ParseRuleMeta("ssc_std", "g009", "113", "前三一码不定位", "不定位", nil, "113")
+	if n := CountBetNums(meta, "0,2,4"); n != 2 {
+		t.Fatalf("一码三选应截断计 2 注, got %d", n)
+	}
+	if got := FormatBetContentForRule(meta, "0,2,4"); got != "0,2" {
+		t.Fatalf("wire=%q want 0,2", got)
 	}
 }
 
@@ -424,6 +479,14 @@ func TestFormatBetContentForRule_renxuanRen2Wire(t *testing.T) {
 	if n := CountBetNums(meta, got); n != 10 {
 		t.Fatalf("betsNums=%d want 10", n)
 	}
+	// 两位短输入须落到默认千/个，不能 flat「0,1」（第三方报格式错误）
+	got2 := FormatBetContentForRule(meta, "0\n1")
+	if got2 != ",0,,,1" {
+		t.Fatalf("short wire=%q want ,0,,,1", got2)
+	}
+	if n := CountBetNums(meta, got2); n != 1 {
+		t.Fatalf("short betsNums=%d want 1", n)
+	}
 }
 
 func TestFormatBetContentForRule_syxwFushi(t *testing.T) {
@@ -500,8 +563,69 @@ func TestCountBetNums_qian2ZhixuanHezhi(t *testing.T) {
 	if n := CountBetNums(meta, got); n != 5 {
 		t.Fatalf("betsNums=%d want 5", n)
 	}
+	// NeedsSolo 对单注样例仍为 true；多注须 ResolveSolo=false（否则第三方报单挑参数错误）
 	if !NeedsSoloForRule(meta, got) {
-		t.Fatal("前二直选和值应 solo")
+		t.Fatal("前二直选和值 NeedsSolo 单注语义应 true")
+	}
+	if ResolveSolo(meta, got, 5) {
+		t.Fatal("前二直选和值 5 注不可 solo")
+	}
+	if !ResolveSolo(meta, "0", 1) {
+		t.Fatal("前二直选和值 1 注应 solo")
+	}
+}
+
+func TestResolveSolo_sscQian2ZuxuanFs(t *testing.T) {
+	meta := ParseRuleMeta("ssc_std", "g004", "42", "组选复式", "前二码", nil, "42")
+	wire := FormatBetContentForRule(meta, "1\n2")
+	if wire != "1,2" {
+		t.Fatalf("wire=%q want 1,2", wire)
+	}
+	if n := CountBetNums(meta, wire); n != 1 {
+		t.Fatalf("bets=%d want 1", n)
+	}
+	if ResolveSolo(meta, wire, 1) {
+		t.Fatal("SSC 前二组选复式应 solo=false（实测 solo=true→单挑参数错误）")
+	}
+	metaHou := ParseRuleMeta("ssc_std", "g005", "52", "组选复式", "后二", nil, "52")
+	if ResolveSolo(metaHou, "0,1", 1) {
+		t.Fatal("SSC 后二组选复式应 solo=false")
+	}
+}
+
+func TestGuajiGroupRequiresSoloFalse_typeID(t *testing.T) {
+	meta := ParseRuleMeta("ssc_std", "g014", "130", "直选复式", "", nil, "130")
+	if !guajiGroupRequiresSoloFalse(meta) {
+		t.Fatal("g014 前后四应 solo=false")
+	}
+	if ResolveSolo(meta, "0\n1\n2\n3", 1) {
+		t.Fatal("前后四直选复式 ResolveSolo 应为 false")
+	}
+}
+
+func TestResolveSolo_qian2FushiMulti(t *testing.T) {
+	meta := ParseRuleMeta("ssc_std", "g004", "38", "前二直选复式", "前二码", nil, "38")
+	wire := FormatBetContentForRule(meta, "0,1,3\n0")
+	n := CountBetNums(meta, wire)
+	if n != 3 {
+		t.Fatalf("bets=%d want 3 wire=%q", n, wire)
+	}
+	if ResolveSolo(meta, wire, n) {
+		t.Fatalf("前二复式 %d 注不可 solo wire=%q", n, wire)
+	}
+	metaDS := ParseRuleMeta("ssc_std", "g004", "39", "前二直选单式", "前二码", nil, "39")
+	wireDS := FormatBetContentForRule(metaDS, "12,13,14,15,12")
+	if wireDS != "12,13,14,15" {
+		t.Fatalf("danshi wire=%q", wireDS)
+	}
+	if n := CountBetNums(metaDS, wireDS); n != 4 {
+		t.Fatalf("danshi bets=%d want 4", n)
+	}
+	if ResolveSolo(metaDS, wireDS, 4) {
+		t.Fatal("前二单式 4 注不可 solo")
+	}
+	if !ResolveSolo(metaDS, "12", 1) {
+		t.Fatal("前二单式 1 注应 solo")
 	}
 }
 
@@ -905,6 +1029,31 @@ func TestFormatBetContentForRule_pk10DxdsCombo(t *testing.T) {
 	}
 	if MatrixSkipReason(meta221) != "" {
 		t.Fatalf("221 不应 skip: %q", MatrixSkipReason(meta221))
+	}
+}
+
+func TestCountBetNums_zhixuanDanshiDedup(t *testing.T) {
+	meta := ParseRuleMeta("ssc_std", "g004", "39", "前二直选单式", "前二码", nil, "39")
+	wire := FormatBetContentForRule(meta, "12,13,14,12")
+	if wire != "12,13,14" {
+		t.Fatalf("wire=%q want 12,13,14", wire)
+	}
+	if n := CountBetNums(meta, wire); n != 3 {
+		t.Fatalf("CountBetNums=%d want 3", n)
+	}
+	if n := CountBetNums(meta, "12,13,14,12"); n != 3 {
+		t.Fatalf("CountBetNums raw=%d want 3", n)
+	}
+	// 用户复现：12,13,14,15,12 → 4 注（末尾重复 12）
+	if n := CountBetNums(meta, "12,13,14,15,12"); n != 4 {
+		t.Fatalf("CountBetNums 15dup=%d want 4", n)
+	}
+	if got := FormatBetContentForRule(meta, "12,13,14,15,12"); got != "12,13,14,15" {
+		t.Fatalf("wire 15dup=%q want 12,13,14,15", got)
+	}
+	// 全重复
+	if n := CountBetNums(meta, "12,12,12"); n != 1 {
+		t.Fatalf("CountBetNums all-dup=%d want 1", n)
 	}
 }
 

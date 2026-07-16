@@ -175,8 +175,47 @@ func (w *PayoutSyncWorker) syncOne(ctx context.Context, row sqlcdb.ListPendingGu
 	}
 
 	status := "lose"
-	if res.Status == "win" || res.Payout > 0 || res.Pnl > 0 {
+	pnl := res.Pnl
+	payout := res.Payout
+	// 勿用「Payout>0」单独判赢：龙虎和局退本时常 payout=本金、pnl≈0，会误成「中」。
+	// 嵌套小奖：pnl 显著为负但仍有派奖额 / 显式 win → 记 win，再视情况用本地 PrizeNet。
+	switch {
+	case pnl > 1e-6:
 		status = "win"
+	case res.Status == "win":
+		status = "win"
+	case payout > 1e-6 && pnl < -1e-6:
+		status = "win"
+	}
+	// 直选组合嵌套小奖：第三方整单净额常为「小奖−全票本金」（pnl≪0 / ≈0 仍标 win）→ 用本地 PrizeNet。
+	// 绝不在 guaji 已有扎实正净额时用更大本地值覆盖（本地赔率常偏高：不定位/跨度/和值大小等）。
+	if status == "win" {
+		if eval, ok, lerr := w.evalLocalDraw(ctx, row); lerr != nil {
+			slog.Warn("payout sync local prize eval failed", "orderNo", row.OrderNo, "err", lerr)
+		} else if ok && eval.Status == "win" && eval.Pnl > 1 {
+			// 仅当第三方净额近零/负值（字段缺失或嵌套淹没）时采用本地
+			if pnl < 1.0 && eval.Pnl > pnl+0.5 {
+				slog.Info("payout sync prefer local prize",
+					"orderNo", row.OrderNo, "guajiPnl", pnl, "localPnl", eval.Pnl)
+				pnl = eval.Pnl
+				if eval.Payout > 0 {
+					payout = eval.Payout
+				}
+			}
+		}
+	}
+	// guaji 记挂但派奖额为 0：API 偶发漏字段。本地已判中且有派奖时补救（组合嵌套/任选）。
+	// 勿在 guaji 已有正派奖却记挂时用本地硬改（避免「平台=中 第三方=挂」回潮）。
+	if status == "lose" && payout < 1e-6 {
+		if eval, ok, lerr := w.evalLocalDraw(ctx, row); lerr != nil {
+			slog.Warn("payout sync local win check failed", "orderNo", row.OrderNo, "err", lerr)
+		} else if ok && eval.Status == "win" && eval.Payout > 1e-6 {
+			slog.Info("payout sync prefer local win (guaji miss payout)",
+				"orderNo", row.OrderNo, "localPnl", eval.Pnl, "localPayout", eval.Payout)
+			status = "win"
+			pnl = eval.Pnl
+			payout = eval.Payout
+		}
 	}
 	currency := row.Currency
 	balanceSnapshot := 0.0
@@ -184,7 +223,14 @@ func (w *PayoutSyncWorker) syncOne(ctx context.Context, row sqlcdb.ListPendingGu
 		balanceSnapshot = info.BalanceByCurrency(currency)
 		w.svc.persistGuajiBalances(ctx, row.GuajiAccountID.Int64, multiCurrencyFromInfo(info))
 	}
-	return w.commitSettlement(ctx, row, status, res.Pnl, res.Payout, currency, balanceSnapshot)
+	return w.commitSettlement(ctx, row, status, pnl, payout, currency, balanceSnapshot)
+}
+
+func (w *PayoutSyncWorker) evalLocalDraw(ctx context.Context, row sqlcdb.ListPendingGuajiBetOrdersRow) (LocalDrawSettlement, bool, error) {
+	if w == nil || w.localDrawFallback == nil {
+		return LocalDrawSettlement{}, false, nil
+	}
+	return w.localDrawFallback(ctx, row.ID, row.OrderNo)
 }
 
 func (w *PayoutSyncWorker) trySettleFromLocalDraw(ctx context.Context, row sqlcdb.ListPendingGuajiBetOrdersRow) (bool, error) {

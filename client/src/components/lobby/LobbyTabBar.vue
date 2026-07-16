@@ -105,12 +105,12 @@ const navLabel = computed(() => (isWeb.value ? '主导航' : '底部导航'))
   display: flex;
   justify-content: space-around;
   align-items: center;
-  padding: 0.75rem 1rem calc(1.5rem + env(safe-area-inset-bottom));
+  padding: 0.3rem 0.75rem calc(0.45rem + env(safe-area-inset-bottom));
   background: rgba(255, 255, 255, 0.95);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.04);
-  border-radius: 1rem 1rem 0 0;
+  border-radius: 0.85rem 0.85rem 0 0;
 }
 .nav-inner {
   display: contents;
@@ -122,8 +122,8 @@ const navLabel = computed(() => (isWeb.value ? '主导航' : '底部导航'))
   display: contents;
 }
 .nav-ico {
-  width: 1.5rem;
-  height: 1.5rem;
+  width: 1.75rem;
+  height: 1.75rem;
   object-fit: contain;
   display: block;
   flex-shrink: 0;
@@ -140,14 +140,14 @@ const navLabel = computed(() => (isWeb.value ? '主导航' : '底部导航'))
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 0.5rem 0.5rem;
-  min-width: 4rem;
+  padding: 0.2rem 0.4rem;
+  min-width: 3.75rem;
   color: #94a3b8;
   text-decoration: none;
-  font-size: 11px;
+  font-size: 12px;
   font-family: 'Noto Sans SC', sans-serif;
-  font-weight: 500;
-  border-radius: 0.75rem;
+  font-weight: 600;
+  border-radius: 0.65rem;
   transition:
     color 0.2s,
     background 0.2s,
@@ -162,11 +162,11 @@ const navLabel = computed(() => (isWeb.value ? '主导航' : '底部导航'))
 .nav-item.active {
   color: #2563eb;
   background: rgba(239, 246, 255, 0.5);
-  padding: 0.375rem 0.75rem 0.5rem;
+  padding: 0.2rem 0.55rem 0.25rem;
 }
 .nav-lbl {
-  margin-top: 0.25rem;
-  line-height: 1.2;
+  margin-top: 0.12rem;
+  line-height: 1.15;
 }
 
 /**

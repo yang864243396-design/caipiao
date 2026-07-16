@@ -71,6 +71,25 @@ func TestValidateRunTypePlayMatrix(t *testing.T) {
 	if err := ValidateRunTypePlay(RunTypeHotColdWarm, "g008", "x", "龙虎", "万位"); err == nil {
 		t.Error("hotcold+龙虎 group should fail")
 	}
+	// 冷热温/随机：仅按位产号子玩法
+	if err := ValidateRunTypePlay(RunTypeHotColdWarm, "g001", "1", "前三码", "前三直选复式"); err != nil {
+		t.Errorf("hotcold+前三直选复式 should pass: %v", err)
+	}
+	if err := ValidateRunTypePlay(RunTypeRandomDraw, "g001", "5", "前三码", "前三组合"); err != nil {
+		t.Errorf("random+前三组合 should pass: %v", err)
+	}
+	if err := ValidateRunTypePlay(RunTypeHotColdWarm, "g001", "2", "前三码", "前三直选单式"); err == nil {
+		t.Error("hotcold+前三直选单式 should fail")
+	}
+	if err := ValidateRunTypePlay(RunTypeRandomDraw, "g001", "3", "前三码", "前三组三"); err == nil {
+		t.Error("random+前三组三 should fail")
+	}
+	if err := ValidateRunTypePlay(RunTypeHotColdWarm, "g007", "r2", "任选", "任二直选复式"); err != nil {
+		t.Errorf("hotcold+任二直选复式 should pass: %v", err)
+	}
+	if err := ValidateRunTypePlay(RunTypeHotColdWarm, "g007", "r2z", "任选", "任二组选复式"); err == nil {
+		t.Error("hotcold+任二组选复式 should fail")
+	}
 }
 
 func pickTestConfig(t *testing.T, raw string) parsedSchemeConfig {
@@ -284,13 +303,36 @@ func TestCompileBetMultiplierRounds(t *testing.T) {
 		t.Fatalf("compiled rounds = %+v, want %+v", rounds, want)
 	}
 
+	// P2：中翻倍 on_win
+	payload = nil
+	_ = json.Unmarshal([]byte(`{"kind":"2","simple":{"multiples":"2,4,8","advanceMode":"on_win"}}`), &payload)
+	rounds = compileBetMultiplierRounds(payload, nil)
+	wantWin := []schemeRound{
+		{Mult: 2, AfterHit: 1, AfterMiss: 0},
+		{Mult: 4, AfterHit: 2, AfterMiss: 0},
+		{Mult: 8, AfterHit: 0, AfterMiss: 0},
+	}
+	if !reflect.DeepEqual(rounds, wantWin) {
+		t.Fatalf("on_win rounds = %+v, want %+v", rounds, wantWin)
+	}
+
+	payload = nil
 	_ = json.Unmarshal([]byte(`{"kind":"0","newbie":{"profitTable":[{"mult":"1"},{"mult":"3"},{"mult":"9"}]}}`), &payload)
 	rounds = compileBetMultiplierRounds(payload, nil)
 	if len(rounds) != 3 || rounds[2].Mult != 9 {
 		t.Fatalf("newbie compiled = %+v", rounds)
 	}
 
+	// P1：kind=0 但已写入 simple.multiples → 优先简单表
+	payload = nil
+	_ = json.Unmarshal([]byte(`{"kind":"0","simple":{"multiples":"2,4,8"},"newbie":{"profitTable":[{"mult":"1"},{"mult":"3"}]}}`), &payload)
+	rounds = compileBetMultiplierRounds(payload, nil)
+	if len(rounds) != 3 || rounds[0].Mult != 2 || rounds[2].Mult != 8 {
+		t.Fatalf("simple preferred over newbie = %+v", rounds)
+	}
+
 	// 高级倍投：首次选择模板 → 注入默认轮次（1-based 跳转）
+	payload = nil
 	_ = json.Unmarshal([]byte(`{"kind":"3","advanced":{"selectedId":"tpl_demo_plan_4"}}`), &payload)
 	rounds = compileBetMultiplierRounds(payload, nil)
 	wantAdv := defaultAdvancedBetMultiplierRounds()

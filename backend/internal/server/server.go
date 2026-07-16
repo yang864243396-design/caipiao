@@ -221,6 +221,7 @@ func (s *Server) registerRoutes(wsSrv *ws.Server) {
 	api.Handle("POST /client/guaji/accounts/bind", clientAuth(http.HandlerFunc(s.handler.GuajiBindAccount)))
 	api.Handle("POST /client/guaji/accounts/{id}/activate", clientAuth(http.HandlerFunc(s.handler.GuajiActivateAccount)))
 	api.Handle("POST /client/guaji/accounts/{id}/reauth", clientAuth(http.HandlerFunc(s.handler.GuajiReauthAccount)))
+	api.Handle("POST /client/guaji/accounts/{id}/import-session", clientAuth(http.HandlerFunc(s.handler.GuajiImportSession)))
 	api.Handle("DELETE /client/guaji/accounts/{id}", clientAuth(http.HandlerFunc(s.handler.GuajiDeleteAccount)))
 	api.Handle("GET /client/guaji/balance", clientAuth(http.HandlerFunc(s.handler.GuajiBalance)))
 	api.Handle("GET /client/guaji/primary-currency", clientAuth(http.HandlerFunc(s.handler.GuajiGetPrimaryCurrency)))

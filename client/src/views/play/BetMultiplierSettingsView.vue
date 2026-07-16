@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ApiError } from '@/api/client'
@@ -24,22 +24,56 @@ import {
   useSchemeTemplateLibrary,
 } from '@/composables/useSchemeTemplateLibrary'
 import {
+  AGGRESSIVE_PRESET,
+  DEFAULT_SIDES_PRESET,
+  applyPresetTimes,
   canGenerateNewbiePlan,
   canGenerateOneclickPlan,
   generateNewbiePlan,
   generateOneclickPlan,
+  type AdvanceMode,
+  type CalcType,
   type PlanTableRow,
 } from '@/utils/betMultiplierPlan'
+import {
+  normalizeBetMultiplierPersistKind,
+  showAutoGenBetMultiplierTabs,
+  type BetMultiplierPlayContext,
+} from '@/utils/betMultiplierPlayCategory'
 import { confirmDialog } from '@/utils/confirmDialog'
 
 const route = useRoute()
 const router = useRouter()
 
-const subTabLabels = ['小白倍投', '一键倍投', '简单倍投', '高级倍投'] as const
+const ALL_SUB_TABS: readonly { id: '0' | '1' | '2' | '3'; label: string; autoGen?: boolean }[] = [
+  { id: '0', label: '小白倍投', autoGen: true },
+  { id: '1', label: '一键倍投', autoGen: true },
+  { id: '2', label: '简单倍投' },
+  { id: '3', label: '高级倍投' },
+] as const
+
 /** Tab 值与 el-radio-button :label 同型（字符串），避免与原生 radio 的值类型不一致导致选中态 class 不匹配 */
 type SubTabId = `${0 | 1 | 2 | 3}`
 /** 从玩法详情进入时默认「简单倍投」 */
 const activeSubTab = ref<SubTabId>('2')
+
+const playContext = computed<BetMultiplierPlayContext>(() => ({
+  playTypeId: String(route.query.playType ?? route.query.playTypeId ?? route.query.typeId ?? '').trim(),
+  subPlayId: String(route.query.subPlay ?? route.query.subPlayId ?? route.query.subId ?? '').trim(),
+  betMode: String(route.query.betMode ?? '').trim(),
+  playTypeLabel: String(route.query.playTypeLabel ?? '').trim(),
+  subPlayLabel: String(
+    route.query.subPlayLabel ?? route.query.playMethod ?? route.query.title ?? '',
+  ).trim(),
+  playMethod: String(route.query.playMethod ?? '').trim(),
+  playTemplate: String(route.query.playTemplate ?? '').trim(),
+  segmentLen: Number(route.query.segmentLen) || undefined,
+}))
+
+const showAutoGenTabs = computed(() => showAutoGenBetMultiplierTabs(playContext.value))
+const visibleSubTabs = computed(() =>
+  ALL_SUB_TABS.filter((t) => !t.autoGen || showAutoGenTabs.value),
+)
 
 const tabFromRoute = route.query.activeTab
 const tabParsed = tabFromRoute == null || tabFromRoute === ''
@@ -49,24 +83,59 @@ if (tabParsed === '0' || tabParsed === '1' || tabParsed === '2' || tabParsed ===
   activeSubTab.value = tabParsed as SubTabId
 }
 
+watch(
+  showAutoGenTabs,
+  (ok) => {
+    if (!ok && (activeSubTab.value === '0' || activeSubTab.value === '1')) {
+      activeSubTab.value = '2'
+    }
+  },
+  { immediate: true },
+)
+
 function goBack() {
   if (window.history.length > 1) router.back()
   else router.push({ name: 'play-detail' })
 }
 
 function needsBetPlanTable(): boolean {
-  return (
-    (activeSubTab.value === '0' && newbiePlanRows.value.length === 0) ||
-    (activeSubTab.value === '1' && oneclickPlanRows.value.length === 0)
-  )
+  // 小白/一键：无预览表且简单表也为空时才拦截（生成会写入简单表）
+  if (activeSubTab.value === '0') {
+    return newbiePlanRows.value.length === 0 && !simpleMultiples.value.trim()
+  }
+  if (activeSubTab.value === '1') {
+    return oneclickPlanRows.value.length === 0 && !simpleMultiples.value.trim()
+  }
+  return false
 }
 
 function validateBetMultiplier(): string | null {
-  if (activeSubTab.value === '2' && !simpleMultiples.value.trim()) return '请填写倍数序列'
-  if (activeSubTab.value === '3' && !selectedAdvancedId.value) {
+  const kind = normalizeBetMultiplierPersistKind(activeSubTab.value)
+  if (kind === '2' && !simpleMultiples.value.trim()) {
+    return '至少要输入一个直线倍投'
+  }
+  if (kind === '3' && !selectedAdvancedId.value) {
     return '无法保存，请先在高级倍投列表中选择一个方案'
   }
   return null
+}
+
+/** 将小白/一键预览表写入简单倍投倍数串 */
+function applyPlanRowsToSimple(rows: PlanTableRow[]): boolean {
+  const mults = rows
+    .map((r) => String(r.mult ?? '').trim())
+    .filter((m) => m !== '' && Number(m) > 0)
+  if (!mults.length) return false
+  simpleMultiples.value = mults.join(',')
+  return true
+}
+
+function ensureSimpleFromActiveAutoGenTab(): void {
+  if (activeSubTab.value === '0' && newbiePlanRows.value.length) {
+    applyPlanRowsToSimple(newbiePlanRows.value)
+  } else if (activeSubTab.value === '1' && oneclickPlanRows.value.length) {
+    applyPlanRowsToSimple(oneclickPlanRows.value)
+  }
 }
 
 /** 从方案配置进入倍投设定时，校验失败将报错文案带回方案页右侧展示 */
@@ -150,52 +219,65 @@ function showConfirmError(msg: string): void {
 function navigateBackToSchemeWithKind() {
   const schemeId = String(route.query.schemeId ?? '')
   if (!schemeId && returnName !== 'play-detail') return
-  returnToEntry({ bmsKind: String(activeSubTab.value) })
+  returnToEntry({ bmsKind: persistKindLabel() })
 }
 
 function newbiePlanInput() {
   return {
-    principal: newbiePrincipal.value,
-    mode: newbieMode.value,
-    profitType: newbieProfitType.value,
-    rateVal: newbieRateVal.value,
-    fixedVal: newbieFixedVal.value,
-    accumStart: newbieAccumStart.value,
-    accumStep: newbieAccumStep.value,
-    preset: newbieGeneratePreset.value,
+    odds: newbieOdds.value,
+    firstBet: newbieFirstBet.value,
+    targetProfit: newbieTargetProfit.value,
+    cycle: newbieCycle.value,
+    money: newbieMoney.value,
+    number: newbieNumber.value,
   }
 }
 
 function oneclickPlanInput() {
   return {
+    money: oneclickMoney.value,
+    number: oneclickNumber.value,
+    mode: oneclickMode.value,
     cycle: oneclickCycle.value,
-    profit: oneclickProfit.value,
-    preset: oneclickGeneratePreset.value,
+    calcType: oneclickCalcType.value,
+    targetRate: oneclickTargetRate.value,
+    targetProfit: oneclickTargetProfit.value,
+    sumBegin: oneclickSumBegin.value,
+    sumStep: oneclickSumStep.value,
+    freeList: oneclickFreeList.value,
   }
 }
 
 function buildBetMultiplierPayload(): BetMultiplierPayload {
+  ensureSimpleFromActiveAutoGenTab()
+  const kind = normalizeBetMultiplierPersistKind(activeSubTab.value)
   return {
-    kind: activeSubTab.value,
+    kind,
     newbie: {
-      principal: newbiePrincipal.value,
-      mode: newbieMode.value,
-      profitType: newbieProfitType.value,
-      rateVal: newbieRateVal.value,
-      fixedVal: newbieFixedVal.value,
-      accumStart: newbieAccumStart.value,
-      accumStep: newbieAccumStep.value,
-      generatePreset: newbieGeneratePreset.value,
+      odds: newbieOdds.value,
+      firstBet: newbieFirstBet.value,
+      targetProfit: newbieTargetProfit.value,
+      cycle: newbieCycle.value,
+      money: newbieMoney.value,
+      number: newbieNumber.value,
       profitTable: newbiePlanRows.value,
     },
     oneclick: {
+      money: oneclickMoney.value,
+      number: oneclickNumber.value,
+      mode: oneclickMode.value,
       cycle: oneclickCycle.value,
-      profit: oneclickProfit.value,
-      generatePreset: oneclickGeneratePreset.value,
+      calcType: oneclickCalcType.value,
+      targetRate: oneclickTargetRate.value,
+      targetProfit: oneclickTargetProfit.value,
+      sumBegin: oneclickSumBegin.value,
+      sumStep: oneclickSumStep.value,
+      freeList: oneclickFreeList.value,
       profitTable: oneclickPlanRows.value,
     },
     simple: {
       multiples: simpleMultiples.value,
+      advanceMode: simpleAdvanceMode.value,
     },
     advanced: {
       selectedId: selectedAdvancedId.value,
@@ -203,27 +285,29 @@ function buildBetMultiplierPayload(): BetMultiplierPayload {
   }
 }
 
+function persistKindLabel(): '2' | '3' {
+  return normalizeBetMultiplierPersistKind(activeSubTab.value)
+}
+
 function applyBetMultiplierPayload(raw: unknown) {
   if (!raw || typeof raw !== 'object') return
   const payload = raw as BetMultiplierPayload
   if (payload.kind === '0' || payload.kind === '1' || payload.kind === '2' || payload.kind === '3') {
-    activeSubTab.value = payload.kind
+    // 旧数据 kind=0/1：打开时落到对应产表 Tab（若玩法允许）；确认后会归一为 2
+    if ((payload.kind === '0' || payload.kind === '1') && !showAutoGenTabs.value) {
+      activeSubTab.value = '2'
+    } else {
+      activeSubTab.value = payload.kind
+    }
   }
   const nb = payload.newbie as Record<string, unknown> | undefined
   if (nb) {
-    if (nb.principal != null) newbiePrincipal.value = String(nb.principal)
-    if (typeof nb.mode === 'string') newbieMode.value = nb.mode
-    if (nb.profitType === 'rate' || nb.profitType === 'fixed' || nb.profitType === 'accum') {
-      newbieProfitType.value = nb.profitType
-    }
-    if (nb.rateVal != null) newbieRateVal.value = String(nb.rateVal)
-    if (nb.fixedVal != null) newbieFixedVal.value = String(nb.fixedVal)
-    if (nb.accumStart != null) newbieAccumStart.value = String(nb.accumStart)
-    if (nb.accumStep != null) newbieAccumStep.value = String(nb.accumStep)
-    const gp = nb.generatePreset
-    if (gp === 'line' || gp === 'followStop' || gp === 'suspend1' || gp === 'suspend2') {
-      newbieGeneratePreset.value = gp
-    }
+    if (nb.odds != null) newbieOdds.value = String(nb.odds)
+    if (nb.firstBet != null) newbieFirstBet.value = String(nb.firstBet)
+    if (nb.targetProfit != null) newbieTargetProfit.value = String(nb.targetProfit)
+    if (nb.cycle != null) newbieCycle.value = String(nb.cycle)
+    if (nb.money != null) newbieMoney.value = String(nb.money)
+    if (nb.number != null) newbieNumber.value = String(nb.number)
     const nbTable = nb.profitTable
     if (Array.isArray(nbTable) && nbTable.length > 0) {
       newbiePlanRows.value = nbTable as PlanTableRow[]
@@ -231,12 +315,23 @@ function applyBetMultiplierPayload(raw: unknown) {
   }
   const oc = payload.oneclick as Record<string, unknown> | undefined
   if (oc) {
+    if (oc.money != null) oneclickMoney.value = String(oc.money)
+    if (oc.number != null) oneclickNumber.value = String(oc.number)
+    if (oc.mode != null) oneclickMode.value = String(oc.mode)
     if (oc.cycle != null) oneclickCycle.value = String(oc.cycle)
-    if (oc.profit != null) oneclickProfit.value = String(oc.profit)
-    const ogp = oc.generatePreset
-    if (ogp === 'line' || ogp === 'wave') {
-      oneclickGeneratePreset.value = ogp
+    if (
+      oc.calcType === 'rate' ||
+      oc.calcType === 'fixed' ||
+      oc.calcType === 'step' ||
+      oc.calcType === 'free'
+    ) {
+      oneclickCalcType.value = oc.calcType
     }
+    if (oc.targetRate != null) oneclickTargetRate.value = String(oc.targetRate)
+    if (oc.targetProfit != null) oneclickTargetProfit.value = String(oc.targetProfit)
+    if (oc.sumBegin != null) oneclickSumBegin.value = String(oc.sumBegin)
+    if (oc.sumStep != null) oneclickSumStep.value = String(oc.sumStep)
+    if (oc.freeList != null) oneclickFreeList.value = String(oc.freeList)
     const ocTable = oc.profitTable
     if (Array.isArray(ocTable) && ocTable.length > 0) {
       oneclickPlanRows.value = ocTable as PlanTableRow[]
@@ -244,6 +339,17 @@ function applyBetMultiplierPayload(raw: unknown) {
   }
   const sm = payload.simple as Record<string, string> | undefined
   if (sm?.multiples != null) simpleMultiples.value = String(sm.multiples)
+  if (sm?.advanceMode === 'on_win' || sm?.advanceMode === 'on_lose') {
+    simpleAdvanceMode.value = sm.advanceMode
+  }
+  // 旧 kind=0/1 且简单表空：把产表结果灌进简单表，便于职责分离后继续运行
+  if (!simpleMultiples.value.trim()) {
+    if (payload.kind === '0' && newbiePlanRows.value.length) {
+      applyPlanRowsToSimple(newbiePlanRows.value)
+    } else if (payload.kind === '1' && oneclickPlanRows.value.length) {
+      applyPlanRowsToSimple(oneclickPlanRows.value)
+    }
+  }
   const adv = payload.advanced as Record<string, string | null> | undefined
   if (adv?.selectedId) selectedAdvancedId.value = adv.selectedId
 }
@@ -287,7 +393,7 @@ async function onConfirm() {
   const persist = shouldPersistBetMultiplier()
 
   if (persist && isDraftSchemeId(schemeId)) {
-    const kind = String(activeSubTab.value) as '0' | '1' | '2' | '3'
+    const kind = persistKindLabel()
     saveDraftBetMultiplier(route.query as Record<string, unknown>, kind, buildBetMultiplierPayload())
     ElMessage.success('已保存倍投方式')
     returnToEntry({ bmsKind: kind })
@@ -314,7 +420,7 @@ async function onConfirm() {
     ElMessage.success('已保存倍投方式')
     navigateBackToSchemeWithKind()
   } else if (shouldSavePlayDetailShareDock()) {
-    const kind = String(activeSubTab.value) as '0' | '1' | '2' | '3'
+    const kind = persistKindLabel()
     savePlayDetailShareDock(playDetailShareDockKey(), {
       entryMode: 'cloud',
       betMultiplierKind: kind,
@@ -332,27 +438,31 @@ function onCancel() {
   router.back()
 }
 
-// —— 小白倍投 ——
-const newbiePrincipal = ref('')
-const newbieMode = ref('元')
-const newbieProfitType = ref<'rate' | 'fixed' | 'accum'>('rate')
-const newbieRateVal = ref('')
-const newbieFixedVal = ref('')
-const newbieAccumStart = ref('')
-const newbieAccumStep = ref('')
-
-/** 小白倍投：四个「一键生成」方案互斥选中 */
-type NewbieGeneratePreset = 'line' | 'followStop' | 'suspend1' | 'suspend2'
-const newbieGeneratePreset = ref<NewbieGeneratePreset>('line')
+// —— 小白倍投（简化递推产表）——
+const newbieOdds = ref(String(route.query.odds ?? '1.9'))
+const newbieFirstBet = ref('2')
+const newbieTargetProfit = ref('1')
+const newbieCycle = ref('10')
+const newbieMoney = ref('1')
+const newbieNumber = ref(String(route.query.number ?? route.query.betCount ?? '1'))
 
 const newbiePlanRows = ref<PlanTableRow[]>([])
 const oneclickPlanRows = ref<PlanTableRow[]>([])
 
-// —— 一键倍投 ——
-const oneclickCycle = ref('')
-const oneclickProfit = ref('')
-type OneclickGeneratePreset = 'line' | 'wave'
-const oneclickGeneratePreset = ref<OneclickGeneratePreset>('line')
+// —— 一键倍投（完整计算器）——
+const oneclickMoney = ref('1')
+const oneclickNumber = ref(String(route.query.number ?? route.query.betCount ?? '1'))
+const oneclickMode = ref(
+  String(route.query.mode ?? route.query.prize ?? '').trim() ||
+    String(Number(route.query.odds ?? 1.9) * Number(route.query.number ?? 1) || 1.9),
+)
+const oneclickCycle = ref('10')
+const oneclickCalcType = ref<CalcType>('fixed')
+const oneclickTargetRate = ref('10')
+const oneclickTargetProfit = ref('1')
+const oneclickSumBegin = ref('1')
+const oneclickSumStep = ref('1')
+const oneclickFreeList = ref('2,4,8')
 
 async function showParamRequiredDialog(message: string): Promise<void> {
   await confirmDialog({
@@ -364,9 +474,8 @@ async function showParamRequiredDialog(message: string): Promise<void> {
   })
 }
 
-function onGenerateNewbie(preset: NewbieGeneratePreset) {
-  newbieGeneratePreset.value = preset
-  const input = { ...newbiePlanInput(), preset }
+function onGenerateNewbie() {
+  const input = newbiePlanInput()
   const err = canGenerateNewbiePlan(input)
   if (err) {
     void showParamRequiredDialog(err)
@@ -374,17 +483,17 @@ function onGenerateNewbie(preset: NewbieGeneratePreset) {
   }
   const rows = generateNewbiePlan(input)
   if (!rows?.length) {
-    void showParamRequiredDialog('无法生成利润表，请检查上方参数后重试')
+    void showParamRequiredDialog('无法生成合适倍数，请检查参数后重试')
     newbiePlanRows.value = []
     return
   }
   newbiePlanRows.value = rows
-  ElMessage.success('已生成利润表')
+  applyPlanRowsToSimple(rows)
+  ElMessage.success('已生成并写入简单倍投')
 }
 
-function onGenerateOneclick(preset: OneclickGeneratePreset) {
-  oneclickGeneratePreset.value = preset
-  const input = { ...oneclickPlanInput(), preset }
+function onGenerateOneclick() {
+  const input = oneclickPlanInput()
   const err = canGenerateOneclickPlan(input)
   if (err) {
     void showParamRequiredDialog(err)
@@ -392,40 +501,77 @@ function onGenerateOneclick(preset: OneclickGeneratePreset) {
   }
   const rows = generateOneclickPlan(input)
   if (!rows?.length) {
-    void showParamRequiredDialog('无法生成利润表，请填写计划周期与收益利润后重试')
+    void showParamRequiredDialog('该计划不适合投注，无法生成合适倍数')
     oneclickPlanRows.value = []
     return
   }
   oneclickPlanRows.value = rows
-  ElMessage.success('已生成利润表')
+  applyPlanRowsToSimple(rows)
+  ElMessage.success('已生成并写入简单倍投')
 }
 
-watch(newbieProfitType, (mode) => {
-  newbiePlanRows.value = []
-  if (mode === 'rate') {
-    newbieFixedVal.value = ''
-    newbieAccumStart.value = ''
-    newbieAccumStep.value = ''
-  } else if (mode === 'fixed') {
-    newbieRateVal.value = ''
-    newbieAccumStart.value = ''
-    newbieAccumStep.value = ''
-  } else {
-    newbieRateVal.value = ''
-    newbieFixedVal.value = ''
+function onApplyOneclickPreset(kind: 'sides' | 'aggressive') {
+  const money = Number(oneclickMoney.value) || 1
+  const number = Number(oneclickNumber.value) || 1
+  const mode = Number(oneclickMode.value)
+  if (!(mode > 0)) {
+    void showParamRequiredDialog('请先填写单倍奖金')
+    return
   }
+  const preset = kind === 'aggressive' ? AGGRESSIVE_PRESET : DEFAULT_SIDES_PRESET
+  const rows = applyPresetTimes(preset, money, number, mode)
+  oneclickCycle.value = String(preset.length)
+  oneclickCalcType.value = 'free'
+  oneclickFreeList.value = preset.join(',')
+  // 参数变更的 watch 会清空预览表，下一 tick 再写入
+  void nextTick(() => {
+    oneclickPlanRows.value = rows
+    applyPlanRowsToSimple(rows)
+    ElMessage.success(kind === 'aggressive' ? '已套用激进预设' : '已套用默认两面预设')
+  })
+}
+
+function onApplyNewbieToSimple() {
+  if (!newbiePlanRows.value.length) {
+    void showParamRequiredDialog('请先生成倍投计划')
+    return
+  }
+  applyPlanRowsToSimple(newbiePlanRows.value)
+  activeSubTab.value = '2'
+  ElMessage.success('已应用到简单倍投')
+}
+
+function onApplyOneclickToSimple() {
+  if (!oneclickPlanRows.value.length) {
+    void showParamRequiredDialog('请先生成倍投计划')
+    return
+  }
+  applyPlanRowsToSimple(oneclickPlanRows.value)
+  activeSubTab.value = '2'
+  ElMessage.success('已应用到简单倍投')
+}
+
+watch(oneclickCalcType, () => {
+  oneclickPlanRows.value = []
 })
 
 watch(
   [
-    newbiePrincipal,
-    newbieMode,
-    newbieRateVal,
-    newbieFixedVal,
-    newbieAccumStart,
-    newbieAccumStep,
+    newbieOdds,
+    newbieFirstBet,
+    newbieTargetProfit,
+    newbieCycle,
+    newbieMoney,
+    newbieNumber,
+    oneclickMoney,
+    oneclickNumber,
+    oneclickMode,
     oneclickCycle,
-    oneclickProfit,
+    oneclickTargetRate,
+    oneclickTargetProfit,
+    oneclickSumBegin,
+    oneclickSumStep,
+    oneclickFreeList,
   ],
   () => {
     newbiePlanRows.value = []
@@ -435,6 +581,7 @@ watch(
 
 // —— 简单倍投 ——
 const simpleMultiples = ref('1,2,4')
+const simpleAdvanceMode = ref<AdvanceMode>('on_lose')
 
 // —— 高级倍投（列表由管理后台方案模板库下发） ——
 interface AdvancedScheme {
@@ -551,7 +698,7 @@ const showPlanTable = computed(() => activeSubTab.value === '0' || activeSubTab.
     <header class="bms-header">
       <div class="bms-header-top">
         <button type="button" class="bms-back" aria-label="返回" @click="goBack">
-          <svg class="bms-back-ico" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+          <svg class="bms-back-ico" viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">
             <path fill="currentColor" d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
           </svg>
         </button>
@@ -571,123 +718,169 @@ const showPlanTable = computed(() => activeSubTab.value === '0' || activeSubTab.
       </div>
       <div class="bms-tabs-row">
         <el-radio-group v-model="activeSubTab" class="detail-tab-rg" size="small">
-          <el-radio-button v-for="(lbl, i) in subTabLabels" :key="lbl" :value="String(i)">{{ lbl }}</el-radio-button>
+          <el-radio-button
+            v-for="item in visibleSubTabs"
+            :key="item.id"
+            :value="item.id"
+          >{{ item.label }}</el-radio-button>
         </el-radio-group>
       </div>
     </header>
 
     <main class="bms-main">
-      <!-- 小白倍投 -->
+      <!-- 小白倍投：简化递推产表 → 写入简单倍投 -->
       <template v-if="activeSubTab === '0'">
         <div class="bms-card">
           <div class="bms-field-row">
-            <span class="bms-lbl">总本金</span>
-            <el-input v-model="newbiePrincipal" size="small" class="bms-inp-short" />
-            <span class="bms-unit">元</span>
-            <span class="bms-lbl bms-lbl--push">投注模式</span>
-            <el-select v-model="newbieMode" size="small" class="bms-select-mode">
-              <el-option label="元" value="元" />
-              <el-option label="角" value="角" />
-            </el-select>
+            <span class="bms-lbl">赔率</span>
+            <el-input v-model="newbieOdds" size="small" class="bms-inp-short" />
+            <span class="bms-lbl bms-lbl--push">首注倍数</span>
+            <el-input v-model="newbieFirstBet" size="small" class="bms-inp-short" />
           </div>
+          <div class="bms-field-row">
+            <span class="bms-lbl">目标利润</span>
+            <el-input v-model="newbieTargetProfit" size="small" class="bms-inp-short" />
+            <span class="bms-unit">元</span>
+            <span class="bms-lbl bms-lbl--push">档数</span>
+            <el-input v-model="newbieCycle" size="small" class="bms-inp-short" />
+          </div>
+          <div class="bms-field-row">
+            <span class="bms-lbl">单价</span>
+            <el-input v-model="newbieMoney" size="small" class="bms-inp-short" />
+            <span class="bms-lbl bms-lbl--push">注数</span>
+            <el-input v-model="newbieNumber" size="small" class="bms-inp-short" />
+          </div>
+          <div class="bms-action-grid bms-action-grid--single">
+            <el-button type="warning" class="bms-btn-generate bms-btn-generate--solid" @click="onGenerateNewbie">
+              生成倍数表
+            </el-button>
+          </div>
+        </div>
+        <div class="bms-apply-row">
+          <el-button type="primary" plain size="small" :disabled="!newbiePlanRows.length" @click="onApplyNewbieToSimple">
+            应用到简单倍投
+          </el-button>
+        </div>
+        <p class="bms-hint bms-hint--primary">* 按「连亏累加 + 保本利润」递推；默认两面：赔率 1.9 / 利润 1 / 首注 2 / 10 档</p>
+        <p class="bms-hint bms-hint--danger">* 倍数计算上限为 200000 倍为止，超出不计</p>
+      </template>
 
+      <!-- 一键倍投：完整计算器 -->
+      <template v-else-if="activeSubTab === '1'">
+        <div class="bms-card">
+          <div class="bms-field-row">
+            <span class="bms-lbl">单价</span>
+            <el-input v-model="oneclickMoney" size="small" class="bms-inp-short" />
+            <span class="bms-lbl bms-lbl--push">注数</span>
+            <el-input v-model="oneclickNumber" size="small" class="bms-inp-short" />
+          </div>
+          <div class="bms-field-row">
+            <span class="bms-lbl">单倍奖金</span>
+            <el-input v-model="oneclickMode" size="small" class="bms-inp-short" />
+            <span class="bms-lbl bms-lbl--push">周期</span>
+            <el-input v-model="oneclickCycle" size="small" class="bms-inp-short" />
+          </div>
           <div class="bms-radio-block">
             <label class="bms-radio-row">
-              <input v-model="newbieProfitType" type="radio" value="rate" class="bms-native-radio" />
-              <span class="bms-radio-lbl">收益利率</span>
-              <el-input v-model="newbieRateVal" size="small" class="bms-inp-grow"
-                :disabled="newbieProfitType !== 'rate'" />
+              <input v-model="oneclickCalcType" type="radio" value="rate" class="bms-native-radio" />
+              <span class="bms-radio-lbl">收益率</span>
+              <el-input
+                v-model="oneclickTargetRate"
+                size="small"
+                class="bms-inp-grow"
+                :disabled="oneclickCalcType !== 'rate'"
+              />
+              <span class="bms-suffix">%</span>
             </label>
             <label class="bms-radio-row">
-              <input v-model="newbieProfitType" type="radio" value="fixed" class="bms-native-radio" />
+              <input v-model="oneclickCalcType" type="radio" value="fixed" class="bms-native-radio" />
               <span class="bms-radio-lbl">固定利润</span>
-              <el-input v-model="newbieFixedVal" size="small" class="bms-inp-grow"
-                :disabled="newbieProfitType !== 'fixed'" />
+              <el-input
+                v-model="oneclickTargetProfit"
+                size="small"
+                class="bms-inp-grow"
+                :disabled="oneclickCalcType !== 'fixed'"
+              />
             </label>
             <div class="bms-radio-row bms-radio-row--accum">
               <label class="bms-accum-label">
-                <input v-model="newbieProfitType" type="radio" value="accum" class="bms-native-radio" />
+                <input v-model="oneclickCalcType" type="radio" value="step" class="bms-native-radio" />
                 <span class="bms-radio-lbl">累加利润：起步</span>
               </label>
-              <el-input v-model="newbieAccumStart" size="small" class="bms-inp-tiny"
-                :disabled="newbieProfitType !== 'accum'" />
+              <el-input
+                v-model="oneclickSumBegin"
+                size="small"
+                class="bms-inp-tiny"
+                :disabled="oneclickCalcType !== 'step'"
+              />
               <span class="bms-radio-lbl">累进</span>
-              <el-input v-model="newbieAccumStep" size="small" class="bms-inp-tiny"
-                :disabled="newbieProfitType !== 'accum'" />
+              <el-input
+                v-model="oneclickSumStep"
+                size="small"
+                class="bms-inp-tiny"
+                :disabled="oneclickCalcType !== 'step'"
+              />
             </div>
+            <label class="bms-radio-row">
+              <input v-model="oneclickCalcType" type="radio" value="free" class="bms-native-radio" />
+              <span class="bms-radio-lbl">自由倍数</span>
+              <el-input
+                v-model="oneclickFreeList"
+                size="small"
+                class="bms-inp-grow"
+                :disabled="oneclickCalcType !== 'free'"
+                placeholder="如 2,4,8"
+              />
+            </label>
           </div>
-
           <div class="bms-action-grid">
-            <el-button type="warning" :plain="newbieGeneratePreset !== 'line'"
-              :class="['bms-btn-generate', { 'bms-btn-generate--solid': newbieGeneratePreset === 'line' }]"
-              @click="onGenerateNewbie('line')">
-              一键生成<br>直线倍投
+            <el-button type="warning" class="bms-btn-generate bms-btn-generate--solid" @click="onGenerateOneclick">
+              计算倍数表
             </el-button>
-            <el-button type="warning" :plain="newbieGeneratePreset !== 'followStop'"
-              :class="['bms-btn-generate', { 'bms-btn-generate--solid': newbieGeneratePreset === 'followStop' }]"
-              @click="onGenerateNewbie('followStop')">
-              一键生成<br>中跟挂停
+            <el-button type="warning" plain class="bms-btn-generate" @click="onApplyOneclickPreset('sides')">
+              套用默认两面
             </el-button>
-            <el-button type="warning" :plain="newbieGeneratePreset !== 'suspend1'"
-              :class="['bms-btn-generate', { 'bms-btn-generate--solid': newbieGeneratePreset === 'suspend1' }]"
-              @click="onGenerateNewbie('suspend1')">
-              一键生成<br>挂停1期
-            </el-button>
-            <el-button type="warning" :plain="newbieGeneratePreset !== 'suspend2'"
-              :class="['bms-btn-generate', { 'bms-btn-generate--solid': newbieGeneratePreset === 'suspend2' }]"
-              @click="onGenerateNewbie('suspend2')">
-              一键生成<br>挂停2期
+            <el-button type="warning" plain class="bms-btn-generate" @click="onApplyOneclickPreset('aggressive')">
+              套用激进预设
             </el-button>
           </div>
         </div>
-        <p class="bms-hint bms-hint--danger">* 倍数计算上限为 200000 倍为止，超出不计</p>
-      </template>
-
-      <!-- 一键倍投 -->
-      <template v-else-if="activeSubTab === '1'">
-        <div class="bms-card">
-          <div class="bms-field-row bms-field-row--oneclick">
-            <span class="bms-lbl">计划周期</span>
-            <div class="bms-oneclick-grow">
-              <el-input v-model="oneclickCycle" size="small" />
-            </div>
-          </div>
-          <div class="bms-field-row bms-field-row--oneclick">
-            <span class="bms-lbl">收益利润</span>
-            <div class="bms-inp-suffix-wrap bms-oneclick-grow">
-              <el-input v-model="oneclickProfit" size="small" />
-              <span class="bms-suffix">%</span>
-            </div>
-          </div>
-          <div class="bms-action-grid">
-            <el-button
-              type="warning"
-              :plain="oneclickGeneratePreset !== 'line'"
-              :class="['bms-btn-generate', { 'bms-btn-generate--solid': oneclickGeneratePreset === 'line' }]"
-              @click="onGenerateOneclick('line')"
-            >
-              一键生成(直线)<br>倍投计划
-            </el-button>
-            <el-button
-              type="warning"
-              :plain="oneclickGeneratePreset !== 'wave'"
-              :class="['bms-btn-generate', { 'bms-btn-generate--solid': oneclickGeneratePreset === 'wave' }]"
-              @click="onGenerateOneclick('wave')"
-            >
-              一键生成(推波)<br>倍投计划
-            </el-button>
-          </div>
+        <div class="bms-apply-row">
+          <el-button type="primary" plain size="small" :disabled="!oneclickPlanRows.length" @click="onApplyOneclickToSimple">
+            应用到简单倍投
+          </el-button>
         </div>
-        <p class="bms-hint bms-hint--primary">* 默认以「元」模式一键生成计划倍数</p>
+        <p class="bms-hint bms-hint--primary">* 按连亏假设搜索最小倍数；结果写入简单倍投表</p>
         <p class="bms-hint bms-hint--danger">* 倍数计算上限为 200000 倍为止，超出不计</p>
       </template>
 
-      <!-- 简单倍投（默认） -->
+      <!-- 简单倍投（直线表：小白/一键写入目标；运行时挂机读此表） -->
       <template v-else-if="activeSubTab === '2'">
         <div class="bms-card bms-card--simple">
-          <el-input v-model="simpleMultiples" type="textarea" :rows="3" size="small" resize="none"
-            class="bms-textarea" />
+          <el-input
+            v-model="simpleMultiples"
+            type="textarea"
+            :rows="3"
+            size="small"
+            resize="none"
+            class="bms-textarea"
+            placeholder="直线倍数表，逗号分隔，如 2,4,8,17"
+          />
+          <div class="bms-radio-block bms-radio-block--advance">
+            <span class="bms-lbl">翻倍方式</span>
+            <label class="bms-radio-row">
+              <input v-model="simpleAdvanceMode" type="radio" value="on_lose" class="bms-native-radio" />
+              <span class="bms-radio-lbl">挂翻倍</span>
+              <span class="bms-hint-inline">未中进下一档，中奖回第 1 档</span>
+            </label>
+            <label class="bms-radio-row">
+              <input v-model="simpleAdvanceMode" type="radio" value="on_win" class="bms-native-radio" />
+              <span class="bms-radio-lbl">中翻倍</span>
+              <span class="bms-hint-inline">中奖进下一档，未中回第 1 档</span>
+            </label>
+          </div>
         </div>
+        <p class="bms-hint bms-hint--primary">* 小白 / 一键生成后会写入本表；确认保存时以本表（或高级跳转表）作为运行配置</p>
         <p class="bms-hint bms-hint--danger">* 倍数计算上限为 200000 倍为止，超出不计</p>
       </template>
 
@@ -759,7 +952,7 @@ const showPlanTable = computed(() => activeSubTab.value === '0' || activeSubTab.
 
 .bms-header {
   flex-shrink: 0;
-  padding-top: max(0.875rem, env(safe-area-inset-top));
+  padding-top: env(safe-area-inset-top);
   padding-left: 0;
   padding-right: 0;
   padding-bottom: 0;
@@ -777,7 +970,10 @@ const showPlanTable = computed(() => activeSubTab.value === '0' || activeSubTab.
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
   column-gap: 0.5rem;
-  padding: 0 0.75rem 0.75rem;
+  height: var(--page-titlebar-height);
+  min-height: var(--page-titlebar-height);
+  box-sizing: border-box;
+  padding: 0 var(--page-titlebar-pad-x);
 }
 
 .bms-tabs-row {
@@ -787,8 +983,8 @@ const showPlanTable = computed(() => activeSubTab.value === '0' || activeSubTab.
 .bms-back {
   justify-self: start;
   flex-shrink: 0;
-  width: 2.25rem;
-  height: 2.25rem;
+  width: var(--page-titlebar-action-size);
+  height: var(--page-titlebar-action-size);
   padding: 0;
   border: none;
   background: transparent;
@@ -808,6 +1004,8 @@ const showPlanTable = computed(() => activeSubTab.value === '0' || activeSubTab.
 
 .bms-back-ico {
   display: block;
+  width: var(--page-titlebar-icon-size);
+  height: var(--page-titlebar-icon-size);
 }
 
 .bms-title {
@@ -948,6 +1146,29 @@ const showPlanTable = computed(() => activeSubTab.value === '0' || activeSubTab.
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.5rem;
+}
+
+.bms-action-grid--single {
+  grid-template-columns: 1fr;
+}
+
+.bms-radio-block--advance {
+  margin-top: 0.75rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid #f1f5f9;
+}
+
+.bms-hint-inline {
+  margin-left: 0.35rem;
+  font-size: 0.6875rem;
+  color: #64748b;
+  line-height: 1.4;
+}
+
+.bms-apply-row {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0.5rem 0 0;
 }
 
 .bms-btn-generate {

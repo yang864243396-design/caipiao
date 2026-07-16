@@ -98,6 +98,9 @@ export interface GameDetailDto {
 
   planInverseBetCount: number
 
+  /** 是否展示「计划反集」Tab：玩法支持且当前有可展示反集号码；false 时隐藏 */
+  planContrarySupported?: boolean
+
   bettingRows: GameBettingRow[]
 
   betRecords: GameBetRecordDto[]

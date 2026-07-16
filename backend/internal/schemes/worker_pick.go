@@ -2,6 +2,7 @@ package schemes
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"sort"
 	"strconv"
@@ -25,7 +26,13 @@ func (w *Worker) resolvePick(
 	inst sqlcdb.SchemeInstance,
 	draw sqlcdb.LotteryDraw,
 ) pickDecision {
-	if cfg.Contrary || cfg.Kind != "custom" || cfg.RunTypeID == "" {
+	if cfg.Contrary {
+		if inv := strings.TrimSpace(cfg.ContraryPlan); inv != "" {
+			return pickDecision{Content: inv}
+		}
+		return pickDecision{Content: cfg.GroupContent}
+	}
+	if cfg.Kind != "custom" || cfg.RunTypeID == "" {
 		return pickDecision{Content: cfg.GroupContent}
 	}
 	switch cfg.RunTypeID {
@@ -208,21 +215,18 @@ func playPositionCount(rule playRule) int {
 }
 
 func playNumberPool(rule playRule) []string {
-	min, max := rule.NumberPoolMin, rule.NumberPoolMax
-	if max <= 0 || max < min {
-		// 六合彩模板号码池 1-49，其余兜底 0-9
-		if rule.PlayTemplate == "lhc_std" || isLHCTypeID(rule.PlayTypeID) {
-			min, max = 1, 49
-		} else {
-			min, max = 0, 9
-		}
-	}
+	min, max := ruleNumberPool(rule)
 	if max-min > 98 {
 		max = min + 98
 	}
 	pool := make([]string, 0, max-min+1)
 	for v := min; v <= max; v++ {
-		pool = append(pool, strconv.Itoa(v))
+		// 11 选 5（max==11）补零；六合/PK10/时时彩保持与开奖球/历史池一致的无补零或单位数形态
+		if max == 11 {
+			pool = append(pool, fmt.Sprintf("%02d", v))
+		} else {
+			pool = append(pool, strconv.Itoa(v))
+		}
 	}
 	return pool
 }

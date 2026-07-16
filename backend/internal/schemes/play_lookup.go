@@ -17,6 +17,41 @@ var errGuajiRuleIDMissing = errors.New("第三方 rule_id 未配置，请执行 
 
 var dingweiPositionLabels = []string{"万位", "千位", "百位", "十位", "个位"}
 
+// catalogTypeIDAliases 方案/前端语义 id 与 rules 同步后的 g0xx 互认。
+func catalogTypeIDAliases(typeID string) []string {
+	typeID = strings.TrimSpace(typeID)
+	if typeID == "" {
+		return nil
+	}
+	switch typeID {
+	case "renxuan", "g011":
+		return []string{"g011", "renxuan"}
+	case "longhu", "g010":
+		return []string{"g010", "longhu"}
+	case "budingwei", "g009":
+		return []string{"g009", "budingwei"}
+	case "dingwei", "g006":
+		return []string{"g006", "dingwei"}
+	case "qianzhonghou3", "g007":
+		return []string{"g007", "qianzhonghou3"}
+	case "qianhou3", "g012":
+		return []string{"g012", "qianhou3"}
+	case "qianhou2", "g008":
+		return []string{"g008", "qianhou2"}
+	default:
+		return []string{typeID}
+	}
+}
+
+func typeIDMatchesAlias(got, want string) bool {
+	for _, a := range catalogTypeIDAliases(want) {
+		if a == got {
+			return true
+		}
+	}
+	return false
+}
+
 // lookupSubPlay 查子玩法；兼容方案存 bet_mode、legacy dingwei_* 或 rules 同步后 sub_id 变更。
 func lookupSubPlay(ctx context.Context, q *sqlcdb.Queries, template, typeID, subID, betMode string, positionIdx int) (sqlcdb.GetSubPlayRow, error) {
 	template = strings.TrimSpace(template)
@@ -30,22 +65,35 @@ func lookupSubPlay(ctx context.Context, q *sqlcdb.Queries, template, typeID, sub
 		return sqlcdb.GetSubPlayRow{}, fmt.Errorf("sub play lookup unavailable")
 	}
 
-	row, err := q.GetSubPlay(ctx, sqlcdb.GetSubPlayParams{
-		TemplateCode: template,
-		TypeID:       typeID,
-		SubID:        subID,
-	})
-	if err == nil {
-		return row, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return sqlcdb.GetSubPlayRow{}, err
+	for _, tid := range catalogTypeIDAliases(typeID) {
+		row, err := q.GetSubPlay(ctx, sqlcdb.GetSubPlayParams{
+			TemplateCode: template,
+			TypeID:       tid,
+			SubID:        subID,
+		})
+		if err == nil {
+			return row, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return sqlcdb.GetSubPlayRow{}, err
+		}
 	}
 
 	if legacySub := legacyDingweiSubID(subID, betMode, positionIdx); legacySub != "" && legacySub != subID {
-		row, err = q.GetSubPlay(ctx, sqlcdb.GetSubPlayParams{
+		row, err := q.GetSubPlay(ctx, sqlcdb.GetSubPlayParams{
 			TemplateCode: template,
 			TypeID:       "dingwei",
+			SubID:        legacySub,
+		})
+		if err == nil {
+			return row, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return sqlcdb.GetSubPlayRow{}, err
+		}
+		row, err = q.GetSubPlay(ctx, sqlcdb.GetSubPlayParams{
+			TemplateCode: template,
+			TypeID:       "g006",
 			SubID:        legacySub,
 		})
 		if err == nil {
@@ -86,7 +134,7 @@ func lookupSubPlayFromRows(template string, rows []sqlcdb.GetSubPlayRow, typeID,
 
 	var candidates []sqlcdb.GetSubPlayRow
 	for _, r := range rows {
-		if r.TypeID != typeID || !r.Enabled {
+		if !r.Enabled || !typeIDMatchesAlias(r.TypeID, typeID) {
 			continue
 		}
 		if r.SubID == subID {
@@ -104,7 +152,7 @@ func lookupSubPlayFromRows(template string, rows []sqlcdb.GetSubPlayRow, typeID,
 	if mode != "" {
 		candidates = candidates[:0]
 		for _, r := range rows {
-			if r.TypeID != typeID || !r.Enabled {
+			if !r.Enabled || !typeIDMatchesAlias(r.TypeID, typeID) {
 				continue
 			}
 			if subPlayLabelMatchesMode(r.Label, mode) {

@@ -137,9 +137,11 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if h.guaji != nil {
-		gctx, gcancel := context.WithTimeout(r.Context(), 8*time.Second)
-		payload["guaji"] = h.guajiHealth(gctx)
-		gcancel()
+		// 健康检查勿同步深探第三方（登录/WS），否则 /health 固定卡满超时并干扰诊断。
+		payload["guaji"] = map[string]any{
+			"enabled":  true,
+			"httpBase": h.guaji.Config().HTTPBase,
+		}
 	}
 	apix.OK(w, payload)
 }

@@ -105,6 +105,7 @@ SELECT
     b.guaji_account_id
 FROM bet_orders b
 WHERE b.status = 'pending'
+  AND b.guaji_account_id IS NULL
 ORDER BY b.placed_at ASC, b.id ASC
 LIMIT sqlc.arg(row_limit);
 

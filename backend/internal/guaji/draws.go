@@ -16,7 +16,9 @@ import (
 //
 // 真实开奖 WS（wss://…/ws）一条 lottery_v2_broadcast 消息含一个区块、多个彩种线
 // （lottery_logXXX，各自 periods），以及该区块衍生的多玩法号码字段（共享）。
-// ParseDrawEvents 把一条消息拆成多个 DrawEvent（每个 lottery_logXXX 一个），
+// ParseDrawEvents 把一条消息拆成多个 DrawEvent：
+//   - lottery_v2_broadcast 内每个 lottery_logXXX 一条，另附 type 本身一条（波场 3 秒）
+//   - lottery1/3/5_wsds 独立 type 各一条（波场 1/3/5 分 00 区块）
 // 号码字段全部带上，由 drawsync 按彩种 play_template 选取对应玩法号码。
 type DrawEvent struct {
 	GameKey     string    // 彩种线键，如 "lottery_log033"（反查 outbound_lottery_code）
@@ -90,6 +92,14 @@ func IsIgnoredDrawGame(gameID, gameName string) bool {
 	return false
 }
 
+// flatDrawMessageTypes：独立消息类型（期号在根上，非 lottery_v2_broadcast 内嵌键）。
+// 文档 §7.3 / 前端 00 区块：波场 1/3/5 分彩 → lottery1_wsds / lottery3_wsds / lottery5_wsds。
+var flatDrawMessageTypes = map[string]bool{
+	"lottery1_wsds": true,
+	"lottery3_wsds": true,
+	"lottery5_wsds": true,
+}
+
 // ParseDrawEvents 解析一条 WS 文本消息，返回 0..N 条彩种线开奖。
 // 非开奖/心跳/忽略彩种返回空切片。
 func ParseDrawEvents(raw []byte) []DrawEvent {
@@ -123,6 +133,21 @@ func ParseDrawEvents(raw []byte) []DrawEvent {
 	}
 	drawnAt := parseDrawTime(looseStr(m["created"]))
 
+	// 波场 1/3/5 分彩（00 区块）：独立 type，期号在根字段。
+	if flatDrawMessageTypes[typ] {
+		periods := looseStr(m["periods"])
+		if periods == "" {
+			return nil
+		}
+		return []DrawEvent{{
+			GameKey:     typ,
+			Periods:     periods,
+			NextPeriods: looseStr(m["next_periods"]),
+			DrawnAt:     drawnAt,
+			Balls:       balls,
+		}}
+	}
+
 	var out []DrawEvent
 	for key, rawVal := range m {
 		if !isLotteryLogKey(key) {
@@ -142,6 +167,30 @@ func ParseDrawEvents(raw []byte) []DrawEvent {
 			DrawnAt:     drawnAt,
 			Balls:       balls,
 		})
+	}
+
+	// 波场 3 秒彩：每条 lottery_v2_broadcast ≈ 一个区块；GameKey 用 type 本身。
+	// 期号优先根 periods；否则用 block_num（前端 bcsmc / blockSpace=1）。
+	if typ == "lottery_v2_broadcast" {
+		periods := looseStr(m["periods"])
+		next := looseStr(m["next_periods"])
+		if periods == "" {
+			if bn := looseStr(m["block_num"]); bn != "" {
+				periods = bn
+				if n, err := strconv.ParseInt(bn, 10, 64); err == nil {
+					next = strconv.FormatInt(n+1, 10)
+				}
+			}
+		}
+		if periods != "" {
+			out = append(out, DrawEvent{
+				GameKey:     typ,
+				Periods:     periods,
+				NextPeriods: next,
+				DrawnAt:     drawnAt,
+				Balls:       balls,
+			})
+		}
 	}
 	return out
 }
@@ -255,7 +304,11 @@ func (c *Client) SubscribeDraws(ctx context.Context, handler func([]DrawEvent)) 
 	q.Set("token", "Anonymous")
 	u.RawQuery = q.Encode()
 
-	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
+	dialer := websocket.Dialer{
+		HandshakeTimeout: 10 * time.Second,
+		NetDialContext:   dialContextPreferHealthy,
+		Proxy:            httpProxyFunc(),
+	}
 	hdr := http.Header{}
 	if c.cfg.Origin != "" {
 		hdr.Set("Origin", c.cfg.Origin)

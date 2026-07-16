@@ -254,6 +254,7 @@ async function onSave(): Promise<void> {
 /** 编辑模式下，方案模式跳转到倍投设定页（返回时回到本页并回显所选 tab） */
 function gotoBetMultiplier(): void {
   saveDraft()
+  const cfg = schemePlayConfig.value
   void router.push({
     name: 'bet-multiplier-settings',
     query: {
@@ -262,6 +263,14 @@ function gotoBetMultiplier(): void {
       returnName: 'scheme-detail',
       activeTab: betMultiplierKind.value || '2',
       title: encodeURIComponent(schemeName.value),
+      playType: playTypeId.value || cfg.playTypeId || '',
+      subPlay: subPlayId.value || cfg.subPlayId || '',
+      betMode: cfg.betMode || '',
+      playTypeLabel: cfg.playTypeLabel || '',
+      subPlayLabel: cfg.playMethodLabel || '',
+      playTemplate: cfg.playTemplate || '',
+      ...(cfg.segmentLen ? { segmentLen: String(cfg.segmentLen) } : {}),
+      ...(lotteryCode.value ? { lottery: lotteryCode.value } : {}),
     },
   })
 }
@@ -416,7 +425,10 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 1rem 1.25rem;
+  height: var(--page-titlebar-height);
+  min-height: var(--page-titlebar-height);
+  box-sizing: border-box;
+  padding: 0 1.25rem;
   background: #fff;
   box-shadow: 0 8px 24px -16px rgba(15, 35, 95, 0.18);
 }
@@ -424,15 +436,15 @@ onMounted(() => {
 .sd-back {
   display: grid;
   place-items: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 12px;
+  width: var(--page-titlebar-action-size);
+  height: var(--page-titlebar-action-size);
+  border-radius: 0.65rem;
   color: #0f172a;
   background: #f1f5f9;
 }
 
 .sd-back .material-sym {
-  font-size: 1rem;
+  font-size: var(--page-titlebar-icon-size);
 }
 
 .sd-title {

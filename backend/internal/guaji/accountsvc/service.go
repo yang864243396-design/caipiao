@@ -250,7 +250,10 @@ func (s *Service) Reauth(ctx context.Context, memberAccount string, accountID in
 	if row.refreshTokenEnc.Valid && row.refreshTokenEnc.String != "" {
 		refresh, err := guaji.DecryptSecret(s.credKey, row.refreshTokenEnc.String)
 		if err == nil {
-			loginRes, err = s.guaji.RefreshToken(ctx, refresh)
+			// refresh 失败/超时绝不能吃满 HTTPTimeout，否则 reauth 整体被拖死、E2E 建案超时。
+			rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			loginRes, err = s.guaji.RefreshToken(rctx, refresh)
+			cancel()
 			if err != nil {
 				loginRes = nil
 			}
@@ -264,7 +267,9 @@ func (s *Service) Reauth(ctx context.Context, memberAccount string, accountID in
 			in.LoginKey = mat["loginKey"]
 			in.GoogleCode = mat["googleCode"]
 		}
-		res, mfaErr, err := s.loginThirdParty(ctx, in)
+		lctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		res, mfaErr, err := s.loginThirdParty(lctx, in)
+		cancel()
 		if mfaErr != nil || err != nil {
 			msg := "重新授权失败"
 			if mfaErr != nil {
@@ -281,6 +286,48 @@ func (s *Service) Reauth(ctx context.Context, memberAccount string, accountID in
 		loginRes = res
 	}
 
+	accessEnc, refreshEnc, expiresAt, err := s.encryptTokens(loginRes)
+	if err != nil {
+		return Account{}, err
+	}
+	if err := s.updateTokens(ctx, m, accountID, accessEnc, refreshEnc, expiresAt); err != nil {
+		return Account{}, err
+	}
+	row, err = s.getRowByID(ctx, m, accountID)
+	if err != nil {
+		return Account{}, err
+	}
+	if !accountTokenValid(row) {
+		return Account{}, ErrTokenInvalid
+	}
+	return mapPublic(row), nil
+}
+
+// ImportSession 把浏览器/外部已取得的第三方 access token 写入绑定账号（服务端直连第三方登录失败时的兜底）。
+func (s *Service) ImportSession(ctx context.Context, memberAccount string, accountID int64, accessToken, refreshToken string) (Account, error) {
+	if s == nil {
+		return Account{}, ErrUnavailable
+	}
+	if len(s.credKey) == 0 {
+		return Account{}, ErrCredentialsKey
+	}
+	accessToken = strings.TrimSpace(accessToken)
+	if accessToken == "" {
+		return Account{}, ErrTokenInvalid
+	}
+	m, err := s.memberID(ctx, memberAccount)
+	if err != nil {
+		return Account{}, err
+	}
+	row, err := s.getRowByID(ctx, m, accountID)
+	if err != nil {
+		if isNoRows(err) {
+			return Account{}, ErrAccountNotFound
+		}
+		return Account{}, err
+	}
+	_ = row
+	loginRes := &guaji.LoginResult{Token: accessToken, RefreshToken: strings.TrimSpace(refreshToken)}
 	accessEnc, refreshEnc, expiresAt, err := s.encryptTokens(loginRes)
 	if err != nil {
 		return Account{}, err
@@ -587,11 +634,22 @@ func (s *Service) encryptTokens(res *guaji.LoginResult) (accessEnc, refreshEnc s
 }
 
 func mapLoginErr(err error) error {
+	if err == nil {
+		return nil
+	}
 	var api *guaji.APIError
 	if errors.As(err, &api) {
 		return ErrInvalidCredentials
 	}
-	return err
+	var mis guaji.MisconfiguredError
+	if errors.As(err, &mis) {
+		return fmt.Errorf("%w: %s", ErrGuajiUpstream, mis.Error())
+	}
+	// 超时 / DNS / 连不上等网络故障 → 明确上游不可用，避免吞成笼统 50000。
+	if guaji.IsTransientUpstreamError(err) {
+		return fmt.Errorf("%w: %w", ErrGuajiUpstream, err)
+	}
+	return ErrInvalidCredentials
 }
 
 func (s *Service) insertRowTx(ctx context.Context, tx pgx.Tx, memberID int64, username, passEnc, mfaEnc, accessEnc, refreshEnc string, expiresAt time.Time, active bool) (row, error) {

@@ -24,12 +24,15 @@ func TestIsIgnoredDrawGame(t *testing.T) {
 func TestParseDrawEventsRealBroadcast(t *testing.T) {
 	raw := []byte(`{"send":true,"message":{"type":"lottery_v2_broadcast","block_num":83441446,"created":"2026-06-09T08:25:30+00:00","last5_num":"94819","last11_5_num":"06,04,08,01,09","last_pk10_num":"03,06,01,04,08,05,10,09,02,07","last_k3_num":"2,3,5","lhc_num":"49,21,18,04,39,36,34","lottery_log101":{"periods":"10113906900723","next_periods":"10113906900724"},"lottery_log033":{"periods":"105202606091971","next_periods":"105202606091972"}}}`)
 	events := ParseDrawEvents(raw)
-	if len(events) != 2 {
-		t.Fatalf("want 2 events, got %d", len(events))
+	if len(events) != 3 {
+		t.Fatalf("want 3 events (2 log + v2_broadcast), got %d", len(events))
 	}
 	byKey := map[string]DrawEvent{}
 	for _, e := range events {
 		byKey[e.GameKey] = e
+	}
+	if v2, ok := byKey["lottery_v2_broadcast"]; !ok || v2.Periods != "83441446" || v2.NextPeriods != "83441447" {
+		t.Fatalf("lottery_v2_broadcast (3s) %+v", v2)
 	}
 	log033, ok := byKey["lottery_log033"]
 	if !ok || log033.Periods != "105202606091971" {
@@ -67,5 +70,21 @@ func TestParseDrawEventsSkipsHeartbeat(t *testing.T) {
 		if events := ParseDrawEvents(raw); len(events) != 0 {
 			t.Fatalf("expected skip for %s, got %d", raw, len(events))
 		}
+	}
+}
+
+// 文档 §7.3：波场 1/3/5 分彩（00 区块）独立 type lottery*_wsds。
+func TestParseDrawEventsTronFfcWsds(t *testing.T) {
+	raw := []byte(`{"message":{"type":"lottery1_wsds","block_num":71205960,"last5_num":"32766","created":"2025-04-10T07:55:09+00:00","periods":"1011867600298","next_periods":"1011867600299"}}`)
+	events := ParseDrawEvents(raw)
+	if len(events) != 1 {
+		t.Fatalf("want 1, got %d", len(events))
+	}
+	ev := events[0]
+	if ev.GameKey != "lottery1_wsds" || ev.Periods != "1011867600298" || ev.NextPeriods != "1011867600299" {
+		t.Fatalf("%+v", ev)
+	}
+	if balls := ev.Balls.BallsFor("ssc_std"); len(balls) != 5 || balls[4] != "6" {
+		t.Fatalf("ssc %+v", balls)
 	}
 }

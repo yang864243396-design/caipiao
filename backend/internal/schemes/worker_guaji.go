@@ -137,7 +137,7 @@ func (w *Worker) placeGuajiSchemeBet(
 		SubID:        cfg.Play.SubPlayID,
 		BetMode:      cfg.Play.BetMode,
 		GroupContent: betContent,
-		PlayMethod:   cfg.PlayTypeLabel,
+		PlayMethod:   playMethodForPayload(cfg.PlayTypeLabel, subPlay.Label),
 	})
 	if err != nil {
 		return schemeGuajiBetMeta{}, err
@@ -150,7 +150,7 @@ func (w *Worker) placeGuajiSchemeBet(
 		LotteryCategory:     lotteryCategoryForCode(inst.LotteryCode),
 		IssueNo:             returned,
 		Amount:              numericFromFloat(amount),
-		PlayMethod:          pgtype.Text{String: cfg.PlayTypeLabel, Valid: cfg.PlayTypeLabel != ""},
+		PlayMethod:          pgtype.Text{String: playMethodForPayload(cfg.PlayTypeLabel, subPlay.Label), Valid: true},
 		BetPayload:          payload,
 		OutboundLotteryCode: outLottery,
 		OutboundPlayCode:    outPlay,
@@ -179,6 +179,27 @@ func textVal(t pgtype.Text) string {
 		return ""
 	}
 	return t.String
+}
+
+// playMethodForPayload 合并大类+子玩法中文名，供结算识别（如「大小单双 五星和值大小」）。
+func playMethodForPayload(playTypeLabel, subLabel string) string {
+	play := strings.TrimSpace(playTypeLabel)
+	sub := strings.TrimSpace(subLabel)
+	switch {
+	case play == "" && sub == "":
+		return ""
+	case play == "":
+		return sub
+	case sub == "":
+		return play
+	case strings.Contains(play, sub) || strings.Contains(sub, play):
+		if len(sub) >= len(play) {
+			return sub
+		}
+		return play
+	default:
+		return play + " " + sub
+	}
 }
 
 func resolveOutboundPlayCode(ctx context.Context, q *sqlcdb.Queries, cfg parsedSchemeConfig, template string) (string, sqlcdb.GetSubPlayRow, error) {

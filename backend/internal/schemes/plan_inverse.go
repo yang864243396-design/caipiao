@@ -15,6 +15,8 @@ type PlanInverseDisplay struct {
 }
 
 // ComputePlanInverseDisplay 由方案配置与历史开奖推演当前计划号码及反集注数。
+// 「计划反集」Tab 展示正集计划的补集；kind=contrary 且已有 planInverseNumbers 时
+// 该字段已是反集投注内容，直接展示（禁止二次取补，否则会回到正集或补集为空）。
 func ComputePlanInverseDisplay(
 	contentSeed, kind string,
 	configJSON []byte,
@@ -33,13 +35,47 @@ func ComputePlanInverseDisplay(
 		cfg.GroupContent = cfg.Groups[0]
 	}
 
+	// 反集看板：planInverseNumbers 已是反集，直接展示
+	if cfg.Contrary {
+		if inv := strings.TrimSpace(cfg.ContraryPlan); inv != "" {
+			digits := formatPlanInverseDigits(inv, cfg.Play)
+			if digits != "" {
+				units := planPickBetUnits(cfg, inv)
+				if units <= 0 {
+					units = 1
+				}
+				return PlanInverseDisplay{Digits: digits, BetCount: units}
+			}
+		}
+	}
+
 	pick := resolveNextPlanPick(cfg, draws)
 	if strings.TrimSpace(pick) == "" {
 		pick = strings.TrimSpace(cfg.GroupContent)
 	}
-	planFormatted := formatPlanInverseDigits(pick, cfg.Play)
-	digits := formatContraryDisplay(pick, cfg.Play)
+	// contrary 且 pick 已是 ContraryPlan 时，改用正集 GroupContent 再取补
+	positive := pick
+	if cfg.Contrary {
+		if inv := strings.TrimSpace(cfg.ContraryPlan); inv != "" && strings.TrimSpace(pick) == inv {
+			if gc := strings.TrimSpace(cfg.GroupContent); gc != "" && gc != inv {
+				positive = gc
+			}
+		}
+	}
+	planFormatted := formatPlanInverseDigits(positive, cfg.Play)
+	digits := formatContraryDisplay(positive, cfg.Play)
+	// 正集取补失败时，若配置里已有 planInverseNumbers 则直接展示（兼容反买配置被 master 看板打开）
 	if digits == "" {
+		if inv := strings.TrimSpace(cfg.ContraryPlan); inv != "" {
+			digits = formatPlanInverseDigits(inv, cfg.Play)
+			if digits != "" {
+				units := planPickBetUnits(cfg, inv)
+				if units <= 0 {
+					units = 1
+				}
+				return PlanInverseDisplay{Digits: digits, BetCount: units}
+			}
+		}
 		return PlanInverseDisplay{}
 	}
 	units := contraryBetUnits(planFormatted, cfg.Play)
@@ -189,38 +225,5 @@ func contraryBetUnits(planInverse string, rule playRule) int {
 
 // formatContraryDisplay 将计划选号对应的反集投注内容格式化为展示串。
 func formatContraryDisplay(pick string, rule playRule) string {
-	pick = strings.TrimSpace(pick)
-	if pick == "" {
-		return ""
-	}
-	if rule.PlayTemplate == "lhc_std" || isLHCTypeID(rule.PlayTypeID) {
-		return formatPlanInverseDigits(pick, rule)
-	}
-	if rule.SegmentLen <= 1 {
-		planLine := formatSSCPlanLine(pick)
-		picks := parseContraryPicks(planLine, rule.PositionIdx)
-		if len(picks) == 0 {
-			return ""
-		}
-		return strings.Join(picks, ",")
-	}
-	lines := splitGroupLines(pick)
-	posCount := playPositionCount(rule)
-	if posCount <= 1 {
-		posCount = len(lines)
-	}
-	if posCount <= 0 {
-		posCount = rule.SegmentLen
-	}
-	parts := make([]string, 0, posCount)
-	for i := 0; i < posCount; i++ {
-		line := ""
-		if i < len(lines) {
-			line = lines[i]
-		}
-		forbidden := parseDigitTokens(line)
-		inverse := allDigitsExcept(forbidden)
-		parts = append(parts, strings.Join(inverse, ","))
-	}
-	return strings.Join(parts, "\n")
+	return complementPlanContent(rule, pick)
 }

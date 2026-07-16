@@ -11,6 +11,8 @@ const (
 	CodeSecurityRequired = 40060 // 下单等业务要求密保验证（实测：账号已设密保仍报，需第三方确认解锁机制）
 	CodeTokenInvalid    = 401
 	CodeTokenInvalidAlt = 42001
+	// CodeTokenInvalidBiz 第三方业务码：无效令牌（users/i/info 等实测返回）。
+	CodeTokenInvalidBiz = 40010
 )
 
 // MisconfiguredError indicates missing or invalid Guaji env configuration.

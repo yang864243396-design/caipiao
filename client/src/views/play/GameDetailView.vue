@@ -41,15 +41,21 @@ import type { PlayTreeResponse } from '@/types/playCatalog'
 import {
   buildGameBetPayload,
   buildGroupContent,
+  buildRenxuanPositionContent,
   countBetUnits,
+  defaultRenxuanPositions,
+  isRenxuanPositionDanshiConfig,
   resolvePlayConfig,
   seedDigitsFromNumbers,
   type PlayConfig,
 } from '@/utils/betPayload'
 import {
   digitOptionsForConfig,
+  poolMaxPicksForConfig,
   textPickOptionsForConfig,
+  togglePoolPick,
 } from '@/utils/pickPanelOptions'
+import SchemeRenxuanDanshiPanel from '@/components/schemes/SchemeRenxuanDanshiPanel.vue'
 import {
   defaultPlaySelection,
   findSubPlay,
@@ -57,6 +63,7 @@ import {
   resolvePlayConfigFromTree,
   type PlayTreePlayConfig,
 } from '@/utils/playConfig'
+import { supportsPlanContraryPlay } from '@/utils/planContrary'
 import {
   LHC_NUMBERS,
   LHC_TAIL_OPTIONS,
@@ -150,6 +157,8 @@ const showBetTabPlayPicker = computed(
 const pickDigits = ref<string[]>(['1', '3', '7'])
 const pickLines = ref<string[][]>([])
 const danshiInput = ref('')
+const renxuanDanshiContent = ref('')
+const usesRenxuanDanshi = computed(() => isRenxuanPositionDanshiConfig(playConfig.value))
 
 const isLhcTemplate = computed(() => playTree.value?.playTemplate === 'lhc_std')
 
@@ -179,6 +188,16 @@ function initManualPicks(cfg: PlayConfig = playConfig.value) {
     return
   }
   if (cfg.inputMode === 'danshi') {
+    if (isRenxuanPositionDanshiConfig(cfg)) {
+      const k = cfg.renPositionCount ?? 2
+      const n = cfg.segmentLen > 0 ? cfg.segmentLen : k
+      const sample = Array.from({ length: n }, (_, i) => String((i + 1) % 10)).join('')
+      renxuanDanshiContent.value = buildRenxuanPositionContent(
+        defaultRenxuanPositions(k),
+        sample,
+      )
+      return
+    }
     danshiInput.value = isLhcTemplate.value ? '大,单' : '0'.repeat(cfg.segmentLen)
     return
   }
@@ -205,16 +224,28 @@ function initManualPicks(cfg: PlayConfig = playConfig.value) {
     danshiInput.value = opts[0]!
     return
   }
+  const maxPicks = poolMaxPicksForConfig(cfg)
   const seed = bettingRows.value[0]?.numbers
+  if (seed) {
+    const fromSeed = seedDigitsFromNumbers(seed)
+    pickDigits.value =
+      maxPicks != null && maxPicks > 0 ? fromSeed.slice(0, maxPicks) : fromSeed
+    return
+  }
+  if (maxPicks === 1) {
+    pickDigits.value = [digitOptions.value[1] ?? digitOptions.value[0] ?? '1']
+    return
+  }
   const defaults = digitOptions.value.slice(1, 4)
-  pickDigits.value = seed ? seedDigitsFromNumbers(seed) : defaults.length ? defaults : ['1', '3', '7']
+  pickDigits.value = defaults.length ? defaults : ['1', '3', '7']
 }
 
 function togglePickDigit(d: string) {
-  const set = new Set(pickDigits.value)
-  if (set.has(d)) set.delete(d)
-  else set.add(d)
-  pickDigits.value = [...set].sort()
+  pickDigits.value = togglePoolPick(
+    pickDigits.value,
+    d,
+    poolMaxPicksForConfig(playConfig.value),
+  )
 }
 
 function toggleLineDigit(lineIndex: number, d: string) {
@@ -233,13 +264,14 @@ function isLineDigitSelected(lineIndex: number, d: string) {
   return (pickLines.value[lineIndex] ?? []).includes(d)
 }
 
-const manualGroupContent = computed(() =>
-  buildGroupContent(playConfig.value, {
+const manualGroupContent = computed(() => {
+  if (usesRenxuanDanshi.value) return renxuanDanshiContent.value
+  return buildGroupContent(playConfig.value, {
     digits: pickDigits.value,
     lines: pickLines.value,
     danshi: danshiInput.value,
-  }),
-)
+  })
+})
 
 const digitOptions = computed(() => digitOptionsForConfig(playConfig.value))
 const textPickOptions = computed(() => textPickOptionsForConfig(playConfig.value))
@@ -287,7 +319,34 @@ watch(
 /** Tab 值与 el-radio-button :value 同型（字符串），避免 Android WebView 原生 radio 值类型不一致 */
 type DetailTabId = '0' | '1' | '2' | '3' | '4'
 const tab = ref<DetailTabId>('0')
-const tabLabels = ['投注', '计划反集', '计划走势', '历史开奖', '投注记录'] as const
+const DETAIL_TABS: readonly { id: DetailTabId; label: string; contraryOnly?: boolean }[] = [
+  { id: '0', label: '投注' },
+  { id: '1', label: '计划反集', contraryOnly: true },
+  { id: '2', label: '计划走势' },
+  { id: '3', label: '历史开奖' },
+  { id: '4', label: '投注记录' },
+] as const
+
+/** 详情接口：方案玩法是否支持反集；无号码时不展示 Tab */
+const planContrarySupportedFromApi = ref(true)
+const showPlanContraryTab = computed(() => {
+  const fromPlay = supportsPlanContraryPlay(playConfig.value)
+  if (isPlaySelectionLocked.value) {
+    // 跟单快照：接口判定支持且已有反集号码才显示（算不出则隐藏，避免空态页）
+    return (
+      planContrarySupportedFromApi.value
+      && fromPlay
+      && planInverseDigits.value.trim() !== ''
+    )
+  }
+  return fromPlay
+})
+const visibleDetailTabs = computed(() =>
+  DETAIL_TABS.filter((t) => !t.contraryOnly || showPlanContraryTab.value),
+)
+const activeTabLabel = computed(
+  () => DETAIL_TABS.find((t) => t.id === tab.value)?.label ?? '',
+)
 
 /** 计划反集：号码串与注数（由详情接口 planInverseDigits / planInverseBetCount 填充） */
 const planInverseDigits = ref('')
@@ -524,11 +583,19 @@ function applyBetMultiplierFromRoute() {
 function goBetMultiplierSettings() {
   betMultiplierError.value = ''
   persistShareDockState()
+  const cfg = playConfig.value
   const q: Record<string, string> = {
     ...buildPlayDetailRouteQuery(),
     returnName: 'play-detail',
     ...(betMultiplierKind.value ? { activeTab: betMultiplierKind.value } : {}),
+    playType: selectedTypeId.value || playTypeId.value || ('typeId' in cfg ? cfg.typeId : '') || '',
+    subPlay: selectedSubId.value || subPlayId.value || ('subId' in cfg ? cfg.subId : '') || '',
+    betMode: cfg.betMode || '',
+    playTypeLabel: cfg.playTypeLabel || '',
+    subPlayLabel: playMethod.value || cfg.playMethodLabel || '',
+    playTemplate: playTree.value?.playTemplate || cfg.playTemplate || '',
   }
+  if (cfg.segmentLen) q.segmentLen = String(cfg.segmentLen)
   delete q.bmsKind
   delete q.bmsError
   void router.push({ name: 'bet-multiplier-settings', query: q })
@@ -779,8 +846,11 @@ function applyGameDetailData(detail: Awaited<ReturnType<typeof fetchGameDetail>>
   countdownPeriod.value = mergedCountdown.countdownPeriod ?? ''
   countdownLabel.value = mergedCountdown.countdownLabel ?? ''
   nextIssue.value = mergedCountdown.countdownPeriod || detail.nextIssue
-  planInverseDigits.value = detail.planInverseDigits
-  planInverseBetCount.value = detail.planInverseBetCount
+  planInverseDigits.value = String(detail.planInverseDigits ?? '').trim()
+  planInverseBetCount.value = Number(detail.planInverseBetCount) || 0
+  // 无反集号码时视为不支持展示 Tab（与后端 planContrarySupported 语义对齐）
+  planContrarySupportedFromApi.value =
+    detail.planContrarySupported !== false && planInverseDigits.value !== ''
   historyGameTag.value = detail.lotteryLabel
   bettingRows.value = detail.bettingRows
   betRecordRows.value = detail.betRecords
@@ -790,6 +860,9 @@ function applyGameDetailData(detail: Awaited<ReturnType<typeof fetchGameDetail>>
   planTrendChartPoints.value = detail.planTrendChart ?? []
   applySchemeDockFromDetail(detail)
   syncDrawingUrgentPoll()
+  if (String(route.query.board ?? '') === 'contrary' && showPlanContraryTab.value) {
+    tab.value = '1'
+  }
 }
 
 function formatDockAmount(v: number) {
@@ -954,7 +1027,7 @@ function tickGameDetailCountdown() {
 }
 
 onMounted(async () => {
-  if (route.query.board === 'contrary') tab.value = '1'
+  if (route.query.board === 'contrary' && showPlanContraryTab.value) tab.value = '1'
   loadShareDockBetMultiplier()
   applyBetMultiplierFromRoute()
   await loadPlayTree()
@@ -968,6 +1041,10 @@ onMounted(async () => {
   })
   syncDrawingUrgentPoll()
   countdownTimer = setInterval(tickGameDetailCountdown, 1000)
+})
+
+watch(showPlanContraryTab, (ok) => {
+  if (!ok && tab.value === '1') tab.value = '0'
 })
 
 async function loadPlayTree() {
@@ -1023,6 +1100,7 @@ watch(lotteryCode, (code) => {
   historyDrawRecords.value = []
   planInverseDigits.value = ''
   planInverseBetCount.value = 0
+  planContrarySupportedFromApi.value = true
   resetSchemeDock()
   currentIssue.value = ''
   nextIssue.value = ''
@@ -1082,7 +1160,7 @@ async function handleBetError(e: unknown, fallback = '投注失败'): Promise<vo
       <div class="head-row">
         <div class="head-left">
           <button type="button" class="icon-link" aria-label="返回" @click="goBack">
-            <img :src="ICON_BACK" alt="" width="24" height="24" class="primary-ico-img" decoding="async" />
+            <img :src="ICON_BACK" alt="" width="30" height="30" class="primary-ico-img" decoding="async" />
           </button>
           <h1 class="head-title">{{ pageTitle }}</h1>
         </div>
@@ -1122,7 +1200,11 @@ async function handleBetError(e: unknown, fallback = '投注失败'): Promise<vo
       </div>
 
       <el-radio-group v-model="tab" size="small" class="detail-tab-rg">
-        <el-radio-button v-for="(label, i) in tabLabels" :key="label" :value="String(i)">{{ label }}</el-radio-button>
+        <el-radio-button
+          v-for="item in visibleDetailTabs"
+          :key="item.id"
+          :value="item.id"
+        >{{ item.label }}</el-radio-button>
       </el-radio-group>
     </header>
 
@@ -1186,7 +1268,7 @@ async function handleBetError(e: unknown, fallback = '投注失败'): Promise<vo
         <div class="plan-inverse-page">
           <div class="plan-inverse-inner">
             <el-card class="plan-inverse-card" shadow="never">
-              <p v-if="!planInverseDigits" class="plan-inverse-empty">暂无反集数据</p>
+              <p v-if="!planInverseDigits.trim()" class="plan-inverse-empty">暂无反集数据</p>
               <p v-else class="plan-inverse-digits">{{ planInverseDigits }}</p>
               <p class="plan-inverse-meta">共 {{ planInverseBetCount }} 注</p>
             </el-card>
@@ -1394,7 +1476,7 @@ async function handleBetError(e: unknown, fallback = '投注失败'): Promise<vo
         </div>
       </template>
       <div v-else class="tab-placeholder">
-        <p>「{{ tabLabels[Number(tab)] }}」功能开发中</p>
+        <p>「{{ activeTabLabel }}」功能开发中</p>
       </div>
     </main>
 
@@ -1424,6 +1506,9 @@ async function handleBetError(e: unknown, fallback = '投注失败'): Promise<vo
                 {{ d }}
               </button>
             </div>
+          </template>
+          <template v-else-if="usesRenxuanDanshi">
+            <SchemeRenxuanDanshiPanel v-model="renxuanDanshiContent" :config="playConfig" />
           </template>
           <template v-else-if="playConfig.inputMode === 'danshi'">
             <el-input
@@ -1622,8 +1707,8 @@ async function handleBetError(e: unknown, fallback = '投注失败'): Promise<vo
 }
 
 .primary-ico-img {
-  width: 1.5rem;
-  height: 1.5rem;
+  width: var(--page-titlebar-icon-size);
+  height: var(--page-titlebar-icon-size);
   object-fit: contain;
   display: block;
   cursor: pointer;
@@ -1644,7 +1729,10 @@ async function handleBetError(e: unknown, fallback = '投注失败'): Promise<vo
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 1rem 1.5rem;
+  height: var(--page-titlebar-height);
+  min-height: var(--page-titlebar-height);
+  box-sizing: border-box;
+  padding: 0 1.5rem;
   width: 100%;
 }
 

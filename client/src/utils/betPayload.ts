@@ -2,6 +2,7 @@ import { LHC_ZODIAC_NUMBERS, lhcMinPickCount } from '@/constants/lhcPlay'
 import { isBetUnitValue } from '@/constants/betModeOptions'
 import {
   isCatalogPlayTypeId,
+  mapGuajiTypeIdToCatalog,
   resolvePlayConfigFromCatalogIds,
 } from '@/utils/playConfig'
 import {
@@ -18,6 +19,180 @@ import {
   longhuPickOptionsForConfig,
 } from '@/utils/longhuPickOptions'
 import { resolvePlayTypeLabel } from '@/utils/playTypeLabels'
+
+/** 保序去重（直选/组选单式对齐第三方：重复号码只计 1 注） */
+export function uniquePreserveOrder(items: string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const raw of items) {
+    const t = raw.trim()
+    if (!t || seen.has(t)) continue
+    seen.add(t)
+    out.push(t)
+  }
+  return out
+}
+
+/** 是否组选单式（须排除对子/豹子，并按组选形态去重） */
+export function isZuxuanDanshiConfig(config: PlayConfig): boolean {
+  const bm = (config.betMode ?? '').trim()
+  if (bm === 'zuxuan_ds') return true
+  const sub = (config.subPlayId ?? '').trim()
+  if (sub === 'zuxuan_ds') return true
+  const catalog = (config.catalogSubId ?? '').trim()
+  if (catalog === 'zuxuan_ds' || catalog.endsWith('_zuxuan_ds')) return true
+  const label = `${config.playMethodLabel ?? ''} ${config.playTypeLabel ?? ''}`
+  if (label.includes('组选单式')) return true
+  return false
+}
+
+/**
+ * 是否按「单式号码串」计注（须保序去重）。
+ * 目录 subId 常为数字（如 g004/39），不能只认 zhixuan_ds；
+ * 例：前二直选单式输入 12,13,14,15,12 → 4 注（重复 12 只计 1）。
+ */
+export function isSscDanshiLikeConfig(config: PlayConfig): boolean {
+  if (isZuxuanDanshiConfig(config)) return true
+  const bm = (config.betMode ?? '').trim()
+  if (bm === 'danshi' || bm === 'zuxuan_ds') return true
+  const sub = (config.subPlayId ?? '').trim()
+  if (sub === 'zhixuan_ds' || sub === 'zuxuan_ds' || sub.endsWith('_ds')) return true
+  const catalog = (config.catalogSubId ?? '').trim()
+  if (catalog.endsWith('_ds')) return true
+  if (config.inputMode === 'danshi' && config.playTemplate !== 'lhc_std') {
+    // 混合组选走 hunhe 分支；此处排除已单独处理的玩法
+    if (bm === 'hunhe' || bm === 'tuotou' || bm.endsWith('_dp')) return false
+    return true
+  }
+  const label = `${config.playMethodLabel ?? ''} ${config.playTypeLabel ?? ''}`
+  if (label.includes('直选单式') || label.includes('组选单式')) return true
+  if (label.includes('单式') && (label.includes('直选') || label.includes('组选') || label.includes('组三') || label.includes('组六'))) {
+    return true
+  }
+  return false
+}
+
+/** 单式内容按位长过滤后保序去重（对齐第三方预览注数） */
+export function dedupeDanshiTokens(raw: string, segmentLen: number): string[] {
+  const parts = raw
+    .split(/[,，\s\n]+/)
+    .map((t) => t.trim())
+    .filter(Boolean)
+  const expect = segmentLen > 0 ? segmentLen : 0
+  return uniquePreserveOrder(
+    parts.filter((t) => /^\d+$/.test(t) && (!expect || t.length === expect)),
+  )
+}
+
+export const SSC_POSITION_LABELS = ['万', '千', '百', '十', '个'] as const
+
+const REN_POS_DEFAULT: Record<number, string[]> = {
+  2: ['千', '个'],
+  3: ['万', '千', '个'],
+  4: ['万', '千', '百', '十'],
+}
+
+/** 任选单式是否需要万千百十个位选（对齐第三方） */
+export function isRenxuanPositionDanshiConfig(config: PlayConfig): boolean {
+  const k = config.renPositionCount ?? 0
+  if (k < 2 || k > 5) return false
+  const isRen =
+    config.playTypeId === 'renxuan' ||
+    config.playTypeId === 'g011' ||
+    config.guajiGroup === '任选' ||
+    (config.playTypeLabel ?? '') === '任选'
+  if (!isRen) return false
+  const bm = config.betMode ?? ''
+  if (bm === 'danshi' || bm === 'zuxuan_ds') return true
+  const label = `${config.playMethodLabel ?? ''}`
+  return label.includes('直选单式') || label.includes('组选单式')
+}
+
+export function defaultRenxuanPositions(k: number): string[] {
+  return [...(REN_POS_DEFAULT[k] ?? REN_POS_DEFAULT[2]!)]
+}
+
+function extractSscPositionNames(raw: string): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const tok of raw.split(/[,，\s]+/).map((t) => t.trim()).filter(Boolean)) {
+    for (const lab of SSC_POSITION_LABELS) {
+      if ((tok === lab || tok === `${lab}位`) && !seen.has(lab)) {
+        seen.add(lab)
+        out.push(lab)
+      }
+    }
+  }
+  if (out.length) return out
+  for (const r of raw) {
+    const lab = String(r)
+    if ((SSC_POSITION_LABELS as readonly string[]).includes(lab) && !seen.has(lab)) {
+      seen.add(lab)
+      out.push(lab)
+    }
+  }
+  return out
+}
+
+export function parseRenxuanPositionContent(
+  raw: string,
+  k: number,
+): { positions: string[]; picks: string } {
+  const text = (raw || '').trim()
+  const want = k > 0 ? k : 2
+  if (!text) {
+    return { positions: defaultRenxuanPositions(want), picks: '' }
+  }
+  const pipe = text.indexOf('|')
+  if (pipe > 0) {
+    const positions = extractSscPositionNames(text.slice(0, pipe).trim())
+    const picks = text.slice(pipe + 1).trim()
+    if (positions.length >= want) {
+      return { positions: positions.slice(0, want), picks }
+    }
+  }
+  const lines = text.split(/\n/).map((l) => l.trim())
+  if (lines.length >= 1) {
+    const positions = extractSscPositionNames(lines[0] ?? '')
+    if (positions.length >= want) {
+      return {
+        positions: positions.slice(0, want),
+        picks: lines.slice(1).join('\n').trim(),
+      }
+    }
+  }
+  return { positions: defaultRenxuanPositions(want), picks: text }
+}
+
+/** 组内容：首行位名 + 换行 + 号码（与 guajibet.parseRenxuanPositionPick 对齐） */
+export function buildRenxuanPositionContent(positions: string[], picks: string): string {
+  const posLine = positions.join(',')
+  const body = (picks || '').trim()
+  return body ? `${posLine}\n${body}` : posLine
+}
+
+/**
+ * 组选单式：排除对子/豹子，按组选形态去重（12 与 21 同一注），保序保留首次形态。
+ * 例：11,12,13,14,15,16,17,22,24,25 → 8 注（去掉 11/22）
+ */
+export function dedupeZuxuanDanshiTokens(raw: string, segmentLen: number): string[] {
+  const expect = segmentLen > 0 ? segmentLen : 2
+  const parts = raw
+    .split(/[,，\s\n]+/)
+    .map((t) => t.trim())
+    .filter(Boolean)
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const t of parts) {
+    if (!/^\d+$/.test(t) || t.length !== expect) continue
+    if ([...t].every((c) => c === t[0])) continue
+    const key = [...t].sort().join('')
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(t)
+  }
+  return out
+}
 
 /** 与后端 schemes/play_api.go BetPayload 对齐 */
 export interface GameBetPayload {  playTemplate?: string
@@ -39,6 +214,13 @@ export interface PlayConfig {
   catalogSubId?: string
   numberPoolMin?: number
   numberPoolMax?: number
+  /** 号池最多可选个数；包胆等对齐第三方为 1（单选） */
+  poolMaxPicks?: number
+  /**
+   * 任选直选/组选单式：从万千百十个中勾选的位数（任二=2）。
+   * 内容格式：首行位名（千,个）+ 换行 + 号码（12,34）
+   */
+  renPositionCount?: number
   /** rules/v2 同步后来自 play_types.label */
   playTypeLabel?: string
   /** rules/v2 同步后来自 sub_plays.label */
@@ -50,8 +232,8 @@ export interface PlayConfig {
 const POSITION_LABELS = ['万', '千', '百', '十', '个'] as const
 
 function configFromPlayIds(playTypeId: string, subPlayId: string): PlayConfig {
-  // 旧订单兼容：hou4 映射为 catalog sixing
-  const typeId = playTypeId === 'hou4' ? 'sixing' : playTypeId
+  // 旧订单兼容：hou4 映射为 catalog sixing；g004 等映射为 qian2
+  const typeId = mapGuajiTypeIdToCatalog(playTypeId === 'hou4' ? 'sixing' : playTypeId)
   if (isCatalogPlayTypeId(typeId)) {
     return resolvePlayConfigFromCatalogIds(typeId, subPlayId)
   }
@@ -75,7 +257,7 @@ export function resolvePlayConfig(options: {
   const subPlayId = options.subPlayId?.trim() ?? ''
   const betMode = options.betMode?.trim() ?? ''
   if (playTypeId) {
-    const typeId = playTypeId === 'hou4' ? 'sixing' : playTypeId
+    const typeId = mapGuajiTypeIdToCatalog(playTypeId === 'hou4' ? 'sixing' : playTypeId)
     if (isCatalogPlayTypeId(typeId)) {
       return resolvePlayConfigFromCatalogIds(typeId, subPlayId, betMode)
     }
@@ -173,6 +355,23 @@ function comboCount(n: number, k: number): number {
   let out = 1
   for (let i = 0; i < k; i++) out = (out * (n - i)) / (i + 1)
   return Math.round(out)
+}
+
+/** 不定位码数：一码/二码/三码 */
+function inferBudingweiNeed(config: PlayConfig): number {
+  const text =
+    `${config.catalogSubId ?? ''} ${config.subPlayId} ${config.playMethodLabel ?? ''} ${config.playTypeLabel ?? ''} ${config.guajiGroup ?? ''}`.toLowerCase()
+  if (text.includes('三码') || text.includes('_3ma') || text.includes('3ma')) return 3
+  if (text.includes('二码') || text.includes('_2ma') || text.includes('2ma')) return 2
+  return 1
+}
+
+function isBudingweiPlayConfig(config: PlayConfig): boolean {
+  if (config.betMode === 'budingwei') return true
+  const tid = (config.playTypeId || '').toLowerCase()
+  if (tid === 'budingwei' || tid === 'g009' || tid === 'g004') return true
+  const label = `${config.playTypeLabel ?? ''} ${config.playMethodLabel ?? ''} ${config.guajiGroup ?? ''}`
+  return label.includes('不定位')
 }
 
 function isLhcDanshiBetMode(betMode: string): boolean {
@@ -336,7 +535,10 @@ export function buildGroupContent(
     ) {
       return (picks.danshi ?? '').trim()
     }
-    return parts.filter((s) => new RegExp(`^\\d{${config.segmentLen}}$`).test(s)).join(',')
+    if (isZuxuanDanshiConfig(config)) {
+      return dedupeZuxuanDanshiTokens(rawInput, config.segmentLen).join(',')
+    }
+    return dedupeDanshiTokens(rawInput, config.segmentLen).join(',')
   }
   if (config.inputMode === 'lhc_num') {
     return [...new Set(parseLhcNumberTokens((picks.digits ?? []).join(',')))].join(',')
@@ -421,6 +623,23 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
     return tokens.length
   }
 
+  // 不定位：一码=选几个号几注（最多2）；二码/三码=C(n,k)（对齐第三方 / guajibet）
+  // 五星二码/三码：第三方要求至少 4 个号
+  if (isBudingweiPlayConfig(config)) {
+    const pool = poolFromConfig(config) ?? { min: 0, max: 9 }
+    const tokens = [...new Set(parsePickTokens(content, pool))]
+    const need = inferBudingweiNeed(config)
+    const label = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''}`
+    const wuxingMulti = label.includes('五星') && need >= 2
+    if (wuxingMulti && tokens.length < 4) return 0
+    if (need <= 1) {
+      if (!tokens.length) return 0
+      return Math.min(tokens.length, 2)
+    }
+    if (tokens.length < need) return 0
+    return comboCount(tokens.length, need)
+  }
+
   if (isLonghuPlayConfig(config)) {
     return parseGroupPicks(config, content).digits.length
   }
@@ -479,8 +698,27 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
     return parts.length || 0
   }
 
-  if (config.subPlayId === 'zhixuan_ds') {
-    return content.split(',').filter((t) => t.length === config.segmentLen).length || 0
+  if (isRenxuanPositionDanshiConfig(config)) {
+    const k = config.renPositionCount ?? renPickCountFromConfig(config)
+    const digitLen = config.segmentLen > 0 ? config.segmentLen : k
+    const { positions, picks } = parseRenxuanPositionContent(content, k)
+    if (positions.length < k || !picks.trim()) return 0
+    if (isZuxuanDanshiConfig(config)) {
+      return dedupeZuxuanDanshiTokens(picks, digitLen).length
+    }
+    return dedupeDanshiTokens(picks, digitLen).length || 0
+  }
+
+  if (isSscDanshiLikeConfig(config)) {
+    // 组选单式：排除对子/豹子 + 形态去重（11,12,22,13 → 2；12,21 → 1）
+    if (isZuxuanDanshiConfig(config)) {
+      return applySegmentBetMultiplier(
+        config,
+        dedupeZuxuanDanshiTokens(content, config.segmentLen).length,
+      )
+    }
+    // 直选单式：相同号码重复录入只计 1 注（如 12,13,14,15,12 → 4；12,12,12 → 1）
+    return dedupeDanshiTokens(content, config.segmentLen).length || 0
   }
 
   // 直选组合：按位乘积 × 段长（三星×3，对齐第三方「组合」）
@@ -671,11 +909,23 @@ function countRenxuanZhixuanUnits(
 }
 
 function inferHezhiSegmentLen(config: PlayConfig): number {
-  const label = `${config.guajiGroup ?? ''} ${config.playTypeLabel ?? ''} ${config.playMethodLabel ?? ''}`
+  const label = `${config.guajiGroup ?? ''} ${config.playTypeLabel ?? ''} ${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''}`
+  const fromRen = renPickCountFromConfig(config)
+  if (fromRen >= 2 && fromRen <= 5 && /任|ren/i.test(label)) return fromRen
   if (label.includes('五星')) return 5
-  if (label.includes('四星') || label.includes('前后四')) return 4
-  if (label.includes('前二') || label.includes('后二') || label.includes('前后二')) return 2
+  if (label.includes('四星') || label.includes('前后四') || label.includes('任四') || label.includes('任选四')) return 4
+  if (label.includes('任三') || label.includes('任选三')) return 3
+  if (
+    label.includes('前二') ||
+    label.includes('后二') ||
+    label.includes('前后二') ||
+    label.includes('任二') ||
+    label.includes('任选二')
+  ) {
+    return 2
+  }
   if (config.segmentLen > 1 && config.segmentLen <= 5) return config.segmentLen
+  if (config.renPositionCount && config.renPositionCount >= 2) return config.renPositionCount
   return 3
 }
 
@@ -785,21 +1035,54 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
     return { ok: true, normalized, betUnits }
   }
 
-  if (sub === 'zhixuan_ds') {
+  if (isRenxuanPositionDanshiConfig(config)) {
+    const k = config.renPositionCount ?? renPickCountFromConfig(config)
+    const digitLen = config.segmentLen > 0 ? config.segmentLen : k
+    const { positions, picks } = parseRenxuanPositionContent(content, k)
+    if (positions.length < k) {
+      return { ok: false, message: `请从万千百十个中勾选 ${k} 个位置` }
+    }
+    if (!picks.trim()) {
+      return { ok: false, message: `请输入 ${digitLen} 位号码，每注用逗号分隔` }
+    }
+    const parts = picks.split(/[,，\s\n]+/).map((s) => s.trim()).filter(Boolean)
+    for (const p of parts) {
+      if (!/^\d+$/.test(p)) return { ok: false, message: '号码存在非数字内容' }
+      if (p.length !== digitLen) {
+        return { ok: false, message: `每注须为 ${digitLen} 位数字，请用逗号分隔` }
+      }
+    }
+    const uniq = isZuxuanDanshiConfig(config)
+      ? dedupeZuxuanDanshiTokens(picks, digitLen)
+      : dedupeDanshiTokens(picks, digitLen)
+    if (!uniq.length) return { ok: false, message: '选号无效' }
+    const normalized = buildRenxuanPositionContent(positions, uniq.join(','))
+    return { ok: true, normalized, betUnits: uniq.length }
+  }
+
+  if (isSscDanshiLikeConfig(config)) {
     const parts = content.split(/[,，\s\n]+/).map((s) => s.trim()).filter(Boolean)
     if (!parts.length) {
       return { ok: false, message: `直选单式须为 ${config.segmentLen} 位数字，每注用逗号分隔` }
     }
-    const valid: string[] = []
     for (const p of parts) {
       if (!/^\d+$/.test(p)) return { ok: false, message: '存在非数字内容' }
-      if (p.length !== config.segmentLen) {
+      if (config.segmentLen > 0 && p.length !== config.segmentLen) {
         return { ok: false, message: `每注须为 ${config.segmentLen} 位数字，请用逗号分隔` }
       }
-      valid.push(p)
     }
-    const normalized = valid.join(',')
-    return { ok: true, normalized, betUnits: valid.length }
+    if (isZuxuanDanshiConfig(config)) {
+      const uniq = dedupeZuxuanDanshiTokens(content, config.segmentLen)
+      if (!uniq.length) {
+        return {
+          ok: false,
+          message: `组选单式须为 ${config.segmentLen} 位且各位不全相同（不含对子/豹子），组选形态相同只计 1 注`,
+        }
+      }
+      return { ok: true, normalized: uniq.join(','), betUnits: uniq.length }
+    }
+    const uniq = dedupeDanshiTokens(content, config.segmentLen)
+    return { ok: true, normalized: uniq.join(','), betUnits: uniq.length }
   }
 
   if (sub === 'zhixuan_fs' && config.segmentLen > 1) {
@@ -1071,11 +1354,16 @@ export function groupContentPlaceholder(config: PlayConfig): string {
   if (config.betMode === 'tuotou') {
     return '拖头：胆码|拖码，如 01,02|03,04,05'
   }
+  if (isRenxuanPositionDanshiConfig(config)) {
+    const k = config.renPositionCount ?? 2
+    const n = config.segmentLen > 0 ? config.segmentLen : k
+    return `先勾选 ${k} 个位置，再输入 ${n} 位号码（逗号分隔），如：千,个↵12,34`
+  }
   if ((config.betMode ?? '').endsWith('_dp')) {
     return '对碰：A组|B组，如 马|龙 或 01,02|03,04'
   }
   if (config.subPlayId === 'zhixuan_ds') {
-    return `每注 ${config.segmentLen} 位数字，多注用逗号分隔（如 1234,5678）`
+    return `每注 ${config.segmentLen} 位数字，多注用逗号分隔；重复号码只计 1 注（如 12,13,14,12 计 3 注）`
   }
   if (config.subPlayId === 'zhixuan_fs' && config.inputMode === 'multiline') {
     const labels = config.segmentLabels.join('、')

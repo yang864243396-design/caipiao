@@ -435,33 +435,6 @@ func parseDigitTokens(raw string) []string {
 	return out
 }
 
-func parseContraryPicks(planInverse string, positionIndex int) []string {
-	segments := strings.Split(planInverse, ",")
-	if positionIndex >= len(segments) {
-		return allDigitsExcept(nil)
-	}
-	seg := strings.TrimSpace(segments[positionIndex])
-	forbidden := parseDigitTokens(seg)
-	return allDigitsExcept(forbidden)
-}
-
-func allDigitsExcept(forbidden []string) []string {
-	block := map[string]struct{}{}
-	for _, d := range forbidden {
-		block[d] = struct{}{}
-	}
-	out := make([]string, 0, 10)
-	for i := 0; i < 10; i++ {
-		d := strconv.Itoa(i)
-		if _, ok := block[d]; !ok {
-			out = append(out, d)
-		}
-	}
-	if len(out) == 0 {
-		return []string{"0"}
-	}
-	return out
-}
 
 func resolveRounds(cfg map[string]interface{}) []schemeRound {
 	return normalizeSchemeRounds(parseSchemeRoundsFromRaw(cfg["rounds"]))

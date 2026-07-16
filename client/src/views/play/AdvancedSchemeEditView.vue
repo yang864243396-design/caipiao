@@ -25,9 +25,12 @@ import { parseSchemeKind } from '@/utils/schemeKind'
 import DateTimePickerModal from '@/components/ui/DateTimePickerModal.vue'
 import { BET_MODE_OPTIONS, betUnitFromSchemeConfig, normalizeBetUnitValue } from '@/constants/betModeOptions'
 import SchemeGroupPickPanel from '@/components/schemes/SchemeGroupPickPanel.vue'
+import SchemeRenxuanDanshiPanel from '@/components/schemes/SchemeRenxuanDanshiPanel.vue'
 import {
   catalogFieldsFromPlayConfig,
+  countBetUnits,
   groupContentPlaceholder,
+  isRenxuanPositionDanshiConfig,
   playConfigSummary,
   validateGroupContent,
   validateSchemeGroups,
@@ -68,6 +71,11 @@ const schemeKind = computed(() =>
 const isCustomKind = computed(() => schemeKind.value === 'custom')
 
 const BACK_ICO = '/images/lobby/icon-back.png'
+/** 开始/结束时间说明（气泡展示，不占文档流） */
+const TIME_RANGE_HINT =
+  '方案保存后将自动同步至精算云中心。开始时间与结束时间须同时填写，或同时留空表示无限期运行。'
+/** 方案模式说明 */
+const BET_MODE_HINT = '倍投设定与轮次设置共用同一份倍率配置，后保存者覆盖先前配置。'
 
 /** false=正式运行，true=模拟运行 */
 const simBet = ref(false)
@@ -100,6 +108,7 @@ const playModeSummary = computed(() => playConfigSummary(schemePlayConfig.value)
 
 /** 当前玩法用 chip 选号时不再展示 textarea（避免双轨编辑） */
 const schemeUsesPickPanel = computed(() => schemeGroupUsesPickPanel(schemePlayConfig.value))
+const schemeUsesRenxuanDanshi = computed(() => isRenxuanPositionDanshiConfig(schemePlayConfig.value))
 
 const groupInputPlaceholder = computed(() => groupContentPlaceholder(schemePlayConfig.value))
 
@@ -111,8 +120,11 @@ const gameNameDisplay = computed(() => {
 })
 
 function groupBetUnits(raw: string): number {
-  const r = validateGroupContent(schemePlayConfig.value, raw)
-  return r.ok ? r.betUnits : 0
+  const cfg = schemePlayConfig.value
+  const r = validateGroupContent(cfg, raw)
+  if (r.ok) return r.betUnits
+  // 输入过程中校验未通过时仍按玩法计注（单式会去重），避免短暂显示原始逗号段数
+  return countBetUnits(cfg, raw)
 }
 
 // ----- 运行类型（runTypeId）与七套方案内容面板 -----
@@ -514,13 +526,14 @@ function toggleHcwDigit(pos: number, digit: string): void {
   }
 }
 
-/** 预估注数：每位选号数相加 */
-const hcwEstimatedUnits = computed(() =>
-  Array.from({ length: positionCount.value }, (_, i) => (hcwPools.value[i] ?? []).length).reduce(
-    (sum, n) => sum + n,
-    0,
-  ),
-)
+/** 预估注数：与随机出号一致，走 countBetUnits（位积/组合×段长/任选 C(n,k)） */
+const hcwEstimatedUnits = computed(() => {
+  const n = positionCount.value
+  if (n <= 0) return 0
+  const lines = Array.from({ length: n }, (_, i) => (hcwPools.value[i] ?? []).join(','))
+  if (lines.every((x) => !x.trim())) return 0
+  return countBetUnits(schemePlayConfig.value, lines.join('\n'))
+})
 
 // --- random_draw 随机出号 ---
 const rdCounts = ref<number[]>([])
@@ -581,6 +594,19 @@ function generateRdPreview(): void {
     return pool.slice(0, count).sort((a, b) => Number(a) - Number(b))
   })
 }
+
+/** 预估注数：按预览（或每位数量占位）走同一套 countBetUnits，含直选组合×段长 */
+const rdEstimatedUnits = computed(() => {
+  const n = positionCount.value
+  if (n <= 0) return 0
+  const lines = Array.from({ length: n }, (_, i) => {
+    const prev = rdPreview.value[i] ?? []
+    if (prev.length) return prev.join(',')
+    const count = Math.min(10, Math.max(1, rdCounts.value[i] ?? 1))
+    return Array.from({ length: count }, (_, j) => String(j % 10)).join(',')
+  })
+  return countBetUnits(schemePlayConfig.value, lines.join('\n'))
+})
 
 // --- builtin_plan 内置计画 ---
 const favorites = ref<SchemeFavoriteRow[]>([])
@@ -982,6 +1008,18 @@ const betMultiplierSelectedLabel = computed(() =>
   betMultiplierKind.value ? (BET_MULTIPLIER_KIND_LABELS[betMultiplierKind.value] ?? '') : '',
 )
 
+const betMultiplierFieldText = computed(() => {
+  if (betMultiplierError.value) return betMultiplierError.value
+  if (betMultiplierSelectedLabel.value) return betMultiplierSelectedLabel.value
+  return '未设置，请选择'
+})
+
+const betMultiplierFieldTone = computed(() => {
+  if (betMultiplierError.value) return 'danger'
+  if (betMultiplierSelectedLabel.value) return 'normal'
+  return 'muted'
+})
+
 function applyBetMultiplierFromConfig(raw: unknown): void {
   if (!raw || typeof raw !== 'object') return
   const kind = (raw as { kind?: string }).kind
@@ -1041,18 +1079,33 @@ function goBetMultiplierSettings() {
   saveSchemeEditRestoreSnapshot(schemeId.value, snapshot)
   flushPersistDraft()
   sessionStorage.setItem(scrollRestoreStorageKey(), String(readDocumentScrollY()))
+  const cfg = schemePlayConfig.value
+  // 回显：旧 kind 0/1 在无自动算表玩法下落到简单；新保存只写 2/3
+  const activeTab =
+    betMultiplierKind.value === '3'
+      ? '3'
+      : betMultiplierKind.value === '0' || betMultiplierKind.value === '1'
+        ? betMultiplierKind.value
+        : '2'
   router.push({
     name: 'bet-multiplier-settings',
     query: {
       fromScheme: '1',
       schemeId: String(route.params.schemeId ?? ''),
-      ...(betMultiplierKind.value ? { activeTab: betMultiplierKind.value } : {}),
+      activeTab,
       ...(route.query.title != null && route.query.title !== ''
         ? { title: String(route.query.title) }
         : {}),
       ...(route.query.lottery != null && String(route.query.lottery) !== ''
         ? { lottery: String(route.query.lottery) }
         : {}),
+      playType: playTypeId.value || cfg.playTypeId || '',
+      subPlay: subPlayId.value || cfg.subPlayId || '',
+      betMode: cfg.betMode || '',
+      playTypeLabel: cfg.playTypeLabel || '',
+      subPlayLabel: cfg.playMethodLabel || '',
+      playTemplate: cfg.playTemplate || '',
+      ...(cfg.segmentLen ? { segmentLen: String(cfg.segmentLen) } : {}),
       ...schemeRouteQueryExtras(),
     },
   })
@@ -1511,7 +1564,7 @@ function onTimeDialogOpened() {
   <div class="scf">
     <header class="scf-header">
       <button type="button" class="scf-back" aria-label="返回" @click="goBack">
-        <img :src="BACK_ICO" alt="" width="24" height="24" class="scf-back-img" decoding="async" />
+        <img :src="BACK_ICO" alt="" width="30" height="30" class="scf-back-img" decoding="async" />
       </button>
       <h1 class="scf-title">方案配置</h1>
       <div class="scf-header-right">
@@ -1524,9 +1577,6 @@ function onTimeDialogOpened() {
 
     <main class="scf-main">
       <section class="scf-section">
-        <div class="scf-section-head">
-          <h2 class="scf-section-title">基础设置</h2>
-        </div>
         <div class="scf-card scf-stack">
           <div class="scf-field">
             <span class="scf-lbl">运行模式</span>
@@ -1568,61 +1618,67 @@ function onTimeDialogOpened() {
               <div class="scf-readonly">{{ gameNameDisplay }}</div>
             </div>
           </div>
-        </div>
-      </section>
 
-      <section class="scf-section">
-        <div class="scf-section-head scf-section-head--plain">
-          <h2 class="scf-section-title">运行逻辑</h2>
-        </div>
-        <div class="scf-card scf-stack">
-          <div class="scf-tip">
-            <p>
-              提示：方案保存后将自动同步至精算云中心。开始时间与结束时间须同时填写，或同时留空表示无限期运行。
-            </p>
-          </div>
           <div class="scf-grid2">
             <div class="scf-field">
-              <span class="scf-lbl">开始时间</span>
+              <span class="scf-lbl scf-lbl--with-help">
+                <span>开始时间</span>
+                <el-popover
+                  placement="top"
+                  :width="260"
+                  trigger="click"
+                  :content="TIME_RANGE_HINT"
+                  popper-class="scf-help-popper"
+                >
+                  <template #reference>
+                    <button type="button" class="scf-help-btn" aria-label="开始时间说明" @click.stop>
+                      <span class="scf-ms scf-ms--help" aria-hidden="true">help</span>
+                    </button>
+                  </template>
+                </el-popover>
+              </span>
               <button type="button" class="scf-time-hit" aria-haspopup="dialog" @click="openTimePicker('start')">
                 <span class="scf-time-hit-val">{{ displayMainStart }}</span>
                 <span class="scf-ms scf-ms--sm scf-time-hit-ico" aria-hidden="true">schedule</span>
               </button>
             </div>
             <div class="scf-field">
-              <span class="scf-lbl">结束时间</span>
+              <span class="scf-lbl scf-lbl--with-help">
+                <span>结束时间</span>
+                <el-popover
+                  placement="top"
+                  :width="260"
+                  trigger="click"
+                  :content="TIME_RANGE_HINT"
+                  popper-class="scf-help-popper"
+                >
+                  <template #reference>
+                    <button type="button" class="scf-help-btn" aria-label="结束时间说明" @click.stop>
+                      <span class="scf-ms scf-ms--help" aria-hidden="true">help</span>
+                    </button>
+                  </template>
+                </el-popover>
+              </span>
               <button type="button" class="scf-time-hit" aria-haspopup="dialog" @click="openTimePicker('end')">
                 <span class="scf-time-hit-val">{{ displayMainEnd }}</span>
                 <span class="scf-ms scf-ms--sm scf-time-hit-ico" aria-hidden="true">schedule</span>
               </button>
             </div>
           </div>
-        </div>
-      </section>
 
-      <section class="scf-section">
-        <div class="scf-section-head scf-section-head--plain">
-          <h2 class="scf-section-title">风险控制</h2>
-        </div>
-        <div class="scf-card scf-grid2">
-          <div class="scf-field">
-            <label class="scf-lbl" for="scf-sl">止损金额</label>
-            <el-input id="scf-sl" v-model="stopLoss" size="large" class="scf-el-inp scf-el-inp--danger"
-              placeholder="0.00" type="number" />
+          <div class="scf-grid2">
+            <div class="scf-field">
+              <label class="scf-lbl" for="scf-sl">止损金额</label>
+              <el-input id="scf-sl" v-model="stopLoss" size="large" class="scf-el-inp scf-el-inp--danger"
+                placeholder="0.00" type="number" />
+            </div>
+            <div class="scf-field">
+              <label class="scf-lbl" for="scf-tp">止盈金额</label>
+              <el-input id="scf-tp" v-model="takeProfit" size="large" class="scf-el-inp scf-el-inp--profit"
+                placeholder="0.00" type="number" />
+            </div>
           </div>
-          <div class="scf-field">
-            <label class="scf-lbl" for="scf-tp">止盈金额</label>
-            <el-input id="scf-tp" v-model="takeProfit" size="large" class="scf-el-inp scf-el-inp--profit"
-              placeholder="0.00" type="number" />
-          </div>
-        </div>
-      </section>
 
-      <section class="scf-section">
-        <div class="scf-section-head scf-section-head--plain">
-          <h2 class="scf-section-title">投注参数</h2>
-        </div>
-        <div class="scf-card scf-stack">
           <div class="scf-grid2">
             <div class="scf-field">
               <label class="scf-lbl" for="scf-mult">倍数系数</label>
@@ -1636,27 +1692,40 @@ function onTimeDialogOpened() {
               </el-select>
             </div>
           </div>
-          <button type="button" class="scf-mode-card" @click="goBetMultiplierSettings">
-            <div class="scf-mode-left">
-              <span class="scf-mode-ico-bg" aria-hidden="true">
-                <span class="scf-ms scf-ms--white">analytics</span>
-              </span>
-              <div class="scf-mode-texts">
-                <p class="scf-mode-title">方案模式设置</p>
-              </div>
-            </div>
-            <div class="scf-mode-right">
-              <span class="scf-ms scf-ms--primary scf-mode-gear" aria-hidden="true">settings</span>
-              <p v-if="betMultiplierError" class="scf-mode-err" role="alert">
-                {{ betMultiplierError }}
-              </p>
-              <p v-else-if="betMultiplierSelectedLabel" class="scf-mode-selected">
-                {{ betMultiplierSelectedLabel }}
-              </p>
-              <p v-else class="scf-mode-unset">未设置，请点击进入倍投设定</p>
-            </div>
-          </button>
-          <p class="scf-mode-share-hint">倍投设定与轮次设置共用同一份倍率配置，后保存者覆盖先前配置</p>
+          <div class="scf-field">
+            <span class="scf-lbl scf-lbl--with-help">
+              <span>方案模式</span>
+              <el-popover
+                placement="top"
+                :width="260"
+                trigger="click"
+                :content="BET_MODE_HINT"
+                popper-class="scf-help-popper"
+              >
+                <template #reference>
+                  <button type="button" class="scf-help-btn" aria-label="方案模式说明" @click.stop>
+                    <span class="scf-ms scf-ms--help" aria-hidden="true">help</span>
+                  </button>
+                </template>
+              </el-popover>
+            </span>
+            <button
+              type="button"
+              class="scf-time-hit"
+              aria-haspopup="dialog"
+              aria-label="方案模式设置"
+              @click="goBetMultiplierSettings"
+            >
+              <span
+                class="scf-time-hit-val"
+                :class="{
+                  'is-muted': betMultiplierFieldTone === 'muted',
+                  'is-danger': betMultiplierFieldTone === 'danger',
+                }"
+              >{{ betMultiplierFieldText }}</span>
+              <span class="scf-ms scf-ms--sm scf-time-hit-ico" aria-hidden="true">chevron_right</span>
+            </button>
+          </div>
         </div>
       </section>
 
@@ -1706,11 +1775,28 @@ function onTimeDialogOpened() {
               </div>
             </div>
             <div class="scf-textarea-wrap">
-              <SchemeGroupPickPanel v-if="schemeUsesPickPanel" v-model="schemeGroups[idx]" :config="schemePlayConfig" />
-              <el-input v-if="!schemeUsesPickPanel" v-model="schemeGroups[idx]" type="textarea" :rows="5" resize="none"
-                class="scf-area" :placeholder="groupInputPlaceholder" />
+              <SchemeRenxuanDanshiPanel
+                v-if="schemeUsesRenxuanDanshi"
+                v-model="schemeGroups[idx]"
+                :config="schemePlayConfig"
+              />
+              <SchemeGroupPickPanel
+                v-else-if="schemeUsesPickPanel"
+                v-model="schemeGroups[idx]"
+                :config="schemePlayConfig"
+              />
+              <el-input
+                v-else
+                v-model="schemeGroups[idx]"
+                type="textarea"
+                :rows="5"
+                resize="none"
+                class="scf-area"
+                :placeholder="groupInputPlaceholder"
+              />
               <div class="scf-area-meta">
-                <span v-if="schemeUsesPickPanel">
+                <span v-if="schemeUsesRenxuanDanshi">勾选位置后输入号码，注数随号码自动计算</span>
+                <span v-else-if="schemeUsesPickPanel">
                   {{
                     schemePlayConfig.inputMode === 'multiline'
                       ? '按位选号，每位多选以逗号保存'
@@ -1864,6 +1950,7 @@ function onTimeDialogOpened() {
           </div>
           <div class="scf-rd-actions">
             <el-button type="primary" plain size="small" @click="generateRdPreview">生成预览</el-button>
+            <span class="scf-rd-units">预估 {{ rdEstimatedUnits }} 注</span>
           </div>
           <div class="scf-field scf-panel-field">
             <span class="scf-lbl">换号策略</span>
@@ -1988,9 +2075,25 @@ function onTimeDialogOpened() {
         </div>
         <div class="scf-field">
           <span class="scf-lbl">投注号码</span>
-          <SchemeGroupPickPanel v-if="schemeUsesPickPanel" v-model="jushuForm.content" :config="schemePlayConfig" />
-          <el-input v-if="!schemeUsesPickPanel" v-model="jushuForm.content" type="textarea" :rows="4" resize="none"
-            class="scf-area" :placeholder="groupInputPlaceholder" />
+          <SchemeRenxuanDanshiPanel
+            v-if="schemeUsesRenxuanDanshi"
+            v-model="jushuForm.content"
+            :config="schemePlayConfig"
+          />
+          <SchemeGroupPickPanel
+            v-else-if="schemeUsesPickPanel"
+            v-model="jushuForm.content"
+            :config="schemePlayConfig"
+          />
+          <el-input
+            v-else
+            v-model="jushuForm.content"
+            type="textarea"
+            :rows="4"
+            resize="none"
+            class="scf-area"
+            :placeholder="groupInputPlaceholder"
+          />
         </div>
         <div class="scf-grid2">
           <div class="scf-field">
@@ -2076,7 +2179,10 @@ function onTimeDialogOpened() {
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 0.5rem;
-  padding: max(0.75rem, env(safe-area-inset-top)) 0.75rem 0.875rem;
+  height: calc(var(--page-titlebar-height) + env(safe-area-inset-top));
+  min-height: calc(var(--page-titlebar-height) + env(safe-area-inset-top));
+  box-sizing: border-box;
+  padding: env(safe-area-inset-top) var(--page-titlebar-pad-x) 0;
   background: rgba(255, 255, 255, 0.92);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
@@ -2085,8 +2191,8 @@ function onTimeDialogOpened() {
 
 .scf-back {
   justify-self: start;
-  width: 2.25rem;
-  height: 2.25rem;
+  width: var(--page-titlebar-action-size);
+  height: var(--page-titlebar-action-size);
   padding: 0;
   border: none;
   border-radius: 0.5rem;
@@ -2099,8 +2205,8 @@ function onTimeDialogOpened() {
 }
 
 .scf-back-img {
-  width: 1.5rem;
-  height: 1.5rem;
+  width: var(--page-titlebar-icon-size);
+  height: var(--page-titlebar-icon-size);
   object-fit: contain;
   display: block;
   pointer-events: none;
@@ -2161,13 +2267,13 @@ function onTimeDialogOpened() {
 }
 
 .scf-main {
-  padding: 1.25rem 1rem 0;
+  padding: 1rem 1rem 0;
   max-width: 32rem;
   margin: 0 auto;
   width: 100%;
   display: flex;
   flex-direction: column;
-  gap: 1.25rem;
+  gap: 0.9rem;
 }
 
 .scf-main-pad {
@@ -2227,40 +2333,99 @@ function onTimeDialogOpened() {
 .scf-card {
   background: #fff;
   border-radius: 0.875rem;
-  padding: 1.15rem 1rem;
+  padding: 0.85rem 1rem;
   box-shadow: 0 4px 20px rgba(25, 28, 30, 0.04);
 }
 
 .scf-stack {
   display: flex;
   flex-direction: column;
-  gap: 1.15rem;
+  gap: 0.7rem;
 }
 
+/* 双列改为单列：全页控件与「方案名称」等同宽 */
 .scf-grid2 {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1rem;
-}
-
-@media (max-width: 380px) {
-  .scf-grid2 {
-    grid-template-columns: 1fr;
-  }
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
 }
 
 .scf-field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.45rem;
+  --scf-lbl-col: 4.5rem;
+  display: grid;
+  grid-template-columns: var(--scf-lbl-col) minmax(0, 1fr);
+  align-items: center;
+  column-gap: 0.5rem;
   min-width: 0;
 }
 
 .scf-lbl {
+  min-width: 0;
+  width: 100%;
   font-size: 0.8125rem;
   font-weight: 600;
   color: var(--scf-on-variant);
-  padding-left: 0.15rem;
+  padding-left: 0;
+  line-height: 1.3;
+}
+
+.scf-lbl--with-help {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  width: 100%;
+  min-width: 0;
+}
+
+.scf-help-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 0.95rem;
+  height: 0.95rem;
+  margin: 0 0 0 -0.05rem;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.scf-help-btn:hover,
+.scf-help-btn:focus-visible {
+  color: var(--scf-primary);
+}
+
+.scf-help-btn:focus-visible {
+  outline: 2px solid var(--scf-primary);
+  outline-offset: 1px;
+}
+
+.scf-ms--help {
+  font-size: 0.875rem !important;
+  line-height: 1;
+}
+
+.scf-field > .scf-el-inp,
+.scf-field > .scf-el-select,
+.scf-field > .scf-seg,
+.scf-field > .scf-readonly,
+.scf-field > .scf-suffix-wrap,
+.scf-field > .scf-time-hit,
+.scf-field > .scf-radio-wrap {
+  width: 100%;
+  min-width: 0;
+}
+
+.scf-panel-field {
+  align-items: start;
+}
+
+.scf-panel-field > .scf-lbl {
+  padding-top: 0.35rem;
 }
 
 .scf-seg {
@@ -2309,8 +2474,13 @@ function onTimeDialogOpened() {
   box-shadow: 0 0 0 1px rgba(0, 102, 255, 0.35) inset;
 }
 
+.scf-el-inp {
+  width: 100%;
+}
+
 .scf-time-hit {
   width: 100%;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2344,6 +2514,19 @@ function onTimeDialogOpened() {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: var(--scf-primary-strong);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scf-time-hit-val.is-muted {
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.scf-time-hit-val.is-danger {
+  color: var(--scf-error);
 }
 
 .scf-time-hit-ico {
@@ -2371,10 +2554,12 @@ function onTimeDialogOpened() {
   background: #f2f4f6;
   box-shadow: none;
   min-height: 2.5rem;
+  width: 100%;
 }
 
 .scf-suffix-wrap {
   position: relative;
+  width: 100%;
 }
 
 .scf-el-inp--suffix :deep(.el-input__wrapper) {
@@ -2393,6 +2578,8 @@ function onTimeDialogOpened() {
 }
 
 .scf-readonly {
+  width: 100%;
+  box-sizing: border-box;
   min-height: 2.5rem;
   padding: 0.55rem 0.9rem;
   border-radius: 0.5rem;
@@ -2403,134 +2590,6 @@ function onTimeDialogOpened() {
   color: var(--scf-on-variant);
   display: flex;
   align-items: center;
-}
-
-.scf-tip {
-  border-left: 4px solid var(--scf-error);
-  border-radius: 0 0.5rem 0.5rem 0;
-  padding: 0.65rem 0.75rem;
-  background: rgba(255, 218, 214, 0.45);
-}
-
-.scf-tip p {
-  margin: 0;
-  font-size: 0.75rem;
-  font-weight: 500;
-  line-height: 1.55;
-  color: var(--scf-error);
-}
-
-.scf-mode-card {
-  width: 100%;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.95rem 1rem;
-  border: none;
-  border-radius: 0.875rem;
-  background: rgba(0, 102, 255, 0.06);
-  cursor: pointer;
-  font-family: inherit;
-  transition: background 0.15s;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.scf-mode-card:hover {
-  background: rgba(0, 102, 255, 0.1);
-}
-
-.scf-mode-left {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  min-width: 0;
-  flex: 1 1 0;
-}
-
-.scf-mode-right {
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 0.35rem;
-  max-width: min(11rem, 42%);
-  padding-top: 0.1rem;
-}
-
-.scf-mode-err {
-  margin: 0;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.35;
-  color: var(--scf-error);
-  text-align: right;
-  word-break: break-word;
-  overflow-wrap: anywhere;
-}
-
-.scf-mode-selected {
-  margin: 0;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.35;
-  color: var(--el-color-primary, #0050cb);
-  text-align: right;
-}
-
-.scf-mode-unset {
-  margin: 0;
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1.35;
-  color: #94a3b8;
-  text-align: right;
-}
-
-.scf-mode-share-hint {
-  margin: 0.375rem 0 0;
-  font-size: 11px;
-  line-height: 1.6;
-  color: var(--el-text-color-secondary);
-}
-
-.scf-mode-ico-bg {
-  flex-shrink: 0;
-  width: 2.5rem;
-  height: 2.5rem;
-  border-radius: 999px;
-  background: var(--scf-primary-strong);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.scf-mode-texts {
-  text-align: left;
-  min-width: 0;
-}
-
-.scf-mode-title {
-  margin: 0;
-  font-size: 0.875rem;
-  font-weight: 700;
-  color: var(--scf-primary-strong);
-}
-
-.scf-mode-sub {
-  margin: 0.15rem 0 0;
-  font-size: 11px;
-  color: var(--scf-on-variant);
-  opacity: 0.78;
-}
-
-.scf-mode-gear {
-  flex-shrink: 0;
-  transition: transform 0.15s;
-}
-
-.scf-mode-card:hover .scf-mode-gear {
-  transform: translateX(3px);
 }
 
 .scf-add-btn {
@@ -3217,7 +3276,13 @@ function onTimeDialogOpened() {
 
 .scf-rd-actions {
   display: flex;
-  justify-content: flex-start;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.5rem 0 0.75rem;
+}
+.scf-rd-units {
+  font-size: 0.8125rem;
+  color: var(--el-text-color-secondary, #64748b);
 }
 
 /* 内置计画 */
@@ -3364,5 +3429,23 @@ function onTimeDialogOpened() {
     margin-left: auto;
     margin-right: auto;
   }
+}
+</style>
+
+<style>
+/* popover 挂到 body，需非 scoped；浮层不占文档流，不挤动页面布局 */
+.scf-help-popper.el-popper {
+  max-width: min(16.5rem, calc(100vw - 2rem));
+  padding: 0.65rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.55;
+  color: #334155;
+  border: none;
+  border-radius: 0.65rem;
+  box-shadow: 0 12px 36px rgba(25, 28, 30, 0.12);
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
 }
 </style>

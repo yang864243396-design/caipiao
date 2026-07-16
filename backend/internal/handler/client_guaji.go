@@ -3,10 +3,12 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 
 	"caipiao/backend/internal/apix"
+	"caipiao/backend/internal/guaji"
 	"caipiao/backend/internal/guaji/accountsvc"
 	"caipiao/backend/internal/member"
 )
@@ -109,6 +111,36 @@ func (h *Handler) GuajiReauthAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	h.withMember(w, r, func(_ *member.Service, account string) {
 		acct, err := h.guajiAccounts.Reauth(r.Context(), account, id)
+		if err != nil {
+			h.handleGuajiErr(w, err)
+			return
+		}
+		apix.OK(w, acct)
+	})
+}
+
+type guajiImportSessionRequest struct {
+	AccessToken  string `json:"accessToken"`
+	RefreshToken string `json:"refreshToken"`
+}
+
+func (h *Handler) GuajiImportSession(w http.ResponseWriter, r *http.Request) {
+	if h.guajiAccounts == nil {
+		apix.Fail(w, http.StatusServiceUnavailable, apix.CodeInternal, "服务未就绪")
+		return
+	}
+	id, err := parseGuajiAccountID(r)
+	if err != nil {
+		apix.Validation(w, "无效的账号 id")
+		return
+	}
+	var req guajiImportSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		apix.Validation(w, "请求体须为 JSON")
+		return
+	}
+	h.withMember(w, r, func(_ *member.Service, account string) {
+		acct, err := h.guajiAccounts.ImportSession(r.Context(), account, id, req.AccessToken, req.RefreshToken)
 		if err != nil {
 			h.handleGuajiErr(w, err)
 			return
@@ -234,6 +266,7 @@ func parseGuajiAccountID(r *http.Request) (int64, error) {
 }
 
 func (h *Handler) handleGuajiErr(w http.ResponseWriter, err error) {
+	var mis guaji.MisconfiguredError
 	switch {
 	case errors.Is(err, member.ErrNotFound):
 		apix.Fail(w, http.StatusNotFound, apix.CodeNotFound, "会员不存在")
@@ -245,6 +278,9 @@ func (h *Handler) handleGuajiErr(w http.ResponseWriter, err error) {
 		apix.Fail(w, http.StatusServiceUnavailable, apix.CodeInternal, "第三方对接未启用")
 	case errors.Is(err, accountsvc.ErrCredentialsKey):
 		apix.Fail(w, http.StatusServiceUnavailable, apix.CodeInternal, "服务端未配置 GUAJI_CREDENTIALS_KEY")
+	case errors.As(err, &mis):
+		slog.Error("guaji misconfigured", "err", err)
+		apix.Fail(w, http.StatusServiceUnavailable, apix.CodeInternal, "第三方对接配置异常，请联系运维")
 	case errors.Is(err, accountsvc.ErrNoActiveAccount):
 		apix.Fail(w, http.StatusOK, apix.CodeValidation, "无启用中的授权账号")
 	case errors.Is(err, accountsvc.ErrTokenInvalid):
@@ -256,8 +292,10 @@ func (h *Handler) handleGuajiErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, accountsvc.ErrInvalidCurrency):
 		apix.Fail(w, http.StatusOK, apix.CodeValidation, "主币种仅支持 USDT / TRX / CNY")
 	case errors.Is(err, accountsvc.ErrGuajiUpstream):
+		slog.Warn("guaji upstream unavailable", "err", err)
 		apix.Fail(w, http.StatusServiceUnavailable, apix.CodeInternal, "第三方服务暂时不可用，请稍后重试")
 	default:
+		slog.Error("guaji handler error", "err", err)
 		apix.Internal(w)
 	}
 }

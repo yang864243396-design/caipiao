@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // Client is the Guaji third-party HTTP adapter (T0 skeleton).
@@ -17,10 +18,26 @@ type Client struct {
 }
 
 func NewClient(cfg Config) *Client {
+	timeout := cfg.HTTPTimeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	transport := &http.Transport{
+		Proxy:                 httpProxyFunc(),
+		DialContext:           dialContextPreferHealthy,
+		ForceAttemptHTTP2:     false, // CDN 边缘对 HTTP/2 偶发异常；HTTP/1.1 更稳
+		MaxIdleConns:          64,
+		MaxConnsPerHost:       32,
+		IdleConnTimeout:       30 * time.Second,
+		TLSHandshakeTimeout:   8 * time.Second,
+		ResponseHeaderTimeout: 15 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
 	return &Client{
 		cfg: cfg,
 		http: &http.Client{
-			Timeout: cfg.HTTPTimeout,
+			Timeout:   timeout,
+			Transport: transport,
 		},
 	}
 }

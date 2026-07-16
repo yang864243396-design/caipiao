@@ -59,7 +59,9 @@ func ensureSchemeStartSkipSnapshot(
 		return false, nil
 	}
 	if syncer != nil {
-		_ = syncer.ForceRefresh(ctx, inst.LotteryCode)
+		refreshCtx, cancel := context.WithTimeout(ctx, 800*time.Millisecond)
+		_ = syncer.ForceRefresh(refreshCtx, inst.LotteryCode)
+		cancel()
 	}
 	if inst.LastSettledIssue.Valid {
 		skipPeriod := strings.TrimSpace(inst.LastSettledIssue.String)

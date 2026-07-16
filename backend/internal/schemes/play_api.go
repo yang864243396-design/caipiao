@@ -215,6 +215,7 @@ func resolvePlayRuleFromBetPayload(p BetPayload) playRule {
 		"typeId":       typeID,
 		"subId":        subID,
 		"betMode":      betMode,
+		"playMethod":   strings.TrimSpace(p.PlayMethod),
 	}
 	if rule, ok := resolveCatalogPlayRule(cfg); ok {
 		return rule
@@ -326,6 +327,10 @@ func configFromPlayMethod(playMethod string) map[string]interface{} {
 		cfg["playTypeId"] = "wuxing"
 	case strings.Contains(playMethod, "四星"), strings.Contains(playMethod, "后四"):
 		cfg["playTypeId"] = "sixing"
+	case strings.Contains(playMethod, "前中后三"):
+		cfg["playTypeId"] = "qianzhonghou3"
+	case strings.Contains(playMethod, "前后三"):
+		cfg["playTypeId"] = "qianhou3"
 	case strings.Contains(playMethod, "前三"):
 		cfg["playTypeId"] = "qian3"
 	case strings.Contains(playMethod, "中三"):

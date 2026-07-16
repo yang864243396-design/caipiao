@@ -23,12 +23,16 @@ func ClassifyUpstreamError(err error) UpstreamFault {
 
 	var api *APIError
 	if errors.As(err, &api) {
-		if api.Code == CodeTokenInvalid || api.Code == CodeTokenInvalidAlt {
+		if isTokenInvalidCode(api.Code) || isTokenInvalidMessage(api.Message) {
 			return UpstreamFault{UserMessage: "授权已失效，请重新授权", IsTokenInvalid: true}
 		}
 		if api.Message != "" {
 			return UpstreamFault{UserMessage: api.Message, IsTokenInvalid: false}
 		}
+	}
+
+	if isTokenInvalidMessage(msg) {
+		return UpstreamFault{UserMessage: "授权已失效，请重新授权", IsTokenInvalid: true}
 	}
 
 	lower := strings.ToLower(msg)
@@ -99,4 +103,31 @@ func isPeriodClosedMessage(msg string) bool {
 // IsTransientUpstreamError 临时上游故障（不应写入 last_token_error）。
 func IsTransientUpstreamError(err error) bool {
 	return !ClassifyUpstreamError(err).IsTokenInvalid
+}
+
+func isTokenInvalidCode(code int) bool {
+	switch code {
+	case CodeTokenInvalid, CodeTokenInvalidAlt, CodeTokenInvalidBiz:
+		return true
+	default:
+		return false
+	}
+}
+
+func isTokenInvalidMessage(msg string) bool {
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return false
+	}
+	lower := strings.ToLower(msg)
+	needles := []string{
+		"无效的令牌", "令牌无效", "请重新登录", "token invalid", "invalid token",
+		"unauthorized", "jwt expired", "token expired",
+	}
+	for _, n := range needles {
+		if strings.Contains(lower, strings.ToLower(n)) {
+			return true
+		}
+	}
+	return false
 }

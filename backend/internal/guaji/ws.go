@@ -26,7 +26,11 @@ func (c *Client) PingAnonymousWS(ctx context.Context) error {
 	q.Set("token", "Anonymous")
 	u.RawQuery = q.Encode()
 
-	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
+	dialer := websocket.Dialer{
+		HandshakeTimeout: 10 * time.Second,
+		NetDialContext:   dialContextPreferHealthy,
+		Proxy:            httpProxyFunc(),
+	}
 	hdr := http.Header{}
 	if c.cfg.Origin != "" {
 		hdr.Set("Origin", c.cfg.Origin)

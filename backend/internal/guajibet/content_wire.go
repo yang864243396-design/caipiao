@@ -223,7 +223,37 @@ func formatPaddedPickDigits(template, groupContent string) string {
 	return strings.Join(parts, ",")
 }
 
-// formatSSCDanshiDigits 直选/组选单式：保留「N 位一注、逗号分隔」。
+// formatSSCZuxuanDanshiDigits 组选单式：N 位一注、逗号分隔；排除对子/豹子，形态去重保序。
+func formatSSCZuxuanDanshiDigits(segLen int, groupContent string) string {
+	if segLen <= 0 {
+		segLen = 2
+	}
+	parts := splitCommaParts(groupContent)
+	if len(parts) == 0 {
+		digits := digitsOnly(groupContent)
+		if len(digits) == segLen && !isBaoziDigits(digits) {
+			return digits
+		}
+		return ""
+	}
+	seen := make(map[string]struct{}, len(parts))
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		d := digitsOnly(p)
+		if len(d) != segLen || isBaoziDigits(d) {
+			continue
+		}
+		key := sortDigitRunes(d)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, d)
+	}
+	return strings.Join(out, ",")
+}
+
+// formatSSCDanshiDigits 直选单式：保留「N 位一注、逗号分隔」。
 // 勿把 "012,345" 压成 "012345"（第三方会报投注数字格式不正确）。
 func formatSSCDanshiDigits(segLen int, groupContent string) string {
 	if segLen <= 0 {
@@ -244,7 +274,7 @@ func formatSSCDanshiDigits(segLen int, groupContent string) string {
 		complete = append(complete, d)
 	}
 	if allComplete {
-		return strings.Join(complete, ",")
+		return strings.Join(uniqueStringsPreserve(complete), ",")
 	}
 	raw := digitsOnly(strings.Join(tokens, ""))
 	if len(raw) < segLen {

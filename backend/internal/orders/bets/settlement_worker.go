@@ -89,6 +89,10 @@ func (w *SettlementWorker) Tick(ctx context.Context) {
 }
 
 func (w *SettlementWorker) settleOne(ctx context.Context, row sqlcdb.ListPendingBetOrdersForSettlementRow) {
+	// real 第三方挂机单：派奖由第三方同步，不走本地开奖结算；绝不能空跑 commit+日志，否则会每 tick 刷同一批单拖死 API。
+	if row.GuajiAccountID.Valid {
+		return
+	}
 	tx, err := w.pool.Begin(ctx)
 	if err != nil {
 		slog.Warn("bet settlement tx begin failed", "orderNo", row.OrderNo, "err", err)

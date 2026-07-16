@@ -1,0 +1,69 @@
+/**
+ * 手机版布局壳：内容最大宽度 500px，视口更宽时两侧白边填充。
+ * 仅在非 layout-web（桌面宽屏）时生效。
+ *
+ * 注意：CSS @media 仍按「视口」匹配，不按壳宽。因此手机壳模式下
+ * 不得使用 min-width > 500px 的断点改版式（否则 800 视口会与真 500 不一致）。
+ * 宽屏多列等改版交给 layout-web.css。
+ */
+
+:root {
+  --layout-mobile-shell: 500px;
+}
+
+html:not(.layout-web) {
+  --layout-mobile-side: max(0px, calc((100vw - var(--layout-mobile-shell)) / 2));
+  background: #ffffff;
+  overscroll-behavior-y: none;
+}
+
+html:not(.layout-web) body {
+  background: #ffffff;
+  overscroll-behavior-y: none;
+}
+
+html:not(.layout-web) #app {
+  max-width: var(--layout-mobile-shell);
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+  min-height: 100dvh;
+  background: #f7f9fb;
+}
+
+/* 隐藏滚动条，保留滚动（页面与内部滚动容器） */
+html:not(.layout-web),
+html:not(.layout-web) body,
+html:not(.layout-web) #app,
+html:not(.layout-web) #app * {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+html:not(.layout-web)::-webkit-scrollbar,
+html:not(.layout-web) body::-webkit-scrollbar,
+html:not(.layout-web) #app::-webkit-scrollbar,
+html:not(.layout-web) #app *::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+
+/**
+ * 固定定位相对视口，需单独夹入壳宽，否则会铺满两侧白边。
+ * 使用 #app 提高优先级，压过各页 scoped 样式。
+ */
+html:not(.layout-web) #app .bottom,
+html:not(.layout-web) #app .scf-footer,
+html:not(.layout-web) #app .copy-hall .topbar {
+  left: var(--layout-mobile-side);
+  right: var(--layout-mobile-side);
+  width: auto;
+  max-width: var(--layout-mobile-shell);
+}
+
+/* 下注坞已居中，限制不超过手机壳 */
+html:not(.layout-web) #app .bet-dock {
+  max-width: min(28rem, var(--layout-mobile-shell));
+}

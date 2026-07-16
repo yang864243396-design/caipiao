@@ -323,8 +323,26 @@ const CATALOG_PLAY_TYPE_IDS = new Set([
   'dxds',
 ])
 
+/** rules/v2 typeId（g00x）→ 语义 catalog id，避免无 play-tree 时单式/段长识别失败 */
+const GUAJI_TYPE_ID_TO_CATALOG: Record<string, string> = {
+  g001: 'qian3',
+  g002: 'zhong3',
+  g003: 'hou3',
+  g004: 'qian2',
+  g005: 'hou2',
+  g006: 'dingwei',
+  g013: 'sixing',
+  g015: 'wuxing',
+}
+
+export function mapGuajiTypeIdToCatalog(typeId: string): string {
+  const id = typeId.trim()
+  return GUAJI_TYPE_ID_TO_CATALOG[id] ?? id
+}
+
 export function isCatalogPlayTypeId(typeId: string): boolean {
-  return CATALOG_PLAY_TYPE_IDS.has(typeId.trim())
+  const id = typeId.trim()
+  return CATALOG_PLAY_TYPE_IDS.has(id) || CATALOG_PLAY_TYPE_IDS.has(mapGuajiTypeIdToCatalog(id))
 }
 
 function combo24SegmentPositions(subId: string): number[] {
@@ -476,6 +494,7 @@ export function resolvePlayConfigFromCatalogIds(
       segmentLabels: ['龙虎'],
       inputMode: 'pool',
       betMode: inferredBet,
+      poolMaxPicks: 1,
     }
   }
 
@@ -497,7 +516,26 @@ export function resolvePlayConfigFromCatalogIds(
     segmentLen = 3
     segmentLabels = ['万', '百', '个']
   } else if (typeId === 'renxuan') {
-    segmentLen = renPickCount(subId)
+    const k = renPickCount(subId)
+    if (
+      betMode === 'danshi' ||
+      betMode === 'zuxuan_ds' ||
+      subId.includes('_ds') ||
+      /单式/.test(subId)
+    ) {
+      return {
+        playTypeId: typeId,
+        subPlayId,
+        catalogSubId: subId,
+        segmentLen: k,
+        segmentLabels: ['选号'],
+        inputMode: 'danshi',
+        betMode: betMode || 'danshi',
+        renPositionCount: k,
+        guajiGroup: '任选',
+      }
+    }
+    segmentLen = 5
     segmentLabels = [...POSITION_LABELS]
   } else if (typeId === 'combo24') {
     const pos = combo24SegmentPositions(subId)
@@ -557,6 +595,8 @@ export function resolvePlayConfigFromTree(
   let segmentLabels: string[]
   let numberPoolMin = pool?.min
   let numberPoolMax = pool?.max
+  let poolMaxPicks: number | undefined
+  let renPositionCount: number | undefined
 
   if (playTemplate === 'lhc_std') {
     const lhcMode = lhcInputModeFromBetMode(betMode, typeId, typeLabel) as PlayConfig['inputMode']
@@ -569,9 +609,11 @@ export function resolvePlayConfigFromTree(
   }
 
   if (playTemplate === 'pk10_std') {
+    let poolMaxPicksPk10: number | undefined
     if (betMode === 'longhu' || guajiGroup === '龙虎' || typeLabel === '龙虎') {
       segmentLen = 1
       segmentLabels = ['龙虎']
+      poolMaxPicksPk10 = 1
     } else if (betMode === 'daxiao' || betMode === 'danshuang' || typeLabel === '大小' || typeLabel === '单双') {
       segmentLen = 1
       segmentLabels = [formatSubPlayLabel(subLabel) || '选号']
@@ -594,7 +636,8 @@ export function resolvePlayConfigFromTree(
     return finishConfig({
       playTemplate, typeId, subId, betMode, typeLabel, subLabel, subPlayId,
       segmentLen, segmentLabels, inputMode,
-      numberPoolMin: numberPoolMin ?? 1, numberPoolMax: numberPoolMax ?? 10, guajiGroup,
+      numberPoolMin: numberPoolMin ?? 1, numberPoolMax: numberPoolMax ?? 10,
+      poolMaxPicks: poolMaxPicksPk10, guajiGroup,
     })
   }
 
@@ -721,17 +764,29 @@ export function resolvePlayConfigFromTree(
     segmentLen = 1
     segmentLabels = ['选号']
   }
-  if ((guajiGroup === '任选' || typeLabel === '任选' || typeId === 'g011') &&
+  if ((guajiGroup === '任选' || typeLabel === '任选' || typeId === 'g011' || typeId === 'renxuan') &&
       (betMode === 'danshi' || betMode === 'zuxuan_ds' || betMode === 'hunhe')) {
-    inputMode = 'danshi'
-    segmentLen = 1
-    segmentLabels = ['选号']
+    const k =
+      renPickCount(subId) ||
+      renxuanSegmentLenFromText(`${guajiTeam} ${guajiFullName} ${subLabel}`) ||
+      2
+    if (betMode === 'hunhe') {
+      inputMode = 'danshi'
+      segmentLen = 1
+      segmentLabels = ['选号']
+    } else {
+      inputMode = 'danshi'
+      segmentLen = k
+      segmentLabels = ['选号']
+      renPositionCount = k
+    }
   }
   if (betMode === 'tuotou' || betMode.endsWith('_dp')) inputMode = 'danshi'
   if (typeId === 'longhu' || isLonghuPlayType(typeLabel, typeId) || guajiGroup === '龙虎' || betMode === 'longhu' || betMode === 'longhuhe') {
     segmentLen = 1
     segmentLabels = ['龙虎']
     inputMode = 'pool'
+    poolMaxPicks = 1
   }
 
   if (betMode === 'hezhi' || (playTemplate === 'pc28_std' && (subLabel === '和值' || subId === 'hezhi'))) {
@@ -769,6 +824,7 @@ export function resolvePlayConfigFromTree(
     numberPoolMax = 9
     segmentLen = 1
     segmentLabels = ['包胆']
+    poolMaxPicks = 1
   }
   if (betMode === 'teshu') {
     inputMode = 'pool'
@@ -783,7 +839,7 @@ export function resolvePlayConfigFromTree(
 
   return finishConfig({
     playTemplate, typeId, subId, betMode, typeLabel, subLabel, subPlayId,
-    segmentLen, segmentLabels, inputMode, numberPoolMin, numberPoolMax, guajiGroup,
+    segmentLen, segmentLabels, inputMode, numberPoolMin, numberPoolMax, poolMaxPicks, renPositionCount, guajiGroup,
   })
 }
 
@@ -800,6 +856,8 @@ function finishConfig(input: {
   inputMode: PlayConfig['inputMode']
   numberPoolMin?: number
   numberPoolMax?: number
+  poolMaxPicks?: number
+  renPositionCount?: number
   guajiGroup: string
 }): PlayTreePlayConfig {
   return {
@@ -817,6 +875,8 @@ function finishConfig(input: {
     inputMode: input.inputMode,
     numberPoolMin: input.numberPoolMin,
     numberPoolMax: input.numberPoolMax,
+    poolMaxPicks: input.poolMaxPicks,
+    renPositionCount: input.renPositionCount,
     guajiGroup: input.guajiGroup || undefined,
   }
 }

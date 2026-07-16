@@ -224,9 +224,11 @@ func (w *Worker) tryActivateAfterStartPeriod(ctx context.Context, inst sqlcdb.Sc
 		return false, nil
 	}
 	if w.periodSync != nil {
-		if err := w.periodSync.ForceRefresh(ctx, inst.LotteryCode); err != nil {
+		refreshCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		if err := w.periodSync.ForceRefresh(refreshCtx, inst.LotteryCode); err != nil {
 			slog.Warn("scheme worker periods refresh after activate failed", "id", inst.ID, "lottery", inst.LotteryCode, "err", err)
 		}
+		cancel()
 	}
 	w.notifySchemeInstance(ctx, inst.MemberID, inst.ID, runModeFromSimBet(inst.SimBet), "running", StatusReasonCloudActive)
 	slog.Info("scheme worker activated after start period ended",
@@ -241,9 +243,11 @@ func (w *Worker) ensureBetWindowOpen(ctx context.Context, inst sqlcdb.SchemeInst
 	if w == nil || w.periodSync == nil {
 		return false
 	}
-	if err := w.periodSync.ForceRefresh(ctx, inst.LotteryCode); err != nil {
+	refreshCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	if err := w.periodSync.ForceRefresh(refreshCtx, inst.LotteryCode); err != nil {
 		slog.Debug("scheme worker force refresh before bet failed", "id", inst.ID, "lottery", inst.LotteryCode, "err", err)
 	}
+	cancel()
 	_, ok := lottery.StrictOpenIssueForGuajiBet(inst.LotteryCode)
 	return ok
 }

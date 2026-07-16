@@ -200,10 +200,8 @@ func formatRenxuanBetContent(meta RuleMeta, mode, groupContent string) string {
 		return formatRenxuanPosPipeWire(groupContent, k, formatRenxuanDanshiPicksOnly(groupContent, k))
 	case "fushi":
 		if strings.Contains(label, "直选") {
-			if k >= 3 {
-				return formatRenxuanZhixuanPositionWire(groupContent, k)
-			}
-			return formatRenxuanFushiFlat(groupContent)
+			// 任二/任三/任四直选复式均须五位逗号定位 wire（任二 flat「0,1」会报投注内容格式错误）
+			return formatRenxuanZhixuanPositionWire(groupContent, k)
 		}
 		if strings.Contains(label, "组选") || strings.Contains(label, "组三") || strings.Contains(label, "组六") {
 			return formatRenxuanPosPipeWire(groupContent, k, formatRenxuanZuxuanPicksOnly(groupContent, k))
@@ -222,11 +220,41 @@ func formatRenxuanZhixuanPositionWire(groupContent string, k int) string {
 	if k <= 0 {
 		k = 2
 	}
+	// 已是五位逗号定位（如 1,2,3,4,5 / ,0,,,1）直接规范化
+	if parts := splitCommaParts(groupContent); len(parts) == sscPositionCount && renxuanPartsLookLikeDigitPools(parts) {
+		segs := make([]string, sscPositionCount)
+		for i, p := range parts {
+			segs[i] = strings.TrimSpace(p)
+		}
+		return strings.Join(segs, ",")
+	}
+	// 五行位号（含空行）→ 五位逗号
+	lines := splitPositionLines(groupContent)
+	if len(lines) == sscPositionCount {
+		segs := make([]string, sscPositionCount)
+		for i, line := range lines {
+			segs[i] = strings.TrimSpace(line)
+		}
+		return strings.Join(segs, ",")
+	}
 	tokens := splitPickTokens(groupContent)
+	// 去掉误入的位名（万千百十个）
+	filtered := make([]string, 0, len(tokens))
+	for _, t := range tokens {
+		if sscPositionIndexFromName(t) >= 0 || t == "位" {
+			continue
+		}
+		filtered = append(filtered, t)
+	}
+	tokens = filtered
 	if len(tokens) < k {
 		for len(tokens) < k {
 			tokens = append(tokens, string(rune('1'+len(tokens))))
 		}
+	}
+	// 恰好 5 个号码段：视为五位各一池
+	if len(tokens) == sscPositionCount {
+		return strings.Join(tokens, ",")
 	}
 	indices := renxuanDefaultPositionIndices(k)
 	segments := make([]string, sscPositionCount)
@@ -236,6 +264,21 @@ func formatRenxuanZhixuanPositionWire(groupContent string, k int) string {
 		}
 	}
 	return strings.Join(segments, ",")
+}
+
+func renxuanPartsLookLikeDigitPools(parts []string) bool {
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		for _, r := range p {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func formatRenxuanFushiFlat(groupContent string) string {
@@ -313,13 +356,35 @@ func formatRenxuanDanshiPicksOnly(groupContent string, k int) string {
 }
 
 func formatRenxuanZuxuanPicksOnly(groupContent string, k int) string {
+	if k <= 0 {
+		k = 2
+	}
 	_, picks := parseRenxuanPositionPick(groupContent, k)
 	tokens := splitPickTokens(picks)
 	if len(tokens) == 0 {
 		tokens = splitPickTokens(groupContent)
 	}
+	// 去掉位名，避免「万百|4」只剩位名残留
+	filtered := make([]string, 0, len(tokens))
+	for _, t := range tokens {
+		if sscPositionIndexFromName(t) >= 0 {
+			continue
+		}
+		filtered = append(filtered, t)
+	}
+	tokens = filtered
+	// 组选复式至少 2 码；组六至少 3。勿按任选位数 k 强行补到 3（组三「1,2」会被补成「1,2,3」）
+	minNeed := 2
+	if k >= 4 {
+		minNeed = 4
+	}
+	if len(tokens) < minNeed {
+		for len(tokens) < minNeed {
+			tokens = append(tokens, string(rune('1'+len(tokens)%9)))
+		}
+	}
 	if len(tokens) == 0 {
-		return sampleZuGroupDigits(k)
+		return sampleZuGroupDigits(minNeed)
 	}
 	return strings.Join(tokens, ",")
 }
@@ -444,7 +509,8 @@ func renxuanNeedsSoloTrue(meta RuleMeta, mode string, betsNums int) bool {
 	case "danshi":
 		return betsNums == 1 && k >= 4
 	case "fushi":
-		return betsNums == 1 && k >= 4
+		// 任二/任三/任四直选复式：单注须 solo=true（实测 rule74/80，solo=false → 单挑参数错误）
+		return betsNums == 1
 	case "hezhi", "weishu":
 		if betsNums != 1 {
 			return false

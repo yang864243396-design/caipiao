@@ -548,12 +548,6 @@ const personalFeatureCount = computed(() => personalFeaturesAll.value.length)
   overflow: hidden;
 }
 
-@media (min-width: 640px) {
-  .mc-head {
-    border-radius: 0 0 2.5rem 2.5rem;
-  }
-}
-
 /* 装饰：右上角弥散光斑（数字精算主义「无线化」分层语言） */
 .mc-head-deco {
   position: absolute;

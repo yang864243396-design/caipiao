@@ -24,6 +24,9 @@ type betEvaluation struct {
 	Hit      bool
 	BetUnits int
 	Odds     float64
+	// PrizeNet 可选：以「1 元单注」为尺度的净奖金绝对值。
+	// >0 时多区位汇总优先用它（嵌套一星/二星），避免其它区位亏损把派奖打成 ≤0 而与第三方不一致。
+	PrizeNet float64
 }
 
 func resolvePlayRule(cfg map[string]interface{}, playLabel string) playRule {
@@ -77,7 +80,12 @@ func drawSegment(balls []string, start, length int) []string {
 
 func evaluatePlayHit(rule playRule, balls []string, groupContent string, contrary bool, contraryPlan string, positionIndex int) betEvaluation {
 	if contrary {
-		return evaluateContraryHit(rule, balls, contraryPlan, positionIndex)
+		// kind=contrary：planInverseNumbers 已是反集投注内容，按原玩法直接结算（不再二次取补）
+		content := strings.TrimSpace(contraryPlan)
+		if content == "" {
+			content = groupContent
+		}
+		return evaluatePlayHit(rule, balls, content, false, "", positionIndex)
 	}
 	if rule.PlayTemplate == "lhc_std" {
 		if ev, ok := evaluateLHCByBetMode(rule, balls, groupContent); ok {
@@ -233,6 +241,7 @@ func evaluateZhixuanDanshi(rule playRule, balls []string, groupContent string) b
 	if len(tokens) == 0 && rule.SegmentLen > 0 {
 		tokens = chunkDigitString(groupContent, rule.SegmentLen)
 	}
+	tokens = uniqueStringTokens(tokens)
 	units := len(tokens)
 	if units <= 0 {
 		units = 1
@@ -245,6 +254,26 @@ func evaluateZhixuanDanshi(rule playRule, balls []string, groupContent string) b
 		}
 	}
 	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(rule.SegmentLen)}
+}
+
+func uniqueStringTokens(items []string) []string {
+	if len(items) <= 1 {
+		return items
+	}
+	seen := make(map[string]struct{}, len(items))
+	out := make([]string, 0, len(items))
+	for _, raw := range items {
+		t := strings.TrimSpace(raw)
+		if t == "" {
+			continue
+		}
+		if _, ok := seen[t]; ok {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	return out
 }
 
 func chunkDigitString(raw string, segLen int) []string {
@@ -286,6 +315,7 @@ func evaluateZuxuanFushi(rule playRule, balls []string, groupContent string) bet
 		}
 		return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(rule.SegmentLen)}
 	}
+	tokens = uniqueStringTokens(tokens)
 	drawnSorted := sortDigits(seg)
 	hit := false
 	for _, t := range tokens {
@@ -297,46 +327,14 @@ func evaluateZuxuanFushi(rule playRule, balls []string, groupContent string) bet
 	return betEvaluation{Hit: hit, BetUnits: len(tokens), Odds: oddsZuxuan(rule.SegmentLen)}
 }
 
-func evaluateContraryHit(rule playRule, balls []string, planInverse string, positionIndex int) betEvaluation {
-	picks := parseContraryPicks(planInverse, positionIndex)
-	if rule.SegmentLen == 1 {
-		hit := evaluatePositionHit(balls, positionIndex, picks)
-		return betEvaluation{Hit: hit, BetUnits: len(picks), Odds: oddsDingwei}
+// evaluateContraryHit 由正集计划内容取补后，按同玩法结算（用于详情「计划反集」注数/奖金预估）。
+func evaluateContraryHit(rule playRule, balls []string, planContent string, positionIndex int) betEvaluation {
+	_ = positionIndex
+	inv := complementPlanContent(rule, planContent)
+	if inv == "" {
+		return betEvaluation{BetUnits: 0, Odds: oddsDingwei}
 	}
-	// 反买多码：逐位取补集后按直选复式判定
-	lines := splitGroupLines(planInverse)
-	if len(lines) < rule.SegmentLen {
-		lines = strings.Split(planInverse, ",")
-	}
-	pools := make([][]string, rule.SegmentLen)
-	for i := 0; i < rule.SegmentLen; i++ {
-		forbidden := []string{}
-		if i < len(lines) {
-			forbidden = parseDigitTokens(lines[i])
-		}
-		pools[i] = allDigitsExcept(forbidden)
-	}
-	seg := drawSegment(balls, rule.SegmentStart, rule.SegmentLen)
-	units := 1
-	for _, p := range pools {
-		n := len(p)
-		if n <= 0 {
-			n = 1
-		}
-		units *= n
-	}
-	hit := len(seg) == rule.SegmentLen
-	if hit {
-		for i, digit := range seg {
-			if !containsDigit(pools[i], digit) {
-				hit = false
-				break
-			}
-		}
-	} else {
-		hit = false
-	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(rule.SegmentLen)}
+	return evaluatePlayHit(rule, balls, inv, false, "", rule.PositionIdx)
 }
 
 func splitGroupLines(content string) []string {
@@ -500,6 +498,9 @@ func oddsZhixuan(segLen int) float64 {
 		return 99.0
 	case 3:
 		return 49.0
+	case 2:
+		// 二星直选 / 组合嵌套后二：对齐 V6 实测净额 ≈19.4
+		return 19.4
 	default:
 		return 9.0
 	}

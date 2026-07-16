@@ -584,15 +584,36 @@ func webBetToSettlement(item *WebBetRecord) *BetSettlement {
 	if item == nil {
 		return nil
 	}
+	pnl := item.NetAmount
+	// net≈0 但毛派奖明显高于本金时，用毛−本金作净额（避免漏记赢）
+	if absFloat(pnl) < 0.01 && item.BetAmount > 0 && item.PayoutAmount > item.BetAmount+0.01 {
+		pnl = item.PayoutAmount - item.BetAmount
+	}
 	status := "lose"
-	if item.NetAmount > 0 || item.PayoutAmount > item.BetAmount {
+	switch {
+	case pnl > 1e-6:
 		status = "win"
+	case item.PayoutAmount > item.BetAmount+1e-6:
+		status = "win"
+	// 直选组合嵌套小奖：派奖>0 但小于本金、净额为负 —— 仍记 win（勿与和局退本混淆：和局 payout≈本金）
+	case item.PayoutAmount > 1e-6 && absFloat(item.PayoutAmount-item.BetAmount) > 0.01:
+		status = "win"
+		if absFloat(pnl) < 0.01 {
+			pnl = item.PayoutAmount - item.BetAmount
+		}
 	}
 	return &BetSettlement{
 		ThirdPartyBetID: strconv.FormatInt(item.ID, 10),
 		Status:          status,
 		Payout:          item.PayoutAmount,
-		Pnl:             item.NetAmount,
+		Pnl:             pnl,
 		Settled:         item.Settled,
 	}
+}
+
+func absFloat(v float64) float64 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }

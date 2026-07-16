@@ -38,23 +38,20 @@ func enrichInstanceForDisplay(_ context.Context, _ *sqlcdb.Queries, row sqlcdb.S
 	return item
 }
 
-// ensurePeriodsFreshForDisplay 展示前刷新 periods 缓存，避免单 instance 接口与列表倒计时来源不一致。
+// ensurePeriodsFreshForDisplay 展示前尽量刷新 periods；锁占用或第三方慢时立即放弃，只用本地缓存。
 func (s *Service) ensurePeriodsFreshForDisplay(ctx context.Context, lotteryCode string) {
 	lotteryCode = strings.TrimSpace(lotteryCode)
 	if lotteryCode == "" || s.periodSync == nil {
 		return
 	}
-	_ = s.periodSync.EnsureFreshIfStale(ctx, lotteryCode)
-	now := time.Now()
-	if _, ok := lottery.PeriodsDisplayCloseAt(lotteryCode, now); ok {
-		return
-	}
-	if lottery.PeriodsScheduleNeedsRefresh(lotteryCode, now) {
-		_ = s.periodSync.ForceRefresh(ctx, lotteryCode)
-	}
+	refreshCtx, cancel := context.WithTimeout(ctx, 800*time.Millisecond)
+	defer cancel()
+	_ = s.periodSync.EnsureFreshIfStale(refreshCtx, lotteryCode)
 }
 
 func (s *Service) enrichInstanceForDisplay(ctx context.Context, row sqlcdb.SchemeInstance, now time.Time) Instance {
-	s.ensurePeriodsFreshForDisplay(ctx, row.LotteryCode)
+	// 开启/启停响应路径：不要同步刷新 periods（ForceRefresh 持锁，易被 worker 拖死）。
+	// 倒计时字段走本地缓存即可；列表轮询会另行刷新。
+	_ = ctx
 	return enrichInstanceForDisplay(ctx, s.q, row, now)
 }

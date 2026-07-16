@@ -464,25 +464,35 @@ func mergeUpdateDefinitionConfig(existing []byte, patch UpdateDefinitionPatch, p
 	return json.Marshal(cfg)
 }
 
-// compileBetMultiplierRounds 倍投设定 → rounds 编译（S2 默认规则：
-// 未中进下一级、命中回第 1 轮、末轮无论中否均回第 1 轮）。
+// compileBetMultiplierRounds 倍投设定 → rounds 编译。
+// 简单直线表默认挂翻倍（on_lose）：未中进下一级、命中回第 1 轮；末轮环回第 1 轮。
+// advanceMode=on_win（中翻倍）：命中进下一级、未中回第 1 轮。
 // 高级倍投（kind=3）使用方案轮次页自定义规则（1-based 局号），首次选择模板时注入默认轮次。
+// P1：新保存仅 kind=2（简单直线表）或 kind=3（高级）；kind=0/1 为旧数据兼容，优先 simple.multiples。
 func compileBetMultiplierRounds(payload map[string]interface{}, existingCfg map[string]interface{}) []schemeRound {
 	kind, _ := payload["kind"].(string)
 	if kind == "3" {
 		return compileAdvancedBetMultiplierRounds(payload, existingCfg)
 	}
 	var seq []float64
-	switch kind {
-	case "0":
-		seq = multSeqFromProfitTable(payload["newbie"])
-	case "1":
-		seq = multSeqFromProfitTable(payload["oneclick"])
-	case "2":
-		if sm, ok := payload["simple"].(map[string]interface{}); ok {
-			if ms, ok := sm["multiples"].(string); ok {
-				seq = parseMultSequence(ms)
-			}
+	advanceMode := "on_lose"
+	// 简单表优先（小白/一键已写入 simple.multiples）
+	if sm, ok := payload["simple"].(map[string]interface{}); ok {
+		if ms, ok := sm["multiples"].(string); ok {
+			seq = parseMultSequence(ms)
+		}
+		if am, ok := sm["advanceMode"].(string); ok && strings.TrimSpace(am) == "on_win" {
+			advanceMode = "on_win"
+		}
+	}
+	if len(seq) == 0 {
+		switch kind {
+		case "0":
+			seq = multSeqFromProfitTable(payload["newbie"])
+		case "1":
+			seq = multSeqFromProfitTable(payload["oneclick"])
+		case "2", "":
+			// already tried simple above
 		}
 	}
 	if len(seq) == 0 {
@@ -494,7 +504,11 @@ func compileBetMultiplierRounds(payload map[string]interface{}, existingCfg map[
 		if next >= len(seq) {
 			next = 0
 		}
-		rounds[i] = schemeRound{Mult: m, AfterHit: 0, AfterMiss: next}
+		if advanceMode == "on_win" {
+			rounds[i] = schemeRound{Mult: m, AfterHit: next, AfterMiss: 0}
+		} else {
+			rounds[i] = schemeRound{Mult: m, AfterHit: 0, AfterMiss: next}
+		}
 	}
 	return rounds
 }

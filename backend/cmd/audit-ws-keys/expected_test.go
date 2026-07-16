@@ -7,6 +7,8 @@ func TestExpectedWSKey_coversP0P1(t *testing.T) {
 		"hash_ffc_1m", "hash_ffc_3m", "hash_ffc_5m",
 		"tron_jisu", "bnb_ffc_1m",
 		"tron_k3_1m", "tron_k3_3m", "tron_k3_5m",
+		"tron_ffc_1m", "tron_ffc_3m", "tron_ffc_5m",
+		"tron_ffc_3s", "tron_ffc_6s", "tron_ffc_15s",
 	} {
 		if _, ok := expectedWSKey[code]; !ok {
 			t.Errorf("missing expectedWSKey[%q]", code)

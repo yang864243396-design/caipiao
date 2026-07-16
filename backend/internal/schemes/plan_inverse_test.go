@@ -31,11 +31,11 @@ func TestComputePlanInverseDisplay_FromConfig(t *testing.T) {
 		"schemeGroups":["1,3,7"]
 	}`)
 	display := ComputePlanInverseDisplay("seed", "custom", cfg, nil)
-	if display.Digits != "0,2,3,4,5,6,7,8,9" {
+	if display.Digits != "0,2,4,5,6,8,9" {
 		t.Fatalf("digits = %q", display.Digits)
 	}
-	if display.BetCount != 9 {
-		t.Fatalf("betCount = %d want 9", display.BetCount)
+	if display.BetCount != 7 {
+		t.Fatalf("betCount = %d want 7", display.BetCount)
 	}
 }
 
@@ -47,8 +47,68 @@ func TestComputePlanInverseDisplay_ContraryKind(t *testing.T) {
 		"schemeGroups":["1,3,7"]
 	}`)
 	display := ComputePlanInverseDisplay("seed", "contrary", cfg, nil)
-	if display.BetCount != 9 {
-		t.Fatalf("betCount = %d want 9", display.BetCount)
+	if display.Digits != "0,2,4,5,6,8,9" {
+		t.Fatalf("digits = %q want complementary of 1,3,7", display.Digits)
+	}
+	if display.BetCount != 7 {
+		t.Fatalf("betCount = %d want 7", display.BetCount)
+	}
+}
+
+func TestComputePlanInverseDisplay_ContraryKindWithPlanInverseNumbers(t *testing.T) {
+	// 反买落库 / 反集看板：planInverseNumbers 已是反集，不可再取补
+	cfg := []byte(`{
+		"runTypeId":"run_std",
+		"playTypeId":"dingwei",
+		"subPlayId":"dingwei_wan",
+		"playTemplate":"ssc_std",
+		"betMode":"dingwei",
+		"planInverseNumbers":"0,2,4,5,6,8,9",
+		"schemeGroups":["1,3,7"]
+	}`)
+	display := ComputePlanInverseDisplay("seed", "contrary", cfg, nil)
+	if display.Digits != "0,2,4,5,6,8,9" {
+		t.Fatalf("digits = %q want stored inverse (no double complement)", display.Digits)
+	}
+	if display.BetCount != 7 {
+		t.Fatalf("betCount = %d want 7", display.BetCount)
+	}
+}
+
+func TestComputePlanInverseDisplay_ContraryBetConfigOnlyInverse(t *testing.T) {
+	// 反买投注落库：仅有 planInverseNumbers，无真实 schemeGroups
+	cfg := []byte(`{
+		"schemeName":"反买-定位胆",
+		"planInverseNumbers":"0,2,4,5,6,8,9",
+		"runTypeId":"run_std",
+		"playTypeId":"dingwei",
+		"subPlayId":"dingwei_wan",
+		"playTemplate":"ssc_std",
+		"betMode":"dingwei"
+	}`)
+	display := ComputePlanInverseDisplay("snap1", "contrary", cfg, nil)
+	if display.Digits != "0,2,4,5,6,8,9" {
+		t.Fatalf("digits = %q want planInverseNumbers", display.Digits)
+	}
+	if display.BetCount != 7 {
+		t.Fatalf("betCount = %d want 7", display.BetCount)
+	}
+}
+
+func TestComputePlanInverseDisplay_CustomBoardUsesStoredInverseFallback(t *testing.T) {
+	// master 看板打开仅含 planInverseNumbers 的配置时，正集 demo 取补可能非目标；
+	// 若正集盖满号池导致补集为空，应回退到已存反集。
+	cfg := []byte(`{
+		"planInverseNumbers":"0,2,4,5,6,8,9",
+		"runTypeId":"fixed_rotate",
+		"playTypeId":"dingwei",
+		"subPlayId":"dingwei_wan",
+		"betMode":"dingwei",
+		"schemeGroups":["0,1,2,3,4,5,6,7,8,9"]
+	}`)
+	display := ComputePlanInverseDisplay("seed", "custom", cfg, nil)
+	if display.Digits != "0,2,4,5,6,8,9" {
+		t.Fatalf("digits = %q want stored inverse fallback", display.Digits)
 	}
 }
 
