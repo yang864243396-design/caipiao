@@ -793,7 +793,7 @@ function statusBadgeClass(s: CloudSchemeCard): string {
               总止损
               <span class="cc-ms cc-lbl-ico" aria-hidden="true">info</span>
             </label>
-            <el-input v-model="totalStopLoss" type="number" size="large" class="cc-el-inp"
+            <el-input v-model="totalStopLoss" type="number" size="default" class="cc-el-inp"
               @change="persistGlobalSettings" />
           </div>
           <div class="cc-field">
@@ -801,7 +801,7 @@ function statusBadgeClass(s: CloudSchemeCard): string {
               总止盈
               <span class="cc-ms cc-lbl-ico" aria-hidden="true">trending_up</span>
             </label>
-            <el-input v-model="totalTakeProfit" type="number" size="large" class="cc-el-inp"
+            <el-input v-model="totalTakeProfit" type="number" size="default" class="cc-el-inp"
               @change="persistGlobalSettings" />
           </div>
         </div>
@@ -810,7 +810,7 @@ function statusBadgeClass(s: CloudSchemeCard): string {
           <label class="cc-lbl">方案倍数系数</label>
           <div class="cc-mult-wrap">
             <div class="cc-mult-prefix" aria-hidden="true">乘</div>
-            <el-input v-model="planMultiplier" type="number" size="large" class="cc-el-inp cc-el-inp--grow"
+            <el-input v-model="planMultiplier" type="number" size="default" class="cc-el-inp cc-el-inp--grow"
               @change="persistGlobalSettings" />
           </div>
         </div>
@@ -822,19 +822,19 @@ function statusBadgeClass(s: CloudSchemeCard): string {
           </div>
           <div class="cc-switch-row">
             <span class="cc-switch-lbl">断期停投</span>
-            <el-switch v-model="breakPeriodStop" @change="persistGlobalSettings" />
+            <el-switch v-model="breakPeriodStop" size="small" @change="persistGlobalSettings" />
           </div>
         </div>
 
         <div class="cc-actions">
-          <el-button type="primary" size="large" round class="cc-btn cc-btn--primary" :loading="enableAllBusy"
+          <el-button type="primary" size="default" round class="cc-btn cc-btn--primary" :loading="enableAllBusy"
             :disabled="enableAllBusy" @click="enableAllSchemes">
             一键开启方案
           </el-button>
-          <el-button size="large" round class="cc-btn cc-btn--outline" @click="openLookbackDialog">
+          <el-button size="default" round class="cc-btn cc-btn--outline" @click="openLookbackDialog">
             回头设置
           </el-button>
-          <el-button size="large" round class="cc-btn cc-btn--outline" @click="openBetRecords">
+          <el-button size="default" round class="cc-btn cc-btn--outline" @click="openBetRecords">
             投注记录
           </el-button>
         </div>
@@ -1048,7 +1048,7 @@ function statusBadgeClass(s: CloudSchemeCard): string {
                 </div>
 
                 <div class="lb-logic-card">
-                  <div class="lb-logic-card-h">方案中几回头</div>
+                  <div class="lb-logic-card-h">方案中局几回头</div>
                   <div class="lb-wins-inline">
                     <span class="lb-wins-txt lb-wins-op">{{ '>=' }}</span>
                     <el-input v-model="lookback.schemeWinsMin" inputmode="numeric" size="small"
@@ -1257,64 +1257,77 @@ function statusBadgeClass(s: CloudSchemeCard): string {
   margin-top: -1.75rem;
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 1.15rem;
 }
 
 .cc-panel {
   background: var(--cc-card);
-  border-radius: 1.25rem;
-  padding: 1.25rem;
+  border-radius: 1rem;
+  padding: 1rem;
   box-shadow: 0 24px 48px -28px rgba(15, 23, 42, 0.12), 0 4px 16px -8px rgba(15, 23, 42, 0.06);
   display: flex;
   flex-direction: column;
-  gap: 1.15rem;
+  gap: 0.65rem;
 }
 
 .cc-panel-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 1rem;
+  gap: 0.65rem;
 }
 
 .cc-field {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: 0.2rem;
   min-width: 0;
 }
 
 .cc-lbl {
-  font-size: 0.6875rem;
+  font-size: 0.625rem;
   font-weight: 700;
   color: var(--cc-on-var);
   display: inline-flex;
   align-items: center;
-  gap: 0.2rem;
+  gap: 0.15rem;
+  line-height: 1.3;
 }
 
 .cc-lbl-ico {
-  font-size: 0.875rem;
+  font-size: 0.75rem;
   opacity: 0.85;
 }
 
 .cc-mult-wrap {
   display: flex;
   align-items: stretch;
-  gap: 0.75rem;
+  gap: 0.5rem;
 }
 
 .cc-mult-prefix {
   flex-shrink: 0;
-  min-width: 2.75rem;
+  min-width: 2.25rem;
   display: flex;
   align-items: center;
   justify-content: center;
   background: var(--el-color-primary);
   color: #fff;
-  font-size: 0.875rem;
+  font-size: 0.75rem;
   font-weight: 700;
-  border-radius: 0.75rem;
+  border-radius: 0.5rem;
   font-family: 'Noto Sans SC', sans-serif;
+}
+
+.cc-panel :deep(.el-input__wrapper) {
+  min-height: 2rem;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.cc-panel :deep(.el-input__inner) {
+  height: 2rem;
+  line-height: 2rem;
+  font-size: 0.8125rem;
 }
 
 .cc-el-inp--grow {
@@ -1338,14 +1351,15 @@ function statusBadgeClass(s: CloudSchemeCard): string {
 .cc-hint {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
-  font-size: 0.75rem;
+  gap: 0.25rem;
+  font-size: 0.6875rem;
   color: var(--cc-on-var);
   min-width: 0;
+  line-height: 1.3;
 }
 
 .cc-hint-ico {
-  font-size: 1.125rem;
+  font-size: 1rem;
   color: var(--cc-primary-strong);
 }
 
@@ -1368,29 +1382,32 @@ function statusBadgeClass(s: CloudSchemeCard): string {
 }
 
 .cc-switch-lbl {
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
   color: var(--cc-on-var);
 }
 
 .cc-actions {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 0.65rem;
-}
-
-@media (max-width: 380px) {
-  .cc-actions {
-    grid-template-columns: 1fr;
-  }
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.4rem;
+  align-items: stretch;
+  margin-top: 0.1rem;
 }
 
 .cc-btn {
-  font-size: 0.6875rem;
+  font-size: 0.625rem;
   font-weight: 700;
-  padding: 0.65rem 0.5rem;
+  padding: 0.45rem 0.2rem;
+  height: 2rem;
   margin: 0;
   width: 100%;
+  min-width: 0;
   border: none;
+  white-space: nowrap;
+}
+
+.cc-actions :deep(.el-button > span) {
+  white-space: nowrap;
 }
 
 .cc-btn--primary {

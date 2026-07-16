@@ -16,6 +16,8 @@ var (
 	ErrInsufficient  = errors.New("第三方可用余额不足")
 	ErrPeriodClosed  = errors.New("当前期已封盘")
 	ErrPlaceRejected = errors.New("第三方接单失败")
+	// ErrZeroBets 直选复式豹子/对子等第三方计 0 注、无法下注的选号。
+	ErrZeroBets = errors.New("投注注数为0（直选复式不含豹子/对子）")
 )
 
 // Request 由 outbound 解析 + 投注参数组装。

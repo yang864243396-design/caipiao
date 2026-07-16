@@ -1,7 +1,7 @@
 /**
  * 倍投设定 Tab 玩法分类（P0 门禁）
- * 四 Tab = 可自动算表（赔率单一、注数清楚）
- * 两 Tab = 仅简单 + 高级
+ * 产品已屏蔽小白 / 一键，界面仅简单 + 高级两 Tab。
+ * 分类仍用于其它倍投策略推断（若有）。
  */
 
 export type BetMultiplierPlayCategory =
@@ -27,12 +27,6 @@ export interface BetMultiplierPlayContext {
   playTemplate?: string
   segmentLen?: number
 }
-
-const FOUR_TAB_CATEGORIES: ReadonlySet<BetMultiplierPlayCategory> = new Set([
-  'locate',
-  'sides',
-  'locate_like',
-])
 
 function norm(s: string | undefined): string {
   return String(s ?? '')
@@ -269,10 +263,10 @@ export function resolveBetMultiplierPlayCategory(
   return 'unknown'
 }
 
-/** 是否展示小白 + 一键（自动算表） */
-export function showAutoGenBetMultiplierTabs(ctx: BetMultiplierPlayContext): boolean {
-  const cat = resolveBetMultiplierPlayCategory(ctx)
-  return FOUR_TAB_CATEGORIES.has(cat)
+/** 是否展示小白 + 一键（自动算表）。产品已屏蔽，仅保留简单 / 高级。 */
+export function showAutoGenBetMultiplierTabs(_ctx: BetMultiplierPlayContext): boolean {
+  void _ctx
+  return false
 }
 
 /** 运行时持久化 kind：仅简单(2) / 高级(3) */

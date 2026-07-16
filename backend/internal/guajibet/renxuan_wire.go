@@ -204,13 +204,16 @@ func formatRenxuanBetContent(meta RuleMeta, mode, groupContent string) string {
 			return formatRenxuanZhixuanPositionWire(groupContent, k)
 		}
 		if strings.Contains(label, "组选") || strings.Contains(label, "组三") || strings.Contains(label, "组六") {
-			return formatRenxuanPosPipeWire(groupContent, k, formatRenxuanZuxuanPicksOnly(groupContent, k))
+			return formatRenxuanPosPipeWire(groupContent, k, formatRenxuanZuxuanPicksOnly(groupContent, k, mode))
 		}
 		return formatRenxuanFushiFlat(groupContent)
 	case "zuxuan_fs", "zu3", "zu6":
-		return formatRenxuanPosPipeWire(groupContent, k, formatRenxuanZuxuanPicksOnly(groupContent, k))
-	case "zu24", "zu12", "zu4", "hunhe":
-		return formatRenxuanPosPipeWire(groupContent, k, formatRenxuanZuxuanPicksOnly(groupContent, k))
+		return formatRenxuanPosPipeWire(groupContent, k, formatRenxuanZuxuanPicksOnly(groupContent, k, mode))
+	case "hunhe":
+		// 混合组选是单式形态（112 / 012,345），勿走号池补码（会把 112 补成 112,2）
+		return formatRenxuanPosPipeWire(groupContent, k, formatRenxuanDanshiPicksOnly(groupContent, k))
+	case "zu24", "zu12", "zu4":
+		return formatRenxuanPosPipeWire(groupContent, k, formatRenxuanZuxuanPicksOnly(groupContent, k, mode))
 	default:
 		return formatRenxuanPosPipeWire(groupContent, k, formatCommaPickDigits(groupContent))
 	}
@@ -355,7 +358,7 @@ func formatRenxuanDanshiPicksOnly(groupContent string, k int) string {
 	return formatRenxuanDanshiPairs(groupContent, k)
 }
 
-func formatRenxuanZuxuanPicksOnly(groupContent string, k int) string {
+func formatRenxuanZuxuanPicksOnly(groupContent string, k int, mode string) string {
 	if k <= 0 {
 		k = 2
 	}
@@ -373,10 +376,28 @@ func formatRenxuanZuxuanPicksOnly(groupContent string, k int) string {
 		filtered = append(filtered, t)
 	}
 	tokens = filtered
-	// 组选复式至少 2 码；组六至少 3。勿按任选位数 k 强行补到 3（组三「1,2」会被补成「1,2,3」）
+	// 已是 n 位单式串（112 / 012）勿按号池补码
+	for _, tok := range tokens {
+		if len(normalizePickDigits(tok)) >= k && k >= 2 {
+			return strings.Join(tokens, ",")
+		}
+	}
+	// 组选复式至少 2 码；组三/组六号池至少 2/3；任四组选6 用 C(n,2) 口径至少 2，勿强补到 4
 	minNeed := 2
-	if k >= 4 {
+	switch mode {
+	case "zu6":
+		minNeed = 3
+		if k >= 4 {
+			minNeed = 2 // 四星/任四组选6：n=2→1 注
+		}
+	case "zu24", "zu12", "zu4":
 		minNeed = 4
+	case "zu3":
+		minNeed = 2
+	default:
+		if k >= 4 {
+			minNeed = 4
+		}
 	}
 	if len(tokens) < minNeed {
 		for len(tokens) < minNeed {

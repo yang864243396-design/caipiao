@@ -1189,25 +1189,22 @@ async function onSaveCloud() {
     await warn('方案模式不能为空，请前往倍投设定页选择')
     return
   }
+  // 止损/止盈非必填：空或 0 表示无上限（运行时 schemelimits 仅在 >0 时生效）
   const stopLossRaw = stopLoss.value.trim()
-  if (!stopLossRaw) {
-    await warn('止损金额不能为空')
-    return
-  }
-  const stopLossNum = Number(stopLossRaw)
-  if (!Number.isFinite(stopLossNum) || stopLossNum < 0) {
-    await warn('止损金额不能小于 0')
-    return
+  if (stopLossRaw) {
+    const stopLossNum = Number(stopLossRaw)
+    if (!Number.isFinite(stopLossNum) || stopLossNum < 0) {
+      await warn('止损金额不能小于 0')
+      return
+    }
   }
   const takeProfitRaw = takeProfit.value.trim()
-  if (!takeProfitRaw) {
-    await warn('止盈金额不能为空')
-    return
-  }
-  const takeProfitNum = Number(takeProfitRaw)
-  if (!Number.isFinite(takeProfitNum) || takeProfitNum < 0) {
-    await warn('止盈金额不能小于 0')
-    return
+  if (takeProfitRaw) {
+    const takeProfitNum = Number(takeProfitRaw)
+    if (!Number.isFinite(takeProfitNum) || takeProfitNum < 0) {
+      await warn('止盈金额不能小于 0')
+      return
+    }
   }
   const multCoeffRaw = multCoeff.value.trim()
   if (!multCoeffRaw) {

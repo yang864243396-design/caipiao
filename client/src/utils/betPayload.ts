@@ -305,6 +305,21 @@ export function parsePickTokens(raw: string, pool?: { min?: number; max?: number
     .filter((s) => /^[0-9]$/.test(s))
 }
 
+/** 直选复式各位均为同一单码（豹子/对子）——第三方网页计 0 注 */
+export function isZhixuanFushiBaoziLines(lines: string[], segmentLen: number): boolean {
+  if (segmentLen < 2 || lines.length < segmentLen) return false
+  let first = ''
+  for (let i = 0; i < segmentLen; i++) {
+    const toks = [...new Set(parsePickTokens(lines[i] ?? ''))]
+    if (toks.length !== 1) return false
+    const d = toks[0] ?? ''
+    if (!d) return false
+    if (i === 0) first = d
+    else if (d !== first) return false
+  }
+  return true
+}
+
 export function parsePoolTokens(raw: string, min: number, max: number): string[] {
   const parts = raw.split(/[\s,，\n]+/).map((s) => s.trim()).filter(Boolean)
   const seen = new Set<string>()
@@ -744,6 +759,8 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
   if (config.subPlayId === 'zhixuan_fs' && config.inputMode === 'multiline') {
     const lines = content.split('\n').filter(Boolean)
     if (lines.length < config.segmentLen) return 0
+    // 各位同一单码（豹子/对子）：第三方网页计 0 注且无法下注
+    if (isZhixuanFushiBaoziLines(lines, config.segmentLen)) return 0
     let units = 1
     for (let i = 0; i < config.segmentLen; i++) {
       const n = parsePickTokens(lines[i] ?? '').length || 1
@@ -797,6 +814,8 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
   }
 
   if (config.subPlayId === 'zhixuan_fs' && config.segmentLen > 1) {
+    // 单码号池扩成各位相同 → 豹子，第三方计 0
+    if (new Set(pool).size === 1) return 0
     return applySegmentBetMultiplier(config, pool.length ** config.segmentLen)
   }
 
@@ -1099,6 +1118,12 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
         normalizedLines.push([...new Set(digits)].join(','))
       }
       const normalized = normalizedLines.join('\n')
+      if (isZhixuanFushiBaoziLines(normalizedLines, config.segmentLen)) {
+        return {
+          ok: false,
+          message: '直选复式不含豹子/对子（各位同一单码），请更换号码或改用直选单式',
+        }
+      }
       return { ok: true, normalized, betUnits: countBetUnits(config, normalized) }
     }
     if (!isValidDigitPoolLine(content)) {
@@ -1107,6 +1132,12 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
     const pool = parsePickTokens(content)
     if (!pool.length) return { ok: false, message: '选号池不能为空' }
     const normalized = [...new Set(pool)].join(',')
+    if (new Set(pool).size === 1) {
+      return {
+        ok: false,
+        message: '直选复式不含豹子/对子（各位同一单码），请更换号码或改用直选单式',
+      }
+    }
     return { ok: true, normalized, betUnits: countBetUnits(config, normalized) }
   }
 
@@ -1368,7 +1399,7 @@ export function groupContentPlaceholder(config: PlayConfig): string {
   if (config.subPlayId === 'zhixuan_fs' && config.inputMode === 'multiline') {
     const labels = config.segmentLabels.join('、')
     const poolHint = poolRangeHint(config)
-    return `直选复式：按位分行输入，共 ${config.segmentLen} 行（${labels}），每位用逗号分隔${poolHint}`
+    return `直选复式：按位分行输入，共 ${config.segmentLen} 行（${labels}），每位用逗号分隔；不含豹子/对子（各位同一单码）${poolHint}`
   }
   if (isLonghuPlayConfig(config)) {
     return `龙虎：${longhuPickHint(config)}，逗号分隔`

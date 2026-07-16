@@ -79,8 +79,11 @@ const tabFromRoute = route.query.activeTab
 const tabParsed = tabFromRoute == null || tabFromRoute === ''
   ? ''
   : String(Array.isArray(tabFromRoute) ? tabFromRoute[0] : tabFromRoute)
-if (tabParsed === '0' || tabParsed === '1' || tabParsed === '2' || tabParsed === '3') {
+if (tabParsed === '2' || tabParsed === '3') {
   activeSubTab.value = tabParsed as SubTabId
+} else if (tabParsed === '0' || tabParsed === '1') {
+  // 小白 / 一键已屏蔽，旧链接落到简单倍投
+  activeSubTab.value = '2'
 }
 
 watch(
@@ -277,7 +280,8 @@ function buildBetMultiplierPayload(): BetMultiplierPayload {
     },
     simple: {
       multiples: simpleMultiples.value,
-      advanceMode: simpleAdvanceMode.value,
+      // 产品已屏蔽翻倍方式选择，固定挂翻倍
+      advanceMode: 'on_lose' as AdvanceMode,
     },
     advanced: {
       selectedId: selectedAdvancedId.value,
@@ -339,9 +343,8 @@ function applyBetMultiplierPayload(raw: unknown) {
   }
   const sm = payload.simple as Record<string, string> | undefined
   if (sm?.multiples != null) simpleMultiples.value = String(sm.multiples)
-  if (sm?.advanceMode === 'on_win' || sm?.advanceMode === 'on_lose') {
-    simpleAdvanceMode.value = sm.advanceMode
-  }
+  // 翻倍方式已屏蔽：忽略旧配置中的中翻倍，统一挂翻倍
+  simpleAdvanceMode.value = 'on_lose'
   // 旧 kind=0/1 且简单表空：把产表结果灌进简单表，便于职责分离后继续运行
   if (!simpleMultiples.value.trim()) {
     if (payload.kind === '0' && newbiePlanRows.value.length) {
@@ -454,7 +457,7 @@ const oneclickMoney = ref('1')
 const oneclickNumber = ref(String(route.query.number ?? route.query.betCount ?? '1'))
 const oneclickMode = ref(
   String(route.query.mode ?? route.query.prize ?? '').trim() ||
-    String(Number(route.query.odds ?? 1.9) * Number(route.query.number ?? 1) || 1.9),
+  String(Number(route.query.odds ?? 1.9) * Number(route.query.number ?? 1) || 1.9),
 )
 const oneclickCycle = ref('10')
 const oneclickCalcType = ref<CalcType>('fixed')
@@ -581,6 +584,7 @@ watch(
 
 // —— 简单倍投 ——
 const simpleMultiples = ref('1,2,4')
+/** 固定挂翻倍（UI 已屏蔽翻倍方式） */
 const simpleAdvanceMode = ref<AdvanceMode>('on_lose')
 
 // —— 高级倍投（列表由管理后台方案模板库下发） ——
@@ -704,25 +708,16 @@ const showPlanTable = computed(() => activeSubTab.value === '0' || activeSubTab.
         </button>
         <h1 class="bms-title">倍投设定</h1>
         <div class="bms-header-right">
-          <el-button
-            v-if="showAdvancedAddBtn"
-            type="primary"
-            plain
-            size="small"
-            class="bms-add-scheme"
-            @click="onAddAdvancedScheme"
-          >
+          <el-button v-if="showAdvancedAddBtn" type="primary" plain size="small" class="bms-add-scheme"
+            @click="onAddAdvancedScheme">
             新增方案
           </el-button>
         </div>
       </div>
       <div class="bms-tabs-row">
         <el-radio-group v-model="activeSubTab" class="detail-tab-rg" size="small">
-          <el-radio-button
-            v-for="item in visibleSubTabs"
-            :key="item.id"
-            :value="item.id"
-          >{{ item.label }}</el-radio-button>
+          <el-radio-button v-for="item in visibleSubTabs" :key="item.id" :value="item.id">{{ item.label
+            }}</el-radio-button>
         </el-radio-group>
       </div>
     </header>
@@ -757,7 +752,8 @@ const showPlanTable = computed(() => activeSubTab.value === '0' || activeSubTab.
           </div>
         </div>
         <div class="bms-apply-row">
-          <el-button type="primary" plain size="small" :disabled="!newbiePlanRows.length" @click="onApplyNewbieToSimple">
+          <el-button type="primary" plain size="small" :disabled="!newbiePlanRows.length"
+            @click="onApplyNewbieToSimple">
             应用到简单倍投
           </el-button>
         </div>
@@ -784,53 +780,32 @@ const showPlanTable = computed(() => activeSubTab.value === '0' || activeSubTab.
             <label class="bms-radio-row">
               <input v-model="oneclickCalcType" type="radio" value="rate" class="bms-native-radio" />
               <span class="bms-radio-lbl">收益率</span>
-              <el-input
-                v-model="oneclickTargetRate"
-                size="small"
-                class="bms-inp-grow"
-                :disabled="oneclickCalcType !== 'rate'"
-              />
+              <el-input v-model="oneclickTargetRate" size="small" class="bms-inp-grow"
+                :disabled="oneclickCalcType !== 'rate'" />
               <span class="bms-suffix">%</span>
             </label>
             <label class="bms-radio-row">
               <input v-model="oneclickCalcType" type="radio" value="fixed" class="bms-native-radio" />
               <span class="bms-radio-lbl">固定利润</span>
-              <el-input
-                v-model="oneclickTargetProfit"
-                size="small"
-                class="bms-inp-grow"
-                :disabled="oneclickCalcType !== 'fixed'"
-              />
+              <el-input v-model="oneclickTargetProfit" size="small" class="bms-inp-grow"
+                :disabled="oneclickCalcType !== 'fixed'" />
             </label>
             <div class="bms-radio-row bms-radio-row--accum">
               <label class="bms-accum-label">
                 <input v-model="oneclickCalcType" type="radio" value="step" class="bms-native-radio" />
                 <span class="bms-radio-lbl">累加利润：起步</span>
               </label>
-              <el-input
-                v-model="oneclickSumBegin"
-                size="small"
-                class="bms-inp-tiny"
-                :disabled="oneclickCalcType !== 'step'"
-              />
+              <el-input v-model="oneclickSumBegin" size="small" class="bms-inp-tiny"
+                :disabled="oneclickCalcType !== 'step'" />
               <span class="bms-radio-lbl">累进</span>
-              <el-input
-                v-model="oneclickSumStep"
-                size="small"
-                class="bms-inp-tiny"
-                :disabled="oneclickCalcType !== 'step'"
-              />
+              <el-input v-model="oneclickSumStep" size="small" class="bms-inp-tiny"
+                :disabled="oneclickCalcType !== 'step'" />
             </div>
             <label class="bms-radio-row">
               <input v-model="oneclickCalcType" type="radio" value="free" class="bms-native-radio" />
               <span class="bms-radio-lbl">自由倍数</span>
-              <el-input
-                v-model="oneclickFreeList"
-                size="small"
-                class="bms-inp-grow"
-                :disabled="oneclickCalcType !== 'free'"
-                placeholder="如 2,4,8"
-              />
+              <el-input v-model="oneclickFreeList" size="small" class="bms-inp-grow"
+                :disabled="oneclickCalcType !== 'free'" placeholder="如 2,4,8" />
             </label>
           </div>
           <div class="bms-action-grid">
@@ -846,7 +821,8 @@ const showPlanTable = computed(() => activeSubTab.value === '0' || activeSubTab.
           </div>
         </div>
         <div class="bms-apply-row">
-          <el-button type="primary" plain size="small" :disabled="!oneclickPlanRows.length" @click="onApplyOneclickToSimple">
+          <el-button type="primary" plain size="small" :disabled="!oneclickPlanRows.length"
+            @click="onApplyOneclickToSimple">
             应用到简单倍投
           </el-button>
         </div>
@@ -854,33 +830,12 @@ const showPlanTable = computed(() => activeSubTab.value === '0' || activeSubTab.
         <p class="bms-hint bms-hint--danger">* 倍数计算上限为 200000 倍为止，超出不计</p>
       </template>
 
-      <!-- 简单倍投（直线表：小白/一键写入目标；运行时挂机读此表） -->
+      <!-- 简单倍投（直线表；翻倍方式固定挂翻倍，UI 已屏蔽） -->
       <template v-else-if="activeSubTab === '2'">
         <div class="bms-card bms-card--simple">
-          <el-input
-            v-model="simpleMultiples"
-            type="textarea"
-            :rows="3"
-            size="small"
-            resize="none"
-            class="bms-textarea"
-            placeholder="直线倍数表，逗号分隔，如 2,4,8,17"
-          />
-          <div class="bms-radio-block bms-radio-block--advance">
-            <span class="bms-lbl">翻倍方式</span>
-            <label class="bms-radio-row">
-              <input v-model="simpleAdvanceMode" type="radio" value="on_lose" class="bms-native-radio" />
-              <span class="bms-radio-lbl">挂翻倍</span>
-              <span class="bms-hint-inline">未中进下一档，中奖回第 1 档</span>
-            </label>
-            <label class="bms-radio-row">
-              <input v-model="simpleAdvanceMode" type="radio" value="on_win" class="bms-native-radio" />
-              <span class="bms-radio-lbl">中翻倍</span>
-              <span class="bms-hint-inline">中奖进下一档，未中回第 1 档</span>
-            </label>
-          </div>
+          <el-input v-model="simpleMultiples" type="textarea" :rows="3" size="small" resize="none" class="bms-textarea"
+            placeholder="直线倍数表，逗号分隔，如 2,4,8,17" />
         </div>
-        <p class="bms-hint bms-hint--primary">* 小白 / 一键生成后会写入本表；确认保存时以本表（或高级跳转表）作为运行配置</p>
         <p class="bms-hint bms-hint--danger">* 倍数计算上限为 200000 倍为止，超出不计</p>
       </template>
 
@@ -898,21 +853,13 @@ const showPlanTable = computed(() => activeSubTab.value === '0' || activeSubTab.
             :class="{ 'bms-advanced-row--alt': idx % 2 === 1 }">
             <label class="bms-advanced-left">
               <input v-model="selectedAdvancedId" type="radio" class="bms-native-radio" :value="row.id" @click.stop />
-              <span
-                class="bms-advanced-title bms-advanced-title--link"
-                role="button"
-                tabindex="0"
+              <span class="bms-advanced-title bms-advanced-title--link" role="button" tabindex="0"
                 @click.prevent.stop="openAdvancedSchemeEditor(row)"
-                @keyup.enter.prevent="openAdvancedSchemeEditor(row)"
-              >{{ row.title }}</span>
+                @keyup.enter.prevent="openAdvancedSchemeEditor(row)">{{ row.title }}</span>
             </label>
             <div class="bms-advanced-ops">
-              <button
-                type="button"
-                class="bms-icon-btn bms-icon-btn--edit"
-                aria-label="编辑"
-                @click.stop="openAdvancedSchemeEditor(row)"
-              />
+              <button type="button" class="bms-icon-btn bms-icon-btn--edit" aria-label="编辑"
+                @click.stop="openAdvancedSchemeEditor(row)" />
             </div>
           </div>
         </div>

@@ -214,10 +214,17 @@ func evaluateZhixuanFushi(rule playRule, balls []string, groupContent string) be
 		}
 		units *= n
 	}
+	// 直选复式豹子（各位同一单码）：对齐第三方网页计 0 注
+	if isZhixuanFushiBaoziPools(pools) {
+		units = 0
+	}
 	seg := drawSegment(balls, rule.SegmentStart, rule.SegmentLen)
 	if len(seg) != rule.SegmentLen {
 		// 无开奖号时仍返回正确注数（预览/资金校验）
 		return betEvaluation{BetUnits: units, Odds: oddsZhixuan(rule.SegmentLen)}
+	}
+	if units <= 0 {
+		return betEvaluation{Hit: false, BetUnits: 0, Odds: oddsZhixuan(rule.SegmentLen)}
 	}
 	hit := true
 	for i, digit := range seg {
@@ -227,6 +234,27 @@ func evaluateZhixuanFushi(rule playRule, balls []string, groupContent string) be
 		}
 	}
 	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(rule.SegmentLen)}
+}
+
+func isZhixuanFushiBaoziPools(pools [][]string) bool {
+	if len(pools) < 2 {
+		return false
+	}
+	var first string
+	for i, p := range pools {
+		if len(p) != 1 {
+			return false
+		}
+		d := p[0]
+		if i == 0 {
+			first = d
+			continue
+		}
+		if d != first {
+			return false
+		}
+	}
+	return first != ""
 }
 
 func evaluateZhixuanDanshi(rule playRule, balls []string, groupContent string) betEvaluation {

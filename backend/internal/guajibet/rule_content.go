@@ -56,9 +56,10 @@ func SampleGroupContent(meta RuleMeta) string {
 		if segLen <= 1 {
 			return "7"
 		}
+		// 各位用不同单码，避免豹子（如 1,1,1）——第三方网页对豹子计 0 注且无法下注
 		lines := make([]string, segLen)
 		for i := range lines {
-			lines[i] = "1"
+			lines[i] = string(byte('0' + i%10))
 		}
 		return strings.Join(lines, "\n")
 	case "zuxuan_fs":
@@ -506,13 +507,25 @@ func CountBetNums(meta RuleMeta, wireContent string) int {
 		if usesPaddedDigits(meta.PlayTemplate) {
 			positions := positionCountForTemplate(meta.PlayTemplate)
 			if IsPositionWireContent(wireContent, positions) {
-				return applySegmentMultiplier(meta, countPositionProductForTemplate(meta.PlayTemplate, wireContent, positions))
+				n := countPositionProductForTemplate(meta.PlayTemplate, wireContent, positions)
+				if isSSCFushiBaoziWire(wireContent) {
+					return 0
+				}
+				return applySegmentMultiplier(meta, n)
 			}
 			_, segStart, segLen := classifyRule(meta)
 			wire := formatPositionWire(meta.PlayTemplate, segStart, segLen, wireContent)
-			return applySegmentMultiplier(meta, countPositionProductForTemplate(meta.PlayTemplate, wire, positions))
+			n := countPositionProductForTemplate(meta.PlayTemplate, wire, positions)
+			if isSSCFushiBaoziWire(wire) {
+				return 0
+			}
+			return applySegmentMultiplier(meta, n)
 		}
-		return applySegmentMultiplier(meta, countSSCFushiProduct(wireContent))
+		n := countSSCFushiProduct(wireContent)
+		if isSSCFushiBaoziWire(wireContent) {
+			return 0
+		}
+		return applySegmentMultiplier(meta, n)
 	case "zuxuan_fs":
 		_, segLen := segmentRange(meta)
 		if paddedFushiUsesFlatPick(meta) {
@@ -785,6 +798,10 @@ func ResolveBetsNums(meta RuleMeta, wireContent string, amount, amountUnit float
 		if n := CountBetNums(meta, wireContent); n > 0 {
 			return n
 		}
+		// 直选复式豹子/对子：CountBetNums 明确为 0，禁止回退成 1（对齐第三方网页无法下注）
+		if IsFushiBaoziZeroBet(meta, wireContent) {
+			return 0
+		}
 	}
 	if n := CountDingweiBetsNums(wireContent); n > 0 {
 		return n
@@ -803,6 +820,14 @@ func ResolveBetsNums(meta RuleMeta, wireContent string, amount, amountUnit float
 		}
 	}
 	return 1
+}
+
+// IsFushiBaoziZeroBet 直选复式各位同一单码（如 7,7,7）时第三方计 0 注且无法下注。
+func IsFushiBaoziZeroBet(meta RuleMeta, wireContent string) bool {
+	if InferBetMode(meta) != "fushi" {
+		return false
+	}
+	return isSSCFushiBaoziWire(wireContent)
 }
 
 // ResolveSolo 是否须 solo=true；注数超过平台单挑上限时须 solo=false。
@@ -1633,6 +1658,32 @@ func countSSCFushiProduct(wireContent string) int {
 		return 0
 	}
 	return product
+}
+
+// isSSCFushiBaoziWire 直选复式各位均为同一单码（如 7,7,7 / 1,1）。
+// 第三方网页预览计 0 注且无法下注，本平台对齐。
+func isSSCFushiBaoziWire(wireContent string) bool {
+	parts := splitCommaParts(wireContent)
+	nonEmpty := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			nonEmpty = append(nonEmpty, p)
+		}
+	}
+	if len(nonEmpty) < 2 {
+		return false
+	}
+	first := nonEmpty[0]
+	if len([]rune(first)) != 1 {
+		return false
+	}
+	for _, p := range nonEmpty[1:] {
+		if p != first {
+			return false
+		}
+	}
+	return true
 }
 
 func formatSSCPositionWire(start, length int, groupContent string) string {

@@ -359,6 +359,10 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 
 	balls := sqlcdb.ParseDrawBalls(draw.Balls)
 	playEval := evaluatePlayHit(cfg.Play, balls, betContent, cfg.Contrary, cfg.ContraryPlan, cfg.Play.PositionIdx)
+	if playEval.BetUnits <= 0 {
+		w.pauseRunningInstance(ctx, inst, StatusReasonBetFailed, guajibet.ErrZeroBets.Error())
+		return errSchemeBetStopped
+	}
 	amount := calcBetAmount(playEval.BetUnits, betMult, cfg.BetUnitYuan)
 	pnl := calcPnLWithOdds(amount, playEval.Hit, playEval.Odds)
 

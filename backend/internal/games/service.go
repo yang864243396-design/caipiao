@@ -479,7 +479,13 @@ func (s *Service) PlaceBet(ctx context.Context, account, lotteryCode string, in 
 		)
 		guajiContent := guajibet.FormatBetContentForRule(ruleMeta, in.BetPayload.GroupContent)
 		amountUnit := 2.0
+		if guajibet.IsFushiBaoziZeroBet(ruleMeta, guajiContent) {
+			return PlaceBetResult{}, fmt.Errorf("%w: %w", guajibet.ErrPlaceRejected, guajibet.ErrZeroBets)
+		}
 		betsNums := guajibet.ResolveBetsNums(ruleMeta, guajiContent, amount, amountUnit, in.Multiplier)
+		if betsNums <= 0 {
+			return PlaceBetResult{}, fmt.Errorf("%w: %w", guajibet.ErrPlaceRejected, guajibet.ErrZeroBets)
+		}
 		betRes, betErr := s.guajiBets.PlaceRealBet(ctx, account, GuajiBetRequest{
 			LotteryCode: lotteryCode,
 			GameID:     gameID,

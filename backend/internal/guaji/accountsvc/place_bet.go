@@ -92,6 +92,9 @@ func (s *Service) PlaceRealBet(ctx context.Context, memberAccount string, req gu
 	if unit <= 0 {
 		unit = 2
 	}
+	if guajibet.IsFushiBaoziZeroBet(req.RuleMeta, req.Content) {
+		return guajibet.Result{}, fmt.Errorf("%w: %w", guajibet.ErrPlaceRejected, guajibet.ErrZeroBets)
+	}
 	betsNums := req.BetsNums
 	if n := guajibet.ResolveBetsNums(req.RuleMeta, req.Content, req.Amount, unit, mult); n > 0 {
 		betsNums = n

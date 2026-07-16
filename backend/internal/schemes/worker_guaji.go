@@ -89,9 +89,12 @@ func (w *Worker) placeGuajiSchemeBet(
 		ruleID,
 	)
 	guajiContent := guajibet.FormatBetContentForRule(ruleMeta, betContent)
+	if guajibet.IsFushiBaoziZeroBet(ruleMeta, guajiContent) {
+		return schemeGuajiBetMeta{}, fmt.Errorf("%w: %w", guajibet.ErrPlaceRejected, guajibet.ErrZeroBets)
+	}
 	betsNums = guajibet.ResolveBetsNums(ruleMeta, guajiContent, amount, amountUnit, multInt)
 	if betsNums <= 0 {
-		betsNums = 1
+		return schemeGuajiBetMeta{}, fmt.Errorf("%w: %w", guajibet.ErrPlaceRejected, guajibet.ErrZeroBets)
 	}
 	// 本端 evaluate 注数偶发偏少（如单式未按逗号切分）；以 wire 注数为准同步金额，避免账本少扣、对账差一倍。
 	amount = calcBetAmount(betsNums, float64(multInt), amountUnit)

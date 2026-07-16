@@ -82,6 +82,14 @@ function asString(v: unknown): string {
   return v == null ? '' : String(v)
 }
 
+function limitDisplay(v: string): string {
+  const s = (v || '').trim()
+  if (!s) return '不限'
+  const n = Number(s)
+  if (Number.isFinite(n) && n <= 0) return '不限'
+  return s
+}
+
 /** 编辑草稿：前往倍投设定页前暂存，返回后恢复（避免重新挂载丢失未保存编辑） */
 const DRAFT_KEY = `scheme-detail-draft:${definitionId}`
 
@@ -371,13 +379,13 @@ onMounted(() => {
         <div class="sd-field">
           <span class="sd-label">方案止损</span>
           <el-input v-if="editing" v-model="stopLoss" size="small" class="sd-edit-ctrl" placeholder="不限" />
-          <span v-else class="sd-value">{{ stopLoss || '不限' }}</span>
+          <span v-else class="sd-value">{{ limitDisplay(stopLoss) }}</span>
         </div>
         <!-- 方案止盈 -->
         <div class="sd-field">
           <span class="sd-label">方案止盈</span>
           <el-input v-if="editing" v-model="takeProfit" size="small" class="sd-edit-ctrl" placeholder="不限" />
-          <span v-else class="sd-value">{{ takeProfit || '不限' }}</span>
+          <span v-else class="sd-value">{{ limitDisplay(takeProfit) }}</span>
         </div>
         <!-- 倍数系数 -->
         <div class="sd-field">

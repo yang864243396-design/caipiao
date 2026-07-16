@@ -536,14 +536,47 @@ func evaluateRenxuan(rule playRule, balls []string, content string) betEvaluatio
 		return evaluateRenxuanWeishu(balls, content, n)
 	}
 
-	lines := splitGroupLines(content)
-	// pipe：千个|12 → 当作和值（若 BetMode 未标 hezhi 但内容是和值 wire）
-	if posLabel, picks, ok := splitPipeContent(content); ok {
-		if mode == "hezhi" || looksLikeRenxuanHezhiPicks(picks) {
+	isZu3 := mode == "zu3" || strings.Contains(sub, "组三") || strings.Contains(sub, "zu3")
+	isZu6 := mode == "zu6" || strings.Contains(sub, "组六") || strings.Contains(sub, "zu6")
+	isHunhe := mode == "hunhe" || strings.Contains(sub, "混合")
+	isZuxuanDanshi := mode == "zuxuan_ds" || isHunhe ||
+		(strings.Contains(sub, "单式") && (isZu3 || isZu6 || strings.Contains(sub, "组选") || strings.Contains(sub, "zuxuan")))
+	isZhixuanDanshi := mode == "danshi" || mode == "zhixuan_ds" ||
+		(strings.Contains(sub, "单式") && !isZuxuanDanshi && !strings.Contains(sub, "组"))
+
+	// 位名前缀：本端「千,个\n12,34」或第三方「千个|12,34」——勿当五行复式，也勿把单式误判和值
+	if posLabel, picks, ok := parseRenxuanPosPicksContent(content, n); ok {
+		if looksLikeRenxuanDanshiPicks(picks, n) || isZhixuanDanshi || isZuxuanDanshi {
+			if isZuxuanDanshi || isZu3 || isZu6 || isHunhe {
+				return evaluateRenxuanZuxuanDanshi(balls, posLabel, picks, n, isZu3, isZu6)
+			}
+			return evaluateRenxuanZhixuanDanshi(balls, posLabel, picks, n)
+		}
+		if strings.Contains(sub, "zu24") || mode == "zu24" {
+			return evaluateRenxuanZuxuanFixedPos(balls, posLabel, picks, n, isZu24Pattern)
+		}
+		if strings.Contains(sub, "zu12") || mode == "zu12" || strings.Contains(sub, "组选12") {
+			return evaluateRenxuanZuxuanFixedPos(balls, posLabel, picks, n, isZu12Pattern)
+		}
+		if isZu3 {
+			return evaluateRenxuanZuxuanFixedPos(balls, posLabel, picks, n, isZu3Pattern)
+		}
+		if isZu6 || strings.Contains(sub, "组选6") {
+			if n >= 4 {
+				return evaluateRenxuanZuxuanFixedPos(balls, posLabel, picks, n, isZu6FourPattern)
+			}
+			return evaluateRenxuanZuxuanFixedPos(balls, posLabel, picks, n, isZu6Pattern)
+		}
+		if mode == "zuxuan_fs" || strings.Contains(sub, "组选") || strings.Contains(sub, "zuxuan") {
+			return evaluateRenxuanZuxuanFixedPos(balls, posLabel, picks, n, nil)
+		}
+		// 无 BetMode 时：和值码（>9）且不像 n 位单式
+		if looksLikeRenxuanHezhiPicks(picks) && !looksLikeRenxuanDanshiPicks(picks, n) {
 			return evaluateRenxuanHezhi(balls, content, n)
 		}
-		_ = posLabel
 	}
+
+	lines := splitGroupLines(content)
 	for len(lines) < 5 {
 		lines = append(lines, "")
 	}
@@ -562,7 +595,8 @@ func evaluateRenxuan(rule playRule, balls []string, content string) betEvaluatio
 		return evaluateRenxuanZuN(balls, pools, n, isZu30Pattern)
 	case strings.Contains(sub, "zu120"):
 		return evaluateRenxuanZuN(balls, pools, n, isZu120Pattern)
-	case strings.Contains(sub, "zuxuan") || strings.Contains(sub, "zu3") || strings.Contains(sub, "zu6"):
+	case strings.Contains(sub, "zuxuan") || strings.Contains(sub, "zu3") || strings.Contains(sub, "zu6") ||
+		strings.Contains(sub, "组选") || strings.Contains(sub, "组三") || strings.Contains(sub, "组六"):
 		return evaluateRenxuanZuxuan(balls, pools, n)
 	}
 	// 五位逗号直选复式 content
@@ -573,6 +607,243 @@ func evaluateRenxuan(rule playRule, balls []string, content string) betEvaluatio
 		return evaluateRenxuanZhixuan(balls, pools, n)
 	}
 	return evaluateRenxuanZhixuan(balls, pools, n)
+}
+
+// parseRenxuanPosPicksContent 解析「位名|号码」或「位名\n号码」。
+func parseRenxuanPosPicksContent(content string, n int) (posLabel, picks string, ok bool) {
+	if pos, p, pipeOK := splitPipeContent(content); pipeOK {
+		if looksLikeRenxuanPosLabel(pos) {
+			return pos, p, true
+		}
+	}
+	lines := splitGroupLines(content)
+	if len(lines) >= 2 && looksLikeRenxuanPosLabel(lines[0]) {
+		return lines[0], strings.Join(lines[1:], ","), true
+	}
+	_ = n
+	return "", "", false
+}
+
+func looksLikeRenxuanPosLabel(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	posChars := map[rune]bool{'万': true, '千': true, '百': true, '十': true, '个': true, '位': true,
+		',': true, '，': true, '、': true, ' ': true}
+	hasPos := false
+	for _, r := range s {
+		if r == '万' || r == '千' || r == '百' || r == '十' || r == '个' {
+			hasPos = true
+		}
+		if !posChars[r] && (r < '0' || r > '4') {
+			return false
+		}
+	}
+	return hasPos
+}
+
+// looksLikeRenxuanDanshiPicks：号码为 n 位数字串（如 12 / 012,345），非和值码列表。
+func looksLikeRenxuanDanshiPicks(picks string, n int) bool {
+	if n <= 0 {
+		n = 2
+	}
+	raw := strings.NewReplacer("，", ",", "\n", ",", " ", ",").Replace(strings.TrimSpace(picks))
+	parts := strings.Split(raw, ",")
+	found := 0
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		digits := make([]rune, 0, len(p))
+		for _, r := range p {
+			if r >= '0' && r <= '9' {
+				digits = append(digits, r)
+			}
+		}
+		if len(digits) == n {
+			found++
+			continue
+		}
+		// 单码池（组选复式）不算单式
+		if len(digits) == 1 {
+			return false
+		}
+		return false
+	}
+	return found > 0
+}
+
+func evaluateRenxuanZhixuanDanshi(balls []string, posLabel, picks string, n int) betEvaluation {
+	positions := renxuanPositionsFromLabel(posLabel, n)
+	draw := renxuanDrawDigits(balls, positions)
+	tokens := renxuanDanshiTokens(picks, n)
+	units := len(tokens)
+	hit := false
+	for _, tok := range tokens {
+		if tok == draw {
+			hit = true
+			break
+		}
+	}
+	if units <= 0 {
+		units = 1
+	}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(n)}
+}
+
+func evaluateRenxuanZuxuanDanshi(balls []string, posLabel, picks string, n int, forceZu3, forceZu6 bool) betEvaluation {
+	positions := renxuanPositionsFromLabel(posLabel, n)
+	draw := renxuanDrawDigits(balls, positions)
+	drawKey := sortDigitString(draw)
+	tokens := renxuanDanshiTokens(picks, n)
+	units := 0
+	hit := false
+	for _, tok := range tokens {
+		if forceZu3 && !isZu3DigitString(tok) {
+			continue
+		}
+		if forceZu6 && !isZu6DigitString(tok) {
+			continue
+		}
+		// 混合/组选单式：排除豹子
+		if isBaoziDigitString(tok) {
+			continue
+		}
+		units++
+		if sortDigitString(tok) == drawKey {
+			if forceZu3 && !isZu3DigitString(draw) {
+				continue
+			}
+			if forceZu6 && !isZu6DigitString(draw) {
+				continue
+			}
+			hit = true
+		}
+	}
+	if units <= 0 {
+		units = 1
+	}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(n)}
+}
+
+func evaluateRenxuanZuxuanFixedPos(balls []string, posLabel, picks string, n int, patternFn func([]string) bool) betEvaluation {
+	positions := renxuanPositionsFromLabel(posLabel, n)
+	pool := parseDigitTokens(picks)
+	units := len(pool)
+	if units <= 0 {
+		units = 1
+	}
+	seg := make([]string, 0, len(positions))
+	for _, p := range positions {
+		if p >= 0 && p < len(balls) {
+			seg = append(seg, balls[p])
+		}
+	}
+	hit := len(seg) == n && allDigitsInPool(seg, pool)
+	if hit && patternFn != nil {
+		hit = patternFn(seg)
+	} else if hit {
+		hit = zuxuanPoolHit(seg, pool)
+	}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(n)}
+}
+
+func renxuanDrawDigits(balls []string, positions []int) string {
+	var b strings.Builder
+	for _, p := range positions {
+		if p >= 0 && p < len(balls) {
+			b.WriteString(strings.TrimSpace(balls[p]))
+		}
+	}
+	return b.String()
+}
+
+func renxuanDanshiTokens(picks string, n int) []string {
+	if n <= 0 {
+		n = 2
+	}
+	raw := strings.NewReplacer("，", ",", "\n", ",", " ", ",").Replace(strings.TrimSpace(picks))
+	var out []string
+	for _, p := range strings.Split(raw, ",") {
+		digits := make([]rune, 0, n)
+		for _, r := range p {
+			if r >= '0' && r <= '9' {
+				digits = append(digits, r)
+			}
+		}
+		if len(digits) >= n {
+			out = append(out, string(digits[:n]))
+		}
+	}
+	if len(out) == 0 {
+		digits := make([]rune, 0, len(picks))
+		for _, r := range picks {
+			if r >= '0' && r <= '9' {
+				digits = append(digits, r)
+			}
+		}
+		for i := 0; i+n <= len(digits); i += n {
+			out = append(out, string(digits[i:i+n]))
+		}
+	}
+	return out
+}
+
+func sortDigitString(s string) string {
+	runes := []rune(s)
+	for i := 0; i < len(runes); i++ {
+		for j := i + 1; j < len(runes); j++ {
+			if runes[j] < runes[i] {
+				runes[i], runes[j] = runes[j], runes[i]
+			}
+		}
+	}
+	return string(runes)
+}
+
+func isBaoziDigitString(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		if s[i] != s[0] {
+			return false
+		}
+	}
+	return true
+}
+
+func isZu3DigitString(s string) bool {
+	if len(s) != 3 {
+		return false
+	}
+	return isZu3Pattern([]string{s[0:1], s[1:2], s[2:3]})
+}
+
+func isZu6DigitString(s string) bool {
+	if len(s) != 3 {
+		return false
+	}
+	return isZu6Pattern([]string{s[0:1], s[1:2], s[2:3]})
+}
+
+// isZu6FourPattern 任选四「组选6」：两对相同（如 AABB）。
+func isZu6FourPattern(seg []string) bool {
+	if len(seg) != 4 {
+		return false
+	}
+	counts := digitCounts(seg)
+	if len(counts) != 2 {
+		return false
+	}
+	for _, c := range counts {
+		if c != 2 {
+			return false
+		}
+	}
+	return true
 }
 
 func splitPipeContent(content string) (posLabel, picks string, ok bool) {
@@ -817,9 +1088,25 @@ func renPickCount(subID string) int {
 	case strings.Contains(raw, "任选二"), strings.Contains(raw, "任二"),
 		strings.HasPrefix(s, "ren2"):
 		return 2
-	default:
-		return 2
 	}
+	// catalog 数字 subId / ruleId（与 guajibet.renxuanSegmentLen 对齐）
+	for _, tok := range strings.FieldsFunc(raw, func(r rune) bool {
+		return r == '|' || r == '/' || r == ' ' || r == ',' || r == '，'
+	}) {
+		id, err := strconv.Atoi(strings.TrimSpace(tok))
+		if err != nil {
+			continue
+		}
+		switch {
+		case id >= 141 && id <= 145:
+			return 4
+		case id >= 80 && id <= 88:
+			return 3
+		case id >= 74 && id <= 79:
+			return 2
+		}
+	}
+	return 2
 }
 
 func drawSegmentForRule(rule playRule, balls []string) []string {

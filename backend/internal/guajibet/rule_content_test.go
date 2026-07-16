@@ -27,9 +27,22 @@ func dingweiMeta() RuleMeta {
 
 func TestFormatBetContentForRule_qian3Fushi(t *testing.T) {
 	meta := qian3FushiMeta()
-	got := FormatBetContentForRule(meta, "1\n1\n1")
-	if got != "1,1,1" {
-		t.Fatalf("wire=%q want 1,1,1", got)
+	baozi := FormatBetContentForRule(meta, "7\n7\n7")
+	if baozi != "7,7,7" {
+		t.Fatalf("baozi wire=%q want 7,7,7", baozi)
+	}
+	if n := CountBetNums(meta, baozi); n != 0 {
+		t.Fatalf("豹子 betsNums=%d want 0（对齐第三方网页）", n)
+	}
+	if n := ResolveBetsNums(meta, baozi, 2, 2, 1); n != 0 {
+		t.Fatalf("ResolveBetsNums 豹子=%d want 0（禁止回退成 1）", n)
+	}
+	if !IsFushiBaoziZeroBet(meta, baozi) {
+		t.Fatal("IsFushiBaoziZeroBet want true")
+	}
+	got := FormatBetContentForRule(meta, "1\n2\n3")
+	if got != "1,2,3" {
+		t.Fatalf("wire=%q want 1,2,3", got)
 	}
 	if !NeedsSoloForRule(meta, got) {
 		t.Fatal("直选复式单注应 solo")
@@ -253,9 +266,12 @@ func TestSegmentRange_qianzhonghou3(t *testing.T) {
 func TestCountBetNums_qianzhonghou3Fushi(t *testing.T) {
 	seg, _ := json.Marshal(map[string]string{"guajiGroup": "前中后三"})
 	meta := ParseRuleMeta("ssc_std", "g007", "101", "直选复式", "前中后三", seg, "101")
-	wire := FormatBetContentForRule(meta, "1\n1\n1")
-	if wire != "1,1,1" {
-		t.Fatalf("wire=%q want 1,1,1", wire)
+	if n := CountBetNums(meta, FormatBetContentForRule(meta, "7\n7\n7")); n != 0 {
+		t.Fatalf("豹子 betsNums=%d want 0", n)
+	}
+	wire := FormatBetContentForRule(meta, "1\n2\n3")
+	if wire != "1,2,3" {
+		t.Fatalf("wire=%q want 1,2,3", wire)
 	}
 	if n := CountBetNums(meta, wire); n != 3 {
 		t.Fatalf("betsNums=%d want 3", n)
@@ -268,7 +284,7 @@ func TestCountBetNums_qianzhonghou3Fushi(t *testing.T) {
 func TestCountBetNums_qianhou3Fushi(t *testing.T) {
 	seg, _ := json.Marshal(map[string]string{"guajiGroup": "前后三"})
 	meta := ParseRuleMeta("ssc_std", "g012", "89", "直选复式", "前后三", seg, "89")
-	wire := FormatBetContentForRule(meta, "1\n1\n1")
+	wire := FormatBetContentForRule(meta, "1\n2\n3")
 	if n := CountBetNums(meta, wire); n != 2 {
 		t.Fatalf("betsNums=%d want 2", n)
 	}
@@ -280,7 +296,10 @@ func TestCountBetNums_qianhou3Fushi(t *testing.T) {
 func TestCountBetNums_qianhou2Fushi(t *testing.T) {
 	seg, _ := json.Marshal(map[string]string{"guajiGroup": "前后二"})
 	meta := ParseRuleMeta("ssc_std", "g008", "119", "直选复式", "前后二", seg, "119")
-	wire := FormatBetContentForRule(meta, "1\n1")
+	if n := CountBetNums(meta, FormatBetContentForRule(meta, "1\n1")); n != 0 {
+		t.Fatalf("对子 betsNums=%d want 0", n)
+	}
+	wire := FormatBetContentForRule(meta, "1\n2")
 	if n := CountBetNums(meta, wire); n != 2 {
 		t.Fatalf("betsNums=%d want 2", n)
 	}

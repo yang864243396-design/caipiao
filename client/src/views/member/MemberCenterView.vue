@@ -13,6 +13,7 @@ import {
   type GuajiBalance,
   type PrimaryCurrency,
 } from '@/api/guaji/accounts'
+import { fetchCloudCenterStats } from '@/api/cloud/center'
 import { demoUser } from '@/demo/demoAccount'
 import { confirmDialog } from '@/utils/confirmDialog'
 import {
@@ -225,11 +226,29 @@ async function refreshBalance(): Promise<void> {
   try {
     const bal = await fetchGuajiBalance()
     syncBalanceFromRemote(bal, true)
+    await loadKpiFromCloudStats()
     ElMessage.success('余额已刷新')
   } catch {
     ElMessage.error('余额刷新失败')
   } finally {
     refreshing.value = false
+  }
+}
+
+/** 当前下注 / 当前盈亏：与云端中心 stats 同源（正式通道） */
+async function loadKpiFromCloudStats(): Promise<void> {
+  try {
+    const s = await fetchCloudCenterStats()
+    const formal = s.formal
+    stats.value = {
+      ...stats.value,
+      // 总投注（方案实例 turnover 之和）
+      betting: String(formal?.totalTurnover ?? 0),
+      // 运行中方案本次盈亏之和
+      pnl: String(formal?.runningSessionPnl ?? 0),
+    }
+  } catch {
+    // 未挂机/接口失败时保持 0，不打断其它加载
   }
 }
 
@@ -270,6 +289,7 @@ async function loadMemberCenter(): Promise<void> {
   } catch {
     // 拉取失败时保留缓存值；无缓存则继续显示 --
   }
+  await loadKpiFromCloudStats()
 }
 
 /** §4.4：切换主币种与切换授权同逻辑——弹窗确认后全部 running/pending 方案暂停 */
