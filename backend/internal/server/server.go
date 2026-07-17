@@ -22,6 +22,7 @@ import (
 	"caipiao/backend/internal/guaji/accountsvc"
 	"caipiao/backend/internal/guaji/drawsync"
 	"caipiao/backend/internal/guaji/historysync"
+	"caipiao/backend/internal/guaji/oddsrefresh"
 	"caipiao/backend/internal/guaji/periodsync"
 	"caipiao/backend/internal/handler"
 	"caipiao/backend/internal/maintenance"
@@ -136,6 +137,13 @@ func New(cfg config.Config) (*Server, error) {
 	if pool != nil && guajiAccounts != nil && guajiClient.Enabled() {
 		if pw := periodsync.NewWorker(pool, guajiClient, guajiAccounts); pw != nil {
 			go pw.Run(workerCtx)
+		}
+	}
+
+	// 账号级赔率线：拉取 real/rate → schemes.SetGuajiOdds（预估/模拟共用）
+	if guajiAccounts != nil && guajiClient.Enabled() {
+		if ow := oddsrefresh.NewWorker(guajiClient, guajiAccounts); ow != nil {
+			go ow.Run(workerCtx)
 		}
 	}
 

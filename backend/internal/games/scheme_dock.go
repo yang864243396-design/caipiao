@@ -24,5 +24,6 @@ func (s *Service) loadSchemeDock(
 		pctx.Kind,
 		pctx.ConfigJSON,
 		pctx.Draws,
+		pctx.LotteryCode,
 	)
 }

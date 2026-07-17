@@ -24,7 +24,7 @@ func evaluatePK10ByBetMode(rule playRule, balls []string, content string) (betEv
 func evaluatePK10Longhu(rule playRule, balls []string, content string) betEvaluation {
 	p1, p2 := pk10LonghuPositions(rule.CatalogSubID)
 	if p1 < 0 || p2 < 0 || p1 >= len(balls) || p2 >= len(balls) {
-		return betEvaluation{BetUnits: 1, Odds: oddsDingwei}
+		return betEvaluation{BetUnits: 1, Odds: oddsDingweiOdds(rule.OddsBase)}
 	}
 	a, b := atoiBall(balls[p1]), atoiBall(balls[p2])
 	picks := parseTextTokens(content)
@@ -49,7 +49,7 @@ func evaluatePK10Longhu(rule playRule, balls []string, content string) betEvalua
 			}
 		}
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsDingwei}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsDingweiOdds(rule.OddsBase)}
 }
 
 func pk10LonghuPositions(subID string) (int, int) {
@@ -72,7 +72,7 @@ func pk10LonghuPositions(subID string) (int, int) {
 func evaluatePK10RankDxds(rule playRule, balls []string, content string) betEvaluation {
 	pos := pk10RankPosition(rule.CatalogSubID)
 	if pos < 0 || pos >= len(balls) {
-		return betEvaluation{BetUnits: 1, Odds: oddsDingwei}
+		return betEvaluation{BetUnits: 1, Odds: oddsDingweiOdds(rule.OddsBase)}
 	}
 	n := atoiBall(balls[pos])
 	picks := parseTextTokens(content)
@@ -87,7 +87,7 @@ func evaluatePK10RankDxds(rule playRule, balls []string, content string) betEval
 			break
 		}
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsDingwei}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsDingweiOdds(rule.OddsBase)}
 }
 
 func pk10RankPosition(subID string) int {
@@ -146,7 +146,7 @@ func evaluatePK10Hezhi(rule playRule, balls []string, content string) betEvaluat
 			break
 		}
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(len(seg))}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(len(seg), rule.OddsBase)}
 }
 
 func evaluatePK10DxdsCombo(rule playRule, balls []string, content string) betEvaluation {
@@ -181,7 +181,7 @@ func evaluatePK10DxdsCombo(rule playRule, balls []string, content string) betEva
 			}
 		}
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsDingwei}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsDingweiOdds(rule.OddsBase)}
 }
 
 func pk10SegmentForSub(subID string, balls []string) []string {

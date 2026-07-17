@@ -316,6 +316,7 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 		groupIndex = int(inst.RoundIndex)
 	}
 	cfg := parseSchemeConfig(inst.Kind, def.Config, int(inst.RoundIndex), groupIndex)
+	cfg.Play = attachOddsBase(cfg.Play, inst.LotteryCode)
 
 	roundIdx := int(inst.RoundIndex)
 	if roundIdx < 0 || roundIdx >= len(cfg.Rounds) {

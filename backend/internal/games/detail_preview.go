@@ -109,6 +109,7 @@ func (s *Service) loadDetailPreviewExtras(
 		pctx.ConfigJSON,
 		playMethod,
 		pctx.Draws,
+		pctx.LotteryCode,
 	)
 
 	out.PlanTrendGroupBets = bundle.PlanTrendGroupBets

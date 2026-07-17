@@ -25,7 +25,7 @@ func resolveSSCPlayRule(typeID, subID, betMode string, playMethod ...string) pla
 		// 数字 guaji rule id 无法表达前四/二码等，合并 playMethod 供结算解析
 		rule.CatalogSubID = labelHint
 	}
-	if labelHint != "" && (typeID == "dxds" || strings.Contains(method, "大小单双") ||
+	if labelHint != "" && (typeID == "dxds" || typeID == "g016" || strings.Contains(method, "大小单双") ||
 		strings.Contains(method, "和值大小") || strings.Contains(method, "和值单双")) {
 		rule.CatalogSubID = labelHint
 	}
@@ -44,8 +44,19 @@ func resolveSSCPlayRule(typeID, subID, betMode string, playMethod ...string) pla
 		rule.SegmentStart, rule.SegmentLen = budingweiSegmentRange(labelHint)
 		return rule
 	}
-	if typeID == "dxds" {
+	// g016=rules 同步后的大小单双（含五星和值大小/单双）；勿落到 sscSegmentRange 默认 0,1
+	if typeID == "dxds" || typeID == "g016" || strings.Contains(method, "大小单双") ||
+		strings.Contains(method, "和值大小") || strings.Contains(method, "和值单双") {
 		rule.SegmentStart, rule.SegmentLen = dxdsSegmentRange(labelHint)
+		if rule.BetMode == "" || rule.BetMode == "fushi" || rule.BetMode == "1" {
+			if strings.Contains(labelHint, "单双") {
+				rule.BetMode = "danshuang"
+			} else if strings.Contains(labelHint, "大小") {
+				rule.BetMode = "daxiao"
+			} else {
+				rule.BetMode = "dxds"
+			}
+		}
 		return rule
 	}
 	if typeID == "renxuan" || typeID == "g011" {

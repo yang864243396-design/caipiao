@@ -5,6 +5,14 @@ import (
 )
 
 func evaluatePC28ByBetMode(rule playRule, balls []string, content string) (betEvaluation, bool) {
+	ev, ok := evaluatePC28ByBetModeRaw(rule, balls, content)
+	if ok {
+		ev = scaleEvalOdds(ev, rule.OddsBase)
+	}
+	return ev, ok
+}
+
+func evaluatePC28ByBetModeRaw(rule playRule, balls []string, content string) (betEvaluation, bool) {
 	mode := strings.TrimSpace(rule.BetMode)
 	switch mode {
 	case "hezhi":
@@ -33,7 +41,7 @@ func evaluatePC28Hezhi(balls []string, content string) betEvaluation {
 			break
 		}
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(1)}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(1, 0)}
 }
 
 func evaluatePC28Dxds(balls []string, content string) betEvaluation {
@@ -64,7 +72,7 @@ func evaluatePC28Dxds(balls []string, content string) betEvaluation {
 			}
 		}
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsDingwei}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsDingweiOdds(0)}
 }
 
 func evaluatePC28Teshu(balls []string, content string) betEvaluation {
@@ -80,12 +88,12 @@ func evaluatePC28Teshu(balls []string, content string) betEvaluation {
 			break
 		}
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(3)}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(3, 0)}
 }
 
 func evaluatePC28Longhubao(balls []string, content string) betEvaluation {
 	if len(balls) < 3 {
-		return betEvaluation{BetUnits: 1, Odds: oddsDingwei}
+		return betEvaluation{BetUnits: 1, Odds: oddsDingweiOdds(0)}
 	}
 	a, c := atoiBall(balls[0]), atoiBall(balls[2])
 	picks := parseTextTokens(content)
@@ -110,7 +118,7 @@ func evaluatePC28Longhubao(balls []string, content string) betEvaluation {
 			}
 		}
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsDingwei}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsDingweiOdds(0)}
 }
 
 func pc28Sum(balls []string) int {

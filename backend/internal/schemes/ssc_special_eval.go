@@ -128,7 +128,7 @@ func evaluateMultiZone(
 func evaluateLonghu(rule playRule, balls []string, content string) betEvaluation {
 	p1, p2, wantTie := longhuPositions(rule.CatalogSubID)
 	if p1 < 0 || p2 < 0 || p1 >= len(balls) || p2 >= len(balls) {
-		return betEvaluation{BetUnits: 1, Odds: oddsDingwei}
+		return betEvaluation{BetUnits: 1, Odds: oddsDingweiOdds(rule.OddsBase)}
 	}
 	a, b := atoiBall(balls[p1]), atoiBall(balls[p2])
 	picks := parseTextTokens(content)
@@ -156,7 +156,7 @@ func evaluateLonghu(rule playRule, balls []string, content string) betEvaluation
 	if wantTie && a != b {
 		hit = false
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsDingwei}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsDingweiOdds(rule.OddsBase)}
 }
 
 func longhuPositions(subID string) (p1, p2 int, tieOnly bool) {
@@ -254,7 +254,7 @@ func normalizeLonghuPick(s string) string {
 func evaluateHezhi(rule playRule, balls []string, content string) betEvaluation {
 	seg := drawSegmentForRule(rule, balls)
 	if len(seg) == 0 {
-		return betEvaluation{BetUnits: 1, Odds: oddsZhixuan(rule.SegmentLen)}
+		return betEvaluation{BetUnits: 1, Odds: oddsZhixuan(rule.SegmentLen, rule.OddsBase)}
 	}
 	sum := 0
 	for _, d := range seg {
@@ -272,13 +272,13 @@ func evaluateHezhi(rule playRule, balls []string, content string) betEvaluation 
 			break
 		}
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(rule.SegmentLen)}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(rule.SegmentLen, rule.OddsBase)}
 }
 
 func evaluateKuadu(rule playRule, balls []string, content string) betEvaluation {
 	seg := drawSegmentForRule(rule, balls)
 	if len(seg) == 0 {
-		return betEvaluation{BetUnits: 1, Odds: oddsZhixuan(rule.SegmentLen)}
+		return betEvaluation{BetUnits: 1, Odds: oddsZhixuan(rule.SegmentLen, rule.OddsBase)}
 	}
 	vals := make([]int, len(seg))
 	for i, d := range seg {
@@ -297,7 +297,7 @@ func evaluateKuadu(rule playRule, balls []string, content string) betEvaluation 
 			break
 		}
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(rule.SegmentLen)}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(rule.SegmentLen, rule.OddsBase)}
 }
 
 func evaluateBudingwei(rule playRule, balls []string, content string) betEvaluation {
@@ -314,7 +314,7 @@ func evaluateBudingwei(rule playRule, balls []string, content string) betEvaluat
 		units = 1
 	}
 	hitN := budingweiHitComboCount(seg, picks, need)
-	unitNet := oddsBudingweiUnitNet(need, rule.SegmentLen)
+	unitNet := oddsBudingweiUnitNet(need, rule.SegmentLen, rule.OddsBase)
 	if hitN <= 0 {
 		return betEvaluation{Hit: false, BetUnits: units, Odds: unitNet}
 	}
@@ -379,7 +379,11 @@ func budingweiHitComboCount(seg, picks []string, need int) int {
 }
 
 // oddsBudingweiUnitNet 不定位单注净赔率（1 元尺度）。五星二码实测净额≈「1 注中×unitNet − 其余挂」。
-func oddsBudingweiUnitNet(need, segLen int) float64 {
+func oddsBudingweiUnitNet(need, segLen int, base float64) float64 {
+	return oddsBudingweiUnitNetRef(need, segLen) * oddsScale(base)
+}
+
+func oddsBudingweiUnitNetRef(need, segLen int) float64 {
 	if need <= 1 {
 		switch {
 		case segLen >= 5:
@@ -442,7 +446,7 @@ func budingweiNeedCount(subID string) int {
 
 func evaluateDxds(rule playRule, balls []string, content string) betEvaluation {
 	seg := drawSegmentForRule(rule, balls)
-	odds := oddsDingwei
+	odds := oddsDingweiOdds(rule.OddsBase)
 	if isWuxingSumDxdsRule(rule) {
 		odds = 1.9 // 五星和值大小/单双：V6 实测净额约 1.9
 	}
@@ -522,7 +526,12 @@ func dxdsPickHit(rule playRule, pick string, seg []string) bool {
 	return false
 }
 
+// evaluateRenxuan 任选评估。内部 helper 按参考基准计算赔率，出口统一按第三方赔率线缩放。
 func evaluateRenxuan(rule playRule, balls []string, content string) betEvaluation {
+	return scaleEvalOdds(evaluateRenxuanRaw(rule, balls, content), rule.OddsBase)
+}
+
+func evaluateRenxuanRaw(rule playRule, balls []string, content string) betEvaluation {
 	n := renPickCount(rule.CatalogSubID)
 	if n <= 0 || n > 5 {
 		n = 2
@@ -690,7 +699,7 @@ func evaluateRenxuanZhixuanDanshi(balls []string, posLabel, picks string, n int)
 	if units <= 0 {
 		units = 1
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(n)}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(n, 0)}
 }
 
 func evaluateRenxuanZuxuanDanshi(balls []string, posLabel, picks string, n int, forceZu3, forceZu6 bool) betEvaluation {
@@ -725,7 +734,7 @@ func evaluateRenxuanZuxuanDanshi(balls []string, posLabel, picks string, n int, 
 	if units <= 0 {
 		units = 1
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(n)}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(n, 0)}
 }
 
 func evaluateRenxuanZuxuanFixedPos(balls []string, posLabel, picks string, n int, patternFn func([]string) bool) betEvaluation {
@@ -747,7 +756,7 @@ func evaluateRenxuanZuxuanFixedPos(balls []string, posLabel, picks string, n int
 	} else if hit {
 		hit = zuxuanPoolHit(seg, pool)
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(n)}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(n, 0)}
 }
 
 func renxuanDrawDigits(balls []string, positions []int) string {
@@ -928,7 +937,7 @@ func evaluateRenxuanHezhi(balls []string, content string, pickCount int) betEval
 	if units <= 0 {
 		units = 1
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(pickCount)}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(pickCount, 0)}
 }
 
 func evaluateRenxuanWeishu(balls []string, content string, pickCount int) betEvaluation {
@@ -962,7 +971,7 @@ func evaluateRenxuanWeishu(balls []string, content string, pickCount int) betEva
 	if units <= 0 {
 		units = 1
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(pickCount)}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(pickCount, 0)}
 }
 
 func countOrderedSumCombos(targetSum, positions int) int {
@@ -1029,7 +1038,7 @@ func evaluateRenxuanZhixuan(balls []string, pools [][]string, pickCount int) bet
 	if units <= 0 {
 		units = 1
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(pickCount)}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(pickCount, 0)}
 }
 
 func evaluateRenxuanZuxuan(balls []string, pools [][]string, pickCount int) betEvaluation {
@@ -1067,7 +1076,7 @@ func evaluateRenxuanZuxuan(balls []string, pools [][]string, pickCount int) betE
 	if units <= 0 {
 		units = 1
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(pickCount)}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(pickCount, 0)}
 }
 
 func isRenxuanPlayType(typeID string) bool {

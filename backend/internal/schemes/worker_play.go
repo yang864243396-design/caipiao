@@ -18,6 +18,9 @@ type playRule struct {
 	SegmentPos    []int // 非连续位段（如前中后三/前后三）
 	NumberPoolMin int
 	NumberPoolMax int
+	// OddsBase 该彩种「1 元三星直选」基准派彩（第三方 real/rate 派生）。
+	// 0 表示未知，赔率按参考基准 970 计（缩放=1）。
+	OddsBase float64
 }
 
 type betEvaluation struct {
@@ -148,7 +151,7 @@ func evaluateDingwei(rule playRule, balls []string, groupContent string) betEval
 	if units <= 0 {
 		units = 1
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsDingwei}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsDingweiOdds(rule.OddsBase)}
 }
 
 func evaluateDingweiMultiline(rule playRule, balls []string, groupContent string) betEvaluation {
@@ -176,7 +179,7 @@ func evaluateDingweiMultiline(rule playRule, balls []string, groupContent string
 	if units <= 0 {
 		units = 1
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsDingwei}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsDingweiOdds(rule.OddsBase)}
 }
 
 func splitDingweiPositionLines(content string) []string {
@@ -221,10 +224,10 @@ func evaluateZhixuanFushi(rule playRule, balls []string, groupContent string) be
 	seg := drawSegment(balls, rule.SegmentStart, rule.SegmentLen)
 	if len(seg) != rule.SegmentLen {
 		// 无开奖号时仍返回正确注数（预览/资金校验）
-		return betEvaluation{BetUnits: units, Odds: oddsZhixuan(rule.SegmentLen)}
+		return betEvaluation{BetUnits: units, Odds: oddsZhixuan(rule.SegmentLen, rule.OddsBase)}
 	}
 	if units <= 0 {
-		return betEvaluation{Hit: false, BetUnits: 0, Odds: oddsZhixuan(rule.SegmentLen)}
+		return betEvaluation{Hit: false, BetUnits: 0, Odds: oddsZhixuan(rule.SegmentLen, rule.OddsBase)}
 	}
 	hit := true
 	for i, digit := range seg {
@@ -233,7 +236,7 @@ func evaluateZhixuanFushi(rule playRule, balls []string, groupContent string) be
 			break
 		}
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(rule.SegmentLen)}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(rule.SegmentLen, rule.OddsBase)}
 }
 
 func isZhixuanFushiBaoziPools(pools [][]string) bool {
@@ -260,7 +263,7 @@ func isZhixuanFushiBaoziPools(pools [][]string) bool {
 func evaluateZhixuanDanshi(rule playRule, balls []string, groupContent string) betEvaluation {
 	seg := drawSegment(balls, rule.SegmentStart, rule.SegmentLen)
 	if len(seg) != rule.SegmentLen {
-		return betEvaluation{BetUnits: 1, Odds: oddsZhixuan(rule.SegmentLen)}
+		return betEvaluation{BetUnits: 1, Odds: oddsZhixuan(rule.SegmentLen, rule.OddsBase)}
 	}
 	tokens := parseSegmentTokensForRule(rule, groupContent, rule.SegmentLen)
 	if len(tokens) == 0 {
@@ -281,7 +284,7 @@ func evaluateZhixuanDanshi(rule playRule, balls []string, groupContent string) b
 			break
 		}
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(rule.SegmentLen)}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(rule.SegmentLen, rule.OddsBase)}
 }
 
 func uniqueStringTokens(items []string) []string {
@@ -328,7 +331,7 @@ func chunkDigitString(raw string, segLen int) []string {
 func evaluateZuxuanFushi(rule playRule, balls []string, groupContent string) betEvaluation {
 	seg := drawSegment(balls, rule.SegmentStart, rule.SegmentLen)
 	if len(seg) != rule.SegmentLen {
-		return betEvaluation{BetUnits: 1, Odds: oddsZuxuan(rule.SegmentLen)}
+		return betEvaluation{BetUnits: 1, Odds: oddsZuxuan(rule.SegmentLen, rule.OddsBase)}
 	}
 	tokens := parseNumberTokens(groupContent, rule.SegmentLen)
 	if len(tokens) == 0 {
@@ -341,7 +344,7 @@ func evaluateZuxuanFushi(rule playRule, balls []string, groupContent string) bet
 		if units <= 0 {
 			units = 1
 		}
-		return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(rule.SegmentLen)}
+		return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(rule.SegmentLen, rule.OddsBase)}
 	}
 	tokens = uniqueStringTokens(tokens)
 	drawnSorted := sortDigits(seg)
@@ -352,7 +355,7 @@ func evaluateZuxuanFushi(rule playRule, balls []string, groupContent string) bet
 			break
 		}
 	}
-	return betEvaluation{Hit: hit, BetUnits: len(tokens), Odds: oddsZuxuan(rule.SegmentLen)}
+	return betEvaluation{Hit: hit, BetUnits: len(tokens), Odds: oddsZuxuan(rule.SegmentLen, rule.OddsBase)}
 }
 
 // evaluateContraryHit 由正集计划内容取补后，按同玩法结算（用于详情「计划反集」注数/奖金预估）。
@@ -360,7 +363,7 @@ func evaluateContraryHit(rule playRule, balls []string, planContent string, posi
 	_ = positionIndex
 	inv := complementPlanContent(rule, planContent)
 	if inv == "" {
-		return betEvaluation{BetUnits: 0, Odds: oddsDingwei}
+		return betEvaluation{BetUnits: 0, Odds: oddsDingweiOdds(rule.OddsBase)}
 	}
 	return evaluatePlayHit(rule, balls, inv, false, "", rule.PositionIdx)
 }
@@ -512,37 +515,50 @@ func sortStringDigits(s string) string {
 	return string(runes)
 }
 
+// oddsDingwei 定位胆参考赔率（base=970 时的值）。实际按 oddsDingweiOdds(base) 缩放。
 const oddsDingwei = 9.0
 
-// 组选包胆单注派奖（1 元模式近似第三方；结算时 pnl≈单注奖金，非全单金额×赔率）
+// 组选包胆单注派奖（1 元模式近似第三方，base=970 参考值）
 const (
 	oddsBaodanZu6 = 161.666
 	oddsBaodanZu3 = 323.333
 )
 
-func oddsZhixuan(segLen int) float64 {
+// oddsDingweiOdds 定位胆赔率，随第三方赔率线缩放。
+func oddsDingweiOdds(base float64) float64 { return oddsDingwei * oddsScale(base) }
+
+// oddsZhixuan 直选单注赔率（1 元模式「可中」尺度，对齐 V6 展示/派彩）。
+// base 为该彩种第三方基准（1 元三星直选）；未知时按参考基准 970。
+// 例：前三直选复式 base=970 → 970；base=980 → 980（随赔率线走）。
+func oddsZhixuan(segLen int, base float64) float64 {
+	var ref float64
 	switch segLen {
+	case 5:
+		ref = 97000.0
 	case 4:
-		return 99.0
+		ref = 9700.0
 	case 3:
-		return 49.0
+		ref = 970.0
 	case 2:
 		// 二星直选 / 组合嵌套后二：对齐 V6 实测净额 ≈19.4
-		return 19.4
+		ref = 19.4
 	default:
-		return 9.0
+		ref = 9.0
 	}
+	return ref * oddsScale(base)
 }
 
-func oddsZuxuan(segLen int) float64 {
+func oddsZuxuan(segLen int, base float64) float64 {
+	var ref float64
 	switch segLen {
 	case 4:
-		return 24.0
+		ref = 24.0
 	case 3:
-		return 16.0
+		ref = 16.0
 	default:
-		return 9.0
+		ref = 9.0
 	}
+	return ref * oddsScale(base)
 }
 
 func calcPnLWithOdds(amount float64, hit bool, odds float64) float64 {

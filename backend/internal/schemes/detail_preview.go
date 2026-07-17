@@ -68,6 +68,7 @@ func RunDetailPreview(
 	configJSON []byte,
 	playMethod string,
 	draws []sqlcdb.ListLotteryDrawsRow,
+	lotteryCode string,
 ) DetailPreviewResult {
 	schemeName = strings.TrimSpace(schemeName)
 	if schemeName == "" {
@@ -81,7 +82,9 @@ func RunDetailPreview(
 	}
 	playMethod = strings.TrimSpace(playMethod)
 	configJSON = ensurePreviewConfigContent(configJSON, contentSeed)
+	oddsBase := oddsBaseForLottery(lotteryCode)
 	cfg := parseSchemeConfig(kind, configJSON, 0, 0)
+	cfg.Play.OddsBase = oddsBase
 	if strings.TrimSpace(cfg.GroupContent) == "" && len(cfg.Groups) > 0 {
 		cfg.GroupContent = cfg.Groups[0]
 	}
@@ -105,6 +108,7 @@ func RunDetailPreview(
 
 	for _, draw := range ordered {
 		cfgRound := parseSchemeConfig(kind, configJSON, roundIdx, 0)
+		cfgRound.Play.OddsBase = oddsBase
 		dec := resolvePickPreview(cfgRound, state, draw.IssueNo, prevBalls)
 		if dec.Skip {
 			prevBalls = sqlcdb.ParseDrawBalls(draw.Balls)

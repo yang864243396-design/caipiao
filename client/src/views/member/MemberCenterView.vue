@@ -16,6 +16,7 @@ import {
 import { fetchCloudCenterStats } from '@/api/cloud/center'
 import { demoUser } from '@/demo/demoAccount'
 import { confirmDialog } from '@/utils/confirmDialog'
+import { copyText } from '@/utils/clipboard'
 import {
   guajiAmountsEqual,
   readGuajiBalanceCache,
@@ -117,10 +118,9 @@ async function openCustomerService(): Promise<void> {
 async function copyTgLink(link: string): Promise<void> {
   const href = normalizeTgHref(link)
   if (!href) return
-  try {
-    await navigator.clipboard.writeText(href)
+  if (await copyText(href)) {
     ElMessage.success('已复制 Telegram 链接')
-  } catch {
+  } else {
     ElMessage.error('复制失败，请手动复制')
   }
 }

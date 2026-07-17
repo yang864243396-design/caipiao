@@ -45,14 +45,14 @@ func evaluateSyxwRenxuan(rule playRule, balls []string, content string) betEvalu
 		if units <= 0 {
 			units = 1
 		}
-		return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(matchM)}
+		return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(matchM, rule.OddsBase)}
 	}
 	units := syxwRenxuanUnits(len(picks), pickN, matchM)
 	if units <= 0 {
 		units = 1
 	}
 	hit := syxwRenxuanHit(balls, picks, matchM)
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(matchM)}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(matchM, rule.OddsBase)}
 }
 
 func syxwRenxuanNM(subID string) (pickN, matchM int, ok bool) {

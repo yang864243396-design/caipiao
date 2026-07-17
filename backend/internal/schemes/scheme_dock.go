@@ -23,6 +23,7 @@ func ComputeSchemeDockSummary(
 	contentSeed, kind string,
 	configJSON []byte,
 	draws []sqlcdb.ListLotteryDrawsRow,
+	lotteryCode string,
 ) SchemeDockSummary {
 	contentSeed = strings.TrimSpace(contentSeed)
 	if contentSeed == "" {
@@ -33,6 +34,7 @@ func ComputeSchemeDockSummary(
 	}
 	configJSON = ensurePreviewConfigContent(configJSON, contentSeed)
 	cfg := parseSchemeConfig(kind, configJSON, 0, 0)
+	cfg.Play = attachOddsBase(cfg.Play, lotteryCode)
 	if strings.TrimSpace(cfg.GroupContent) == "" && len(cfg.Groups) > 0 {
 		cfg.GroupContent = cfg.Groups[0]
 	}
@@ -127,7 +129,7 @@ func estimateMaxPrize(betUnit, betMult, odds float64) float64 {
 		betMult = 1
 	}
 	if odds <= 0 {
-		odds = oddsDingwei
+		odds = oddsDingweiOdds(0)
 	}
 	return round2(betUnit * betMult * odds)
 }

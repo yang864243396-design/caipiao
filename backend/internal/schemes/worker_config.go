@@ -298,8 +298,8 @@ func resolvePlayTypeLabel(cfg map[string]interface{}) string {
 		"g004": "前二码", "g005": "后二码",
 		"g007": "前中后三", "g008": "前后二", "g009": "不定位",
 		"g010": "龙虎", "g011": "任选", "g012": "前后三",
-		"g013": "四星", "g014": "前后四", "g015": "五星",
-		"hou4": "后四", "qian3": "前三", "zhong3": "中三",
+		"g013": "四星", "g014": "前后四", "g015": "五星", "g016": "大小单双",
+		"dxds": "大小单双", "hou4": "后四", "qian3": "前三", "zhong3": "中三",
 	}
 	subLabels := map[string]string{
 		"zhixuan_fs": "直选复式", "zhixuan_ds": "直选单式", "zuxuan_fs": "组选复式",

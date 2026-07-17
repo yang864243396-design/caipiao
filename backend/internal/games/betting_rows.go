@@ -40,6 +40,7 @@ func (s *Service) loadBettingRows(
 		pctx.ConfigJSON,
 		strings.TrimSpace(q.PlayMethod),
 		pctx.Draws,
+		pctx.LotteryCode,
 	)
 
 	out := make([]BettingExecutionRow, 0, len(bundle.Executions))

@@ -38,6 +38,10 @@ func catalogTypeIDAliases(typeID string) []string {
 		return []string{"g012", "qianhou3"}
 	case "qianhou2", "g008":
 		return []string{"g008", "qianhou2"}
+	case "qianhou4", "g014":
+		return []string{"g014", "qianhou4"}
+	case "dxds", "g016":
+		return []string{"g016", "dxds"}
 	default:
 		return []string{typeID}
 	}

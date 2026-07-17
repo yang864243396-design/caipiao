@@ -672,13 +672,14 @@ func NeedsSoloForRule(meta RuleMeta, wireContent string) bool {
 	}
 	mode := InferBetMode(meta)
 	group := strings.TrimSpace(meta.Group)
-	if group == "前后二" || group == "前后四" {
-		switch mode {
-		case "hezhi":
-			return strings.Contains(meta.Label, "组选")
-		case "kuadu", "weishu", "baodan", "teshu", "zu3", "zu6", "hunhe", "zuhe":
-			return false
-		}
+	// 前后二/前后四：实测任意玩法 solo=true →「单挑参数错误」（含直选复式/单式）
+	if group == "前后二" || group == "前后四" || meta.TypeID == "g008" || meta.TypeID == "g014" {
+		return false
+	}
+	textQH := meta.Group + " " + meta.TypeLabel + " " + meta.Label + " " + meta.TeamLabel + " " + meta.FullName
+	if (strings.Contains(textQH, "前后二") || strings.Contains(textQH, "前后四")) &&
+		!strings.Contains(textQH, "前中后三") && !strings.Contains(textQH, "前后三") {
+		return false
 	}
 	if mode == "weishu" || mode == "teshu" || mode == "baodan" {
 		return false

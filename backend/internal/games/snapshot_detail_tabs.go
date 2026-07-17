@@ -65,7 +65,7 @@ func (s *Service) loadSnapshotDetailTabs(
 	}
 	draws = filterDrawsBeforeOpenPeriod(draws, openPeriod, latestDrawn)
 
-	preview := schemes.RunDetailPreview(schemeName, snapshotID, kind, configJSON, playMethod, draws)
+	preview := schemes.RunDetailPreview(schemeName, snapshotID, kind, configJSON, playMethod, draws, lotteryCode)
 
 	history = make([]PlanTrendRow, 0, len(preview.PlanTrendHistory))
 	for _, row := range preview.PlanTrendHistory {

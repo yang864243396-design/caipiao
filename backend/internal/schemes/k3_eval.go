@@ -6,6 +6,14 @@ import (
 )
 
 func evaluateK3ByBetMode(rule playRule, balls []string, content string) (betEvaluation, bool) {
+	ev, ok := evaluateK3ByBetModeRaw(rule, balls, content)
+	if ok {
+		ev = scaleEvalOdds(ev, rule.OddsBase)
+	}
+	return ev, ok
+}
+
+func evaluateK3ByBetModeRaw(rule playRule, balls []string, content string) (betEvaluation, bool) {
 	mode := strings.TrimSpace(rule.BetMode)
 	switch mode {
 	case "hezhi":
@@ -45,7 +53,7 @@ func evaluateK3Hezhi(balls []string, content string) betEvaluation {
 			break
 		}
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(1)}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(1, 0)}
 }
 
 func evaluateK3ErTongDan(balls []string, content string) betEvaluation {
@@ -58,9 +66,9 @@ func evaluateK3ErTongDan(balls []string, content string) betEvaluation {
 		pair := atoiBall(strings.TrimSpace(parts[0]))
 		other := atoiBall(strings.TrimSpace(parts[1]))
 		hit := k3CountFace(balls, pair) == 2 && k3CountFace(balls, other) == 1
-		return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(2)}
+		return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(2, 0)}
 	}
-	return betEvaluation{BetUnits: units, Odds: oddsZuxuan(2)}
+	return betEvaluation{BetUnits: units, Odds: oddsZuxuan(2, 0)}
 }
 
 func evaluateK3ErTongFu(balls []string, content string) betEvaluation {
@@ -76,7 +84,7 @@ func evaluateK3ErTongFu(balls []string, content string) betEvaluation {
 			break
 		}
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(2)}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(2, 0)}
 }
 
 func evaluateK3SanTong(balls []string, content string) betEvaluation {
@@ -92,7 +100,7 @@ func evaluateK3SanTong(balls []string, content string) betEvaluation {
 			break
 		}
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(1)}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(1, 0)}
 }
 
 func evaluateK3ErBuTong(balls []string, content string) betEvaluation {
@@ -114,7 +122,7 @@ func evaluateK3ErBuTong(balls []string, content string) betEvaluation {
 			}
 		}
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(2)}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(2, 0)}
 }
 
 func evaluateK3Biaozhun(balls []string, content string) betEvaluation {
@@ -134,7 +142,7 @@ func evaluateK3Biaozhun(balls []string, content string) betEvaluation {
 	if matched >= 2 {
 		hit = true
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(2)}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(2, 0)}
 }
 
 func evaluateK3ShouDong(balls []string, content string) betEvaluation {
@@ -152,7 +160,7 @@ func evaluateK3SanLian(balls []string, content string) betEvaluation {
 			units = 1
 		}
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(1)}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(1, 0)}
 }
 
 func evaluateK3DanTiao(balls []string, content string) betEvaluation {
@@ -168,7 +176,7 @@ func evaluateK3DanTiao(balls []string, content string) betEvaluation {
 			break
 		}
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsDingwei}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsDingweiOdds(0)}
 }
 
 func k3DiceSum(balls []string) int {

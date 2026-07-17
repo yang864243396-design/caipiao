@@ -100,8 +100,8 @@ func TestEvaluateZuheQianzhonghou3MultiZone(t *testing.T) {
 	if ev.BetUnits != 9 {
 		t.Fatalf("BetUnits=%d want 9 (1×1×1×3组合×3区)", ev.BetUnits)
 	}
-	// 1/3 区中：odds_eff = (49+1)/3 - 1
-	wantOdds := (oddsZhixuan(3)+1)/3 - 1
+	// 1/3 区中：odds_eff = (三星赔率+1)/3 - 1
+	wantOdds := (oddsZhixuan(3, 0)+1)/3 - 1
 	if ev.Odds < wantOdds-0.01 || ev.Odds > wantOdds+0.01 {
 		t.Fatalf("Odds=%v want ~%v", ev.Odds, wantOdds)
 	}
