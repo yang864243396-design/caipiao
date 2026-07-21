@@ -1368,14 +1368,8 @@ const rdEstimatedUnits = computed(() => {
 const favorites = ref<SchemeFavoriteRow[]>([])
 const favoritesLoading = ref(false)
 const favoritesLoaded = ref(false)
-const favSelectedSnapshotId = ref('')
 const builtinSnapshotId = ref('')
 const builtinApplying = ref(false)
-const builtinReselecting = ref(false)
-
-const builtinChosenFavorite = computed(
-  () => favorites.value.find((f) => f.snapshotId === builtinSnapshotId.value) ?? null,
-)
 
 async function loadFavorites(): Promise<void> {
   if (favoritesLoading.value) return
@@ -1390,38 +1384,29 @@ async function loadFavorites(): Promise<void> {
   }
 }
 
-function formatFavoredAt(raw: string): string {
-  const t = new Date(raw)
-  if (Number.isNaN(t.getTime())) return raw
-  return t.toLocaleString('zh-CN', { hour12: false })
+/** 内置计画列表：方案名称最多展示 5 个字符 */
+function formatBuiltinSchemeName(name: string): string {
+  const chars = Array.from(String(name ?? '').trim())
+  if (chars.length <= 5) return chars.join('')
+  return `${chars.slice(0, 5).join('')}…`
 }
 
-function startBuiltinReselect(): void {
-  builtinReselecting.value = true
-  favSelectedSnapshotId.value = builtinSnapshotId.value
-  if (!favoritesLoaded.value) void loadFavorites()
-}
-
-async function confirmBuiltinPlan(): Promise<void> {
-  if (builtinApplying.value) return
-  if (!favSelectedSnapshotId.value) {
-    ElMessage.warning('请先选择一个收藏方案')
-    return
-  }
+/** 点击列表即选中/切换收藏方案，保持列表样式不跳转摘要页 */
+async function selectBuiltinFavorite(snapshotId: string): Promise<void> {
+  const id = String(snapshotId ?? '').trim()
+  if (!id || builtinApplying.value) return
+  if (id === builtinSnapshotId.value) return
   if (isDraftScheme.value) {
-    builtinSnapshotId.value = favSelectedSnapshotId.value
-    ElMessage.success('已选择收藏方案')
-    builtinReselecting.value = false
+    builtinSnapshotId.value = id
     persistDraft()
     return
   }
   builtinApplying.value = true
   try {
     await updateSchemeDefinition(schemeId.value, {
-      builtinPlan: { snapshotId: favSelectedSnapshotId.value },
+      builtinPlan: { snapshotId: id },
     })
-    ElMessage.success('已复制该方案配置')
-    builtinReselecting.value = false
+    builtinSnapshotId.value = id
     await loadRemoteDefinition()
   } catch (err) {
     const message = err instanceof ApiError ? err.message : err instanceof Error ? err.message : '选择失败'
@@ -2260,6 +2245,12 @@ async function onSaveCloud() {
       const count = Math.min(10, Math.max(1, rdCounts.value[i] ?? 1))
       return Array.from({ length: count }, (_, j) => String(j % 10)).join(',')
     })
+  } else if (rt === 'builtin_plan') {
+    // 方案内容由服务端按收藏快照物化，本地 schemeGroups 可为空
+    if (!builtinSnapshotId.value.trim()) {
+      await warn('请先在方案内容中选择已收藏的跟单方案')
+      return
+    }
   } else {
     if (groups.every((g) => !groupHasContent(g))) {
       await warn('方案内容不能为空')
@@ -2309,11 +2300,12 @@ async function onSaveCloud() {
     schemeFunds: schemeFunds.value,
     startTime: startTime.value,
     endTime: endTime.value,
-    schemeGroups: [...schemeGroups.value],
+    // 内置计画：勿回传空 schemeGroups，避免覆盖服务端物化后的号码内容
+    ...(isBuiltinPlan.value ? {} : { schemeGroups: [...schemeGroups.value] }),
     stopLoss: stopLoss.value,
     takeProfit: takeProfit.value,
     betUnit: betUnit.value,
-    ...catalogFieldsFromPlayConfig(schemePlayConfig.value),
+    ...(isBuiltinPlan.value ? {} : catalogFieldsFromPlayConfig(schemePlayConfig.value)),
   }
 
   try {
@@ -2367,7 +2359,12 @@ async function onSaveCloud() {
         createdDefId = def.id
         const patch = {
           ...draftPatchFromSnapshot(draft),
-          ...catalogFieldsFromPlayConfig(schemePlayConfig.value),
+          // 内置计画玩法由物化写入，勿用本地空玩法字段覆盖
+          ...(isBuiltinPlan.value ? {} : catalogFieldsFromPlayConfig(schemePlayConfig.value)),
+        }
+        if (isBuiltinPlan.value && !patch.builtinPlan?.snapshotId) {
+          await warn('请先在方案内容中选择已收藏的跟单方案')
+          return
         }
         const syncedBetMultiplier = await syncDraftAdvancedTemplatesToServer(def.id, draft)
         if (syncedBetMultiplier) {
@@ -2391,10 +2388,16 @@ async function onSaveCloud() {
       return
     }
 
-    // 添加/复制前先提交暂存的方案模式
-    if (pendingBetMultiplier.value) {
-      await updateSchemeDefinition(schemeId.value, buildCommitPatch())
-      clearPendingBetMultiplier()
+    // 添加/复制前先提交暂存的方案模式；内置计画确保已按收藏快照物化
+    if (pendingBetMultiplier.value || isBuiltinPlan.value) {
+      const commitPatch: UpdateSchemeInput = {
+        ...buildCommitPatch(),
+        ...(isBuiltinPlan.value && builtinSnapshotId.value.trim()
+          ? { builtinPlan: { snapshotId: builtinSnapshotId.value.trim() } }
+          : {}),
+      }
+      await updateSchemeDefinition(schemeId.value, commitPatch)
+      if (pendingBetMultiplier.value) clearPendingBetMultiplier()
     }
 
     if (hasCloudInstance.value) {
@@ -2813,7 +2816,9 @@ function onTimeDialogOpened() {
         <div class="scf-section-head">
           <div class="scf-section-head-left">
             <h2 class="scf-section-title">方案内容</h2>
-            <p class="scf-play-hint">{{ runTypeLabel }} · {{ playModeSummary }}</p>
+            <p class="scf-play-hint">
+              {{ isBuiltinPlan ? runTypeLabel : `${runTypeLabel} · ${playModeSummary}` }}
+            </p>
           </div>
           <button v-if="runTypeId === 'fixed_rotate'" type="button" class="scf-add-btn" @click="onAddGroup">
             <span class="scf-ms scf-ms--sm" aria-hidden="true">add</span>
@@ -3200,46 +3205,35 @@ function onTimeDialogOpened() {
           </div>
         </div>
 
-        <!-- 7. 内置计画 -->
+        <!-- 7. 内置计画：始终列表选中，点击即可切换 -->
         <div v-else-if="runTypeId === 'builtin_plan'" class="scf-content-card scf-panel">
-          <template v-if="builtinSnapshotId && !builtinReselecting">
-            <div class="scf-bp-summary">
-              <div class="scf-bp-summary-main">
-                <p class="scf-bp-summary-title">
-                  已跟随：{{ builtinChosenFavorite?.schemeName ?? schemeName }} ·
-                  {{ builtinChosenFavorite?.playMethod ?? playModeSummary }}
-                </p>
-                <p class="scf-run-tip">内置计画配置只读，与收藏计划保持一致</p>
-              </div>
-              <el-button size="small" plain @click="startBuiltinReselect">重新选择</el-button>
-            </div>
-          </template>
-          <template v-else>
-            <el-empty v-if="favoritesLoaded && !favorites.length" description="暂无收藏方案，先去跟单大厅收藏方案" :image-size="64" />
-            <template v-else>
-              <div class="scf-bp-list">
-                <button v-for="f in favorites" :key="f.snapshotId" type="button" class="scf-bp-item"
-                  :class="{ 'is-sel': favSelectedSnapshotId === f.snapshotId }"
-                  @click="favSelectedSnapshotId = f.snapshotId">
-                  <span class="scf-bp-radio" :class="{ 'is-on': favSelectedSnapshotId === f.snapshotId }"
-                    aria-hidden="true" />
-                  <span class="scf-bp-info">
-                    <span class="scf-bp-name">{{ f.schemeName }}</span>
-                    <span class="scf-bp-meta">
-                      {{ f.lotteryLabel }} · {{ f.playMethod }} · 收藏于 {{ formatFavoredAt(f.favoredAt) }}
-                    </span>
-                  </span>
-                </button>
-              </div>
-              <div class="scf-bp-actions">
-                <el-button type="primary" :loading="builtinApplying" :disabled="!favSelectedSnapshotId"
-                  @click="confirmBuiltinPlan">
-                  确认选择
-                </el-button>
-                <el-button v-if="builtinReselecting" plain @click="builtinReselecting = false">取消</el-button>
-              </div>
-            </template>
-          </template>
+          <el-empty
+            v-if="favoritesLoaded && !favorites.length"
+            description="暂无收藏方案，先去跟单大厅收藏方案"
+            :image-size="64"
+          />
+          <div
+            v-else
+            v-loading="favoritesLoading || !favoritesLoaded"
+            class="scf-bp-list"
+            :class="{ 'is-busy': builtinApplying }"
+          >
+            <button
+              v-for="f in favorites"
+              :key="f.snapshotId"
+              type="button"
+              class="scf-bp-item"
+              :class="{ 'is-sel': builtinSnapshotId === f.snapshotId }"
+              :disabled="builtinApplying"
+              :aria-pressed="builtinSnapshotId === f.snapshotId"
+              :aria-label="`${f.schemeName}，${f.lotteryLabel || '未标注彩种'}`"
+              :title="f.schemeName"
+              @click="selectBuiltinFavorite(f.snapshotId)"
+            >
+              <span class="scf-bp-name">{{ formatBuiltinSchemeName(f.schemeName) }}</span>
+              <span class="scf-bp-lottery">{{ f.lotteryLabel || '—' }}</span>
+            </button>
+          </div>
         </div>
       </section>
 
@@ -4954,51 +4948,29 @@ function onTimeDialogOpened() {
   height: 0.875rem;
 }
 
-/* 内置计画 */
-.scf-bp-summary {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.85rem 1rem;
-  border-radius: 0.75rem;
-  background: rgba(0, 80, 203, 0.06);
-}
-
-.scf-bp-summary-main {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  min-width: 0;
-}
-
-.scf-bp-summary-title {
-  margin: 0;
-  font-size: 0.875rem;
-  font-weight: 700;
-  line-height: 1.6;
-  color: var(--scf-primary);
-  word-break: break-all;
-}
-
+/* 内置计画：一行 3 个，仅名称（最多 5 字）+ 彩种 */
 .scf-bp-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.55rem;
+  min-height: 4rem;
 }
 
 .scf-bp-item {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 0.7rem;
-  width: 100%;
-  padding: 0.8rem 0.9rem;
+  justify-content: center;
+  gap: 0.2rem;
+  min-width: 0;
+  min-height: 3.6rem;
+  padding: 0.65rem 0.4rem;
   border: none;
-  border-radius: 0.75rem;
+  border-radius: 0.7rem;
   background: rgba(242, 244, 246, 0.65);
   cursor: pointer;
   font-family: inherit;
-  text-align: left;
+  text-align: center;
   transition:
     background 0.15s,
     box-shadow 0.15s;
@@ -5014,44 +4986,35 @@ function onTimeDialogOpened() {
   box-shadow: 0 0 0 1.5px rgba(0, 80, 203, 0.45) inset;
 }
 
-.scf-bp-radio {
-  flex-shrink: 0;
-  width: 1.05rem;
-  height: 1.05rem;
-  border-radius: 999px;
-  box-shadow: 0 0 0 1.5px var(--scf-outline) inset;
-  background: #fff;
-  transition: box-shadow 0.15s;
-}
-
-.scf-bp-radio.is-on {
-  box-shadow: 0 0 0 5px var(--el-color-primary, #0050cb) inset;
-}
-
-.scf-bp-info {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  min-width: 0;
-}
-
 .scf-bp-name {
-  font-size: 0.9375rem;
+  max-width: 100%;
+  font-size: 0.875rem;
   font-weight: 700;
+  line-height: 1.3;
   color: #191c1e;
-  word-break: break-all;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.scf-bp-meta {
+.scf-bp-lottery {
+  max-width: 100%;
   font-size: 11px;
   font-weight: 500;
-  line-height: 1.6;
+  line-height: 1.35;
   color: var(--scf-on-variant);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.scf-bp-actions {
-  display: flex;
-  gap: 0.5rem;
+.scf-bp-list.is-busy {
+  opacity: 0.65;
+  pointer-events: none;
+}
+
+.scf-bp-item:disabled {
+  cursor: wait;
 }
 </style>
 

@@ -28,7 +28,8 @@ func FormatBetContent(template, betMode, playMethod string, positionIdx int, gro
 			if pos < 0 {
 				pos = positionIndexFromLabel(playMethod)
 			}
-			return formatSSCDingweiContent(pos, groupContent)
+			multiPos := !dingweiLabelPositionLocked(playMethod)
+			return formatSSCDingweiContent(pos, groupContent, multiPos)
 		}
 	}
 	return groupContent
@@ -51,8 +52,18 @@ func positionIndexFromLabel(label string) int {
 	return 0
 }
 
-func formatSSCDingweiContent(positionIdx int, groupContent string) string {
-	return formatDingweiWire("ssc_std", positionIdx, groupContent)
+func formatSSCDingweiContent(positionIdx int, groupContent string, multiPos bool) string {
+	return formatDingweiWire("ssc_std", positionIdx, groupContent, multiPos)
+}
+
+// dingweiLabelPositionLocked 玩法名是否锁定到万/千/百/十/个（单位号池）；否则为全位、逗号分位。
+func dingweiLabelPositionLocked(label string) bool {
+	for _, r := range []rune{'万', '千', '百', '十', '个'} {
+		if strings.ContainsRune(label, r) {
+			return true
+		}
+	}
+	return false
 }
 
 func splitPositionLines(content string) []string {

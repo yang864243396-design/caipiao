@@ -374,7 +374,7 @@ func FormatBetContentForRule(meta RuleMeta, groupContent string) string {
 	switch mode {
 	case "dingwei":
 		pos := dingweiPositionIndex(meta)
-		return formatDingweiWire(meta.PlayTemplate, pos, groupContent)
+		return formatDingweiWire(meta.PlayTemplate, pos, groupContent, !dingweiMetaPositionLocked(meta))
 	case "fushi":
 		if meta.PlayTemplate == "k3_std" {
 			return formatCommaPickDigits(groupContent)
@@ -449,7 +449,7 @@ func FormatBetContentForRule(meta RuleMeta, groupContent string) string {
 	switch kind {
 	case KindSSCDingweiWire:
 		pos := dingweiPositionIndex(meta)
-		return formatDingweiWire(meta.PlayTemplate, pos, groupContent)
+		return formatDingweiWire(meta.PlayTemplate, pos, groupContent, !dingweiMetaPositionLocked(meta))
 	case KindSSCPositionWire:
 		if usesPaddedDigits(meta.PlayTemplate) {
 			return formatPositionWire(meta.PlayTemplate, segStart, segLen, groupContent)
@@ -1651,7 +1651,35 @@ func dingweiPositionIndex(meta RuleMeta) int {
 			return idx
 		}
 	}
+	sid := strings.ToLower(strings.TrimSpace(meta.SubID))
+	switch {
+	case strings.HasSuffix(sid, "_wan"):
+		return 0
+	case strings.HasSuffix(sid, "_qian"):
+		return 1
+	case strings.HasSuffix(sid, "_bai"):
+		return 2
+	case strings.HasSuffix(sid, "_shi"):
+		return 3
+	case strings.HasSuffix(sid, "_ge"):
+		return 4
+	}
 	return 0
+}
+
+// dingweiMetaPositionLocked 是否锁定单位（万/千/百/十/个）；一星/全位定位胆为 false（逗号分位）。
+func dingweiMetaPositionLocked(meta RuleMeta) bool {
+	text := meta.FullName + meta.Label + meta.SubID + meta.TypeLabel
+	if dingweiLabelPositionLocked(text) {
+		return true
+	}
+	sid := strings.ToLower(strings.TrimSpace(meta.SubID))
+	for _, suf := range []string{"_wan", "_qian", "_bai", "_shi", "_ge"} {
+		if strings.HasSuffix(sid, suf) {
+			return true
+		}
+	}
+	return false
 }
 
 func formatSSCFushiContent(start, length int, groupContent string) string {

@@ -175,10 +175,16 @@ func isLaidOutDingweiWire(groupContent string, positions int) bool {
 	return hasEmpty || hasConcat
 }
 
-func formatDingweiWire(template string, positionIdx int, groupContent string) string {
+// formatDingweiWire 定位胆内容 → 五位逗号 wire。
+// multiPos=true（一星/全位定位胆）：逗号分位，与定码轮换录入一致，「1,2,3」→「1,2,3,,」。
+// multiPos=false（锁定万/千/百/十/个）：逗号为同一位号池，「1,3,5,7,9」压到 positionIdx。
+func formatDingweiWire(template string, positionIdx int, groupContent string, multiPos bool) string {
 	positions := positionCountForTemplate(template)
 	if strings.Contains(groupContent, "\n") {
 		return formatDingweiMultiline(template, positions, groupContent)
+	}
+	if multiPos {
+		return formatDingweiCommaPositions(template, positions, groupContent)
 	}
 	// 已按位编排（含空位或多码连写段）：按位保留；勿把 "1,3,5,7,9" 当成五位 wire
 	if isLaidOutDingweiWire(groupContent, positions) {
@@ -203,6 +209,22 @@ func formatDingweiWire(template string, positionIdx int, groupContent string) st
 	}
 	segments := make([]string, positions)
 	segments[positionIdx] = digits
+	return strings.Join(segments, ",")
+}
+
+// formatDingweiCommaPositions 全位定位胆：无换行时按逗号分位（不足补空位）；无逗号则整段落在首位。
+func formatDingweiCommaPositions(template string, positions int, groupContent string) string {
+	segments := make([]string, positions)
+	if !strings.Contains(groupContent, ",") {
+		segments[0] = normalizeSegmentDigits(template, groupContent)
+		return strings.Join(segments, ",")
+	}
+	for i, seg := range strings.Split(groupContent, ",") {
+		if i >= positions {
+			break
+		}
+		segments[i] = normalizeSegmentDigits(template, seg)
+	}
 	return strings.Join(segments, ",")
 }
 
