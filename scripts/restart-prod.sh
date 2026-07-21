@@ -84,6 +84,11 @@ need_cmd systemctl
 
 if [[ "$DO_PULL" -eq 1 ]]; then
   log "git pull ($APP_ROOT)"
+  # 线上目录以远程为准：上次 npm build 常会改脏 components.d.ts，直接 pull 会失败
+  if ! git -C "$APP_ROOT" diff --quiet || ! git -C "$APP_ROOT" diff --cached --quiet; then
+    log "丢弃本地未提交改动（含构建生成的 *.d.ts），再拉取"
+    git -C "$APP_ROOT" reset --hard HEAD
+  fi
   git -C "$APP_ROOT" pull --ff-only
   ok "代码已更新"
 fi
