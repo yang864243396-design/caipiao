@@ -6,25 +6,35 @@ import { confirmDialog } from '@/utils/confirmDialog'
 import { ApiError } from '@/api/client'
 import { addSchemeToCloud, forkSchemeToCloud } from '@/api/schemes/addToCloud'
 import {
+  checkSchemeNameAvailable,
   createScheme,
   fetchSchemeDefinitions,
   updateSchemeDefinition,
   deleteSchemeDefinition,
+  fetchHotColdWarmTiers,
 } from '@/api/schemes/definitions'
 import type {
   SchemeJushuRow,
   SchemeTriggerBet,
   SchemeTriggerRow,
   SchemeHotColdWarm,
+  SchemeHotColdPickType,
+  SchemeRotateStrategy,
   SchemeRandomDraw,
   UpdateSchemeInput,
 } from '@/api/schemes/definitions'
 import { fetchSchemeFavorites, type SchemeFavoriteRow } from '@/api/schemes/favorites'
+import type { BetMultiplierPayload } from '@/api/schemes/betMultiplier'
+import { fetchLotterySchemeOptions } from '@/api/schemes/schemeOptions'
 import { fetchGameDraws } from '@/api/games/detail'
+import { fetchPlayTree } from '@/api/games/lotteries'
 import { parseSchemeKind } from '@/utils/schemeKind'
 import DateTimePickerModal from '@/components/ui/DateTimePickerModal.vue'
+import OptionPickerModal from '@/components/ui/OptionPickerModal.vue'
+import type { OptionPickerItem } from '@/components/ui/OptionPickerModal.vue'
 import { BET_MODE_OPTIONS, betUnitFromSchemeConfig, normalizeBetUnitValue } from '@/constants/betModeOptions'
 import SchemeGroupPickPanel from '@/components/schemes/SchemeGroupPickPanel.vue'
+import SchemeGroupInputPanel from '@/components/schemes/SchemeGroupInputPanel.vue'
 import SchemeRenxuanDanshiPanel from '@/components/schemes/SchemeRenxuanDanshiPanel.vue'
 import {
   catalogFieldsFromPlayConfig,
@@ -32,19 +42,35 @@ import {
   groupContentPlaceholder,
   isRenxuanPositionDanshiConfig,
   playConfigSummary,
+  isYixingDingweiPlayConfig,
   validateGroupContent,
   validateSchemeGroups,
+  yixingContentMaxPicksError,
+  YIXING_MAX_PICKS_MSG,
+  YIXING_MAX_PICKS_PER_POS,
 } from '@/utils/betPayload'
+import { defaultPlaySelection, formatSubPlayLabel } from '@/utils/playConfig'
 import { normalizeSchemeTimePairFromConfig, schemeTimeRangeError } from '@/utils/schemeDateTime'
 import { usePublicLotteries } from '@/composables/usePublicLotteries'
 import { usePlayTreeConfig } from '@/composables/usePlayTreeConfig'
 import { longhuPickOptionsForConfig } from '@/utils/longhuPickOptions'
-import { schemeGroupUsesPickPanel, textPickOptionsForConfig } from '@/utils/pickPanelOptions'
 import {
+  schemeGroupContentToInputBox,
+  schemeGroupUsesDigitInput,
+  schemeGroupUsesPickPanel,
+  textPickOptionsForConfig,
+} from '@/utils/pickPanelOptions'
+import {
+  filterPlayTypesForRunType,
+  filterSubPlaysForRunType,
   isLonghuPlayConfigLike,
   isPc28HezhiConfigLike,
   isPc28ModeConfigLike,
+  lotteryHasAdvTriggerPlay,
+  syncRunTypePlaySelection,
+  validateRunTypePlaySelection,
 } from '@/utils/runTypeMatrix'
+import type { PlayTypeNode } from '@/types/playCatalog'
 import {
   clearSchemeDraft,
   consumeSchemeEditRestoreSnapshot,
@@ -54,6 +80,7 @@ import {
   loadSchemeDraft,
   saveSchemeDraft,
   saveSchemeEditRestoreSnapshot,
+  type SchemeDraftMeta,
   type SchemeDraftSnapshot,
 } from '@/utils/schemeDraftStorage'
 import { syncDraftAdvancedTemplatesToServer } from '@/utils/draftAdvancedTemplates'
@@ -61,7 +88,7 @@ import { simBetFromSchemeConfig } from '@/utils/schemeSimBet'
 
 const route = useRoute()
 const router = useRouter()
-const { load: loadLotteries, codeToLabel } = usePublicLotteries()
+const { lotteries, load: loadLotteries, codeToLabel } = usePublicLotteries()
 
 const schemeId = computed(() => String(route.params.schemeId ?? ''))
 const isDraftScheme = computed(() => isDraftSchemeId(schemeId.value) || route.query.draft === '1')
@@ -69,6 +96,12 @@ const schemeKind = computed(() =>
   parseSchemeKind(route.query.kind ?? route.query.schemeKind),
 )
 const isCustomKind = computed(() => schemeKind.value === 'custom')
+/** 新建草稿可改彩种/运行类型/玩法；已落库方案不可改（服务端 forbidden） */
+const identityEditable = computed(() => isDraftScheme.value)
+
+/** 从方案详情进入：完成后回详情，已有实例不 fork */
+const returnFromDetail = computed(() => String(route.query.returnName ?? '') === 'scheme-detail')
+const editBlockedRunning = computed(() => String(route.query.status ?? '') === 'running')
 
 const BACK_ICO = '/images/lobby/icon-back.png'
 /** 开始/结束时间说明（气泡展示，不占文档流） */
@@ -79,7 +112,8 @@ const BET_MODE_HINT = '倍投设定与轮次设置共用同一份倍率配置，
 
 /** false=正式运行，true=模拟运行 */
 const simBet = ref(false)
-const schemeName = ref(decodeURIComponent(String(route.query.title ?? '') || '精算方案-A01'))
+const titleFromQuery = String(route.query.title ?? '')
+const schemeName = ref(titleFromQuery ? decodeURIComponent(titleFromQuery) : '')
 const shareStatus = ref<'private' | 'public'>('private')
 const shareLocked = ref(false)
 const cloudBusy = ref(false)
@@ -94,7 +128,7 @@ const betUnit = ref('2')
 /** 方案内容按组划分，默认一组 */
 const schemeGroups = ref<string[]>([''])
 
-const lotteryCode = ref(String(route.query.lottery ?? 'tron_ffc_1m'))
+const lotteryCode = ref(String(route.query.lottery ?? ''))
 const playTypeId = ref(String(route.query.playType ?? route.query.playTypeId ?? ''))
 const subPlayId = ref(String(route.query.subPlay ?? route.query.subPlayId ?? ''))
 
@@ -108,16 +142,42 @@ const playModeSummary = computed(() => playConfigSummary(schemePlayConfig.value)
 
 /** 当前玩法用 chip 选号时不再展示 textarea（避免双轨编辑） */
 const schemeUsesPickPanel = computed(() => schemeGroupUsesPickPanel(schemePlayConfig.value))
+/** 数字玩法方案内容改用输入框录入（对齐第三方，不点选） */
+const schemeUsesDigitInput = computed(() => schemeGroupUsesDigitInput(schemePlayConfig.value))
 const schemeUsesRenxuanDanshi = computed(() => isRenxuanPositionDanshiConfig(schemePlayConfig.value))
 
 const groupInputPlaceholder = computed(() => groupContentPlaceholder(schemePlayConfig.value))
 
 const gameNameDisplay = computed(() => {
-  const id = String(route.query.lottery ?? '')
+  const id = lotteryCode.value
   const label = codeToLabel(id)
   if (label) return label
   return id || '—'
 })
+
+// ----- 顶部身份字段：方案名称 / 彩种 / 运行类型 / 玩法类型 / 子玩法 -----
+type IdentityPickerKind = 'lottery' | 'runType' | 'playType' | 'subPlay'
+const DEPRECATED_RUN_TYPES = new Set(['batch_fixed', 'dynamic_chase', 'plan_follow'])
+
+const lotteryOptions = computed<OptionPickerItem[]>(() =>
+  lotteries.value.map((l) => ({ label: l.displayName, value: l.code })),
+)
+
+const runTypeOptions = ref<OptionPickerItem[]>([
+  { label: '定码轮换', value: 'fixed_rotate' },
+  { label: '高级定码轮换', value: 'adv_fixed_rotate' },
+  { label: '高级开某投某', value: 'adv_trigger_bet' },
+  { label: '冷热出号', value: 'hot_cold_warm' },
+  { label: '随机出号', value: 'random_draw' },
+  { label: '内置计画', value: 'builtin_plan' },
+  { label: '固定取码', value: 'fixed_number' },
+])
+const playTypeOptions = ref<OptionPickerItem[]>([])
+const subPlayOptions = ref<OptionPickerItem[]>([])
+const playTreeTypes = ref<PlayTypeNode[]>([])
+
+const identityPickerOpen = ref(false)
+const identityPickerKind = ref<IdentityPickerKind | null>(null)
 
 function groupBetUnits(raw: string): number {
   const cfg = schemePlayConfig.value
@@ -143,22 +203,223 @@ const RUN_TYPE_LABELS: Record<RunTypeId, string> = {
   fixed_rotate: '定码轮换',
   adv_fixed_rotate: '高级定码轮换',
   adv_trigger_bet: '高级开某投某',
-  hot_cold_warm: '冷热温出号',
+  hot_cold_warm: '冷热出号',
   random_draw: '随机出号',
   builtin_plan: '内置计画',
-  fixed_number: '固定号码',
+  fixed_number: '固定取码',
 }
 
-/** batch_fixed / dynamic_chase / plan_follow 等废弃或未知值统一兜底为高级定码轮换 */
+/** batch_fixed / dynamic_chase / plan_follow 等废弃或未知值统一兜底为定码轮换 */
 function normalizeRunTypeId(raw: unknown): RunTypeId {
   const v = String(Array.isArray(raw) ? raw[0] ?? '' : raw ?? '').trim()
   if ((RUN_TYPE_IDS as readonly string[]).includes(v)) return v as RunTypeId
-  return 'adv_fixed_rotate'
+  return 'fixed_rotate'
 }
 
 /** 远端 def.config.runTypeId 为准，路由 query.runType 兜底 */
 const runTypeId = ref<RunTypeId>(normalizeRunTypeId(route.query.runType))
 const runTypeLabel = computed(() => RUN_TYPE_LABELS[runTypeId.value])
+const isBuiltinPlan = computed(() => runTypeId.value === 'builtin_plan')
+
+const availableRunTypeOptions = computed<OptionPickerItem[]>(() => {
+  let opts = runTypeOptions.value.filter((o) => !DEPRECATED_RUN_TYPES.has(String(o.value)))
+  if (playTreeTypes.value.length > 0 && !lotteryHasAdvTriggerPlay(playTreeTypes.value)) {
+    opts = opts.filter((o) => String(o.value) !== 'adv_trigger_bet')
+  }
+  return opts
+})
+
+const filteredPlayTypeOptions = computed<OptionPickerItem[]>(() =>
+  filterPlayTypesForRunType(runTypeId.value, playTypeOptions.value, playTreeTypes.value),
+)
+
+const filteredSubPlayOptions = computed<OptionPickerItem[]>(() => {
+  const typeNode = playTreeTypes.value.find((t) => t.typeId === playTypeId.value)
+  const fromTree = (typeNode?.subPlays ?? []).map((s) => ({
+    label: formatSubPlayLabel(s.label),
+    value: s.subId,
+  }))
+  const source = fromTree.length > 0 ? fromTree : subPlayOptions.value
+  return filterSubPlaysForRunType(
+    runTypeId.value,
+    source,
+    playTypeId.value,
+    playTreeTypes.value,
+  )
+})
+
+const playTypeLabelDisplay = computed(() => {
+  const fromOpts = filteredPlayTypeOptions.value.find((o) => String(o.value) === playTypeId.value)?.label
+  if (fromOpts) return fromOpts
+  return schemePlayConfig.value.playTypeLabel || playTypeId.value || '—'
+})
+
+const subPlayLabelDisplay = computed(() => {
+  const fromOpts = filteredSubPlayOptions.value.find((o) => String(o.value) === subPlayId.value)?.label
+  if (fromOpts) return fromOpts
+  return schemePlayConfig.value.playMethodLabel || subPlayId.value || '—'
+})
+
+function applyRunTypePlaySync() {
+  if (isBuiltinPlan.value || !playTreeTypes.value.length) return
+  const synced = syncRunTypePlaySelection({
+    runTypeId: runTypeId.value,
+    playTypeId: playTypeId.value,
+    subPlayId: subPlayId.value,
+    playTreeTypes: playTreeTypes.value,
+    playTypeOptions: playTypeOptions.value,
+    subPlayOptions: subPlayOptions.value,
+  })
+  runTypeId.value = normalizeRunTypeId(synced.runTypeId)
+  playTypeId.value = synced.playTypeId
+  subPlayId.value = synced.subPlayId
+}
+
+function ensureSelectedInOptions(
+  options: OptionPickerItem[],
+  selected: { value: string },
+  fallback: string,
+) {
+  if (options.length === 0) return
+  if (!options.some((o) => String(o.value) === selected.value)) {
+    selected.value = String(options[0]?.value ?? fallback)
+  }
+}
+
+async function loadRunTypeOptions(code: string) {
+  if (!code) return
+  try {
+    const data = await fetchLotterySchemeOptions(code)
+    const fresh = data.runTypes.filter((o) => !DEPRECATED_RUN_TYPES.has(String(o.value)))
+    if (fresh.length) runTypeOptions.value = fresh
+  } catch {
+    /* 保留默认运行类型 */
+  }
+}
+
+async function loadIdentityPlayTree(code: string) {
+  if (!code) return
+  try {
+    const tree = await fetchPlayTree(code)
+    playTreeTypes.value = tree.playTypes
+    playTypeOptions.value = tree.playTypes.map((t) => ({
+      label: t.label,
+      value: t.typeId,
+    }))
+    const hasType = tree.playTypes.some((t) => t.typeId === playTypeId.value)
+    if (!hasType) {
+      const def = defaultPlaySelection(tree)
+      playTypeId.value = def.typeId
+      subPlayId.value = def.subId
+    }
+    const typeNode = tree.playTypes.find((t) => t.typeId === playTypeId.value)
+    subPlayOptions.value = (typeNode?.subPlays ?? []).map((s) => ({
+      label: formatSubPlayLabel(s.label),
+      value: s.subId,
+    }))
+    ensureSelectedInOptions(subPlayOptions.value, subPlayId, subPlayId.value)
+    applyRunTypePlaySync()
+  } catch (e) {
+    playTreeTypes.value = []
+    playTypeOptions.value = []
+    subPlayOptions.value = []
+    if (identityEditable.value) {
+      ElMessage.error(e instanceof ApiError ? e.message : '加载玩法树失败')
+    }
+  }
+}
+
+const identityPickerTitle = computed(() => {
+  switch (identityPickerKind.value) {
+    case 'lottery':
+      return '选择彩种'
+    case 'runType':
+      return '运行类型'
+    case 'playType':
+      return '玩法类型'
+    case 'subPlay':
+      return '子玩法'
+    default:
+      return ''
+  }
+})
+
+const identityPickerOptions = computed<OptionPickerItem[]>(() => {
+  switch (identityPickerKind.value) {
+    case 'lottery':
+      return lotteryOptions.value
+    case 'runType':
+      return availableRunTypeOptions.value
+    case 'playType':
+      return filteredPlayTypeOptions.value
+    case 'subPlay':
+      return filteredSubPlayOptions.value
+    default:
+      return []
+  }
+})
+
+const identityPickerSelectedValue = computed(() => {
+  switch (identityPickerKind.value) {
+    case 'lottery':
+      return lotteryCode.value
+    case 'runType':
+      return runTypeId.value
+    case 'playType':
+      return playTypeId.value
+    case 'subPlay':
+      return subPlayId.value
+    default:
+      return ''
+  }
+})
+
+function openIdentityPicker(k: IdentityPickerKind) {
+  if (!identityEditable.value) return
+  identityPickerKind.value = k
+  identityPickerOpen.value = true
+}
+
+function onIdentityPickerConfirm(val: string | number) {
+  const v = String(val)
+  const k = identityPickerKind.value
+  if (k === 'lottery') {
+    lotteryCode.value = v
+    void loadRunTypeOptions(v)
+    void loadIdentityPlayTree(v)
+  } else if (k === 'runType') {
+    runTypeId.value = normalizeRunTypeId(v)
+    applyRunTypePlaySync()
+  } else if (k === 'playType') {
+    playTypeId.value = v
+    const local = playTreeTypes.value.find((t) => t.typeId === v)
+    if (local) {
+      subPlayOptions.value = (local.subPlays ?? []).map((s) => ({
+        label: formatSubPlayLabel(s.label),
+        value: s.subId,
+      }))
+    }
+    applyRunTypePlaySync()
+  } else if (k === 'subPlay') {
+    subPlayId.value = v
+  }
+  identityPickerKind.value = null
+}
+
+function onIdentityPickerCancel() {
+  identityPickerKind.value = null
+}
+
+function labelOf(list: OptionPickerItem[] | readonly OptionPickerItem[], id: string) {
+  return list.find((o) => String(o.value) === id)?.label ?? ''
+}
+
+watch(availableRunTypeOptions, (opts) => {
+  if (!identityEditable.value || !opts.length) return
+  if (!opts.some((o) => String(o.value) === runTypeId.value)) {
+    runTypeId.value = 'fixed_rotate'
+  }
+})
 
 const POSITION_FALLBACK_LABELS = ['万位', '千位', '百位', '十位', '个位']
 const ALL_DIGITS = Array.from({ length: 10 }, (_, i) => String(i))
@@ -202,7 +463,7 @@ function isPc28PlayLine(): boolean {
   return isPc28ModeConfigLike(schemePlayConfig.value)
 }
 
-/** 固定号码：仅展示并保存第 1 组 */
+/** 固定取码：仅展示并保存第 1 组 */
 const displayedGroupIndexes = computed(() =>
   runTypeId.value === 'fixed_number' ? [0] : schemeGroups.value.map((_, i) => i),
 )
@@ -235,7 +496,9 @@ function applyJushuFromConfig(raw: unknown): boolean {
 
 /** 远端无 jushuList 时由现有 schemeGroups 生成预览行（局 i+1 = 第 i 组），保存后落 jushuList */
 function seedJushuFromGroups(): void {
-  const groups = schemeGroups.value.map((g) => g.trim()).filter(Boolean)
+  const groups = schemeGroups.value
+    .map((g) => String(g ?? '').replace(/\r/g, ''))
+    .filter((g) => g.trim())
   if (!groups.length) return
   jushuList.value = groups.map((content, i) => ({ ju: i + 1, content, afterHit: 1, afterMiss: 1 }))
 }
@@ -256,8 +519,9 @@ function confirmJushuDialog(): void {
     ElMessage.warning(`第 ${f.ju} 局已存在，局数不可重复`)
     return
   }
-  const content = f.content.trim()
-  if (!content) {
+  // 定位胆多位含前导空行，禁止 trim
+  const content = String(f.content ?? '').replace(/\r/g, '')
+  if (!content.trim()) {
     ElMessage.warning('投注号码不能为空')
     return
   }
@@ -272,11 +536,31 @@ function removeJushuRow(idx: number): void {
   jushuList.value.splice(idx, 1)
 }
 
+/** 局数列表展示：按录入框原版（压缩）格式，不把引擎换行渲染成多行 */
+function formatJushuContentDisplay(content: string): string {
+  const raw = String(content ?? '').replace(/\r/g, '')
+  if (!raw.trim()) return ''
+  if (schemeUsesDigitInput.value) {
+    const box = schemeGroupContentToInputBox(raw, schemePlayConfig.value)
+    if (box) return box
+  }
+  if (raw.includes('\n')) {
+    return raw
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .join(', ')
+  }
+  return raw
+}
+
 // --- adv_trigger_bet 高级开某投某 ---
 const PC28_HEZHI_VALUES = Array.from({ length: 28 }, (_, i) => String(i))
 const longhuPickValues = computed(() => longhuPickOptionsForConfig(schemePlayConfig.value))
 const triggerRows = ref<SchemeTriggerRow[]>([])
 const triggerMode = ref<SchemeTriggerBet['mode']>('always_pos')
+/** 定位胆投注位（可多选）：0=万 … 4=个（统一一星定位胆时必选） */
+const triggerPositionIdxs = ref<number[]>([0])
 /** 远端已有配置时不随玩法解析过程重建行 */
 let triggerRowsLocked = false
 let lastTriggerPlayKey = ''
@@ -313,6 +597,21 @@ const triggerBetOptions = computed<string[]>(() => {
 
 const isTriggerTextPlay = computed(() => triggerBetOptions.value.length > 0)
 
+/** 统一「一星定位胆」等多位面板：需选手动投注位；子玩法已锁万/千…则不显示 */
+const showTriggerPositionPicker = computed(() => {
+  if (runTypeId.value !== 'adv_trigger_bet') return false
+  if (isLonghuPlay.value || isTriggerTextPlay.value) return false
+  const cfg = schemePlayConfig.value
+  const tid = String(cfg.playTypeId ?? '')
+  const bm = String(cfg.betMode ?? '')
+  const isDingwei =
+    bm === 'dingwei' ||
+    tid === 'dingwei' ||
+    tid === 'g006' ||
+    String(cfg.guajiGroup ?? '') === '一星'
+  return isDingwei && positionCount.value >= 2
+})
+
 function triggerOpenValues(): string[] {
   if (isLonghuPlay.value) return longhuPickValues.value
   if (isPc28HezhiConfigLike(schemePlayConfig.value) && isPc28PlayLine()) {
@@ -335,9 +634,47 @@ function ensureTriggerRows(): void {
   triggerRows.value = opens.map((open) => ({ enabled: true, open, pos: '', neg: '' }))
 }
 
+function normalizeTriggerPositionIdxs(raw: unknown, maxExclusive = 10): number[] {
+  const max = Math.max(1, maxExclusive) - 1
+  const out: number[] = []
+  const seen = new Set<number>()
+  const push = (n: number) => {
+    if (!Number.isFinite(n)) return
+    const idx = Math.min(max, Math.max(0, Math.trunc(n)))
+    if (seen.has(idx)) return
+    seen.add(idx)
+    out.push(idx)
+  }
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (typeof item === 'number') push(item)
+      else if (typeof item === 'string' && /^\d+$/.test(item.trim())) push(Number(item.trim()))
+    }
+  } else if (typeof raw === 'number') {
+    push(raw)
+  } else if (typeof raw === 'string' && /^\d+$/.test(raw.trim())) {
+    push(Number(raw.trim()))
+  }
+  out.sort((a, b) => a - b)
+  return out.length ? out : [0]
+}
+
+function toggleTriggerPosition(idx: number): void {
+  const cur = [...triggerPositionIdxs.value]
+  const at = cur.indexOf(idx)
+  if (at >= 0) {
+    if (cur.length <= 1) return // 至少保留一位
+    cur.splice(at, 1)
+  } else {
+    cur.push(idx)
+    cur.sort((a, b) => a - b)
+  }
+  triggerPositionIdxs.value = cur
+}
+
 function applyTriggerBetFromConfig(raw: unknown): void {
   if (!raw || typeof raw !== 'object') return
-  const tb = raw as { rows?: unknown; mode?: unknown }
+  const tb = raw as { rows?: unknown; mode?: unknown; positionIdx?: unknown; positionIdxs?: unknown }
   if (Array.isArray(tb.rows) && tb.rows.length) {
     const rows: SchemeTriggerRow[] = []
     for (const item of tb.rows) {
@@ -358,6 +695,14 @@ function applyTriggerBetFromConfig(raw: unknown): void {
   const mode = String(tb.mode ?? '')
   if (mode === 'always_pos' || mode === 'always_neg' || mode === 'alt_pos_first' || mode === 'alt_neg_first') {
     triggerMode.value = mode
+  }
+  if (tb.positionIdxs != null || tb.positionIdx != null) {
+    const fromArr = normalizeTriggerPositionIdxs(tb.positionIdxs, positionCount.value || 10)
+    if (Array.isArray(tb.positionIdxs) && fromArr.length) {
+      triggerPositionIdxs.value = fromArr
+    } else {
+      triggerPositionIdxs.value = normalizeTriggerPositionIdxs(tb.positionIdx, positionCount.value || 10)
+    }
   }
 }
 
@@ -398,9 +743,16 @@ const triggerInputPlaceholder = computed(() => {
   return pool.length ? `${pool[0]}-${pool[pool.length - 1]}` : '0-9'
 })
 
-// --- hot_cold_warm 冷热温出号 ---
-const hcwTotalPeriods = ref(100)
-const hcwWinRotate = ref(false)
+// --- hot_cold_warm 冷热出号（v6 仅冷/热） ---
+const hcwTotalPeriods = ref(20)
+const hcwFaultCount = ref(1)
+const hcwStrategy = ref<SchemeRotateStrategy>('keep')
+const HCW_STRATEGY_OPTIONS: Array<{ label: string; value: SchemeRotateStrategy }> = [
+  { label: '每期换', value: 'every' },
+  { label: '不换号', value: 'keep' },
+  { label: '中后换', value: 'after_hit' },
+  { label: '挂后换', value: 'after_miss' },
+]
 /** 每位一个已选号码数组 */
 const hcwPools = ref<string[][]>([])
 const hcwLoading = ref(false)
@@ -411,26 +763,81 @@ interface HcwTier {
   cold: string[]
 }
 const hcwTiers = ref<HcwTier[]>([])
+/** 每位/单档：选项 → 最近统计命中次数 */
+const hcwFreq = ref<Array<Record<string, number>>>([])
+interface HcwCell {
+  token: string
+  count: number | null
+  tier: 'hot' | 'cold' | 'none'
+}
+
+/**
+ * 号码整体频次模式（组选家族/不定位/包胆）：单档选号池（跨位合并频次），
+ * 区别于按位型（每位一档）。
+ */
+const hcwDigitOverall = computed(() => {
+  const cfg = schemePlayConfig.value as { betMode?: string; subPlayId?: string; playMethodLabel?: string }
+  const bm = String(cfg.betMode ?? '').toLowerCase()
+  if (['zu3', 'zu6', 'zu24', 'zu12', 'zu60', 'zu30', 'zu120', 'budingwei', 'baodan'].includes(bm)) return true
+  const sub = `${String(cfg.subPlayId ?? '')}`.toLowerCase()
+  if (/zuxuan_fs|zu3|zu6|zu24|zu12|zu60|zu30|zu120|budingwei|baodan/.test(sub)) return true
+  const label = String(cfg.playMethodLabel ?? '')
+  if (label.includes('单式')) return false
+  return /组三|组六|组选|不定位|包胆/.test(label)
+})
+
+/**
+ * 属性/聚合家族（大小单双/龙虎/庄闲/特殊号/和值/跨度）：单档「选项池」，
+ * 分档频次由服务端复用权威判定计算（避免前端重复实现各彩种大小阈值/和值/跨度/龙虎口径）。
+ */
+const hcwAttribute = computed(() => {
+  const bm = String(schemePlayConfig.value.betMode ?? '').toLowerCase()
+  return ['daxiao', 'danshuang', 'dxds', 'zhuangxian', 'longhu', 'longhuhe', 'longhubao', 'teshu', 'hezhi', 'kuadu'].includes(bm)
+})
+
+/** 单档布局（整体频次 或 属性选项池），区别于按位型每位一档 */
+const hcwSingleGroup = computed(() => hcwDigitOverall.value || hcwAttribute.value)
+
+/** 属性选项宇宙（由服务端分档接口回填，用于无统计时的兜底展示） */
+const hcwAttrUniverse = ref<string[]>([])
 
 function ensureHcwPools(): void {
-  const n = positionCount.value
+  const n = hcwSingleGroup.value ? 1 : positionCount.value
   while (hcwPools.value.length < n) hcwPools.value.push([])
 }
+
+/** 冷热分档分组：属性=单档「选项池」；号码整体频次=单档「号码池」；按位=每位一档 */
+const hcwGroupLabels = computed(() =>
+  hcwAttribute.value ? ['选项池'] : hcwDigitOverall.value ? ['号码池'] : positionLabels.value,
+)
+
+/** 无统计时的兜底可选项：属性=服务端回填的选项宇宙；其余=数字池 */
+const hcwFallbackOptions = computed(() =>
+  hcwAttribute.value ? hcwAttrUniverse.value : numberPoolTokens.value,
+)
 
 function applyHotColdWarmFromConfig(raw: unknown): void {
   if (!raw || typeof raw !== 'object') return
   const c = raw as Record<string, unknown>
   const tp = Math.trunc(Number(c.totalPeriods))
-  if (Number.isFinite(tp) && tp >= 20 && tp <= 500) hcwTotalPeriods.value = tp
-  if (typeof c.winRotate === 'boolean') hcwWinRotate.value = c.winRotate
+  if (Number.isFinite(tp) && tp >= 20 && tp <= 100) hcwTotalPeriods.value = tp
+  else if (Number.isFinite(tp) && tp > 100) hcwTotalPeriods.value = 100
+  const st = String(c.strategy ?? '')
+  if (st === 'every' || st === 'keep' || st === 'after_hit' || st === 'after_miss') {
+    hcwStrategy.value = st
+  } else if (typeof c.winRotate === 'boolean') {
+    hcwStrategy.value = c.winRotate ? 'after_hit' : 'keep'
+  }
+  const fc = Math.trunc(Number(c.faultCount))
+  if (Number.isFinite(fc) && fc >= 1 && fc <= 10) hcwFaultCount.value = fc
   if (Array.isArray(c.pool)) {
-    // 回填时玩法树可能尚未就绪（numberPoolTokens 不可依赖），原样保留数字 token，
-    // 展示选中态与去重均按数值比较（poolHasToken / toggleHcwDigit）
+    // 回填时玩法树可能尚未就绪：保留任意非空 token（数字或属性文字如 大/小/龙/虎），
+    // 展示选中态与去重经 tokenEq（数字按值、文字按串）比较
     hcwPools.value = c.pool.map((line) =>
       String(line ?? '')
         .split(/[,，\s]+/)
         .map((s) => s.trim())
-        .filter((s) => /^\d{1,2}$/.test(s)),
+        .filter((s) => s !== ''),
     )
   }
 }
@@ -459,15 +866,50 @@ function hcwPositionOffset(ballsLen: number): number {
   return 0
 }
 
+/** 属性家族分档：调用服务端接口（复用权威 evaluatePlayHit 计频），单档选项池 */
+async function loadHcwAttrStats(): Promise<void> {
+  const cfg = schemePlayConfig.value
+  const res = await fetchHotColdWarmTiers({
+    lotteryCode: lotteryCode.value,
+    playTypeId: cfg.playTypeId,
+    subPlayId: cfg.subPlayId,
+    playTemplate: cfg.playTemplate,
+    betMode: cfg.betMode,
+    catalogSubId: cfg.catalogSubId,
+    playMethodLabel: cfg.playMethodLabel,
+    numberPoolMin: cfg.numberPoolMin,
+    numberPoolMax: cfg.numberPoolMax,
+    segmentLen: cfg.segmentLen,
+    periods: hcwTotalPeriods.value,
+  })
+  if (res.mode !== 'attribute' || !Array.isArray(res.universe) || res.universe.length === 0) {
+    hcwStatsReady.value = false
+    hcwFreq.value = []
+    return
+  }
+  hcwAttrUniverse.value = res.universe
+  hcwTiers.value = [
+    { hot: res.hot ?? [], warm: res.warm ?? [], cold: res.cold ?? [] },
+  ]
+  hcwFreq.value = [res.counts && typeof res.counts === 'object' ? { ...res.counts } : {}]
+  hcwStatsReady.value = true
+}
+
 async function loadHcwStats(): Promise<void> {
   if (hcwLoading.value) return
   hcwLoading.value = true
   try {
+    if (hcwAttribute.value) {
+      await loadHcwAttrStats()
+      return
+    }
     const res = await fetchGameDraws(lotteryCode.value, undefined, hcwTotalPeriods.value)
     const items = Array.isArray(res?.items) ? res.items : []
     const segLen = positionCount.value
     const pool = numberPoolTokens.value
-    const freq: Array<Record<string, number>> = Array.from({ length: segLen }, () => ({}))
+    // 号码整体频次：所有位合并统计为单档；按位型：每位一档
+    const dims = hcwDigitOverall.value ? 1 : segLen
+    const freq: Array<Record<string, number>> = Array.from({ length: dims }, () => ({}))
     let counted = 0
     for (const it of items) {
       const balls = Array.isArray(it?.balls) ? it.balls : []
@@ -476,64 +918,192 @@ async function loadHcwStats(): Promise<void> {
       for (let p = 0; p < segLen; p++) {
         const tk = normalizePoolToken(String(balls[offset + p] ?? ''))
         if (tk) {
-          freq[p]![tk] = (freq[p]![tk] ?? 0) + 1
+          const d = hcwDigitOverall.value ? 0 : p
+          freq[d]![tk] = (freq[d]![tk] ?? 0) + 1
           counted += 1
         }
       }
     }
     if (!counted) {
       hcwStatsReady.value = false
+      hcwFreq.value = []
       return
     }
-    // 频次降序排序后按池长三等分：热 / 温 / 冷（与引擎 hotColdWarmTiers 口径一致）
-    const third = Math.ceil(pool.length / 3)
+    // 频次降序排序后按池长二等分：热 / 冷（对齐 v6，无温档）
+    const half = Math.ceil(pool.length / 2)
     hcwTiers.value = freq.map((counts) => {
       const sorted = [...pool].sort((a, b) => {
         const diff = (counts[b] ?? 0) - (counts[a] ?? 0)
         return diff !== 0 ? diff : Number(a) - Number(b)
       })
       return {
-        hot: sorted.slice(0, third),
-        warm: sorted.slice(third, 2 * third),
-        cold: sorted.slice(2 * third),
+        hot: sorted.slice(0, half),
+        warm: [],
+        cold: sorted.slice(half),
       }
     })
+    hcwFreq.value = freq.map((counts) => ({ ...counts }))
     hcwStatsReady.value = true
   } catch {
     hcwStatsReady.value = false
+    hcwFreq.value = []
   } finally {
     hcwLoading.value = false
   }
 }
 
-/** 池内是否已含该号（数值比较，兼容 '07' 与 '7'） */
+/** token 相等：数字按数值比较（兼容 '07'/'7'），属性文字按字符串比较 */
+function tokenEq(a: string, b: string): boolean {
+  const na = Number(a)
+  const nb = Number(b)
+  if (a.trim() !== '' && b.trim() !== '' && Number.isFinite(na) && Number.isFinite(nb)) {
+    return na === nb
+  }
+  return a === b
+}
+
+/** 池内是否已含该号（数字按值、属性文字按串） */
 function poolHasToken(arr: string[] | undefined, token: string): boolean {
   if (!arr) return false
-  const n = Number(token)
-  return arr.some((t) => Number(t) === n)
+  return arr.some((t) => tokenEq(t, token))
 }
 
 function toggleHcwDigit(pos: number, digit: string): void {
   ensureHcwPools()
   const arr = hcwPools.value[pos]
   if (!arr) return
-  const n = Number(digit)
-  const i = arr.findIndex((t) => Number(t) === n)
+  const i = arr.findIndex((t) => tokenEq(t, digit))
   if (i >= 0) arr.splice(i, 1)
   else {
     arr.push(digit)
-    arr.sort((a, b) => Number(a) - Number(b))
+    // 数字池升序；属性文字保持选择顺序（Number 比较对文字为 NaN，稳定不变序）
+    arr.sort((a, b) => {
+      const na = Number(a)
+      const nb = Number(b)
+      if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb
+      return 0
+    })
   }
 }
 
-/** 预估注数：与随机出号一致，走 countBetUnits（位积/组合×段长/任选 C(n,k)） */
+function sortHcwTokens(tokens: string[]): string[] {
+  return [...tokens].sort((a, b) => {
+    const na = Number(a)
+    const nb = Number(b)
+    if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb
+    return 0
+  })
+}
+
+/** 快捷选号目标：冷/热取分档；全取当前可见全集 */
+function hcwQuickTargets(pos: number, kind: 'cold' | 'hot' | 'all'): string[] {
+  if (kind === 'all') {
+    if (hcwStatsReady.value) {
+      const t = hcwTiers.value[pos]
+      return [...(t?.hot ?? []), ...(t?.cold ?? [])]
+    }
+    return [...hcwFallbackOptions.value]
+  }
+  if (!hcwStatsReady.value) return []
+  const t = hcwTiers.value[pos]
+  return kind === 'hot' ? [...(t?.hot ?? [])] : [...(t?.cold ?? [])]
+}
+
+function applyHcwQuick(pos: number, kind: 'cold' | 'hot' | 'all' | 'clear'): void {
+  ensureHcwPools()
+  if (kind === 'clear') {
+    hcwPools.value[pos] = []
+    return
+  }
+  const targets = hcwQuickTargets(pos, kind)
+  if (!targets.length) return
+  hcwPools.value[pos] = sortHcwTokens(targets)
+}
+
+/** 快捷钮高亮：当前池与该快捷目标完全一致（「清」仅动作、不高亮） */
+function hcwQuickActive(pos: number, kind: 'cold' | 'hot' | 'all'): boolean {
+  const pool = hcwPools.value[pos] ?? []
+  const targets = hcwQuickTargets(pos, kind)
+  if (!targets.length) return false
+  if (pool.length !== targets.length) return false
+  return targets.every((t) => poolHasToken(pool, t))
+}
+
+function hcwLookupCount(pos: number, token: string): number {
+  const counts = hcwFreq.value[pos] ?? {}
+  for (const [k, v] of Object.entries(counts)) {
+    if (tokenEq(k, token)) return Number(v) || 0
+  }
+  return 0
+}
+
+function hcwTokenTier(pos: number, token: string): 'hot' | 'cold' | 'none' {
+  if (!hcwStatsReady.value) return 'none'
+  const t = hcwTiers.value[pos]
+  if ((t?.hot ?? []).some((x) => tokenEq(x, token))) return 'hot'
+  if ((t?.cold ?? []).some((x) => tokenEq(x, token))) return 'cold'
+  return 'none'
+}
+
+/** 每位展示：0–9（或选项宇宙）升序；下方带频次；热/冷着色 */
+function hcwDisplayCells(pos: number): HcwCell[] {
+  let tokens: string[]
+  if (hcwStatsReady.value) {
+    const t = hcwTiers.value[pos]
+    const seen: string[] = []
+    for (const d of [...(t?.hot ?? []), ...(t?.cold ?? [])]) {
+      if (!seen.some((x) => tokenEq(x, d))) seen.push(d)
+    }
+    tokens = seen.length ? seen : [...hcwFallbackOptions.value]
+  } else {
+    tokens = [...hcwFallbackOptions.value]
+  }
+  return sortHcwTokens(tokens).map((token) => ({
+    token,
+    count: hcwStatsReady.value ? hcwLookupCount(pos, token) : null,
+    tier: hcwTokenTier(pos, token),
+  }))
+}
+
+/** 按分组缓存单元格，避免模板重复计算 */
+const hcwCellsByPos = computed(() =>
+  hcwGroupLabels.value.map((_, pi) => hcwDisplayCells(pi)),
+)
+
+/** 预估注数：按手动选号池计算 */
 const hcwEstimatedUnits = computed(() => {
+  // 属性家族：每个已选选项 = 1 注（大/小/龙/虎/和值值…）
+  if (hcwAttribute.value) {
+    return (hcwPools.value[0] ?? []).filter((t) => t.trim() !== '').length
+  }
+  // 号码整体频次：单档选号池，按组选/不定位/包胆口径算注数
+  if (hcwDigitOverall.value) {
+    const line = (hcwPools.value[0] ?? []).join(',')
+    return line.trim() ? countBetUnits(schemePlayConfig.value, line) : 0
+  }
   const n = positionCount.value
   if (n <= 0) return 0
   const lines = Array.from({ length: n }, (_, i) => (hcwPools.value[i] ?? []).join(','))
   if (lines.every((x) => !x.trim())) return 0
   return countBetUnits(schemePlayConfig.value, lines.join('\n'))
 })
+
+/** 保存时从已选池反推出号类型；容错取面板设定值 */
+function deriveHcwPickTypesForSave(): SchemeHotColdPickType[] {
+  ensureHcwPools()
+  const n = hcwSingleGroup.value ? 1 : positionCount.value
+  const types = new Set<SchemeHotColdPickType>()
+  for (let pi = 0; pi < n; pi++) {
+    const pool = hcwPools.value[pi] ?? []
+    if (!hcwStatsReady.value) continue
+    const t = hcwTiers.value[pi]
+    for (const d of pool) {
+      if ((t?.hot ?? []).some((x) => tokenEq(x, d))) types.add('hot')
+      if ((t?.cold ?? []).some((x) => tokenEq(x, d))) types.add('cold')
+    }
+  }
+  return types.size ? ([...types] as SchemeHotColdPickType[]) : ['hot']
+}
 
 // --- random_draw 随机出号 ---
 const rdCounts = ref<number[]>([])
@@ -550,7 +1120,58 @@ const RD_STRATEGY_OPTIONS = [
 function ensureRdCounts(): void {
   const n = positionCount.value
   while (rdCounts.value.length < n) rdCounts.value.push(1)
+  if (rdCounts.value.length === 0) rdCounts.value.push(1)
 }
+
+/** 单式/组选单式：整注随机（仅需注数 rdCounts[0]），非按位产号 */
+const rdWholeTicket = computed(() => {
+  const cfg = schemePlayConfig.value as { betMode?: string; subPlayId?: string; playMethodLabel?: string }
+  const bm = String(cfg.betMode ?? '').toLowerCase()
+  const sub = String(cfg.subPlayId ?? '').toLowerCase()
+  if (['danshi', 'zhixuan_ds', 'zuxuan_ds', 'hunhe'].includes(bm)) return true
+  if (['zhixuan_ds', 'zuxuan_ds'].includes(sub)) return true
+  const label = String(cfg.playMethodLabel ?? '')
+  return label.includes('单式') || label.includes('混合')
+})
+
+/** 单式整注随机的本地预览注单 */
+const rdWholePreview = ref<string[]>([])
+
+/** 组三/组六/组选N/组选复式：号码池随机（选 K 个号），非按位、非整注 */
+const rdZuxuanPool = computed(() => {
+  if (rdWholeTicket.value) return false
+  const cfg = schemePlayConfig.value as { betMode?: string; subPlayId?: string; catalogSubId?: string; playMethodLabel?: string }
+  const bm = String(cfg.betMode ?? '').toLowerCase()
+  if (['zu3', 'zu6', 'zu24', 'zu12', 'zu60', 'zu30', 'zu120'].includes(bm)) return true
+  const cat = `${String(cfg.subPlayId ?? '')} ${String(cfg.catalogSubId ?? '')}`.toLowerCase()
+  if (/zuxuan_fs|zuxuan|zu3|zu6|zu24|zu12|zu60|zu30|zu120/.test(cat)) return true
+  return /组三|组六|组选/.test(String(cfg.playMethodLabel ?? ''))
+})
+
+/** 属性/聚合家族（大小单双/龙虎/特殊号/庄闲/和值/跨度/不定位/包胆）：从选项宇宙随机抽 K 个 */
+const rdAttribute = computed(() => {
+  if (rdWholeTicket.value || rdZuxuanPool.value) return false
+  const bm = String(schemePlayConfig.value.betMode ?? '').toLowerCase()
+  return ['daxiao', 'danshuang', 'dxds', 'zhuangxian', 'longhu', 'longhuhe', 'longhubao', 'teshu', 'hezhi', 'kuadu', 'budingwei', 'baodan'].includes(bm)
+})
+
+/** 随机出号是否用"单一数量输入"（单式注数 / 组选选码个数 / 属性选项个数） */
+const rdSingleCountMode = computed(() => rdWholeTicket.value || rdZuxuanPool.value || rdAttribute.value)
+const rdSingleCountLabel = computed(() => {
+  if (rdWholeTicket.value) return '注数'
+  if (rdZuxuanPool.value) return '选码个数'
+  return '选项个数'
+})
+const rdSingleCountMax = computed(() => {
+  if (rdWholeTicket.value) return 200
+  if (rdZuxuanPool.value) return Math.max(3, numberPoolTokens.value.length)
+  return 28 // 属性家族：上限由引擎按宇宙裁剪（如大小单双最多 4、和值最多 28）
+})
+const rdSingleCountMin = computed(() => {
+  if (rdWholeTicket.value) return 1
+  if (rdZuxuanPool.value) return Math.max(2, positionCount.value)
+  return 1
+})
 
 /** 各面板状态随玩法位数 / 运行类型就绪（须在 ensureHcwPools / ensureRdCounts 声明之后） */
 watch(
@@ -565,7 +1186,13 @@ watch(
   ],
   () => {
     if (runTypeId.value === 'adv_trigger_bet') ensureTriggerRows()
-    if (runTypeId.value === 'hot_cold_warm') ensureHcwPools()
+    if (runTypeId.value === 'hot_cold_warm') {
+      ensureHcwPools()
+      // 玩法家族切换后旧分档失效（数字↔属性宇宙不同），重置后按当前总期数直接统计
+      hcwStatsReady.value = false
+      hcwAttrUniverse.value = []
+      void loadHcwStats()
+    }
     if (runTypeId.value === 'random_draw') ensureRdCounts()
   },
   { immediate: true },
@@ -581,9 +1208,83 @@ function applyRandomDrawFromConfig(raw: unknown): void {
   if (s === 'every' || s === 'keep' || s === 'after_hit' || s === 'after_miss') rdStrategy.value = s
 }
 
+// --- fixed_number 固定取码：条件规则（命中上期开奖→投固定号） ---
+interface FixedPickRuleRow {
+  posStart: number
+  posEnd: number
+  codeMin: number
+  codeMax: number
+  numbers: string
+}
+const fixedPickRules = ref<FixedPickRuleRow[]>([])
+
+function addFixedPickRule(): void {
+  fixedPickRules.value.push({ posStart: 1, posEnd: 1, codeMin: 0, codeMax: 9, numbers: '' })
+}
+
+function removeFixedPickRule(idx: number): void {
+  fixedPickRules.value.splice(idx, 1)
+}
+
+function applyFixedPickFromConfig(raw: unknown): void {
+  if (!raw || typeof raw !== 'object') return
+  const c = raw as Record<string, unknown>
+  if (!Array.isArray(c.rules)) return
+  fixedPickRules.value = c.rules.map((r) => {
+    const m = (r ?? {}) as Record<string, unknown>
+    // 存储 0-based 位下标，界面以 1-based 展示
+    const posStart = Math.max(0, Math.trunc(Number(m.posStart)) || 0)
+    const posEnd = Math.max(posStart, Math.trunc(Number(m.posEnd)) || posStart)
+    const codeMin = Math.max(0, Math.trunc(Number(m.codeMin)) || 0)
+    const codeMax = Math.max(codeMin, Math.trunc(Number(m.codeMax)) || 0)
+    return {
+      posStart: posStart + 1,
+      posEnd: posEnd + 1,
+      codeMin,
+      codeMax,
+      numbers: String(m.numbers ?? ''),
+    }
+  })
+}
+
 /** 仅本地预览；云端运行时每期由引擎按数量自动随机 */
 function generateRdPreview(): void {
   ensureRdCounts()
+  if (rdWholeTicket.value) {
+    const pool = [...numberPoolTokens.value]
+    const positions = positionCount.value
+    const n = Math.min(200, Math.max(1, rdCounts.value[0] ?? 1))
+    const seen = new Set<string>()
+    const out: string[] = []
+    for (let a = 0; out.length < n && a < n * 100 + 100; a++) {
+      const digits = Array.from({ length: positions }, () => pool[Math.floor(Math.random() * pool.length)] ?? '0')
+      const key = digits.join('')
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push(key)
+    }
+    rdWholePreview.value = out
+    rdPreview.value = []
+    return
+  }
+  if (rdZuxuanPool.value) {
+    const pool = [...numberPoolTokens.value]
+    const k = Math.min(pool.length, Math.max(rdSingleCountMin.value, rdCounts.value[0] ?? rdSingleCountMin.value))
+    for (let j = pool.length - 1; j > 0; j--) {
+      const t = Math.floor(Math.random() * (j + 1))
+      ;[pool[j], pool[t]] = [pool[t]!, pool[j]!]
+    }
+    rdWholePreview.value = [pool.slice(0, k).sort((a, b) => Number(a) - Number(b)).join(',')]
+    rdPreview.value = []
+    return
+  }
+  if (rdAttribute.value) {
+    // 属性家族由引擎按选项宇宙随机产出，本地不预览
+    rdWholePreview.value = []
+    rdPreview.value = []
+    return
+  }
+  rdWholePreview.value = []
   rdPreview.value = Array.from({ length: positionCount.value }, (_, i) => {
     const pool = [...numberPoolTokens.value]
     const count = Math.min(10, Math.max(1, rdCounts.value[i] ?? 1), pool.length)
@@ -597,6 +1298,16 @@ function generateRdPreview(): void {
 
 /** 预估注数：按预览（或每位数量占位）走同一套 countBetUnits，含直选组合×段长 */
 const rdEstimatedUnits = computed(() => {
+  // 单式整注随机：注数即 rdCounts[0]
+  if (rdWholeTicket.value) return Math.min(200, Math.max(1, rdCounts.value[0] ?? 1))
+  // 组选号码池随机：按选中号码池走 countBetUnits（组选口径）
+  if (rdZuxuanPool.value) {
+    const pool = [...numberPoolTokens.value]
+    const k = Math.min(pool.length, Math.max(rdSingleCountMin.value, rdCounts.value[0] ?? rdSingleCountMin.value))
+    return countBetUnits(schemePlayConfig.value, pool.slice(0, k).join(','))
+  }
+  // 属性家族：注数随选项个数（精确注数由引擎按玩法口径计算）
+  if (rdAttribute.value) return Math.max(1, rdCounts.value[0] ?? 1)
   const n = positionCount.value
   if (n <= 0) return 0
   const lines = Array.from({ length: n }, (_, i) => {
@@ -686,7 +1397,6 @@ const remoteHasInstance = ref(false)
 const remoteReady = ref(false)
 let remotePersistTimer: ReturnType<typeof setTimeout> | null = null
 const instanceStatusText = computed(() => (remoteHasInstance.value ? '待开启' : ''))
-const canDeleteScheme = computed(() => isDraftScheme.value || !remoteHasInstance.value)
 const hasCloudInstance = computed(() => remoteHasInstance.value)
 
 /** 倍投设定 Tab 与中文名称（与 BetMultiplierSettingsView 一致） */
@@ -729,15 +1439,68 @@ function applyDraftSnapshot(draft: SchemeDraftSnapshot): void {
   if (draft.triggerBet) applyTriggerBetFromConfig(draft.triggerBet)
   if (draft.hotColdWarm) applyHotColdWarmFromConfig(draft.hotColdWarm)
   if (draft.randomDraw) applyRandomDrawFromConfig(draft.randomDraw)
+  if (draft.fixedPick) applyFixedPickFromConfig(draft.fixedPick)
+}
+
+function buildLiveDraftMeta(): SchemeDraftMeta {
+  return {
+    kind: schemeKind.value,
+    schemeName: schemeName.value.trim() || '未命名方案',
+    lotteryCode: isBuiltinPlan.value ? '' : lotteryCode.value.trim(),
+    runTypeId: runTypeId.value,
+    playTypeId: isBuiltinPlan.value ? '' : playTypeId.value.trim(),
+    subPlayId: isBuiltinPlan.value ? '' : subPlayId.value.trim(),
+  }
+}
+
+/** 倍投设定页确认后暂存，点「完成」再写入定义 */
+const pendingBetMultiplier = ref<BetMultiplierPayload | null>(null)
+
+function bmPendingStorageKey(): string {
+  return `scheme-edit-bm-pending:${schemeId.value}`
+}
+
+function consumePendingBetMultiplier(): void {
+  try {
+    const raw = sessionStorage.getItem(bmPendingStorageKey())
+    if (!raw) return
+    const d = JSON.parse(raw) as { kind?: string; payload?: BetMultiplierPayload }
+    if (d?.payload && typeof d.payload === 'object') {
+      pendingBetMultiplier.value = d.payload
+      applyBetMultiplierFromConfig(d.payload)
+    }
+    if (d?.kind === '0' || d?.kind === '1' || d?.kind === '2' || d?.kind === '3') {
+      betMultiplierKind.value = d.kind
+      betMultiplierError.value = ''
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function clearPendingBetMultiplier(): void {
+  pendingBetMultiplier.value = null
+  try {
+    sessionStorage.removeItem(bmPendingStorageKey())
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 显式保存（完成/返回/添加云端）时带上暂存倍投；防抖自动持久化不含倍投 */
+function buildCommitPatch(): UpdateSchemeInput {
+  const patch = buildRemoteDraftPatch()
+  if (pendingBetMultiplier.value) {
+    patch.betMultiplier = pendingBetMultiplier.value as unknown as Record<string, unknown>
+  }
+  return patch
 }
 
 function buildDraftSnapshot(): SchemeDraftSnapshot {
-  const meta = draftMetaFromQuery(route.query as Record<string, unknown>)
-  meta.schemeName = schemeName.value.trim() || meta.schemeName
   const existing = loadSchemeDraft()
   const rtFields = runTypeDraftFields()
   return {
-    meta,
+    meta: buildLiveDraftMeta(),
     simBet: simBet.value,
     schemeFunds: schemeFunds.value,
     startTime: startTime.value,
@@ -749,12 +1512,13 @@ function buildDraftSnapshot(): SchemeDraftSnapshot {
     multCoeff: multCoeff.value,
     shareStatus: shareStatus.value,
     betMultiplierKind: betMultiplierKind.value,
-    betMultiplier: existing?.betMultiplier,
+    betMultiplier: pendingBetMultiplier.value ?? existing?.betMultiplier,
     builtinSnapshotId: builtinSnapshotId.value || undefined,
     jushuList: rtFields.jushuList,
     triggerBet: rtFields.triggerBet,
     hotColdWarm: rtFields.hotColdWarm,
     randomDraw: rtFields.randomDraw,
+    fixedPick: rtFields.fixedPick,
   }
 }
 
@@ -772,36 +1536,58 @@ function syncRunTypePanelsAfterSnapshot(): void {
 /** 从倍投设定等子页返回时，用离开前快照覆盖远端/草稿加载结果 */
 function applyPendingRestoreSnapshot(): void {
   const restored = consumeSchemeEditRestoreSnapshot(schemeId.value)
-  if (!restored) return
-  applyDraftSnapshot(restored)
-  const draft = loadSchemeDraft()
-  if (draft?.betMultiplier) {
-    applyBetMultiplierFromConfig(draft.betMultiplier)
-    if (draft.betMultiplierKind) betMultiplierKind.value = draft.betMultiplierKind
+  if (restored) {
+    applyDraftSnapshot(restored)
+    const draft = loadSchemeDraft()
+    if (draft?.betMultiplier) {
+      applyBetMultiplierFromConfig(draft.betMultiplier)
+      if (draft.betMultiplierKind) betMultiplierKind.value = draft.betMultiplierKind
+    }
   }
+  // 倍投设定页确认的暂存优先（尚未点「完成」落库）
+  consumePendingBetMultiplier()
   const qk = route.query.bmsKind
   const kindFromQuery = String(Array.isArray(qk) ? qk[0] : qk ?? '')
   if (kindFromQuery === '0' || kindFromQuery === '1' || kindFromQuery === '2' || kindFromQuery === '3') {
     betMultiplierKind.value = kindFromQuery
   }
-  syncRunTypePanelsAfterSnapshot()
+  if (restored || pendingBetMultiplier.value) {
+    syncRunTypePanelsAfterSnapshot()
+  }
 }
 
 async function loadRemoteDefinition() {
   if (isDraftScheme.value) {
-    const draft = loadSchemeDraft()
+    const fresh = route.query.fresh === '1'
+    if (fresh) {
+      clearSchemeDraft()
+      const nextQuery = { ...route.query } as Record<string, string | string[] | undefined>
+      delete nextQuery.fresh
+      void router.replace({ query: nextQuery })
+    }
+    const draft = fresh ? null : loadSchemeDraft()
     if (draft) {
       applyDraftSnapshot(draft)
     } else {
       const meta = draftMetaFromQuery(route.query as Record<string, unknown>)
-      schemeName.value = meta.schemeName
-      runTypeId.value = normalizeRunTypeId(meta.runTypeId)
+      schemeName.value = meta.schemeName === '未命名方案' && !String(route.query.title ?? '')
+        ? ''
+        : meta.schemeName
+      runTypeId.value = normalizeRunTypeId(meta.runTypeId || 'fixed_rotate')
       if (meta.lotteryCode) lotteryCode.value = meta.lotteryCode
       if (meta.playTypeId) playTypeId.value = meta.playTypeId
       if (meta.subPlayId) subPlayId.value = meta.subPlayId
     }
     remoteHasInstance.value = false
     shareLocked.value = false
+    await loadLotteries()
+    if (!lotteryCode.value && lotteries.value.length && !isBuiltinPlan.value) {
+      lotteryCode.value = lotteries.value[0].code
+    }
+    if (lotteryCode.value) {
+      await loadRunTypeOptions(lotteryCode.value)
+      await loadIdentityPlayTree(lotteryCode.value)
+    }
     void loadPlayTree()
     remoteReady.value = true
     syncRunTypePanelsAfterSnapshot()
@@ -820,6 +1606,10 @@ async function loadRemoteDefinition() {
     simBet.value = simBetFromSchemeConfig(cfg as Record<string, unknown>)
     if (typeof cfg.schemeFunds === 'string' || typeof cfg.schemeFunds === 'number') {
       schemeFunds.value = String(cfg.schemeFunds)
+    }
+    if (typeof cfg.multCoeff === 'string' || typeof cfg.multCoeff === 'number') {
+      const mc = String(cfg.multCoeff).trim()
+      if (mc !== '') multCoeff.value = mc
     }
     const times = normalizeSchemeTimePairFromConfig(cfg.startTime, cfg.endTime)
     startTime.value = times.start
@@ -856,6 +1646,7 @@ async function loadRemoteDefinition() {
     applyTriggerBetFromConfig(cfg.triggerBet)
     applyHotColdWarmFromConfig(cfg.hotColdWarm)
     applyRandomDrawFromConfig(cfg.randomDraw)
+    applyFixedPickFromConfig(cfg.fixedPick)
     const bp = cfg.builtinPlan
     if (bp && typeof bp === 'object' && typeof (bp as { snapshotId?: unknown }).snapshotId === 'string') {
       builtinSnapshotId.value = (bp as { snapshotId: string }).snapshotId
@@ -866,6 +1657,10 @@ async function loadRemoteDefinition() {
   } catch {
     /* 列表加载失败时保留 query 默认值 */
   } finally {
+    if (lotteryCode.value) {
+      void loadRunTypeOptions(lotteryCode.value)
+      void loadIdentityPlayTree(lotteryCode.value)
+    }
     remoteReady.value = true
     syncRunTypePanelsAfterSnapshot()
     applyPendingRestoreSnapshot()
@@ -904,24 +1699,49 @@ function runTypeDraftFields(): Partial<UpdateSchemeInput> {
         rows: triggerRows.value.map((r) => ({ ...r })),
         mode: triggerMode.value,
       }
+      if (showTriggerPositionPicker.value) {
+        triggerBet.positionIdxs = normalizeTriggerPositionIdxs(
+          triggerPositionIdxs.value,
+          positionCount.value || 10,
+        )
+      }
       return { triggerBet }
     }
     case 'hot_cold_warm': {
       const hotColdWarm: SchemeHotColdWarm = {
-        totalPeriods: hcwTotalPeriods.value,
-        pool: Array.from({ length: positionCount.value }, (_, i) => (hcwPools.value[i] ?? []).join(',')),
-        winRotate: hcwWinRotate.value,
+        totalPeriods: Math.min(100, Math.max(20, Math.trunc(Number(hcwTotalPeriods.value) || 20))),
+        pool: hcwSingleGroup.value
+          ? [(hcwPools.value[0] ?? []).join(',')]
+          : Array.from({ length: positionCount.value }, (_, i) => (hcwPools.value[i] ?? []).join(',')),
+        strategy: hcwStrategy.value,
+        // 出号类型由已选池反推；容错严格以面板设定为准（不被选号池行宽抬高）
+        pickTypes: deriveHcwPickTypesForSave(),
+        faultCount: Math.min(10, Math.max(1, Math.trunc(Number(hcwFaultCount.value) || 1))),
+        // 兼容旧字段：中后换 ≈ 原中奖轮换开
+        winRotate: hcwStrategy.value === 'after_hit',
       }
       return { hotColdWarm }
     }
     case 'random_draw': {
-      const randomDraw: SchemeRandomDraw = {
-        counts: Array.from({ length: positionCount.value }, (_, i) =>
-          Math.min(10, Math.max(1, rdCounts.value[i] ?? 1)),
-        ),
-        strategy: rdStrategy.value,
-      }
+      // 单式=注数 / 组选=选码个数 → counts=[K]；按位型 → 每位号码数量
+      const counts = rdSingleCountMode.value
+        ? [Math.min(rdSingleCountMax.value, Math.max(rdSingleCountMin.value, rdCounts.value[0] ?? rdSingleCountMin.value))]
+        : Array.from({ length: positionCount.value }, (_, i) => Math.min(10, Math.max(1, rdCounts.value[i] ?? 1)))
+      const randomDraw: SchemeRandomDraw = { counts, strategy: rdStrategy.value }
       return { randomDraw }
+    }
+    case 'fixed_number': {
+      // 固定取码：仅收集填了投注号码的有效规则；位序 1-based → 0-based
+      const rules = fixedPickRules.value
+        .filter((r) => String(r.numbers).trim() !== '')
+        .map((r) => {
+          const ps = Math.max(0, Math.trunc(r.posStart) - 1)
+          const pe = Math.max(ps, Math.trunc(r.posEnd) - 1)
+          const cmin = Math.max(0, Math.trunc(r.codeMin))
+          const cmax = Math.max(cmin, Math.trunc(r.codeMax))
+          return { posStart: ps, posEnd: pe, codeMin: cmin, codeMax: cmax, numbers: String(r.numbers).trim() }
+        })
+      return { fixedPick: { rules } }
     }
     default:
       return {}
@@ -932,9 +1752,10 @@ function buildRemoteDraftPatch(): UpdateSchemeInput {
   return {
     simBet: simBet.value,
     schemeFunds: schemeFunds.value,
+    multCoeff: multCoeff.value.trim(),
     startTime: startTime.value,
     endTime: endTime.value,
-    // 内置计画配置只读（服务端物化），不回写 schemeGroups；固定号码仅保存单元素数组
+    // 内置计画配置只读（服务端物化），不回写 schemeGroups；固定取码仅保存单元素数组
     ...(runTypeId.value === 'builtin_plan'
       ? {}
       : {
@@ -981,6 +1802,10 @@ watch(
     stopLoss,
     takeProfit,
     multCoeff,
+    lotteryCode,
+    runTypeId,
+    playTypeId,
+    subPlayId,
   ],
   persistDraft,
   { deep: true },
@@ -988,14 +1813,76 @@ watch(
 
 /** 七套面板状态跟随现有防抖持久化机制 */
 watch(
-  [jushuList, triggerRows, triggerMode, hcwTotalPeriods, hcwPools, hcwWinRotate, rdCounts, rdStrategy],
+  [
+    jushuList,
+    triggerRows,
+    triggerMode,
+    hcwTotalPeriods,
+    hcwFaultCount,
+    hcwPools,
+    hcwStrategy,
+    rdCounts,
+    rdStrategy,
+  ],
   persistDraft,
   { deep: true },
 )
 
-function goBack() {
+function detailReturnQuery(): Record<string, string> {
+  const q: Record<string, string> = {}
+  for (const key of ['turnover', 'sessionPnl', 'multiplier', 'status'] as const) {
+    const raw = route.query[key]
+    const v = String(Array.isArray(raw) ? raw[0] ?? '' : raw ?? '').trim()
+    if (v) q[key] = v
+  }
+  return q
+}
+
+function goBackToDetail(): void {
+  const id = schemeId.value.trim()
+  if (!id || isDraftSchemeId(id)) {
+    void router.push({ name: 'cloud' })
+    return
+  }
+  void router.push({
+    name: 'scheme-detail',
+    params: { definitionId: id },
+    query: detailReturnQuery(),
+  })
+}
+
+async function goBack() {
+  if (returnFromDetail.value) {
+    // 返回不提交暂存的方案模式（须点「完成」）；其它字段仍走防抖已落库的部分
+    clearPendingBetMultiplier()
+    goBackToDetail()
+    return
+  }
   if (window.history.length > 1) router.back()
-  else router.push({ name: 'custom-scheme-new' })
+  else router.push({ name: 'cloud' })
+}
+
+async function onDoneFromDetail(): Promise<void> {
+  if (cloudBusy.value) return
+  if (editBlockedRunning.value) {
+    ElMessage.warning('运行中的方案不可编辑，请先暂停后再修改')
+    return
+  }
+  cloudBusy.value = true
+  try {
+    flushPersistDraft()
+    // 确保最后一次改动落库（含暂存的方案模式；debounce 不含倍投）
+    if (!isDraftScheme.value) {
+      await updateSchemeDefinition(schemeId.value, buildCommitPatch())
+      clearPendingBetMultiplier()
+    }
+    ElMessage.success('方案已保存')
+    goBackToDetail()
+  } catch (e) {
+    ElMessage.error(e instanceof ApiError ? e.message : '保存失败')
+  } finally {
+    cloudBusy.value = false
+  }
 }
 
 /** 倍投设定方式（0–3），须从倍投设定页确认后才有值 */
@@ -1036,6 +1923,7 @@ watch(
     if (id === '0' || id === '1' || id === '2' || id === '3') {
       betMultiplierKind.value = id
       betMultiplierError.value = ''
+      consumePendingBetMultiplier()
     }
     const nextQuery = { ...route.query } as Record<string, string | string[] | undefined>
     delete nextQuery.bmsKind
@@ -1067,9 +1955,17 @@ function schemeRouteQueryExtras(): Record<string, string> {
   const q: Record<string, string> = {}
   if (isDraftScheme.value) q.draft = '1'
   if (route.query.kind != null && String(route.query.kind) !== '') q.kind = String(route.query.kind)
-  if (route.query.runType != null && String(route.query.runType) !== '') q.runType = String(route.query.runType)
-  if (route.query.playType != null && String(route.query.playType) !== '') q.playType = String(route.query.playType)
-  if (route.query.subPlay != null && String(route.query.subPlay) !== '') q.subPlay = String(route.query.subPlay)
+  if (runTypeId.value) q.runType = runTypeId.value
+  if (playTypeId.value) q.playType = playTypeId.value
+  if (subPlayId.value) q.subPlay = subPlayId.value
+  if (lotteryCode.value) q.lottery = lotteryCode.value
+  // 从详情进入：子页返回配置页后仍需带回回详情的上下文
+  if (returnFromDetail.value) {
+    q.returnName = 'scheme-detail'
+    Object.assign(q, detailReturnQuery())
+  } else if (String(route.query.returnName ?? '') !== '') {
+    q.returnName = String(route.query.returnName)
+  }
   return q
 }
 
@@ -1087,27 +1983,33 @@ function goBetMultiplierSettings() {
       : betMultiplierKind.value === '0' || betMultiplierKind.value === '1'
         ? betMultiplierKind.value
         : '2'
+  const extras = schemeRouteQueryExtras()
+  // 倍投设定须回到配置页；用 detailReturn 保留「完成后回详情」
+  const bmsQuery: Record<string, string> = {
+    fromScheme: '1',
+    schemeId: String(route.params.schemeId ?? ''),
+    activeTab,
+    ...(schemeName.value.trim()
+      ? { title: encodeURIComponent(schemeName.value.trim()) }
+      : {}),
+    ...(lotteryCode.value ? { lottery: lotteryCode.value } : {}),
+    playType: playTypeId.value || cfg.playTypeId || '',
+    subPlay: subPlayId.value || cfg.subPlayId || '',
+    betMode: cfg.betMode || '',
+    playTypeLabel: cfg.playTypeLabel || '',
+    subPlayLabel: cfg.playMethodLabel || '',
+    playTemplate: cfg.playTemplate || '',
+    ...(cfg.segmentLen ? { segmentLen: String(cfg.segmentLen) } : {}),
+    ...extras,
+    returnName: 'advanced-scheme-edit',
+  }
+  if (returnFromDetail.value || extras.returnName === 'scheme-detail') {
+    bmsQuery.detailReturn = 'scheme-detail'
+    Object.assign(bmsQuery, detailReturnQuery())
+  }
   router.push({
     name: 'bet-multiplier-settings',
-    query: {
-      fromScheme: '1',
-      schemeId: String(route.params.schemeId ?? ''),
-      activeTab,
-      ...(route.query.title != null && route.query.title !== ''
-        ? { title: String(route.query.title) }
-        : {}),
-      ...(route.query.lottery != null && String(route.query.lottery) !== ''
-        ? { lottery: String(route.query.lottery) }
-        : {}),
-      playType: playTypeId.value || cfg.playTypeId || '',
-      subPlay: subPlayId.value || cfg.subPlayId || '',
-      betMode: cfg.betMode || '',
-      playTypeLabel: cfg.playTypeLabel || '',
-      subPlayLabel: cfg.playMethodLabel || '',
-      playTemplate: cfg.playTemplate || '',
-      ...(cfg.segmentLen ? { segmentLen: String(cfg.segmentLen) } : {}),
-      ...schemeRouteQueryExtras(),
-    },
+    query: bmsQuery,
   })
 }
 
@@ -1148,6 +2050,10 @@ function onAddGroup() {
 
 async function onSaveCloud() {
   if (cloudBusy.value) return
+  if (returnFromDetail.value) {
+    await onDoneFromDetail()
+    return
+  }
 
   const warn = (message: string) =>
     confirmDialog({
@@ -1159,18 +2065,32 @@ async function onSaveCloud() {
     })
 
   const name = schemeName.value.trim()
-  const lottery = String(route.query.lottery ?? '').trim()
+  const lottery = lotteryCode.value.trim()
   const fundsRaw = schemeFunds.value.trim()
   const funds = Number(fundsRaw)
-  const groups = schemeGroups.value.map((g) => g.trim())
+  // 定位胆多位内容含前导空行，禁止 trim（否则 ,,12,, 会压成万位）
+  const groups = schemeGroups.value.map((g) => String(g ?? '').replace(/\r/g, ''))
+  const groupHasContent = (g: string) => Boolean(g.trim())
 
   if (!name) {
     await warn('方案名称不能为空')
     return
   }
-  if (!lottery) {
-    await warn('游戏名称不能为空')
+  if (!isBuiltinPlan.value && (!lottery || !playTypeId.value || !subPlayId.value)) {
+    await warn('请选择彩种与玩法')
     return
+  }
+  if (!isBuiltinPlan.value) {
+    const matrixErr = validateRunTypePlaySelection(
+      runTypeId.value,
+      playTypeId.value,
+      subPlayId.value,
+      playTreeTypes.value,
+    )
+    if (matrixErr) {
+      await warn(matrixErr)
+      return
+    }
   }
   if (!fundsRaw || !Number.isFinite(funds)) {
     await warn('方案资金不能为空')
@@ -1222,10 +2142,22 @@ async function onSaveCloud() {
   }
 
   const rt = runTypeId.value
+  const yixingCfg = schemePlayConfig.value
+  const yixingPlay = isYixingDingweiPlayConfig(yixingCfg)
+
   if (rt === 'adv_fixed_rotate') {
     if (!jushuList.value.length) {
       await warn('请至少添加一局投注号码')
       return
+    }
+    if (yixingPlay) {
+      for (const row of jushuList.value) {
+        const maxErr = yixingContentMaxPicksError(yixingCfg, row.content)
+        if (maxErr) {
+          await warn(maxErr)
+          return
+        }
+      }
     }
     // 与局数内容对齐，供仍读取 schemeGroups 的下游兜底
     schemeGroups.value = jushuList.value.map((r) => r.content)
@@ -1237,20 +2169,42 @@ async function onSaveCloud() {
       await warn('请填写开某投某映射（可用「全部随机」）')
       return
     }
+    if (showTriggerPositionPicker.value && !triggerPositionIdxs.value.length) {
+      await warn('请至少选择一个投注位')
+      return
+    }
     const sample = triggerRows.value.find((r) => r.enabled && String(r.pos).trim())
     schemeGroups.value = [sample ? String(sample.pos).trim() : '0']
   } else if (rt === 'hot_cold_warm') {
     ensureHcwPools()
     if (hcwEstimatedUnits.value <= 0) {
-      await warn('请至少选择一个冷热温号码')
+      await warn('请至少选择一个冷热号码')
       return
     }
-    schemeGroups.value = Array.from(
-      { length: positionCount.value },
-      (_, i) => (hcwPools.value[i] ?? []).join(','),
-    )
+    if (yixingPlay) {
+      const n = hcwSingleGroup.value ? 1 : positionCount.value
+      for (let i = 0; i < n; i++) {
+        const count = (hcwPools.value[i] ?? []).filter((t) => String(t).trim() !== '').length
+        if (count > YIXING_MAX_PICKS_PER_POS) {
+          await warn(YIXING_MAX_PICKS_MSG)
+          return
+        }
+      }
+    }
+    schemeGroups.value = hcwSingleGroup.value
+      ? [(hcwPools.value[0] ?? []).join(',')]
+      : Array.from({ length: positionCount.value }, (_, i) => (hcwPools.value[i] ?? []).join(','))
   } else if (rt === 'random_draw') {
     ensureRdCounts()
+    if (yixingPlay && !rdSingleCountMode.value) {
+      const over = Array.from({ length: positionCount.value }, (_, i) => rdCounts.value[i] ?? 1).some(
+        (c) => c > YIXING_MAX_PICKS_PER_POS,
+      )
+      if (over) {
+        await warn(YIXING_MAX_PICKS_MSG)
+        return
+      }
+    }
     if (!rdPreview.value.length || rdPreview.value.every((row) => !row.length)) {
       generateRdPreview()
     }
@@ -1261,16 +2215,26 @@ async function onSaveCloud() {
       return Array.from({ length: count }, (_, j) => String(j % 10)).join(',')
     })
   } else {
-    if (groups.every((g) => g === '')) {
+    if (groups.every((g) => !groupHasContent(g))) {
       await warn('方案内容不能为空')
       return
     }
-    if (groups.some((g) => g === '')) {
+    if (groups.some((g) => !groupHasContent(g))) {
       await warn('存在空的方案分组，请填写内容或删除该组')
       return
     }
 
-    const groupCheck = validateSchemeGroups(schemePlayConfig.value, schemeGroups.value)
+    if (yixingPlay) {
+      for (const g of groups) {
+        const maxErr = yixingContentMaxPicksError(yixingCfg, g)
+        if (maxErr) {
+          await warn(maxErr)
+          return
+        }
+      }
+    }
+
+    const groupCheck = validateSchemeGroups(schemePlayConfig.value, groups)
     if (!groupCheck.ok) {
       for (const idx of groupCheck.invalidIndexes) {
         schemeGroups.value[idx] = ''
@@ -1293,7 +2257,7 @@ async function onSaveCloud() {
   const cloudPayload = {
     kind: schemeKind.value,
     schemeName: schemeName.value.trim() || '未命名方案',
-    lotteryCode: String(route.query.lottery ?? ''),
+    lotteryCode: isBuiltinPlan.value ? '' : lottery,
     shareStatus: (isCustomKind.value ? shareStatus.value : 'private') as 'private' | 'public',
     simBet: simBet.value,
     schemeFunds: schemeFunds.value,
@@ -1308,6 +2272,35 @@ async function onSaveCloud() {
 
   try {
     if (isDraftScheme.value) {
+      const check = await checkSchemeNameAvailable(name)
+      if (!check.available) {
+        if (check.existingDefinitionId && !check.existingHasInstance) {
+          const resume = await confirmDialog({
+            title: '名称已占用',
+            message: `方案「${name}」已存在但未添加至云端。继续编辑该方案，或删除旧草稿后重新新建？`,
+            tone: 'warning',
+            confirmText: '继续编辑',
+            cancelText: '删除重建',
+          })
+          if (resume) {
+            await router.replace({
+              name: 'advanced-scheme-edit',
+              params: { schemeId: check.existingDefinitionId },
+              query: { kind: 'custom' },
+            })
+            return
+          }
+          try {
+            await deleteSchemeDefinition(check.existingDefinitionId)
+          } catch (e) {
+            ElMessage.error(e instanceof ApiError ? e.message : '删除旧方案失败')
+            return
+          }
+        } else {
+          ElMessage.error('方案名称已存在，请更换名称')
+          return
+        }
+      }
       saveSchemeDraft(buildDraftSnapshot())
       const draft = loadSchemeDraft()
       if (!draft) {
@@ -1344,12 +2337,18 @@ async function onSaveCloud() {
           try {
             await deleteSchemeDefinition(createdDefId)
           } catch {
-            /* 回滚失败时保留定义，用户可在新建页「删除重建」 */
+            /* 回滚失败时保留定义，用户可删除后重建 */
           }
         }
         throw innerErr
       }
       return
+    }
+
+    // 添加/复制前先提交暂存的方案模式
+    if (pendingBetMultiplier.value) {
+      await updateSchemeDefinition(schemeId.value, buildCommitPatch())
+      clearPendingBetMultiplier()
     }
 
     if (hasCloudInstance.value) {
@@ -1375,41 +2374,6 @@ async function onSaveCloud() {
     setTimeout(() => {
       cloudBusy.value = false
     }, 1000)
-  }
-}
-
-async function onDeleteScheme() {
-  if (!canDeleteScheme.value) {
-    ElMessage.warning('运行中的方案不可删除')
-    return
-  }
-  if (isDraftScheme.value) {
-    const ok = await confirmDialog({
-      title: '放弃新建',
-      message: '尚未添加至云端，确定放弃本次新建？',
-      tone: 'danger',
-      confirmText: '放弃',
-    })
-    if (!ok) return
-    clearSchemeDraft()
-    ElMessage.success('已放弃新建')
-    goBack()
-    return
-  }
-  const ok = await confirmDialog({
-    title: '删除方案',
-    message: '删除后将同时移除云端实例，确定继续？',
-    tone: 'danger',
-    confirmText: '删除',
-  })
-  if (!ok) return
-  try {
-    await deleteSchemeDefinition(schemeId.value)
-    ElMessage.success('方案已删除')
-    goBack()
-  } catch (err) {
-    const message = err instanceof ApiError ? err.message : err instanceof Error ? err.message : '删除失败'
-    ElMessage.warning(message)
   }
 }
 
@@ -1563,18 +2527,96 @@ function onTimeDialogOpened() {
       <button type="button" class="scf-back" aria-label="返回" @click="goBack">
         <img :src="BACK_ICO" alt="" width="30" height="30" class="scf-back-img" decoding="async" />
       </button>
-      <h1 class="scf-title">方案配置</h1>
+      <h1 class="scf-title">{{ isDraftScheme ? '新增方案' : '方案配置' }}</h1>
       <div class="scf-header-right">
         <span v-if="instanceStatusText" class="scf-inst-badge">{{ instanceStatusText }}</span>
-        <button type="button" class="scf-del-btn" :disabled="!canDeleteScheme" @click="onDeleteScheme">
-          删除
-        </button>
       </div>
     </header>
 
     <main class="scf-main">
       <section class="scf-section">
         <div class="scf-card scf-stack">
+          <div class="scf-field">
+            <label class="scf-lbl" for="scf-name">方案名称</label>
+            <el-input
+              id="scf-name"
+              v-model="schemeName"
+              size="large"
+              class="scf-el-inp"
+              placeholder="输入方案名称..."
+              clearable
+            />
+          </div>
+          <div v-if="!isBuiltinPlan" class="scf-field">
+            <span class="scf-lbl" id="scf-lbl-lottery">彩种</span>
+            <button
+              v-if="identityEditable"
+              type="button"
+              class="scf-time-hit"
+              aria-haspopup="dialog"
+              :aria-expanded="identityPickerOpen && identityPickerKind === 'lottery'"
+              aria-labelledby="scf-lbl-lottery scf-val-lottery"
+              @click="openIdentityPicker('lottery')"
+            >
+              <span id="scf-val-lottery" class="scf-time-hit-val">{{
+                labelOf(lotteryOptions, lotteryCode) || '请选择彩种'
+              }}</span>
+              <span class="scf-ms scf-ms--sm scf-time-hit-ico" aria-hidden="true">tune</span>
+            </button>
+            <div v-else class="scf-readonly">{{ gameNameDisplay }}</div>
+          </div>
+          <div class="scf-field">
+            <span class="scf-lbl" id="scf-lbl-run">运行类型</span>
+            <button
+              v-if="identityEditable"
+              type="button"
+              class="scf-time-hit"
+              aria-haspopup="dialog"
+              :aria-expanded="identityPickerOpen && identityPickerKind === 'runType'"
+              aria-labelledby="scf-lbl-run scf-val-run"
+              @click="openIdentityPicker('runType')"
+            >
+              <span id="scf-val-run" class="scf-time-hit-val">{{
+                labelOf(availableRunTypeOptions, runTypeId) || runTypeLabel
+              }}</span>
+              <span class="scf-ms scf-ms--sm scf-time-hit-ico" aria-hidden="true">tune</span>
+            </button>
+            <div v-else class="scf-readonly">{{ runTypeLabel }}</div>
+          </div>
+          <p v-if="isBuiltinPlan" class="scf-identity-hint">
+            内置计画无需选择彩种与玩法，创建后在方案内容中选择已收藏的跟单大厅方案
+          </p>
+          <div v-if="!isBuiltinPlan" class="scf-field">
+            <span class="scf-lbl" id="scf-lbl-play">玩法类型</span>
+            <div class="scf-play-pair" role="group" aria-labelledby="scf-lbl-play">
+              <button
+                v-if="identityEditable"
+                type="button"
+                class="scf-time-hit"
+                aria-haspopup="dialog"
+                aria-label="玩法类型"
+                :aria-expanded="identityPickerOpen && identityPickerKind === 'playType'"
+                @click="openIdentityPicker('playType')"
+              >
+                <span id="scf-val-play" class="scf-time-hit-val">{{ playTypeLabelDisplay }}</span>
+                <span class="scf-ms scf-ms--sm scf-time-hit-ico" aria-hidden="true">tune</span>
+              </button>
+              <div v-else class="scf-readonly">{{ playTypeLabelDisplay }}</div>
+              <button
+                v-if="identityEditable"
+                type="button"
+                class="scf-time-hit"
+                aria-haspopup="dialog"
+                aria-label="子玩法"
+                :aria-expanded="identityPickerOpen && identityPickerKind === 'subPlay'"
+                @click="openIdentityPicker('subPlay')"
+              >
+                <span id="scf-val-sub" class="scf-time-hit-val">{{ subPlayLabelDisplay }}</span>
+                <span class="scf-ms scf-ms--sm scf-time-hit-ico" aria-hidden="true">tune</span>
+              </button>
+              <div v-else class="scf-readonly">{{ subPlayLabelDisplay }}</div>
+            </div>
+          </div>
           <div class="scf-field">
             <span class="scf-lbl">运行模式</span>
             <div class="scf-seg" role="group" aria-label="运行模式">
@@ -1585,10 +2627,6 @@ function onTimeDialogOpened() {
                 模拟运行
               </button>
             </div>
-          </div>
-          <div class="scf-field">
-            <label class="scf-lbl" for="scf-name">方案名称</label>
-            <el-input id="scf-name" v-model="schemeName" size="large" class="scf-el-inp" placeholder="方案名称" />
           </div>
           <div v-if="showShareField" class="scf-field">
             <span class="scf-lbl">分享状态</span>
@@ -1602,77 +2640,76 @@ function onTimeDialogOpened() {
               {{ shareStatus === 'public' ? '公开 (已锁定)' : '私密 (已锁定)' }}
             </div>
           </div>
-          <div class="scf-grid2">
-            <div class="scf-field">
-              <label class="scf-lbl" for="scf-funds">方案资金</label>
-              <div class="scf-suffix-wrap">
-                <el-input id="scf-funds" v-model="schemeFunds" size="large" class="scf-el-inp scf-el-inp--suffix"
-                  type="number" />
-              </div>
-            </div>
-            <div class="scf-field">
-              <span class="scf-lbl">游戏名称</span>
-              <div class="scf-readonly">{{ gameNameDisplay }}</div>
+          <div class="scf-field">
+            <label class="scf-lbl" for="scf-funds">方案资金</label>
+            <div class="scf-suffix-wrap">
+              <el-input id="scf-funds" v-model="schemeFunds" size="large" class="scf-el-inp scf-el-inp--suffix"
+                type="number" />
             </div>
           </div>
 
-          <div class="scf-grid2">
-            <div class="scf-field">
-              <span class="scf-lbl scf-lbl--with-help">
-                <span>开始时间</span>
-                <el-popover
-                  placement="top"
-                  :width="260"
-                  trigger="click"
-                  :content="TIME_RANGE_HINT"
-                  popper-class="scf-help-popper"
-                >
-                  <template #reference>
-                    <button type="button" class="scf-help-btn" aria-label="开始时间说明" @click.stop>
-                      <span class="scf-ms scf-ms--help" aria-hidden="true">help</span>
-                    </button>
-                  </template>
-                </el-popover>
-              </span>
-              <button type="button" class="scf-time-hit" aria-haspopup="dialog" @click="openTimePicker('start')">
+          <div class="scf-field">
+            <span class="scf-lbl scf-lbl--with-help" id="scf-lbl-runtime">
+              <span>运行时间</span>
+              <el-popover
+                placement="top"
+                :width="260"
+                trigger="click"
+                :content="TIME_RANGE_HINT"
+                popper-class="scf-help-popper"
+              >
+                <template #reference>
+                  <button type="button" class="scf-help-btn" aria-label="运行时间说明" @click.stop>
+                    <span class="scf-ms scf-ms--help" aria-hidden="true">help</span>
+                  </button>
+                </template>
+              </el-popover>
+            </span>
+            <div class="scf-play-pair" role="group" aria-labelledby="scf-lbl-runtime">
+              <button
+                type="button"
+                class="scf-time-hit"
+                aria-haspopup="dialog"
+                aria-label="开始时间"
+                @click="openTimePicker('start')"
+              >
                 <span class="scf-time-hit-val">{{ displayMainStart }}</span>
                 <span class="scf-ms scf-ms--sm scf-time-hit-ico" aria-hidden="true">schedule</span>
               </button>
-            </div>
-            <div class="scf-field">
-              <span class="scf-lbl scf-lbl--with-help">
-                <span>结束时间</span>
-                <el-popover
-                  placement="top"
-                  :width="260"
-                  trigger="click"
-                  :content="TIME_RANGE_HINT"
-                  popper-class="scf-help-popper"
-                >
-                  <template #reference>
-                    <button type="button" class="scf-help-btn" aria-label="结束时间说明" @click.stop>
-                      <span class="scf-ms scf-ms--help" aria-hidden="true">help</span>
-                    </button>
-                  </template>
-                </el-popover>
-              </span>
-              <button type="button" class="scf-time-hit" aria-haspopup="dialog" @click="openTimePicker('end')">
+              <button
+                type="button"
+                class="scf-time-hit"
+                aria-haspopup="dialog"
+                aria-label="结束时间"
+                @click="openTimePicker('end')"
+              >
                 <span class="scf-time-hit-val">{{ displayMainEnd }}</span>
                 <span class="scf-ms scf-ms--sm scf-time-hit-ico" aria-hidden="true">schedule</span>
               </button>
             </div>
           </div>
 
-          <div class="scf-grid2">
-            <div class="scf-field">
-              <label class="scf-lbl" for="scf-sl">止损金额</label>
-              <el-input id="scf-sl" v-model="stopLoss" size="large" class="scf-el-inp scf-el-inp--danger"
-                placeholder="0.00" type="number" />
-            </div>
-            <div class="scf-field">
-              <label class="scf-lbl" for="scf-tp">止盈金额</label>
-              <el-input id="scf-tp" v-model="takeProfit" size="large" class="scf-el-inp scf-el-inp--profit"
-                placeholder="0.00" type="number" />
+          <div class="scf-field">
+            <span class="scf-lbl" id="scf-lbl-sltp">止损-止盈</span>
+            <div class="scf-play-pair" role="group" aria-labelledby="scf-lbl-sltp">
+              <el-input
+                id="scf-sl"
+                v-model="stopLoss"
+                size="large"
+                class="scf-el-inp scf-el-inp--danger"
+                placeholder="止损"
+                type="number"
+                aria-label="止损金额"
+              />
+              <el-input
+                id="scf-tp"
+                v-model="takeProfit"
+                size="large"
+                class="scf-el-inp scf-el-inp--profit"
+                placeholder="止盈"
+                type="number"
+                aria-label="止盈金额"
+              />
             </div>
           </div>
 
@@ -1748,16 +2785,54 @@ function onTimeDialogOpened() {
           </button>
         </div>
 
-        <!-- 1/2. 定码轮换（多分组） / 固定号码（单组） -->
+        <!-- 固定取码：条件规则（命中上期开奖→投固定号）；留空则每期复投下方固定号码 -->
+        <div v-if="runTypeId === 'fixed_number'" class="scf-fp-rules">
+          <div class="scf-fp-head">
+            <span class="scf-fp-title">取码规则（可选）</span>
+            <button type="button" class="scf-add-btn" @click="addFixedPickRule">
+              <span class="scf-ms scf-ms--sm" aria-hidden="true">add</span>
+              <span>新增规则</span>
+            </button>
+          </div>
+          <p class="scf-run-tip">
+            当上期开奖在「位区间」内任一号码落在「号码区间」时，命中即投该条固定号码；按序匹配、首条命中即投。留空则每期复投下方固定号码。
+          </p>
+          <div v-for="(rule, ri) in fixedPickRules" :key="ri" class="scf-fp-rule">
+            <div class="scf-fp-line">
+              <span class="scf-fp-lbl">位区间</span>
+              <el-input-number v-model="rule.posStart" :min="1" :max="20" :step="1" step-strictly size="small"
+                controls-position="right" class="scf-fp-num" />
+              <span class="scf-fp-dash">-</span>
+              <el-input-number v-model="rule.posEnd" :min="1" :max="20" :step="1" step-strictly size="small"
+                controls-position="right" class="scf-fp-num" />
+              <span class="scf-fp-lbl scf-fp-lbl--code">号码区间</span>
+              <el-input-number v-model="rule.codeMin" :min="0" :max="99" :step="1" step-strictly size="small"
+                controls-position="right" class="scf-fp-num" />
+              <span class="scf-fp-dash">-</span>
+              <el-input-number v-model="rule.codeMax" :min="0" :max="99" :step="1" step-strictly size="small"
+                controls-position="right" class="scf-fp-num" />
+              <button type="button" class="scf-tb-btn scf-tb-btn--danger" @click="removeFixedPickRule(ri)">
+                <span class="scf-ms scf-ms--sm" aria-hidden="true">delete</span>
+              </button>
+            </div>
+            <div class="scf-fp-line">
+              <span class="scf-fp-lbl">投注号码</span>
+              <el-input v-model="rule.numbers" size="small" placeholder="命中后投注的号码，多个用逗号分隔" class="scf-fp-nums" />
+            </div>
+          </div>
+        </div>
+
+        <!-- 1/2. 定码轮换（多分组） / 固定取码（单组·静态兜底） -->
         <div v-if="runTypeId === 'fixed_rotate' || runTypeId === 'fixed_number'" class="scf-groups-stack">
           <p v-if="runTypeId === 'fixed_number'" class="scf-run-tip scf-run-tip--banner">
-            固定号码：仅需设置一注号码，每期原样复投
+            固定取码：未设置取码规则时，每期原样复投以下固定号码
           </p>
           <div v-for="idx in displayedGroupIndexes" :key="idx" class="scf-content-card">
             <div class="scf-group-bar">
               <h3 class="scf-group-title">
-                {{ runTypeId === 'fixed_number' ? '固定号码' : `第 ${idx + 1} 组` }}
+                {{ runTypeId === 'fixed_number' ? '固定取码' : `第 ${idx + 1} 组` }}
               </h3>
+              <span class="scf-group-units">注数: {{ groupBetUnits(schemeGroups[idx] ?? '') }}</span>
               <div class="scf-content-toolbar scf-content-toolbar--group" role="toolbar"
                 :aria-label="`第 ${idx + 1} 组操作`">
                 <button type="button" class="scf-tb-btn scf-tb-btn--muted" @click="onClearContent(idx)">
@@ -1777,6 +2852,11 @@ function onTimeDialogOpened() {
                 v-model="schemeGroups[idx]"
                 :config="schemePlayConfig"
               />
+              <SchemeGroupInputPanel
+                v-else-if="schemeUsesDigitInput"
+                v-model="schemeGroups[idx]"
+                :config="schemePlayConfig"
+              />
               <SchemeGroupPickPanel
                 v-else-if="schemeUsesPickPanel"
                 v-model="schemeGroups[idx]"
@@ -1786,23 +2866,11 @@ function onTimeDialogOpened() {
                 v-else
                 v-model="schemeGroups[idx]"
                 type="textarea"
-                :rows="5"
+                :rows="8"
                 resize="none"
                 class="scf-area"
                 :placeholder="groupInputPlaceholder"
               />
-              <div class="scf-area-meta">
-                <span v-if="schemeUsesRenxuanDanshi">勾选位置后输入号码，注数随号码自动计算</span>
-                <span v-else-if="schemeUsesPickPanel">
-                  {{
-                    schemePlayConfig.inputMode === 'multiline'
-                      ? '按位选号，每位多选以逗号保存'
-                      : '点击号码选择，多选以逗号保存'
-                  }}
-                </span>
-                <span v-else>每注以逗号分隔</span>
-                <span>注数: {{ groupBetUnits(schemeGroups[idx] ?? '') }}</span>
-              </div>
             </div>
           </div>
         </div>
@@ -1815,7 +2883,7 @@ function onTimeDialogOpened() {
             <li v-for="(row, idx) in jushuList" :key="row.ju" class="scf-jushu-row">
               <div class="scf-jushu-main">
                 <span class="scf-jushu-no">第 {{ row.ju }} 局</span>
-                <span class="scf-jushu-content">{{ row.content }}</span>
+                <span class="scf-jushu-content">{{ formatJushuContentDisplay(row.content) }}</span>
               </div>
               <div class="scf-jushu-side">
                 <span class="scf-jushu-jump">中后 → 第 {{ row.afterHit }} 局</span>
@@ -1831,6 +2899,25 @@ function onTimeDialogOpened() {
 
         <!-- 4. 高级开某投某：映射表 + 投向模式 -->
         <div v-else-if="runTypeId === 'adv_trigger_bet'" class="scf-content-card scf-panel">
+          <div v-if="showTriggerPositionPicker" class="scf-field scf-panel-field">
+            <span class="scf-lbl">投注位</span>
+            <div
+              class="scf-trig-pos-chips"
+              role="group"
+              aria-label="投注位多选"
+              :style="{ '--scf-trig-pos-n': String(positionLabels.length || 5) }"
+            >
+              <button
+                v-for="(label, idx) in positionLabels"
+                :key="`trig-pos-${idx}`"
+                type="button"
+                class="scf-trig-pos-chip"
+                :class="{ 'is-on': triggerPositionIdxs.includes(idx) }"
+                :aria-pressed="triggerPositionIdxs.includes(idx)"
+                @click="toggleTriggerPosition(idx)"
+              >{{ label }}</button>
+            </div>
+          </div>
           <div class="scf-trig-grid scf-trig-grid--head" aria-hidden="true">
             <span>启用</span>
             <span>开出</span>
@@ -1849,12 +2936,12 @@ function onTimeDialogOpened() {
               </el-select>
             </template>
             <template v-else>
-              <el-input :model-value="row.pos" size="small" maxlength="2" :placeholder="triggerInputPlaceholder"
+              <el-input v-model="row.pos" size="small" maxlength="2" :placeholder="triggerInputPlaceholder"
                 inputmode="numeric" :disabled="!row.enabled"
-                @update:model-value="row.pos = sanitizeTriggerDigit($event)" />
-              <el-input :model-value="row.neg" size="small" maxlength="2" :placeholder="triggerInputPlaceholder"
+                @change="row.pos = sanitizeTriggerDigit(row.pos)" />
+              <el-input v-model="row.neg" size="small" maxlength="2" :placeholder="triggerInputPlaceholder"
                 inputmode="numeric" :disabled="!row.enabled"
-                @update:model-value="row.neg = sanitizeTriggerDigit($event)" />
+                @change="row.neg = sanitizeTriggerDigit(row.neg)" />
             </template>
           </div>
           <div class="scf-field scf-panel-field">
@@ -1863,88 +2950,189 @@ function onTimeDialogOpened() {
               <el-radio v-for="o in TRIGGER_MODE_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</el-radio>
             </el-radio-group>
           </div>
-          <p class="scf-run-tip">上期开出号码无启用映射时，按启用行第 1 行的正投下注</p>
-        </div>
-
-        <!-- 5. 冷热温出号 -->
-        <div v-else-if="runTypeId === 'hot_cold_warm'" class="scf-content-card scf-panel">
-          <div class="scf-hcw-bar">
-            <div class="scf-hcw-ctrl">
-              <span class="scf-lbl">总期数</span>
-              <el-input-number v-model="hcwTotalPeriods" :min="20" :max="500" :step="10" size="small" />
-              <el-button size="small" type="primary" plain :loading="hcwLoading" @click="loadHcwStats">
-                刷新统计
-              </el-button>
-            </div>
-            <div class="scf-hcw-ctrl">
-              <span class="scf-lbl">中奖轮换</span>
-              <el-switch v-model="hcwWinRotate" />
-            </div>
-          </div>
-          <div v-for="(label, pi) in positionLabels" :key="pi" class="scf-hcw-pos">
-            <p class="scf-hcw-pos-name">{{ label }}</p>
-            <template v-if="hcwStatsReady">
-              <div class="scf-hcw-tier scf-hcw-tier--hot">
-                <span class="scf-hcw-tier-lbl">热</span>
-                <div class="scf-hcw-chips">
-                  <button v-for="d in hcwTiers[pi]?.hot ?? []" :key="d" type="button" class="scf-hcw-chip"
-                    :class="{ 'is-on': poolHasToken(hcwPools[pi], d) }" @click="toggleHcwDigit(pi, d)">
-                    {{ d }}
-                  </button>
-                </div>
-              </div>
-              <div class="scf-hcw-tier scf-hcw-tier--warm">
-                <span class="scf-hcw-tier-lbl">温</span>
-                <div class="scf-hcw-chips">
-                  <button v-for="d in hcwTiers[pi]?.warm ?? []" :key="d" type="button" class="scf-hcw-chip"
-                    :class="{ 'is-on': poolHasToken(hcwPools[pi], d) }" @click="toggleHcwDigit(pi, d)">
-                    {{ d }}
-                  </button>
-                </div>
-              </div>
-              <div class="scf-hcw-tier scf-hcw-tier--cold">
-                <span class="scf-hcw-tier-lbl">冷</span>
-                <div class="scf-hcw-chips">
-                  <button v-for="d in hcwTiers[pi]?.cold ?? []" :key="d" type="button" class="scf-hcw-chip"
-                    :class="{ 'is-on': poolHasToken(hcwPools[pi], d) }" @click="toggleHcwDigit(pi, d)">
-                    {{ d }}
-                  </button>
-                </div>
-              </div>
+          <p class="scf-run-tip">
+            <template v-if="showTriggerPositionPicker">
+              可多选投注位：每位按该位上期开奖各自查映射下注；某位无映射时用启用行第 1 行正投
             </template>
             <template v-else>
-              <p class="scf-run-tip">暂无开奖统计，可直接手动选号</p>
-              <div class="scf-hcw-tier scf-hcw-tier--plain">
-                <div class="scf-hcw-chips">
-                  <button v-for="d in numberPoolTokens" :key="d" type="button" class="scf-hcw-chip"
-                    :class="{ 'is-on': poolHasToken(hcwPools[pi], d) }" @click="toggleHcwDigit(pi, d)">
-                    {{ d }}
-                  </button>
-                </div>
-              </div>
+              上期开出号码无启用映射时，按启用行第 1 行的正投下注
             </template>
+          </p>
+        </div>
+
+        <!-- 5. 冷热出号（v6 仅冷/热） -->
+        <div v-else-if="runTypeId === 'hot_cold_warm'" class="scf-content-card scf-panel">
+          <div class="scf-hcw-bar scf-hcw-bar--top">
+            <div class="scf-hcw-ctrl">
+              <span class="scf-hcw-lbl">总期数</span>
+              <div class="scf-stepper" role="group" aria-label="总期数">
+                <button
+                  type="button"
+                  class="scf-stepper-btn"
+                  :disabled="hcwTotalPeriods <= 20"
+                  aria-label="减少总期数"
+                  @click="hcwTotalPeriods = Math.max(20, hcwTotalPeriods - 1)"
+                >
+                  <span class="scf-ms scf-ms--sm" aria-hidden="true">remove</span>
+                </button>
+                <el-input
+                  v-model.number="hcwTotalPeriods"
+                  type="number"
+                  inputmode="numeric"
+                  maxlength="3"
+                  class="scf-stepper-input"
+                  :min="20"
+                  :max="100"
+                  @change="hcwTotalPeriods = Math.min(100, Math.max(20, Math.trunc(Number(hcwTotalPeriods) || 20)))"
+                />
+                <button
+                  type="button"
+                  class="scf-stepper-btn"
+                  :disabled="hcwTotalPeriods >= 100"
+                  aria-label="增加总期数"
+                  @click="hcwTotalPeriods = Math.min(100, hcwTotalPeriods + 1)"
+                >
+                  <span class="scf-ms scf-ms--sm" aria-hidden="true">add</span>
+                </button>
+              </div>
+              <button
+                type="button"
+                class="scf-hcw-refresh"
+                :disabled="hcwLoading"
+                aria-label="刷新统计"
+                title="刷新统计"
+                @click="loadHcwStats"
+              >
+                <span
+                  class="scf-ms scf-ms--sm"
+                  :class="{ 'scf-hcw-refresh-spin': hcwLoading }"
+                  aria-hidden="true"
+                >refresh</span>
+              </button>
+            </div>
+            <div class="scf-hcw-ctrl">
+              <span class="scf-hcw-lbl">容错</span>
+              <div class="scf-stepper" role="group" aria-label="容错个数">
+                <button
+                  type="button"
+                  class="scf-stepper-btn"
+                  :disabled="hcwFaultCount <= 1"
+                  aria-label="减少容错"
+                  @click="hcwFaultCount = Math.max(1, hcwFaultCount - 1)"
+                >
+                  <span class="scf-ms scf-ms--sm" aria-hidden="true">remove</span>
+                </button>
+                <el-input
+                  v-model.number="hcwFaultCount"
+                  type="number"
+                  inputmode="numeric"
+                  maxlength="2"
+                  class="scf-stepper-input"
+                  :min="1"
+                  :max="10"
+                  @change="hcwFaultCount = Math.min(10, Math.max(1, Math.trunc(Number(hcwFaultCount) || 1)))"
+                />
+                <button
+                  type="button"
+                  class="scf-stepper-btn"
+                  :disabled="hcwFaultCount >= 10"
+                  aria-label="增加容错"
+                  @click="hcwFaultCount = Math.min(10, hcwFaultCount + 1)"
+                >
+                  <span class="scf-ms scf-ms--sm" aria-hidden="true">add</span>
+                </button>
+              </div>
+            </div>
           </div>
-          <div class="scf-hcw-pool">
-            <p class="scf-hcw-pool-title">
-              <span>已选号码池</span>
-              <span class="scf-hcw-pool-units">预估 {{ hcwEstimatedUnits }} 注</span>
+          <div class="scf-hcw-bar scf-hcw-bar--strategy">
+            <el-radio-group v-model="hcwStrategy" class="scf-hcw-strategy">
+              <el-radio v-for="o in HCW_STRATEGY_OPTIONS" :key="o.value" :value="o.value">
+                {{ o.label }}
+              </el-radio>
+            </el-radio-group>
+            <span class="scf-hcw-units">总计：{{ hcwEstimatedUnits }} 注</span>
+          </div>
+          <div v-for="(label, pi) in hcwGroupLabels" :key="pi" class="scf-hcw-pos">
+            <div class="scf-hcw-pos-head">
+              <p class="scf-hcw-pos-name">{{ label }}</p>
+              <div class="scf-hcw-quick" role="group" :aria-label="`${label}快捷选号`">
+                <button
+                  type="button"
+                  class="scf-hcw-qbtn"
+                  :class="{ 'is-on': hcwQuickActive(pi, 'cold') }"
+                  :disabled="!hcwStatsReady || !(hcwTiers[pi]?.cold?.length)"
+                  @click="applyHcwQuick(pi, 'cold')"
+                >冷</button>
+                <button
+                  type="button"
+                  class="scf-hcw-qbtn"
+                  :class="{ 'is-on': hcwQuickActive(pi, 'hot') }"
+                  :disabled="!hcwStatsReady || !(hcwTiers[pi]?.hot?.length)"
+                  @click="applyHcwQuick(pi, 'hot')"
+                >热</button>
+                <button
+                  type="button"
+                  class="scf-hcw-qbtn"
+                  :class="{ 'is-on': hcwQuickActive(pi, 'all') }"
+                  :disabled="!hcwQuickTargets(pi, 'all').length"
+                  @click="applyHcwQuick(pi, 'all')"
+                >全</button>
+                <button
+                  type="button"
+                  class="scf-hcw-qbtn"
+                  @click="applyHcwQuick(pi, 'clear')"
+                >清</button>
+              </div>
+            </div>
+            <p v-if="!hcwStatsReady && !hcwLoading" class="scf-run-tip">
+              {{ hcwAttribute ? '暂无选项频次，可点刷新重试' : '暂无开奖统计，可直接手动选号' }}
             </p>
-            <p v-for="(label, pi) in positionLabels" :key="pi" class="scf-hcw-pool-line">
-              <span class="scf-hcw-pool-pos">{{ label }}</span>
-              <span class="scf-hcw-pool-vals">{{ (hcwPools[pi] ?? []).join(',') || '未选' }}</span>
-            </p>
+            <div
+              v-if="(hcwCellsByPos[pi] ?? []).length"
+              class="scf-hcw-grid"
+              :style="{
+                '--hcw-cols': String(Math.min(10, (hcwCellsByPos[pi] ?? []).length) || 10),
+              }"
+            >
+              <button
+                v-for="cell in hcwCellsByPos[pi]"
+                :key="cell.token"
+                type="button"
+                class="scf-hcw-cell"
+                :class="{
+                  'is-hot': cell.tier === 'hot',
+                  'is-cold': cell.tier === 'cold',
+                  'is-on': poolHasToken(hcwPools[pi], cell.token),
+                }"
+                @click="toggleHcwDigit(pi, cell.token)"
+              >
+                <span class="scf-hcw-cell-num">{{ cell.token }}</span>
+                <span class="scf-hcw-cell-cnt">{{ cell.count == null ? '—' : cell.count }}</span>
+              </button>
+            </div>
           </div>
         </div>
 
         <!-- 6. 随机出号 -->
         <div v-else-if="runTypeId === 'random_draw'" class="scf-content-card scf-panel">
-          <div v-for="(label, pi) in positionLabels" :key="pi" class="scf-rd-row">
-            <span class="scf-rd-pos">{{ label }}</span>
-            <el-input-number v-model="rdCounts[pi]" :min="1" :max="10" size="small" />
-            <span v-if="(rdPreview[pi] ?? []).length" class="scf-rd-preview">
-              预览：{{ (rdPreview[pi] ?? []).join(',') }}
-            </span>
-          </div>
+          <!-- 单式整注随机 / 组选号码池随机：仅需单一数量 -->
+          <template v-if="rdSingleCountMode">
+            <div class="scf-rd-row">
+              <span class="scf-rd-pos">{{ rdSingleCountLabel }}</span>
+              <el-input-number v-model="rdCounts[0]" :min="rdSingleCountMin" :max="rdSingleCountMax" size="small" />
+            </div>
+            <p v-if="rdWholePreview.length" class="scf-rd-preview">预览：{{ rdWholePreview.join(' ') }}</p>
+          </template>
+          <!-- 按位型：每位配号码数量 -->
+          <template v-else>
+            <div v-for="(label, pi) in positionLabels" :key="pi" class="scf-rd-row">
+              <span class="scf-rd-pos">{{ label }}</span>
+              <el-input-number v-model="rdCounts[pi]" :min="1" :max="10" size="small" />
+              <span v-if="(rdPreview[pi] ?? []).length" class="scf-rd-preview">
+                预览：{{ (rdPreview[pi] ?? []).join(',') }}
+              </span>
+            </div>
+          </template>
           <div class="scf-rd-actions">
             <el-button type="primary" plain size="small" @click="generateRdPreview">生成预览</el-button>
             <span class="scf-rd-units">预估 {{ rdEstimatedUnits }} 注</span>
@@ -2006,6 +3194,16 @@ function onTimeDialogOpened() {
 
     <DateTimePickerModal v-model="dtpVisible" :value="dtpValue" :title="dtpField === 'start' ? '开始时间' : '结束时间'"
       @confirm="onTimePicked" />
+
+    <OptionPickerModal
+      v-model="identityPickerOpen"
+      :selected-value="identityPickerSelectedValue"
+      :title="identityPickerTitle"
+      :options="identityPickerOptions"
+      selection-accent="primary"
+      @confirm="onIdentityPickerConfirm"
+      @cancel="onIdentityPickerCancel"
+    />
 
     <el-dialog v-model="timeDialogVisible" title="运行时段" width="min(22rem, calc(100vw - 2rem))" class="scf-tw-dialog"
       modal-class="scf-tw-overlay" append-to-body align-center destroy-on-close @opened="onTimeDialogOpened">
@@ -2070,10 +3268,18 @@ function onTimeDialogOpened() {
           <span class="scf-lbl">局数</span>
           <el-input-number v-model="jushuForm.ju" :min="1" :step="1" step-strictly class="scf-jushu-num" />
         </div>
-        <div class="scf-field">
-          <span class="scf-lbl">投注号码</span>
+        <div class="scf-field scf-field--jushu-nums">
+          <div class="scf-jushu-nums-lbl">
+            <span class="scf-lbl">投注号码</span>
+            <span class="scf-group-units">注数: {{ groupBetUnits(jushuForm.content) }}</span>
+          </div>
           <SchemeRenxuanDanshiPanel
             v-if="schemeUsesRenxuanDanshi"
+            v-model="jushuForm.content"
+            :config="schemePlayConfig"
+          />
+          <SchemeGroupInputPanel
+            v-else-if="schemeUsesDigitInput"
             v-model="jushuForm.content"
             :config="schemePlayConfig"
           />
@@ -2086,7 +3292,7 @@ function onTimeDialogOpened() {
             v-else
             v-model="jushuForm.content"
             type="textarea"
-            :rows="4"
+            :rows="8"
             resize="none"
             class="scf-area"
             :placeholder="groupInputPlaceholder"
@@ -2111,13 +3317,27 @@ function onTimeDialogOpened() {
     </el-dialog>
 
     <footer class="scf-footer">
-      <p v-if="hasCloudInstance" class="scf-fork-hint">
+      <p v-if="editBlockedRunning" class="scf-fork-hint">
+        运行中的方案不可编辑，请先暂停后再修改。
+      </p>
+      <p v-else-if="hasCloudInstance && !returnFromDetail" class="scf-fork-hint">
         该方案已有云端实例；再次添加将自动复制新方案（默认私密）。
       </p>
-      <el-button type="primary" class="scf-cloud-btn" size="large" :loading="cloudBusy" :disabled="cloudBusy"
-        @click="onSaveCloud">
-        <span class="scf-ms scf-ms--fill scf-cloud-ico" aria-hidden="true">cloud_upload</span>
-        添加至云端
+      <el-button
+        type="primary"
+        class="scf-cloud-btn"
+        size="large"
+        :loading="cloudBusy"
+        :disabled="cloudBusy || editBlockedRunning"
+        @click="returnFromDetail ? onDoneFromDetail() : onSaveCloud()"
+      >
+        <template v-if="returnFromDetail">
+          完成
+        </template>
+        <template v-else>
+          <span class="scf-ms scf-ms--fill scf-cloud-ico" aria-hidden="true">cloud_upload</span>
+          添加至云端
+        </template>
       </el-button>
     </footer>
   </div>
@@ -2132,6 +3352,7 @@ function onTimeDialogOpened() {
   --scf-outline: #c2c6d8;
   --scf-error: #ba1a1a;
   --scf-tertiary: #a33200;
+  --scf-profit: #0d9f6e;
   --scf-secondary-container: #9bb4fe;
   --scf-on-secondary-container: #f8f7ff;
   --scf-error-container: #ffdad6;
@@ -2242,20 +3463,6 @@ function onTimeDialogOpened() {
   color: var(--scf-primary);
 }
 
-.scf-del-btn {
-  border: none;
-  background: transparent;
-  color: var(--scf-error);
-  font-size: 13px;
-  cursor: pointer;
-  padding: 0.25rem 0.5rem;
-}
-
-.scf-del-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
 .scf-fork-hint {
   margin: 0 0 0.75rem;
   font-size: 12px;
@@ -2340,6 +3547,14 @@ function onTimeDialogOpened() {
   gap: 0.7rem;
 }
 
+.scf-identity-hint {
+  margin: 0;
+  padding: 0 0.15rem;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: #64748b;
+}
+
 /* 双列改为单列：全页控件与「方案名称」等同宽 */
 .scf-grid2 {
   display: flex;
@@ -2412,7 +3627,22 @@ function onTimeDialogOpened() {
 .scf-field > .scf-readonly,
 .scf-field > .scf-suffix-wrap,
 .scf-field > .scf-time-hit,
-.scf-field > .scf-radio-wrap {
+.scf-field > .scf-radio-wrap,
+.scf-field > .scf-play-pair {
+  width: 100%;
+  min-width: 0;
+}
+
+.scf-play-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: stretch;
+}
+
+.scf-play-pair > .scf-time-hit,
+.scf-play-pair > .scf-readonly,
+.scf-play-pair > .scf-el-inp {
   width: 100%;
   min-width: 0;
 }
@@ -2538,7 +3768,7 @@ function onTimeDialogOpened() {
 }
 
 .scf-el-inp--profit :deep(.el-input__inner) {
-  color: var(--scf-tertiary);
+  color: var(--scf-profit);
   font-weight: 700;
 }
 
@@ -2615,11 +3845,71 @@ function onTimeDialogOpened() {
   gap: 1rem;
 }
 
-.scf-group-bar {
+.scf-fp-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  padding: 1rem;
+  background: var(--el-fill-color-lighter, #f7f9fb);
+  border-radius: 0.75rem;
+}
+
+.scf-fp-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.65rem;
+}
+
+.scf-fp-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.scf-fp-rule {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  background: #fff;
+  border-radius: 0.5rem;
+}
+
+.scf-fp-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.scf-fp-lbl {
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+  white-space: nowrap;
+}
+
+.scf-fp-lbl--code {
+  margin-left: 0.75rem;
+}
+
+.scf-fp-dash {
+  color: var(--el-text-color-secondary);
+}
+
+.scf-fp-num {
+  width: 6rem;
+}
+
+.scf-fp-nums {
+  flex: 1;
+  min-width: 12rem;
+}
+
+.scf-group-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
   flex-wrap: wrap;
   padding: 0.65rem 1rem;
   border-bottom: 1px solid rgba(194, 198, 216, 0.2);
@@ -2637,13 +3927,23 @@ function onTimeDialogOpened() {
   color: var(--scf-primary-strong);
 }
 
-.scf-content-toolbar--group {
+.scf-group-units {
   flex: 1;
+  min-width: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  font-family: 'Inter', 'Noto Sans SC', system-ui, sans-serif;
+  color: #64748b;
+  letter-spacing: 0;
+}
+
+.scf-content-toolbar--group {
+  flex: 0 0 auto;
   display: flex;
   justify-content: flex-end;
   align-items: stretch;
   align-self: stretch;
-  min-width: min(12rem, 100%);
+  margin-left: auto;
   border-bottom: none;
 }
 
@@ -2706,25 +4006,23 @@ function onTimeDialogOpened() {
   border: none;
   border-radius: 0.75rem;
   background: rgba(242, 244, 246, 0.65);
-  padding: 1rem;
+  padding: 1rem 1.1rem;
+  min-height: 9.5rem;
   font-size: 0.9375rem;
-  font-family: ui-monospace, 'Cascadia Code', 'Segoe UI Mono', monospace;
-  line-height: 1.55;
+  font-family: 'Inter', 'Noto Sans SC', system-ui, sans-serif;
+  line-height: 1.65;
   box-shadow: none;
+  white-space: pre-wrap;
 }
 
 .scf-area :deep(.el-textarea__inner:focus) {
   box-shadow: 0 0 0 2px rgba(0, 102, 255, 0.18);
 }
 
-.scf-area-meta {
-  margin-top: 0.65rem;
-  display: flex;
-  justify-content: space-between;
-  gap: 0.5rem;
-  font-size: 11px;
-  color: #727687;
-  padding: 0 0.2rem;
+.scf-area :deep(.el-textarea__inner::placeholder) {
+  color: #94a3b8;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .scf-footer {
@@ -3017,7 +4315,7 @@ function onTimeDialogOpened() {
   font-family: ui-monospace, 'Cascadia Code', 'Segoe UI Mono', monospace;
   color: #191c1e;
   word-break: break-all;
-  white-space: pre-wrap;
+  white-space: normal;
 }
 
 .scf-jushu-side {
@@ -3054,8 +4352,76 @@ function onTimeDialogOpened() {
   gap: 1rem;
 }
 
+.scf-field--jushu-nums {
+  align-items: start;
+}
+
+.scf-jushu-nums-lbl {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  padding-top: 0.35rem;
+}
+
+.scf-jushu-nums-lbl .scf-group-units {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--scf-on-variant);
+}
+
 .scf-jushu-num {
   width: 100%;
+}
+
+/* 开某投某 · 投注位（与 scf-field 同列，芯片均分一行） */
+.scf-trig-pos-chips {
+  --scf-trig-pos-n: 5;
+  display: grid;
+  grid-template-columns: repeat(var(--scf-trig-pos-n), minmax(0, 1fr));
+  gap: 0.35rem;
+  width: 100%;
+  min-width: 0;
+  padding: 0.25rem;
+  border-radius: 0.65rem;
+  background: rgba(242, 244, 246, 0.85);
+}
+
+.scf-trig-pos-chip {
+  height: 2rem;
+  margin: 0;
+  padding: 0 0.2rem;
+  border: none;
+  border-radius: 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  font-family: inherit;
+  line-height: 1;
+  cursor: pointer;
+  background: transparent;
+  color: var(--scf-on-variant);
+  transition:
+    background 0.15s,
+    color 0.15s,
+    box-shadow 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.scf-trig-pos-chip:hover:not(.is-on) {
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--scf-primary-strong, #0050cb);
+}
+
+.scf-trig-pos-chip.is-on {
+  background: #fff;
+  color: var(--el-color-primary, #0050cb);
+  box-shadow: 0 2px 10px rgba(25, 28, 30, 0.08);
+}
+
+.scf-trig-pos-chip:focus-visible {
+  outline: 2px solid rgba(0, 102, 255, 0.35);
+  outline-offset: 1px;
 }
 
 /* 开某投某映射表 */
@@ -3088,19 +4454,187 @@ function onTimeDialogOpened() {
   background: rgba(0, 80, 203, 0.06);
 }
 
-/* 冷热温 */
+/* 冷热出号 */
 .scf-hcw-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 0.75rem;
-  flex-wrap: wrap;
+  width: 100%;
+}
+
+.scf-hcw-bar--top {
+  justify-content: space-between;
+  flex-wrap: nowrap;
+}
+
+.scf-hcw-bar--strategy {
+  justify-content: space-between;
+  gap: 0.35rem;
+}
+
+.scf-hcw-refresh {
+  display: grid;
+  place-items: center;
+  width: 1.85rem;
+  height: 1.85rem;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0.45rem;
+  background: rgba(0, 80, 203, 0.08);
+  color: var(--scf-primary-strong, #0050cb);
+  cursor: pointer;
+  transition: background 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.scf-hcw-refresh:hover:not(:disabled) {
+  background: rgba(0, 80, 203, 0.14);
+}
+
+.scf-hcw-refresh:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.scf-hcw-refresh:focus-visible {
+  outline: 2px solid rgba(0, 102, 255, 0.35);
+  outline-offset: 1px;
+}
+
+.scf-hcw-refresh-spin {
+  display: inline-block;
+  animation: scf-hcw-spin 0.8s linear infinite;
+}
+
+@keyframes scf-hcw-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .scf-hcw-ctrl {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  min-width: 0;
+  flex: none;
+}
+
+.scf-hcw-strategy {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.1rem 0.35rem;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.scf-hcw-strategy :deep(.el-radio) {
+  margin-right: 0;
+  height: auto;
+  margin-left: 0;
+}
+
+.scf-hcw-strategy :deep(.el-radio__label) {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding-left: 0.2rem;
+}
+
+.scf-hcw-strategy :deep(.el-radio__inner) {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+/* 勿用全局 .scf-lbl（width:100%），否则在 flex 行内会挤掉输入框 */
+.scf-hcw-lbl {
+  flex: none;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--scf-on-variant);
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+/* 左减右加：紧凑步进器（最多 3 位数字） */
+.scf-stepper {
+  display: inline-flex;
+  align-items: stretch;
+  height: 1.85rem;
+  border-radius: 0.45rem;
+  background: #f2f4f6;
+  overflow: hidden;
+}
+
+.scf-stepper-btn {
+  display: grid;
+  place-items: center;
+  width: 1.45rem;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--scf-primary-strong);
+  cursor: pointer;
+  transition: background 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.scf-stepper-btn:hover:not(:disabled) {
+  background: rgba(0, 80, 203, 0.08);
+}
+
+.scf-stepper-btn:disabled {
+  color: rgba(66, 70, 86, 0.35);
+  cursor: not-allowed;
+}
+
+.scf-stepper-btn:focus-visible {
+  outline: 2px solid rgba(0, 102, 255, 0.35);
+  outline-offset: -2px;
+}
+
+.scf-stepper-input {
+  width: 2.15rem;
+}
+
+.scf-stepper-input :deep(.el-input__wrapper) {
+  height: 1.85rem;
+  padding: 0;
+  box-shadow: none !important;
+  background: transparent;
+  border-radius: 0;
+}
+
+.scf-stepper-input :deep(.el-input__inner) {
+  height: 1.85rem;
+  line-height: 1.85rem;
+  padding: 0;
+  text-align: center;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #191c1e;
+  /* 隐藏 number 原生上下箭头 */
+  -moz-appearance: textfield;
+}
+
+.scf-stepper-input :deep(.el-input__inner::-webkit-outer-spin-button),
+.scf-stepper-input :deep(.el-input__inner::-webkit-inner-spin-button) {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.scf-hcw-units {
+  flex: none;
+  flex-shrink: 0;
+  margin-left: 0.15rem;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--scf-primary-strong, #0050cb);
+  white-space: nowrap;
 }
 
 .scf-hcw-pos {
@@ -3112,139 +4646,146 @@ function onTimeDialogOpened() {
   background: rgba(247, 249, 251, 0.9);
 }
 
+.scf-hcw-pos-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
 .scf-hcw-pos-name {
   margin: 0;
+  flex: none;
   font-size: 0.8125rem;
   font-weight: 700;
   color: var(--scf-on-variant);
 }
 
-.scf-hcw-tier {
+.scf-hcw-quick {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-left: auto;
 }
 
-.scf-hcw-tier-lbl {
-  flex-shrink: 0;
-  width: 1.5rem;
-  height: 1.5rem;
-  border-radius: 0.45rem;
-  display: inline-flex;
+.scf-hcw-qbtn {
+  width: 1.85rem;
+  height: 1.85rem;
+  margin: 0;
+  padding: 0;
+  border: 1px solid rgba(194, 198, 216, 0.55);
+  border-radius: 0.4rem;
+  background: #fff;
+  color: #424656;
+  font-size: 0.75rem;
+  font-weight: 700;
+  font-family: inherit;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.scf-hcw-qbtn:hover:not(:disabled):not(.is-on) {
+  border-color: rgba(0, 80, 203, 0.45);
+  color: var(--scf-primary-strong);
+}
+
+.scf-hcw-qbtn.is-on {
+  background: var(--el-color-primary, #0050cb);
+  border-color: var(--el-color-primary, #0050cb);
+  color: #fff;
+}
+
+.scf-hcw-qbtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.scf-hcw-qbtn:focus-visible {
+  outline: 2px solid rgba(0, 102, 255, 0.35);
+  outline-offset: 1px;
+}
+
+.scf-hcw-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--hcw-cols, 10), minmax(0, 1fr));
+  gap: 0.3rem;
+  width: 100%;
+  overflow: visible;
+}
+
+.scf-hcw-cell {
+  display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.scf-hcw-tier--hot .scf-hcw-tier-lbl {
-  background: var(--el-color-primary, #0050cb);
-  color: #fff;
-}
-
-.scf-hcw-tier--warm .scf-hcw-tier-lbl {
-  background: var(--el-color-primary-light-5, #80a7e5);
-  color: #fff;
-}
-
-.scf-hcw-tier--cold .scf-hcw-tier-lbl {
-  background: var(--el-color-primary-light-9, #ecf2fc);
-  color: var(--el-color-primary, #0050cb);
-}
-
-.scf-hcw-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-}
-
-.scf-hcw-chip {
-  width: 2.1rem;
-  height: 2.1rem;
-  border: none;
-  border-radius: 0.55rem;
-  font-size: 0.9375rem;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  font-family: inherit;
+  gap: 0.1rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0.35rem 0.1rem 0.3rem;
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+  background: #fff;
   cursor: pointer;
-  background: #f2f4f6;
-  color: var(--scf-on-variant);
+  font-family: inherit;
   transition:
     box-shadow 0.15s,
     background 0.15s,
+    border-color 0.15s,
     color 0.15s;
   -webkit-tap-highlight-color: transparent;
 }
 
-.scf-hcw-tier--hot .scf-hcw-chip {
-  background: rgba(0, 80, 203, 0.14);
-  color: var(--el-color-primary, #0050cb);
-}
-
-.scf-hcw-tier--warm .scf-hcw-chip {
-  background: var(--el-color-primary-light-5, #80a7e5);
-  color: #fff;
-}
-
-.scf-hcw-tier--cold .scf-hcw-chip {
-  background: var(--el-color-primary-light-9, #ecf2fc);
-  color: var(--el-color-primary, #0050cb);
-}
-
-.scf-hcw-chip.is-on {
-  background: var(--el-color-primary, #0050cb);
-  color: #fff;
-  box-shadow: 0 4px 14px rgba(0, 80, 203, 0.28);
-}
-
-.scf-hcw-pool {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  padding: 0.75rem 0.85rem;
-  border-radius: 0.75rem;
-  background: rgba(0, 80, 203, 0.05);
-}
-
-.scf-hcw-pool-title {
-  margin: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  font-size: 0.8125rem;
+.scf-hcw-cell-num {
+  font-size: 0.9375rem;
   font-weight: 700;
-  color: var(--scf-primary);
-}
-
-.scf-hcw-pool-units {
-  font-size: 11px;
-  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
   color: var(--scf-on-variant);
 }
 
-.scf-hcw-pool-line {
-  margin: 0;
-  display: flex;
-  gap: 0.5rem;
-  font-size: 0.875rem;
-  line-height: 1.6;
-}
-
-.scf-hcw-pool-pos {
-  flex-shrink: 0;
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--scf-on-variant);
-  align-self: center;
-}
-
-.scf-hcw-pool-vals {
-  font-family: ui-monospace, 'Cascadia Code', 'Segoe UI Mono', monospace;
+.scf-hcw-cell-cnt {
+  font-size: 10px;
   font-weight: 600;
-  color: #191c1e;
-  word-break: break-all;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  color: var(--scf-on-variant);
+  opacity: 0.85;
+}
+
+.scf-hcw-cell.is-hot .scf-hcw-cell-num,
+.scf-hcw-cell.is-hot .scf-hcw-cell-cnt {
+  color: #e53935;
+}
+
+.scf-hcw-cell.is-cold .scf-hcw-cell-num,
+.scf-hcw-cell.is-cold .scf-hcw-cell-cnt {
+  color: #b0b4be;
+}
+
+.scf-hcw-cell.is-on {
+  border-color: rgba(0, 80, 203, 0.45);
+  background: rgba(0, 80, 203, 0.08);
+  box-shadow: 0 2px 10px rgba(0, 80, 203, 0.12);
+}
+
+.scf-hcw-cell.is-on.is-hot {
+  border-color: rgba(229, 57, 53, 0.45);
+  background: rgba(229, 57, 53, 0.1);
+  box-shadow: 0 2px 10px rgba(229, 57, 53, 0.14);
+}
+
+.scf-hcw-cell.is-on.is-cold {
+  border-color: rgba(176, 180, 190, 0.7);
+  background: rgba(176, 180, 190, 0.16);
+  box-shadow: none;
 }
 
 /* 随机出号 */

@@ -50,9 +50,11 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/play/custom-scheme/new',
-    name: 'custom-scheme-new',
-    component: () => import('@/views/play/CustomSchemeNewView.vue'),
-    meta: { title: '新增方案' },
+    redirect: {
+      name: 'advanced-scheme-edit',
+      params: { schemeId: 'new' },
+      query: { draft: '1', kind: 'custom', fresh: '1' },
+    },
   },
   {
     path: '/play/scheme-detail/:definitionId',

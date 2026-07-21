@@ -71,7 +71,7 @@ func (s *Service) materializeBuiltinPlan(
 	// 复制快照的玩法与方案内容（保留本方案的资金/时间/止盈止损等运行参数）
 	for _, key := range []string{
 		"playTemplate", "playTypeId", "subPlayId", "typeId", "subId", "betMode", "betUnit", "playMethod",
-		"schemeGroups", "jushuList", "triggerBet", "hotColdWarm", "randomDraw", "rounds", "betMultiplier",
+		"schemeGroups", "jushuList", "triggerBet", "hotColdWarm", "randomDraw", "fixedPick", "rounds", "betMultiplier",
 	} {
 		if v, ok := snapCfg[key]; ok {
 			overlay[key] = v
@@ -107,6 +107,8 @@ type UpdateDefinitionPatch struct {
 	SimBet         bool
 	HasSimBet      bool
 	SchemeFunds    string
+	MultCoeff      string
+	HasMultCoeff   bool
 	StartTime      string
 	EndTime        string
 	HasStartTime   bool
@@ -135,6 +137,8 @@ type UpdateDefinitionPatch struct {
 	HasHotColdWarm bool
 	RandomDraw     json.RawMessage
 	HasRandomDraw  bool
+	FixedPick      json.RawMessage
+	HasFixedPick   bool
 	// 内置计画：选择收藏快照（服务端物化）
 	BuiltinPlanSnapshotID string
 	HasBuiltinPlan        bool
@@ -160,6 +164,18 @@ func ParseUpdatePatch(raw map[string]json.RawMessage) (UpdateDefinitionPatch, er
 	}
 	if v, ok := raw["schemeFunds"]; ok {
 		patch.SchemeFunds = strings.TrimSpace(unquoteJSONString(v))
+	}
+	if v, ok := raw["multCoeff"]; ok {
+		mc := strings.TrimSpace(unquoteJSONString(v))
+		if mc != "" {
+			n, err := strconv.ParseInt(mc, 10, 64)
+			if err != nil || n < 0 {
+				return UpdateDefinitionPatch{}, fmt.Errorf("%w: multCoeff 须为非负整数", ErrInvalidUpdatePatch)
+			}
+			mc = strconv.FormatInt(n, 10)
+		}
+		patch.MultCoeff = mc
+		patch.HasMultCoeff = true
 	}
 	if v, ok := raw["startTime"]; ok {
 		patch.HasStartTime = true
@@ -221,6 +237,10 @@ func ParseUpdatePatch(raw map[string]json.RawMessage) (UpdateDefinitionPatch, er
 	if v, ok := raw["randomDraw"]; ok {
 		patch.RandomDraw = append(json.RawMessage(nil), v...)
 		patch.HasRandomDraw = true
+	}
+	if v, ok := raw["fixedPick"]; ok {
+		patch.FixedPick = append(json.RawMessage(nil), v...)
+		patch.HasFixedPick = true
 	}
 	if v, ok := raw["builtinPlan"]; ok {
 		var bp struct {
@@ -394,6 +414,13 @@ func mergeUpdateDefinitionConfig(existing []byte, patch UpdateDefinitionPatch, p
 			delete(cfg, "betUnit")
 		}
 	}
+	if patch.HasMultCoeff {
+		if strings.TrimSpace(patch.MultCoeff) != "" {
+			cfg["multCoeff"] = strings.TrimSpace(patch.MultCoeff)
+		} else {
+			delete(cfg, "multCoeff")
+		}
+	}
 	if patch.HasBetMode {
 		if isBetUnitArtifact(patch.BetMode) {
 			cfg["betUnit"] = patch.BetMode
@@ -453,6 +480,13 @@ func mergeUpdateDefinitionConfig(existing []byte, patch UpdateDefinitionPatch, p
 			return nil, err
 		}
 		cfg["randomDraw"] = v
+	}
+	if patch.HasFixedPick {
+		var v interface{}
+		if err := json.Unmarshal(patch.FixedPick, &v); err != nil {
+			return nil, err
+		}
+		cfg["fixedPick"] = v
 	}
 	for k, v := range planOverlay {
 		cfg[k] = v

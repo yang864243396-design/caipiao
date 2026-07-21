@@ -34,10 +34,20 @@ func resolveSSCPlayRule(typeID, subID, betMode string, playMethod ...string) pla
 		rule.SubPlayID = subID
 	}
 
-	if typeID == "dingwei" {
+	// g006 = rules/v2「一星/定位胆」；与旧 dingwei 同属定位胆族。
+	// SegmentLen 恒为 1（走 evaluateDingwei / 多行五位结算）；
+	// 未锁定位的统一定位胆（如 subId=13）用 SegmentPos 表达五位面板，供冷热/随机按位取码。
+	if typeID == "dingwei" || typeID == "g006" {
 		rule.SegmentLen = 1
-		rule.PositionIdx = dingweiPositionIndex(subID)
-		rule.SegmentStart = rule.PositionIdx
+		rule.BetMode = "dingwei"
+		if isSSCDingweiFivePosition(subID, method) {
+			rule.SegmentPos = []int{0, 1, 2, 3, 4}
+			rule.PositionIdx = 0
+			rule.SegmentStart = 0
+		} else {
+			rule.PositionIdx = dingweiPositionIndex(subID, method)
+			rule.SegmentStart = rule.PositionIdx
+		}
 		return rule
 	}
 	if typeID == "budingwei" || typeID == "g009" {
@@ -154,21 +164,54 @@ func combo24SegmentPositions(subID string) []int {
 	}
 }
 
-func dingweiPositionIndex(subID string) int {
+func dingweiPositionIndex(subID string, playMethod ...string) int {
+	method := ""
+	if len(playMethod) > 0 {
+		method = strings.TrimSpace(playMethod[0])
+	}
+	hint := method + " " + subID
 	switch {
-	case strings.HasSuffix(subID, "_wan"):
+	case strings.HasSuffix(subID, "_wan"), strings.Contains(hint, "万"):
 		return 0
-	case strings.HasSuffix(subID, "_qian"):
+	case strings.HasSuffix(subID, "_qian"), strings.Contains(hint, "千"):
 		return 1
-	case strings.HasSuffix(subID, "_bai"):
+	case strings.HasSuffix(subID, "_bai"), strings.Contains(hint, "百"):
 		return 2
-	case strings.HasSuffix(subID, "_shi"):
+	case strings.HasSuffix(subID, "_shi"), strings.Contains(hint, "十"):
 		return 3
-	case strings.HasSuffix(subID, "_ge"):
+	case strings.HasSuffix(subID, "_ge"), strings.Contains(hint, "个"):
 		return 4
 	default:
+		// 一星定位胆（sub_id=13 等）默认按万位触发；与第三方 wire「号,,,,」一致。
 		return 0
 	}
+}
+
+// isSSCDingweiFivePosition 是否为前端五位定位胆面板（未锁定万/千/百/十/个）。
+// 与 client playConfig.isDingweiFivePositionScheme 对齐：g006 + 数字 subId（如 13）→ 五位。
+func isSSCDingweiFivePosition(subID, playMethod string) bool {
+	s := strings.ToLower(strings.TrimSpace(subID))
+	if strings.HasPrefix(s, "dingwei_") {
+		return false
+	}
+	for _, suf := range []string{"_wan", "_qian", "_bai", "_shi", "_ge"} {
+		if strings.HasSuffix(s, suf) {
+			return false
+		}
+	}
+	hint := strings.TrimSpace(playMethod) + " " + strings.TrimSpace(subID)
+	for _, label := range []string{"万位", "千位", "百位", "十位", "个位"} {
+		if strings.Contains(hint, label) {
+			return false
+		}
+	}
+	// 显式「· 万」等短标签
+	for _, label := range []string{"· 万", "· 千", "· 百", "· 十", "· 个"} {
+		if strings.Contains(hint, label) {
+			return false
+		}
+	}
+	return true
 }
 
 func sscSegmentRange(typeID string) (start, length int) {

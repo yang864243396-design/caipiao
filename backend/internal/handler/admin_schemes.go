@@ -43,6 +43,21 @@ func (h *Handler) AdminSchemeMonitorList(w http.ResponseWriter, r *http.Request)
 	apix.OK(w, result)
 }
 
+func (h *Handler) AdminSchemeBetHistory(w http.ResponseWriter, r *http.Request) {
+	if h.schemes == nil {
+		apix.Fail(w, http.StatusServiceUnavailable, apix.CodeInternal, "数据库未就绪")
+		return
+	}
+	instanceID := r.PathValue("instanceId")
+	days := queryInt(r, "days", 30)
+	result, err := h.schemes.AdminBetHistory(r.Context(), instanceID, days)
+	if err != nil {
+		h.handleSchemeAdminErr(w, err)
+		return
+	}
+	apix.OK(w, result)
+}
+
 func (h *Handler) AdminSchemeForceStop(w http.ResponseWriter, r *http.Request) {
 	if h.schemes == nil {
 		apix.Fail(w, http.StatusServiceUnavailable, apix.CodeInternal, "数据库未就绪")

@@ -493,9 +493,12 @@ export function parseGroupPicks(
   }
   const pool = poolFromConfig(config)
   if (config.inputMode === 'multiline') {
+    const padded = isDingweiMultilineConfig(config)
+      ? dingweiPositionLines(String(content ?? '').replace(/\r/g, ''), config.segmentLen)
+      : splitGroupLines(trimmed)
     return {
       digits: [],
-      lines: splitGroupLines(trimmed).map((line) => parsePickTokens(line, pool)),
+      lines: padded.map((line) => parsePickTokens(line, pool)),
     }
   }
   if (config.inputMode === 'lhc_num') {
@@ -781,8 +784,9 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
     return units
   }
 
-  if (config.betMode === 'dingwei' && config.inputMode === 'multiline' && config.segmentLen > 1) {
-    const lines = splitGroupLines(content)
+  if (isDingweiMultilineConfig(config)) {
+    // 保留前导空位：",,12,," / "\n\n1,2\n\n" 不得压成首位
+    const lines = dingweiPositionLines(content, config.segmentLen)
     const poolCfg = poolFromConfig(config)
     let total = 0
     for (let i = 0; i < config.segmentLen; i++) {
@@ -991,6 +995,68 @@ export function splitGroupLinesPad(content: string, len: number): string[] {
   return lines.slice(0, Math.max(len, lines.length))
 }
 
+/**
+ * 定位胆多位内容 → 按位行（保留前导/中间空位）。
+ * 支持换行格式「\\n\\n1,2\\n\\n」与逗号 wire「,,12,,」；禁止 trim/filter 空行导致位次前移。
+ */
+export function dingweiPositionLines(raw: string, segLen: number): string[] {
+  const n = Math.max(1, segLen)
+  const s = String(raw ?? '').replace(/\r/g, '')
+  if (s.includes('\n')) {
+    return splitGroupLinesPad(s, n).slice(0, n)
+  }
+  const parts = s.split(',')
+  if (parts.length === n) {
+    return parts.map((p) => {
+      const digits = String(p ?? '')
+        .replace(/\D/g, '')
+        .split('')
+        .filter((d) => d >= '0' && d <= '9')
+      return [...new Set(digits)].join(',')
+    })
+  }
+  return splitGroupLinesPad(s, n).slice(0, n)
+}
+
+/** 一星/定位胆多位（允许空位）：校验与计注须按位保留空槽 */
+function isDingweiMultilineConfig(config: PlayConfig): boolean {
+  if (config.inputMode !== 'multiline' || config.segmentLen <= 1) return false
+  return isYixingDingweiPlayConfig(config)
+}
+
+/** 一星/定位胆：每位最多投注号码个数（0–9 共 10 个号，上限 9） */
+export const YIXING_MAX_PICKS_PER_POS = 9
+export const YIXING_MAX_PICKS_MSG = '每个位置最多只能投注9个号码'
+
+/** 是否一星/定位胆玩法（含 rules/v2 g006、guajiGroup=一星） */
+export function isYixingDingweiPlayConfig(config: PlayConfig): boolean {
+  if (config.betMode === 'dingwei') return true
+  const tid = String(config.playTypeId ?? '')
+  if (tid === 'dingwei' || tid === 'g006') return true
+  if (config.guajiGroup === '一星') return true
+  const label = `${config.playTypeLabel ?? ''} ${config.playMethodLabel ?? ''}`
+  return label.includes('一星') || label.includes('定位胆')
+}
+
+/** 一星内容按位校验：任一位号码数 > 9 则返回固定提示 */
+export function yixingContentMaxPicksError(config: PlayConfig, raw: string): string | null {
+  if (!isYixingDingweiPlayConfig(config)) return null
+  const poolCfg = poolFromConfig(config) ?? undefined
+  if (isDingweiMultilineConfig(config)) {
+    const lines = dingweiPositionLines(String(raw ?? '').replace(/\r/g, ''), config.segmentLen)
+    for (let i = 0; i < config.segmentLen; i++) {
+      const line = lines[i] ?? ''
+      if (!line.trim()) continue
+      const n = [...new Set(parsePickTokens(line, poolCfg))].length
+      if (n > YIXING_MAX_PICKS_PER_POS) return YIXING_MAX_PICKS_MSG
+    }
+    return null
+  }
+  const n = [...new Set(parsePickTokens(String(raw ?? ''), poolCfg))].length
+  if (n > YIXING_MAX_PICKS_PER_POS) return YIXING_MAX_PICKS_MSG
+  return null
+}
+
 /** 直选单式：提取指定位数的数字串 */
 export function parseNumberTokens(raw: string, expectLen: number): string[] {
   const parts = raw.split(/[,，\s\n]+/).map((s) => s.trim()).filter(Boolean)
@@ -1141,8 +1207,9 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
     return { ok: true, normalized, betUnits: countBetUnits(config, normalized) }
   }
 
-  if (config.betMode === 'dingwei' && config.inputMode === 'multiline' && config.segmentLen > 1) {
-    const lines = splitGroupLines(content)
+  if (isDingweiMultilineConfig(config)) {
+    // 勿用 content=raw.trim()：会吃掉前导空行，",,12,," / "\n\n1,2\n\n" 被压成万位
+    const lines = dingweiPositionLines(String(raw ?? '').replace(/\r/g, ''), config.segmentLen)
     const poolCfg = poolFromConfig(config)
     const normalizedLines: string[] = []
     let hasAny = false
@@ -1156,9 +1223,12 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
         const pos = config.segmentLabels[i] ?? `第 ${i + 1} 位`
         return { ok: false, message: `${pos}选号格式不合法，请使用 0-9 并以逗号分隔` }
       }
-      const digits = parsePickTokens(line, poolCfg)
+      const digits = [...new Set(parsePickTokens(line, poolCfg))]
+      if (digits.length > YIXING_MAX_PICKS_PER_POS) {
+        return { ok: false, message: YIXING_MAX_PICKS_MSG }
+      }
       if (digits.length) hasAny = true
-      normalizedLines.push([...new Set(digits)].join(','))
+      normalizedLines.push(digits.join(','))
     }
     if (!hasAny) return { ok: false, message: '请至少在一位选择号码' }
     const normalized = normalizedLines.join('\n')
@@ -1263,17 +1333,23 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
   }
   const poolCfg = poolFromConfig(config)
   if (poolCfg) {
-    const pool = parsePickTokens(content, poolCfg)
+    const pool = [...new Set(parsePickTokens(content, poolCfg))]
     if (!pool.length) return { ok: false, message: `选号须在 ${poolCfg.min}–${poolCfg.max} 范围内` }
-    const normalized = [...new Set(pool)].join(',')
+    if (isYixingDingweiPlayConfig(config) && pool.length > YIXING_MAX_PICKS_PER_POS) {
+      return { ok: false, message: YIXING_MAX_PICKS_MSG }
+    }
+    const normalized = pool.join(',')
     return { ok: true, normalized, betUnits: countBetUnits(config, normalized) }
   }
   if (!isValidDigitPoolLine(content)) {
     return { ok: false, message: '选号格式不合法，请使用 0-9 并以逗号分隔每注' }
   }
-  const pool = parsePickTokens(content)
+  const pool = [...new Set(parsePickTokens(content))]
   if (!pool.length) return { ok: false, message: '选号无效' }
-  const normalized = [...new Set(pool)].join(',')
+  if (isYixingDingweiPlayConfig(config) && pool.length > YIXING_MAX_PICKS_PER_POS) {
+    return { ok: false, message: YIXING_MAX_PICKS_MSG }
+  }
+  const normalized = pool.join(',')
   return { ok: true, normalized, betUnits: countBetUnits(config, normalized) }
 }
 
@@ -1284,13 +1360,19 @@ export interface SchemeGroupsValidation {
   message: string
 }
 
+/** 分组是否无有效内容（勿用 trim 吃掉定位胆前导空行后再判空） */
+function isBlankGroupContent(raw: string): boolean {
+  return !String(raw ?? '').replace(/\r/g, '').trim()
+}
+
 /** 校验全部方案分组；返回不合法组下标 */
 export function validateSchemeGroups(config: PlayConfig, groups: string[]): SchemeGroupsValidation {
   const normalized: string[] = []
   const invalidIndexes: number[] = []
   for (let i = 0; i < groups.length; i++) {
-    const raw = groups[i]?.trim() ?? ''
-    if (!raw) {
+    // 保留前导/尾随换行空位：",,12,," → "\n\n1,2\n\n"；trim 会压成万位 "1,2\n\n\n\n"
+    const raw = String(groups[i] ?? '').replace(/\r/g, '')
+    if (isBlankGroupContent(raw)) {
       invalidIndexes.push(i)
       normalized.push('')
       continue

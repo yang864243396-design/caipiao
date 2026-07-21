@@ -465,7 +465,11 @@ function clearSchemeSearch() {
 }
 
 function onHeaderAdd() {
-  void router.push({ name: 'custom-scheme-new' })
+  void router.push({
+    name: 'advanced-scheme-edit',
+    params: { schemeId: 'new' },
+    query: { draft: '1', kind: 'custom', fresh: '1' },
+  })
 }
 
 async function enableAllSchemes() {
@@ -873,7 +877,7 @@ function statusBadgeClass(s: CloudSchemeCard): string {
           <div class="cc-kv-grid">
             <div class="cc-kv">
               <span class="cc-k">方案名称</span>
-              <span class="cc-v">{{ s.schemeName }}</span>
+              <span class="cc-v cc-v--ellipsis" :title="s.schemeName">{{ s.schemeName }}</span>
             </div>
             <div class="cc-kv">
               <span class="cc-k">投注流水</span>
@@ -1490,6 +1494,7 @@ function statusBadgeClass(s: CloudSchemeCard): string {
 }
 
 .cc-card {
+  min-width: 0;
   background: var(--cc-card);
   border-radius: 1.25rem;
   padding: 1.25rem;
@@ -1603,8 +1608,9 @@ function statusBadgeClass(s: CloudSchemeCard): string {
 
 .cc-kv-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 0.65rem 1.25rem;
+  min-width: 0;
 }
 
 .cc-kv {
@@ -1612,20 +1618,29 @@ function statusBadgeClass(s: CloudSchemeCard): string {
   justify-content: space-between;
   align-items: center;
   gap: 0.5rem;
+  min-width: 0;
   padding-bottom: 0.35rem;
   border-bottom: 1px solid rgba(226, 232, 240, 0.65);
 }
 
 .cc-k {
+  flex: 0 0 auto;
   font-size: 0.75rem;
   color: var(--cc-on-var);
 }
 
 .cc-v {
+  flex: 1 1 auto;
   font-size: 0.75rem;
   font-weight: 600;
   text-align: right;
   min-width: 0;
+}
+
+.cc-v--ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .cc-v--primary {

@@ -1,8 +1,19 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import ContentDialog from '@/components/ui/ContentDialog.vue'
 import { useLobbyPageContent } from '@/composables/useLobbyPageContent'
 import { useMaintenanceClient } from '@/composables/useMaintenanceClient'
+
+const router = useRouter()
+
+function goCreateCustomScheme() {
+  void router.push({
+    name: 'advanced-scheme-edit',
+    params: { schemeId: 'new' },
+    query: { draft: '1', kind: 'custom', fresh: '1' },
+  })
+}
 const {
   popupAnnouncement,
   shouldBlockLobby,
@@ -154,7 +165,7 @@ const ANNOUNCE_IMG = '/images/lobby/announce-placeholder.png'
             </div>
           </div>
         </RouterLink>
-        <RouterLink class="bento-s b-left bento-s-link" to="/play/custom-scheme/new">
+        <button type="button" class="bento-s b-left bento-s-link" @click="goCreateCustomScheme">
           <div class="bento-icon terr">
             <img
               :src="BENTO_CUSTOM_ICON"
@@ -166,7 +177,7 @@ const ANNOUNCE_IMG = '/images/lobby/announce-placeholder.png'
             />
           </div>
           <h3 class="bento-h sm">自创方案</h3>
-        </RouterLink>
+        </button>
         <RouterLink class="bento-s b-right bento-s-link" :to="{ name: 'scheme-download' }">
           <div class="bento-icon pri">
             <img
@@ -469,6 +480,11 @@ const ANNOUNCE_IMG = '/images/lobby/announce-placeholder.png'
 .bento-s-link {
   text-decoration: none;
   color: inherit;
+  border: none;
+  font: inherit;
+  width: 100%;
+  appearance: none;
+  -webkit-appearance: none;
 }
 .bento-s:hover {
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);

@@ -274,8 +274,9 @@ Mock 层：`client/src/mock/schemeDefinitionsMock.ts` · `admin/src/mock/schemeS
 
 ### 15.4 回头（lookback）
 
-- **个别**：单实例 `lookback_pnl` 达阈值 → 复位倍投轮次（不暂停）
-- **整体**：`member_lookback_runtime` 累计达阈值 → 同会员同 `runMode` 全部 running 实例复位
+- **个别**：单实例 `lookback_pnl` 达阈值 → **仅**复位倍投轮次 `round_index→0` 并清 `lookback_pnl`（不暂停）
+- **整体**：`member_lookback_runtime` 累计达阈值 → 同会员同通道全部 running 实例同上复位
+- **不出号**：不清理 `pick_index` / `current_pick` / `last_direction`（与富联「回到倍投起点」一致；定码轮换/高级定码跳局不受回头打断）
 - 复位事件写入 `admin_audit_logs`（actor=`scheme-worker`）
 
 ### 15.5 会员手动投注（Client 真实选号 + 结算 Worker）

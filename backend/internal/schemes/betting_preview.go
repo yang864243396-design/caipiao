@@ -66,11 +66,16 @@ func PreviewBettingExecutions(
 	state := simPickState{}
 	rows := make([]BettingExecutionPreview, 0, len(ordered))
 	var prevBalls []string
+	histDraws := make([][]string, 0, len(ordered))
 
 	for _, draw := range ordered {
-		dec := resolvePickPreview(cfg, state, draw.IssueNo, prevBalls)
+		dec := resolvePickPreview(cfg, state, draw.IssueNo, prevBalls, histDraws)
 		if dec.Skip {
-			prevBalls = sqlcdb.ParseDrawBalls(draw.Balls)
+			balls := sqlcdb.ParseDrawBalls(draw.Balls)
+			if len(balls) > 0 {
+				histDraws = append(histDraws, balls)
+			}
+			prevBalls = balls
 			continue
 		}
 		content := strings.TrimSpace(dec.Content)
@@ -103,6 +108,9 @@ func PreviewBettingExecutions(
 
 		pickIdx, curPick, lastDir := advancePickState(cfg, previewInstState(state), dec, eval.Hit)
 		state = simPickState{pickIndex: pickIdx, currentPick: curPick, lastDirection: lastDir}
+		if len(balls) > 0 {
+			histDraws = append(histDraws, balls)
+		}
 		prevBalls = balls
 	}
 
@@ -120,7 +128,13 @@ func previewInstState(s simPickState) sqlcdb.SchemeInstance {
 	}
 }
 
-func resolvePickPreview(cfg parsedSchemeConfig, state simPickState, issueNo string, prevBalls []string) pickDecision {
+func resolvePickPreview(
+	cfg parsedSchemeConfig,
+	state simPickState,
+	issueNo string,
+	prevBalls []string,
+	histDraws [][]string,
+) pickDecision {
 	inst := previewInstState(state)
 	if cfg.Contrary {
 		if inv := strings.TrimSpace(cfg.ContraryPlan); inv != "" {
@@ -139,7 +153,16 @@ func resolvePickPreview(cfg parsedSchemeConfig, state simPickState, issueNo stri
 	case RunTypeAdvTriggerBet:
 		return pickTriggerBetPreview(cfg, inst, prevBalls)
 	case RunTypeHotColdWarm:
-		return pickHotColdWarm(cfg, inst)
+		// 预览用「当期之前」的历史开奖取冷热码（与运行时 recentDrawBalls 一致）
+		periods := 20
+		if cfg.HotCold != nil && cfg.HotCold.TotalPeriods > 0 {
+			periods = cfg.HotCold.TotalPeriods
+		}
+		hist := histDraws
+		if len(hist) > periods {
+			hist = hist[len(hist)-periods:]
+		}
+		return pickHotColdWarmFromDraws(cfg, inst, hist)
 	case RunTypeRandomDraw:
 		return pickRandomDrawPreview(cfg, inst, issueNo)
 	case RunTypeFixedNumber:
@@ -152,40 +175,7 @@ func resolvePickPreview(cfg parsedSchemeConfig, state simPickState, issueNo stri
 }
 
 func pickTriggerBetPreview(cfg parsedSchemeConfig, inst sqlcdb.SchemeInstance, prevBalls []string) pickDecision {
-	if cfg.Trigger == nil || len(cfg.Trigger.Rows) == 0 {
-		return pickDecision{Skip: true}
-	}
-	enabled := make([]triggerRow, 0, len(cfg.Trigger.Rows))
-	for _, r := range cfg.Trigger.Rows {
-		if r.Enabled {
-			enabled = append(enabled, r)
-		}
-	}
-	if len(enabled) == 0 {
-		return pickDecision{Skip: true}
-	}
-	row := enabled[0]
-	if len(prevBalls) > 0 {
-		for _, r := range enabled {
-			if triggerOpenMatches(cfg.Play, prevBalls, r.Open) {
-				row = r
-				break
-			}
-		}
-	}
-	direction := nextTriggerDirection(cfg.Trigger.Mode, inst.LastDirection)
-	content := row.Pos
-	if direction == "neg" {
-		content = row.Neg
-	}
-	if strings.TrimSpace(content) == "" {
-		if strings.TrimSpace(row.Pos) != "" {
-			direction, content = "pos", row.Pos
-		} else {
-			return pickDecision{Skip: true}
-		}
-	}
-	return pickDecision{Content: content, Direction: direction}
+	return resolveTriggerBetDecision(cfg, prevBalls, inst.LastDirection)
 }
 
 func pickRandomDrawPreview(cfg parsedSchemeConfig, inst sqlcdb.SchemeInstance, issueNo string) pickDecision {

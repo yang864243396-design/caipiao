@@ -5,6 +5,7 @@ import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import AdminDialog from '@/components/AdminDialog.vue'
 import ShareBetMultiplierDialog, { type BetMultiplierPayload } from '@/components/schemes/ShareBetMultiplierDialog.vue'
 import SchemeGroupPickPanel from '@/components/schemes/SchemeGroupPickPanel.vue'
+import SchemeGroupInputPanel from '@/components/schemes/SchemeGroupInputPanel.vue'
 import type { CreateShareSnapshotInput } from '@/api/schemes'
 import { BET_MODE_OPTIONS, betUnitFromSchemeConfig } from '@/constants/betModeOptions'
 import { useAdminPlayTreeConfig } from '@/composables/useAdminPlayTreeConfig'
@@ -15,7 +16,11 @@ import {
   groupContentPlaceholder,
   validateSchemeGroups,
 } from '@client/utils/betPayload'
-import { schemeGroupUsesPickPanel } from '@client/utils/pickPanelOptions'
+import {
+  groupDigitInputHint,
+  schemeGroupUsesDigitInput,
+  schemeGroupUsesPickPanel,
+} from '@client/utils/pickPanelOptions'
 import {
   fromDatePickerValue,
   normalizeSchemeTimePairFromConfig,
@@ -127,9 +132,9 @@ const RUN_TYPE_OPTIONS = [
   { label: '定码轮换', value: 'fixed_rotate' },
   { label: '高级定码轮换', value: 'adv_fixed_rotate' },
   { label: '高级开某投某', value: 'adv_trigger_bet' },
-  { label: '冷热温出号', value: 'hot_cold_warm' },
+  { label: '冷热出号', value: 'hot_cold_warm' },
   { label: '随机出号', value: 'random_draw' },
-  { label: '固定号码', value: 'fixed_number' },
+  { label: '固定取码', value: 'fixed_number' },
 ] as const
 
 const BET_MULTIPLIER_KIND_LABELS: Record<string, string> = {
@@ -158,6 +163,10 @@ const usesGroupContent = computed(
   () => runTypeId.value === 'fixed_rotate' || runTypeId.value === 'fixed_number',
 )
 const schemeUsesPickPanel = computed(() => schemeGroupUsesPickPanel(playConfig.value))
+/** 数字玩法方案内容改用输入框录入（对齐第三方，不点选） */
+const schemeUsesDigitInput = computed(() => schemeGroupUsesDigitInput(playConfig.value))
+/** 数字录入提示（按玩法动态：位名 + 示例） */
+const digitInputHint = computed(() => groupDigitInputHint(playConfig.value))
 const groupInputPlaceholder = computed(() => groupContentPlaceholder(playConfig.value))
 
 const betMultiplierLabel = computed(() => {
@@ -297,7 +306,9 @@ function onBetMultiplierConfirm(payload: BetMultiplierPayload) {
 }
 
 function buildInput(): CreateShareSnapshotInput {
-  const groups = schemeGroups.value.map((g) => g.trim()).filter(Boolean)
+  // 定位胆多位内容含前导空行，禁止 trim（否则 ,,12,, 会压成万位）
+  const keepGroup = (g: string) => String(g ?? '').replace(/\r/g, '')
+  const groups = schemeGroups.value.map(keepGroup).filter((g) => g.trim())
   return {
     schemeName: schemeName.value.trim(),
     lotteryCode: lotteryCode.value,
@@ -313,7 +324,8 @@ function buildInput(): CreateShareSnapshotInput {
     takeProfit: takeProfit.value.trim(),
     startTime: fromDatePickerValue(startTime.value),
     endTime: fromDatePickerValue(endTime.value),
-    schemeGroups: runTypeId.value === 'fixed_number' ? [schemeGroups.value[0]?.trim() ?? ''] : groups,
+    schemeGroups:
+      runTypeId.value === 'fixed_number' ? [keepGroup(schemeGroups.value[0] ?? '')] : groups,
   }
 }
 
@@ -341,7 +353,9 @@ function validateBeforeSubmit(): string | null {
     }
     schemeGroups.value = groupCheck.normalized
   } else if (!isBuiltinPlan.value && runTypeId.value !== 'adv_trigger_bet') {
-    const groups = schemeGroups.value.map((g) => g.trim()).filter(Boolean)
+    const groups = schemeGroups.value
+      .map((g) => String(g ?? '').replace(/\r/g, ''))
+      .filter((g) => g.trim())
     if (groups.length === 0) return '请至少填写一组方案内容'
   }
 
@@ -374,7 +388,7 @@ function collectMissingRequired(): string[] {
   if (!multCoeff.value.trim()) missing.push('倍数系数')
   if (!betMultiplier.value?.kind) missing.push('方案模式（倍投设定）')
   if (requiresSchemeGroups.value) {
-    const filled = schemeGroups.value.map((g) => g.trim()).filter(Boolean)
+    const filled = schemeGroups.value.filter((g) => String(g ?? '').trim())
     if (filled.length === 0) missing.push('方案内容（请在下方选号）')
   }
   return missing
@@ -609,7 +623,7 @@ watch(resolvedSubPlayOptions, (opts) => {
             class="scheme-group-card"
           >
             <div class="scheme-group-head">
-              <strong>{{ runTypeId === 'fixed_number' ? '固定号码' : `第 ${idx + 1} 组` }}</strong>
+              <strong>{{ runTypeId === 'fixed_number' ? '固定取码' : `第 ${idx + 1} 组` }}</strong>
               <el-button
                 v-if="runTypeId === 'fixed_rotate' && schemeGroups.length > 1"
                 link
@@ -619,9 +633,18 @@ watch(resolvedSubPlayOptions, (opts) => {
                 删除组
               </el-button>
             </div>
-            <SchemeGroupPickPanel v-if="schemeUsesPickPanel" v-model="schemeGroups[idx]" :config="playConfig" />
+            <SchemeGroupInputPanel
+              v-if="schemeUsesDigitInput"
+              v-model="schemeGroups[idx]"
+              :config="playConfig"
+            />
+            <SchemeGroupPickPanel
+              v-else-if="schemeUsesPickPanel"
+              v-model="schemeGroups[idx]"
+              :config="playConfig"
+            />
             <el-input
-              v-if="!schemeUsesPickPanel"
+              v-else
               v-model="schemeGroups[idx]"
               type="textarea"
               :rows="5"
@@ -630,7 +653,8 @@ watch(resolvedSubPlayOptions, (opts) => {
               style="margin-top: 0.5rem"
             />
             <p class="scheme-group-meta">
-              <span v-if="schemeUsesPickPanel">
+              <span v-if="schemeUsesDigitInput">{{ digitInputHint }}</span>
+              <span v-else-if="schemeUsesPickPanel">
                 {{
                   playConfig.inputMode === 'multiline'
                     ? '按位选号，每位多选以逗号保存'

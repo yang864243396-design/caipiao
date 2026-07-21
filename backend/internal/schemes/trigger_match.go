@@ -19,7 +19,8 @@ func SupportsAdvTriggerBetLegacy(playTypeID, subPlayID string) bool {
 }
 
 // triggerOpenMatches 上期开奖是否命中映射行的「开出」条件。
-func triggerOpenMatches(rule playRule, balls []string, open string) bool {
+// watchPositions 非空时：任一选定投注位开出等于 open 即命中；空则回退 rule.PositionIdx。
+func triggerOpenMatches(rule playRule, balls []string, open string, watchPositions ...[]int) bool {
 	open = normalizeTriggerToken(open)
 	if open == "" || len(balls) == 0 {
 		return false
@@ -37,9 +38,15 @@ func triggerOpenMatches(rule playRule, balls []string, open string) bool {
 			return normalizeTriggerToken(pc28LonghubaoResult(balls)) == open
 		}
 	}
-	pos := rule.PositionIdx
-	if pos >= 0 && pos < len(balls) {
-		return normalizeTriggerToken(strings.TrimSpace(balls[pos])) == open
+	positions := []int{rule.PositionIdx}
+	if len(watchPositions) > 0 && len(watchPositions[0]) > 0 {
+		positions = watchPositions[0]
+	}
+	for _, pos := range positions {
+		if pos >= 0 && pos < len(balls) &&
+			normalizeTriggerToken(strings.TrimSpace(balls[pos])) == open {
+			return true
+		}
 	}
 	return false
 }

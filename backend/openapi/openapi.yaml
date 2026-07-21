@@ -2157,6 +2157,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApiResponseEmpty'
 
+  /admin/schemes/instances/{instanceId}/bet-history:
+    get:
+      summary: 方案实例投注与盈亏历史（投注执行 + 投注记录）
+      tags: [admin-ops]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/instanceId'
+        - name: days
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 90
+            default: 30
+      responses:
+        '200':
+          description: OK
+
   /admin/schemes/instances/{instanceId}/force-stop:
     post:
       summary: 强停 → soft_stopped（已封停）

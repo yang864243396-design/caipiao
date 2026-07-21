@@ -82,6 +82,55 @@ func (h *Handler) CheckSchemeName(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type hotColdWarmTiersRequest struct {
+	LotteryCode     string `json:"lotteryCode"`
+	PlayTypeId      string `json:"playTypeId"`
+	SubPlayId       string `json:"subPlayId"`
+	PlayTemplate    string `json:"playTemplate"`
+	BetMode         string `json:"betMode"`
+	CatalogSubId    string `json:"catalogSubId"`
+	PlayMethodLabel string `json:"playMethodLabel"`
+	NumberPoolMin   int    `json:"numberPoolMin"`
+	NumberPoolMax   int    `json:"numberPoolMax"`
+	SegmentLen      int    `json:"segmentLen"`
+	Periods         int    `json:"periods"`
+}
+
+// HotColdWarmTiers 冷热属性家族分档：按最近 N 期选项命中频次返回热/冷（温档为空）。
+func (h *Handler) HotColdWarmTiers(w http.ResponseWriter, r *http.Request) {
+	if h.schemes == nil {
+		apix.Fail(w, http.StatusServiceUnavailable, apix.CodeInternal, "数据库未就绪")
+		return
+	}
+	var req hotColdWarmTiersRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		apix.Validation(w, "请求体须为 JSON")
+		return
+	}
+	if strings.TrimSpace(req.LotteryCode) == "" {
+		apix.Validation(w, "lotteryCode 不能为空")
+		return
+	}
+	result, err := h.schemes.HotColdWarmTiers(r.Context(), schemes.HotColdWarmTiersInput{
+		LotteryCode:     strings.TrimSpace(req.LotteryCode),
+		PlayTypeID:      strings.TrimSpace(req.PlayTypeId),
+		SubPlayID:       strings.TrimSpace(req.SubPlayId),
+		PlayTemplate:    strings.TrimSpace(req.PlayTemplate),
+		BetMode:         strings.TrimSpace(req.BetMode),
+		CatalogSubID:    strings.TrimSpace(req.CatalogSubId),
+		PlayMethodLabel: strings.TrimSpace(req.PlayMethodLabel),
+		NumberPoolMin:   req.NumberPoolMin,
+		NumberPoolMax:   req.NumberPoolMax,
+		SegmentLen:      req.SegmentLen,
+		Periods:         req.Periods,
+	})
+	if err != nil {
+		h.handleSchemeErr(w, err)
+		return
+	}
+	apix.OK(w, result)
+}
+
 func (h *Handler) GetScheme(w http.ResponseWriter, r *http.Request) {
 	if h.schemes == nil {
 		apix.Fail(w, http.StatusServiceUnavailable, apix.CodeInternal, "数据库未就绪")

@@ -149,10 +149,47 @@ func normalizeSegmentDigits(template, line string) string {
 	return strings.Join(parts, "")
 }
 
+// isLaidOutDingweiWire 区分「已按位编排」与「一位号池恰好 N 个逗号分隔码」。
+// ",,12,," / ",,,,13579" / "39,,,," → true；"1,3,5,7,9"（个位五码）→ false，应压到 positionIdx。
+func isLaidOutDingweiWire(groupContent string, positions int) bool {
+	if !IsPositionWireContent(groupContent, positions) {
+		return false
+	}
+	hasEmpty := false
+	hasConcat := false
+	for _, seg := range strings.Split(groupContent, ",") {
+		digits := strings.Map(func(r rune) rune {
+			if r >= '0' && r <= '9' {
+				return r
+			}
+			return -1
+		}, seg)
+		if digits == "" {
+			hasEmpty = true
+			continue
+		}
+		if len(digits) > 1 {
+			hasConcat = true
+		}
+	}
+	return hasEmpty || hasConcat
+}
+
 func formatDingweiWire(template string, positionIdx int, groupContent string) string {
 	positions := positionCountForTemplate(template)
 	if strings.Contains(groupContent, "\n") {
 		return formatDingweiMultiline(template, positions, groupContent)
+	}
+	// 已按位编排（含空位或多码连写段）：按位保留；勿把 "1,3,5,7,9" 当成五位 wire
+	if isLaidOutDingweiWire(groupContent, positions) {
+		segments := make([]string, positions)
+		for i, seg := range strings.Split(groupContent, ",") {
+			if i >= positions {
+				break
+			}
+			segments[i] = normalizeSegmentDigits(template, seg)
+		}
+		return strings.Join(segments, ",")
 	}
 	digits := normalizeSegmentDigits(template, groupContent)
 	if digits == "" {

@@ -96,13 +96,21 @@ function isDingweiFivePositionScheme(
   guajiGroup: string,
 ): boolean {
   if (!isSSCPlayTemplate(playTemplate)) return false
+  const tid = typeId.trim()
   const isDingwei =
-    typeId === 'dingwei' || isDingweiStarType(typeLabel, typeId, subLabel) || guajiGroup === '一星'
+    tid === 'dingwei' ||
+    tid === 'g006' ||
+    isDingweiStarType(typeLabel, typeId, subLabel) ||
+    guajiGroup === '一星'
   if (!isDingwei) return false
+  // 已指定万/千/百/十/个 → 单位面板；其余一星/定位胆（含 rules 数字 subId）→ 五位
   if (subId.startsWith('dingwei_')) return false
   if (dingweiPositionLabel(subLabel)) return false
+  if (tid === 'g006' || tid === 'dingwei' || guajiGroup === '一星' || typeLabel.trim() === '一星') {
+    return true
+  }
   const raw = subLabel.trim()
-  return raw.includes('定位胆') || raw.includes('定胆') || raw === '一星' || guajiGroup === '一星'
+  return raw.includes('定位胆') || raw.includes('定胆') || raw === '一星'
 }
 
 function renPickCount(subId: string): number {

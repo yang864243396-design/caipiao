@@ -81,10 +81,10 @@ function togglePosition(lab: string) {
   positions.value = SSC_POSITION_LABELS.filter((p) => set.has(p))
 }
 
-const placeholder = computed(
-  () =>
-    `输入 ${digitLen.value} 位号码，逗号分隔（如 ${'12'.slice(0, digitLen.value).padEnd(digitLen.value, '0')},34）`,
-)
+const placeholder = computed(() => {
+  const example = `${'12'.slice(0, digitLen.value).padEnd(digitLen.value, '0')},34`
+  return `从万、千、百、十、个中勾选 ${pickCount.value} 个位置，再输入 ${digitLen.value} 位号码组成一注；所选位置与号码顺序均须与开奖一致。示例：${example}`
+})
 </script>
 
 <template>
@@ -104,13 +104,10 @@ const placeholder = computed(
         </button>
       </div>
     </div>
-    <p class="srd-hint">
-      从万、千、百、十、个中勾选 {{ pickCount }} 个位置，再输入 {{ digitLen }} 位号码组成一注；所选位置与号码顺序均须与开奖一致。
-    </p>
     <el-input
       v-model="picksText"
       type="textarea"
-      :rows="4"
+      :rows="6"
       resize="none"
       class="srd-area"
       :placeholder="placeholder"
@@ -171,22 +168,30 @@ const placeholder = computed(
   box-shadow: 0 4px 12px rgba(0, 102, 255, 0.22);
 }
 
-.srd-hint {
-  margin: 0;
-  font-size: 0.75rem;
-  line-height: 1.5;
-  color: #6b7a90;
-  font-family: 'Noto Sans SC', sans-serif;
-}
-
 .srd-area {
   width: 100%;
 }
 
 .srd-area :deep(.el-textarea__inner) {
-  min-height: 5.5rem;
+  min-height: 9.5rem;
+  border: none;
+  border-radius: 0.75rem;
+  background: rgba(242, 244, 246, 0.65);
+  padding: 1rem 1.1rem;
   font-family: 'Inter', 'Noto Sans SC', sans-serif;
-  font-size: 0.875rem;
-  line-height: 1.6;
+  font-size: 0.9375rem;
+  line-height: 1.65;
+  box-shadow: none;
+  white-space: pre-wrap;
+}
+
+.srd-area :deep(.el-textarea__inner:focus) {
+  box-shadow: 0 0 0 2px rgba(0, 102, 255, 0.18);
+}
+
+.srd-area :deep(.el-textarea__inner::placeholder) {
+  color: #94a3b8;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 </style>

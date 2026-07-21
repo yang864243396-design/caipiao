@@ -6,9 +6,11 @@ import { ElMessage } from 'element-plus'
 
 import { fetchLotteryDraws, type LotteryDrawRow } from '@/api/games'
 
-import { useSchemeInstancesStore } from '@/stores/schemeInstances'
+import { fetchSchemeBetHistory } from '@/api/schemes'
 
 import type { SchemeInstanceRow } from '@/stores/schemeInstances'
+
+import type { SchemeBetHistoryItem } from '@/types/schemes'
 
 
 
@@ -30,19 +32,13 @@ const emit = defineEmits<{
 
 
 
-const store = useSchemeInstancesStore()
-
-
-
 const tab = ref<'bets' | 'draws'>('bets')
 
 const historySubTab = ref(0)
 
 const pageSize = ref(10)
 
-const executionPage = ref(1)
-
-const recordPage = ref(1)
+const betPage = ref(1)
 
 
 
@@ -50,37 +46,27 @@ const historySubTabLabels = ['号码', '大小', '单双', '龙虎', '总和'] a
 
 
 
-const betExecutions = computed(() =>
+const betItems = ref<SchemeBetHistoryItem[]>([])
 
-  props.scheme ? store.betExecutionsForScheme(props.scheme.id) : [],
-
-)
+const betsLoading = ref(false)
 
 const drawRecords = ref<LotteryDrawRow[]>([])
 
 const drawsLoading = ref(false)
 
-const betRecords = computed(() =>
 
-  props.scheme ? store.betRecordsForScheme(props.scheme.id) : [],
 
-)
+const pagedBetItems = computed(() => slicePage(betItems.value, betPage.value))
 
 
 
-const pagedExecutions = computed(() => slicePage(betExecutions.value, executionPage.value))
-
-const pagedRecords = computed(() => slicePage(betRecords.value, recordPage.value))
+const settledRows = computed(() => betItems.value.filter((r) => r.status === '已结算'))
 
 
 
 const settledPnl = computed(() =>
 
-  betRecords.value
-
-    .filter((r) => r.status === '已结算')
-
-    .reduce((sum, r) => sum + r.profitLoss, 0),
+  settledRows.value.reduce((sum, r) => sum + r.profitLoss, 0),
 
 )
 
@@ -88,17 +74,30 @@ const settledPnl = computed(() =>
 
 const executionWinRate = computed(() => {
 
-  const total = betExecutions.value.length
+  const total = settledRows.value.length
 
   if (total === 0) return '—'
 
-  const wins = betExecutions.value.filter((r) => r.win).length
+  const wins = settledRows.value.filter((r) => r.win === true).length
 
   return `${Math.round((wins / total) * 1000) / 10}%`
 
 })
 
 
+
+async function loadBetHistory(instanceId: string) {
+  betsLoading.value = true
+  try {
+    const result = await fetchSchemeBetHistory(instanceId, 30)
+    betItems.value = result.items ?? []
+  } catch (e) {
+    betItems.value = []
+    ElMessage.error(e instanceof Error ? e.message : '加载投注记录失败')
+  } finally {
+    betsLoading.value = false
+  }
+}
 
 async function loadDrawHistory(lotteryCode: string) {
   drawsLoading.value = true
@@ -114,11 +113,13 @@ async function loadDrawHistory(lotteryCode: string) {
 }
 
 watch(
-  () => [props.modelValue, props.scheme?.lotteryCode] as const,
-  ([open, lotteryCode]) => {
-    if (open && lotteryCode) {
-      void loadDrawHistory(lotteryCode)
+  () => [props.modelValue, props.scheme?.id, props.scheme?.lotteryCode] as const,
+  ([open, instanceId, lotteryCode]) => {
+    if (open && instanceId) {
+      void loadBetHistory(instanceId)
+      if (lotteryCode) void loadDrawHistory(lotteryCode)
     } else {
+      betItems.value = []
       drawRecords.value = []
     }
   },
@@ -134,8 +135,7 @@ watch(
 
     historySubTab.value = 0
 
-    executionPage.value = 1
-    recordPage.value = 1
+    betPage.value = 1
 
   },
 
@@ -145,9 +145,7 @@ watch(
 
 watch(tab, () => {
 
-  executionPage.value = 1
-
-  recordPage.value = 1
+  betPage.value = 1
 
 })
 
@@ -249,7 +247,7 @@ function close() {
 
     :title="scheme ? `方案 ${scheme.id} · 玩法详情数据` : '玩法详情数据'"
 
-    size="min(760px, 94vw)"
+    size="min(920px, 96vw)"
 
     destroy-on-close
 
@@ -291,7 +289,7 @@ function close() {
 
         <el-descriptions-item label="投注胜率">
 
-          {{ executionWinRate }}（{{ betExecutions.length }} 注）
+          {{ executionWinRate }}（{{ settledRows.length }} 注）
 
         </el-descriptions-item>
 
@@ -303,91 +301,39 @@ function close() {
 
         <el-tab-pane label="投注与记录" name="bets">
 
-          <p class="scheme-history-hint">
+          <el-table v-loading="betsLoading" :data="pagedBetItems" stripe size="small" style="width: 100%">
 
-            合并 client「投注」与「投注记录」：上方为执行明细，下方为账务记录。
+            <el-table-column prop="time" label="时间" min-width="88" />
 
-          </p>
+            <el-table-column prop="period" label="期数" min-width="110" show-overflow-tooltip />
 
+            <el-table-column prop="playMethod" label="玩法" min-width="88" show-overflow-tooltip />
 
-
-          <h4 class="scheme-history-subtitle">投注执行</h4>
-
-          <el-table :data="pagedExecutions" stripe size="small" style="width: 100%">
-
-            <el-table-column prop="time" label="下注时间" min-width="96" />
-
-            <el-table-column prop="schemeName" label="方案名" min-width="108" show-overflow-tooltip />
-
-            <el-table-column prop="numbers" label="下注号码" min-width="96">
+            <el-table-column prop="numbers" label="下注号码" min-width="100" show-overflow-tooltip>
 
               <template #default="{ row }">
 
-                <span class="scheme-history-mono">{{ row.numbers }}</span>
+                <span class="scheme-history-mono">{{ row.numbers || '—' }}</span>
 
               </template>
 
             </el-table-column>
 
-            <el-table-column prop="period" label="下注期" min-width="72" />
-
-            <el-table-column prop="draw" label="开奖号码" min-width="108">
+            <el-table-column prop="draw" label="开奖号码" min-width="100" show-overflow-tooltip>
 
               <template #default="{ row }">
 
-                <span class="scheme-history-mono">{{ row.draw }}</span>
+                <span class="scheme-history-mono">{{ row.draw || '—' }}</span>
 
               </template>
 
             </el-table-column>
 
-            <el-table-column label="中挂" min-width="72" align="center">
+            <el-table-column prop="multiplier" label="倍数" min-width="56" align="center" />
 
-              <template #default="{ row }">
+            <el-table-column prop="round" label="轮次" min-width="56" align="center" />
 
-                <el-tag :type="row.win ? 'success' : 'danger'" size="small" effect="light">
-
-                  {{ row.win ? '中' : '挂' }}
-
-                </el-tag>
-
-              </template>
-
-            </el-table-column>
-
-          </el-table>
-
-          <div class="scheme-history-pager">
-
-            <el-pagination
-
-              v-model:current-page="executionPage"
-
-              :page-size="pageSize"
-
-              layout="total, prev, pager, next"
-
-              :total="betExecutions.length"
-
-            />
-
-          </div>
-
-
-
-          <h4 class="scheme-history-subtitle">投注记录</h4>
-
-          <el-table :data="pagedRecords" stripe size="small" style="width: 100%">
-
-            <el-table-column prop="period" label="期数" min-width="120" />
-
-            <el-table-column prop="playMethod" label="玩法" min-width="96" />
-
-            <el-table-column prop="multiplier" label="倍数" min-width="64" align="center" />
-
-            <el-table-column prop="round" label="轮次" min-width="64" align="center" />
-
-            <el-table-column label="金额" min-width="72" align="right">
+            <el-table-column label="金额" min-width="64" align="right">
 
               <template #default="{ row }">
 
@@ -397,7 +343,7 @@ function close() {
 
             </el-table-column>
 
-            <el-table-column label="盈亏" min-width="72" align="right">
+            <el-table-column label="盈亏" min-width="64" align="right">
 
               <template #default="{ row }">
 
@@ -407,21 +353,29 @@ function close() {
 
                   :class="
 
-                    row.profitLoss > 0
+                    row.status === '已撤单' || row.status === '待开奖'
 
-                      ? 'scheme-history-pl--gain'
+                      ? 'scheme-history-pl--neutral'
 
-                      : row.profitLoss < 0
+                      : row.profitLoss > 0
 
-                        ? 'scheme-history-pl--loss'
+                        ? 'scheme-history-pl--gain'
 
-                        : 'scheme-history-pl--neutral'
+                        : row.profitLoss < 0
+
+                          ? 'scheme-history-pl--loss'
+
+                          : 'scheme-history-pl--neutral'
 
                   "
 
                 >
 
-                  {{ row.status === '已撤单' ? '—' : formatBetRecordPl(row.profitLoss) }}
+                  {{
+                    row.status === '已撤单' || row.status === '待开奖'
+                      ? '—'
+                      : formatBetRecordPl(row.profitLoss)
+                  }}
 
                 </span>
 
@@ -429,11 +383,35 @@ function close() {
 
             </el-table-column>
 
-            <el-table-column label="状态" min-width="88" align="center">
+            <el-table-column label="结果" min-width="80" align="center">
 
               <template #default="{ row }">
 
-                <el-tag type="primary" effect="light" size="small">{{ row.status }}</el-tag>
+                <el-tag
+
+                  v-if="row.win === true"
+
+                  type="success"
+
+                  size="small"
+
+                  effect="light"
+
+                >中</el-tag>
+
+                <el-tag
+
+                  v-else-if="row.win === false"
+
+                  type="danger"
+
+                  size="small"
+
+                  effect="light"
+
+                >挂</el-tag>
+
+                <el-tag v-else type="info" size="small" effect="light">{{ row.status }}</el-tag>
 
               </template>
 
@@ -445,13 +423,13 @@ function close() {
 
             <el-pagination
 
-              v-model:current-page="recordPage"
+              v-model:current-page="betPage"
 
               :page-size="pageSize"
 
               layout="total, prev, pager, next"
 
-              :total="betRecords.length"
+              :total="betItems.length"
 
             />
 

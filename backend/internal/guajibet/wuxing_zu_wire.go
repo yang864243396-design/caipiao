@@ -40,6 +40,48 @@ func formatWuxingZuWire(mode, groupContent string) string {
 	}
 }
 
+// formatZu12Wire 四星/前后四组选12：双区「二重号池,单号池」，如 12,34。
+func formatZu12Wire(groupContent string) string {
+	groupContent = strings.TrimSpace(groupContent)
+	if groupContent == "" {
+		return "12,34"
+	}
+	parts := splitCommaParts(groupContent)
+	if len(parts) == 2 {
+		a := normalizePickDigits(parts[0])
+		b := normalizePickDigits(parts[1])
+		if len(a) >= 2 && len(b) >= 2 {
+			return a + "," + b
+		}
+	}
+	digits := splitPickDigits(groupContent)
+	if len(digits) >= 4 {
+		return strings.Join(digits[:2], "") + "," + strings.Join(digits[2:4], "")
+	}
+	return "12,34"
+}
+
+// formatZu4Wire 四星/前后四组选4：双区「三重号,单号」，如 1,2。
+func formatZu4Wire(groupContent string) string {
+	groupContent = strings.TrimSpace(groupContent)
+	if groupContent == "" {
+		return "1,2"
+	}
+	parts := splitCommaParts(groupContent)
+	if len(parts) == 2 {
+		a := normalizePickDigits(parts[0])
+		b := normalizePickDigits(parts[1])
+		if len(a) >= 1 && len(b) >= 1 {
+			return a[:1] + "," + b[:1]
+		}
+	}
+	digits := splitPickDigits(groupContent)
+	if len(digits) >= 2 {
+		return digits[0] + "," + digits[1]
+	}
+	return "1,2"
+}
+
 func formatWuxingZuDoubleSingleWire(groupContent string) string {
 	groupContent = strings.TrimSpace(groupContent)
 	if groupContent == "" {
@@ -48,7 +90,31 @@ func formatWuxingZuDoubleSingleWire(groupContent string) string {
 	if _, wire, ok := parseWuxingZuDoubleSingleWire(groupContent); ok {
 		return wire
 	}
-	return formatCommaPickDigits(groupContent)
+	// 扁选「0,1,2,3,4」→「0,1234」（重号+单号池）；实测 flat 原样会「投注数字不合规」
+	if wire, ok := coerceFlatDigitsToDoubleSingle(groupContent, 1, 3); ok {
+		return wire
+	}
+	return sampleWuxingZu60Content()
+}
+
+// coerceFlatDigitsToDoubleSingle 把扁选号池压成「前 headLen 码作头段, 其余拼成尾段」。
+func coerceFlatDigitsToDoubleSingle(groupContent string, headLen, minTail int) (string, bool) {
+	digits := splitPickDigits(groupContent)
+	if headLen <= 0 || len(digits) < headLen+minTail {
+		return "", false
+	}
+	// 已是两段且头段长度匹配时勿再压
+	if parts := splitCommaParts(groupContent); len(parts) == 2 {
+		if len(normalizePickDigits(parts[0])) == headLen && len(normalizePickDigits(parts[1])) >= minTail {
+			return "", false
+		}
+	}
+	head := strings.Join(digits[:headLen], "")
+	tail := strings.Join(digits[headLen:], "")
+	if head == "" || tail == "" {
+		return "", false
+	}
+	return head + "," + tail, true
 }
 
 func formatWuxingZu30Wire(groupContent string) string {
@@ -58,6 +124,12 @@ func formatWuxingZu30Wire(groupContent string) string {
 	}
 	if wire, ok := normalizeWuxingZu30Wire(groupContent); ok {
 		return wire
+	}
+	// 扁选 5 码 →「abc,de」
+	if wire, ok := coerceFlatDigitsToDoubleSingle(groupContent, 3, 2); ok {
+		if nwire, ok2 := normalizeWuxingZu30Wire(wire); ok2 {
+			return nwire
+		}
 	}
 	return sampleWuxingZu30Content()
 }
@@ -70,6 +142,11 @@ func formatWuxingZu20Wire(groupContent string) string {
 	if wire, ok := normalizeWuxingZu20Wire(groupContent); ok {
 		return wire
 	}
+	if wire, ok := coerceFlatDigitsToDoubleSingle(groupContent, 2, 3); ok {
+		if nwire, ok2 := normalizeWuxingZu20Wire(wire); ok2 {
+			return nwire
+		}
+	}
 	return sampleWuxingZu20Content()
 }
 
@@ -80,6 +157,14 @@ func formatWuxingZuZeroPoolWire(groupContent string) string {
 	}
 	if wire, ok := normalizeWuxingZuZeroPoolWire(groupContent); ok {
 		return wire
+	}
+	// 扁选 5 码 →「0,abcde」
+	digits := splitPickDigits(groupContent)
+	if len(digits) >= 5 {
+		tail := strings.Join(digits[:5], "")
+		if wire, ok := normalizeWuxingZuZeroPoolWire("0," + tail); ok {
+			return wire
+		}
 	}
 	return sampleWuxingZuZeroPoolContent()
 }

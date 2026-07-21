@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -38,12 +39,24 @@ type triggerBetCfg struct {
 	Rows []triggerRow `json:"rows"`
 	// always_pos / always_neg / alt_pos_first / alt_neg_first
 	Mode string `json:"mode"`
+	// PositionIdxs 定位胆投注位（可多选，0=万/冠军 …）；HasPosition 表示配置显式指定。
+	// 兼容旧字段 positionIdx（单值）。统一「一星定位胆」默认万位。
+	PositionIdxs []int `json:"positionIdxs,omitempty"`
+	PositionIdx  int   `json:"positionIdx,omitempty"` // 首项/旧单值镜像
+	HasPosition  bool  `json:"-"`
 }
 
 type hotColdWarmCfg struct {
 	TotalPeriods int      `json:"totalPeriods"`
 	Pool         []string `json:"pool"`
-	WinRotate    bool     `json:"winRotate"`
+	// every 每期换 / keep 不换号 / after_hit 中后换 / after_miss 挂后换
+	Strategy string `json:"strategy"`
+	// WinRotate 兼容旧配置；Strategy 为空时 true→after_hit、false→keep
+	WinRotate bool `json:"winRotate"`
+	// PickTypes 出号类型：hot / cold（可多选；空则兼容旧 pool 或默认 hot）
+	PickTypes []string `json:"pickTypes"`
+	// FaultCount 容错个数：从冷/热排序结果取前 N 个号（1-10，默认 1）
+	FaultCount int `json:"faultCount"`
 }
 
 type randomDrawCfg struct {
@@ -51,6 +64,22 @@ type randomDrawCfg struct {
 	// every 每期换 / keep 不换号 / after_hit 中后换 / after_miss 挂后换
 	Strategy string `json:"strategy"`
 }
+
+// fixedPickRule 固定取码单条规则（V8 GDQM）：上期开奖在[PosStart,PosEnd]位区间内
+// 任一位号码落在[CodeMin,CodeMax]范围时命中，命中即投 Numbers 固定号码组。
+type fixedPickRule struct {
+	PosStart int    `json:"posStart"`
+	PosEnd   int    `json:"posEnd"`
+	CodeMin  int    `json:"codeMin"`
+	CodeMax  int    `json:"codeMax"`
+	Numbers  string `json:"numbers"`
+}
+
+// fixedPickCfg 固定取码：多条条件规则，按序匹配、首条命中即投（甲：命中→投）。
+type fixedPickCfg struct {
+	Rules []fixedPickRule `json:"rules"`
+}
+
 
 type parsedSchemeConfig struct {
 	Kind          string
@@ -68,6 +97,7 @@ type parsedSchemeConfig struct {
 	Trigger       *triggerBetCfg
 	HotCold       *hotColdWarmCfg
 	Random        *randomDrawCfg
+	FixedPick     *fixedPickCfg
 }
 
 func parseSchemeConfig(kind string, raw []byte, roundIndex, groupIndex int) parsedSchemeConfig {
@@ -114,8 +144,10 @@ func parseSchemeConfig(kind string, raw []byte, roundIndex, groupIndex int) pars
 	}
 	out.Jushu = resolveJushuList(cfg, groups, out.Rounds)
 	out.Trigger = resolveTriggerBet(cfg)
+	applyTriggerBetPosition(&out)
 	out.HotCold = resolveHotColdWarm(cfg)
 	out.Random = resolveRandomDraw(cfg)
+	out.FixedPick = resolveFixedPick(cfg)
 	_ = roundIndex
 	return out
 }
@@ -158,9 +190,9 @@ func resolveJushuList(cfg map[string]interface{}, groups []string, rounds []sche
 				AfterMiss: toInt(m["afterMiss"], 1),
 			}
 			if c, ok := m["content"].(string); ok {
-				row.Content = strings.TrimSpace(c)
+				row.Content = normalizeSchemeGroupContent(c)
 			}
-			if row.Ju > 0 && row.Content != "" {
+			if row.Ju > 0 && strings.TrimSpace(row.Content) != "" {
 				out = append(out, row)
 			}
 		}
@@ -189,6 +221,23 @@ func resolveTriggerBet(cfg map[string]interface{}) *triggerBetCfg {
 	out := &triggerBetCfg{Mode: "always_pos"}
 	if m, ok := raw["mode"].(string); ok && strings.TrimSpace(m) != "" {
 		out.Mode = strings.TrimSpace(m)
+	}
+	seenPos := map[int]bool{}
+	appendPos := func(idx int) {
+		if idx < 0 || seenPos[idx] {
+			return
+		}
+		seenPos[idx] = true
+		out.PositionIdxs = append(out.PositionIdxs, idx)
+		out.HasPosition = true
+	}
+	if arr, ok := raw["positionIdxs"].([]interface{}); ok {
+		for _, item := range arr {
+			appendPos(toInt(item, -1))
+		}
+	}
+	if _, ok := raw["positionIdx"]; ok {
+		appendPos(toInt(raw["positionIdx"], -1))
 	}
 	rows, _ := raw["rows"].([]interface{})
 	for _, item := range rows {
@@ -219,17 +268,133 @@ func resolveTriggerBet(cfg map[string]interface{}) *triggerBetCfg {
 	return out
 }
 
+// applyTriggerBetPosition 将开某投某配置的投注位写回 Play，供匹配开奖/查子玩法/判中共用。
+func applyTriggerBetPosition(out *parsedSchemeConfig) {
+	if out == nil || out.Trigger == nil || !out.Trigger.HasPosition {
+		return
+	}
+	if !triggerBetUsesPosition(out.Play) {
+		return
+	}
+	max := 4
+	if out.Play.PlayTemplate == "pk10_std" {
+		max = 9
+	}
+	norm := make([]int, 0, len(out.Trigger.PositionIdxs))
+	seen := map[int]bool{}
+	for _, idx := range out.Trigger.PositionIdxs {
+		if idx < 0 {
+			idx = 0
+		}
+		if idx > max {
+			idx = max
+		}
+		if seen[idx] {
+			continue
+		}
+		seen[idx] = true
+		norm = append(norm, idx)
+	}
+	if len(norm) == 0 {
+		norm = []int{0}
+	}
+	sort.Ints(norm)
+	out.Trigger.PositionIdxs = norm
+	out.Trigger.PositionIdx = norm[0]
+	out.Play.PositionIdx = norm[0]
+	out.Play.SegmentStart = norm[0]
+	if out.Play.SegmentLen <= 0 || out.Play.BetMode == "dingwei" ||
+		out.Play.PlayTypeID == "dingwei" || out.Play.PlayTypeID == "g006" {
+		out.Play.SegmentLen = 1
+	}
+}
+
+func triggerBetUsesPosition(rule playRule) bool {
+	if isLonghuPlay(rule) {
+		return false
+	}
+	if rule.PlayTemplate == "pc28_std" {
+		return false
+	}
+	bm := strings.TrimSpace(rule.BetMode)
+	tid := strings.TrimSpace(rule.PlayTypeID)
+	if bm == "dingwei" || tid == "dingwei" || tid == "g006" {
+		return true
+	}
+	return false
+}
+
+// layoutTriggerBetDingweiContent 将单位号码编排到选定投注位（多行），
+// 避免统一「一星定位胆」子玩法在 wire 时始终压到万位。
+func layoutTriggerBetDingweiContent(cfg parsedSchemeConfig, content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" || cfg.Trigger == nil || !cfg.Trigger.HasPosition {
+		return content
+	}
+	if !triggerBetUsesPosition(cfg.Play) {
+		return content
+	}
+	if strings.Contains(content, "\n") {
+		return content
+	}
+	positions := 5
+	if cfg.Play.PlayTemplate == "pk10_std" {
+		positions = 10
+	}
+	// 已是「号,,,,」五段 wire：原样保留
+	if strings.Count(content, ",") == positions-1 {
+		return content
+	}
+	idxs := cfg.Trigger.PositionIdxs
+	if len(idxs) == 0 {
+		idxs = []int{cfg.Play.PositionIdx}
+	}
+	lines := make([]string, positions)
+	for _, idx := range idxs {
+		if idx < 0 {
+			idx = 0
+		}
+		if idx >= positions {
+			idx = positions - 1
+		}
+		lines[idx] = content
+	}
+	return strings.Join(lines, "\n")
+}
+
 func resolveHotColdWarm(cfg map[string]interface{}) *hotColdWarmCfg {
 	raw, ok := cfg["hotColdWarm"].(map[string]interface{})
 	if !ok {
 		return nil
 	}
-	out := &hotColdWarmCfg{TotalPeriods: 100}
+	out := &hotColdWarmCfg{TotalPeriods: 20, Strategy: "keep", FaultCount: 1}
 	if v := toInt(raw["totalPeriods"], 0); v > 0 {
 		out.TotalPeriods = v
 	}
 	if v, ok := raw["winRotate"].(bool); ok {
 		out.WinRotate = v
+	}
+	if s, ok := raw["strategy"].(string); ok {
+		switch strings.TrimSpace(s) {
+		case "every", "keep", "after_hit", "after_miss":
+			out.Strategy = strings.TrimSpace(s)
+		}
+	} else if out.WinRotate {
+		out.Strategy = "after_hit"
+	}
+	if fc := toInt(raw["faultCount"], 0); fc > 0 {
+		if fc > 10 {
+			fc = 10
+		}
+		out.FaultCount = fc
+	}
+	if arr, ok := raw["pickTypes"].([]interface{}); ok {
+		for _, item := range arr {
+			s := strings.ToLower(strings.TrimSpace(fmt.Sprint(item)))
+			if s == "hot" || s == "cold" {
+				out.PickTypes = append(out.PickTypes, s)
+			}
+		}
 	}
 	if pool, ok := raw["pool"].([]interface{}); ok {
 		for _, item := range pool {
@@ -241,7 +406,8 @@ func resolveHotColdWarm(cfg map[string]interface{}) *hotColdWarmCfg {
 			}
 		}
 	}
-	if len(out.Pool) == 0 {
+	// 新口径：出号类型+容错即可运行；旧口径：仅有 pool 也可
+	if len(out.PickTypes) == 0 && len(out.Pool) == 0 {
 		return nil
 	}
 	return out
@@ -267,6 +433,44 @@ func resolveRandomDraw(cfg map[string]interface{}) *randomDrawCfg {
 			}
 			out.Counts = append(out.Counts, n)
 		}
+	}
+	return out
+}
+
+// resolveFixedPick 解析固定取码规则列表（V8 GDQM）。
+func resolveFixedPick(cfg map[string]interface{}) *fixedPickCfg {
+	raw, ok := cfg["fixedPick"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	rules, _ := raw["rules"].([]interface{})
+	out := &fixedPickCfg{}
+	for _, item := range rules {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		r := fixedPickRule{
+			PosStart: toInt(m["posStart"], 0),
+			PosEnd:   toInt(m["posEnd"], 0),
+			CodeMin:  toInt(m["codeMin"], 0),
+			CodeMax:  toInt(m["codeMax"], 0),
+		}
+		if v, ok := m["numbers"].(string); ok {
+			r.Numbers = strings.TrimSpace(v)
+		}
+		if r.PosEnd < r.PosStart {
+			r.PosStart, r.PosEnd = r.PosEnd, r.PosStart
+		}
+		if r.CodeMax < r.CodeMin {
+			r.CodeMin, r.CodeMax = r.CodeMax, r.CodeMin
+		}
+		if r.Numbers != "" {
+			out.Rules = append(out.Rules, r)
+		}
+	}
+	if len(out.Rules) == 0 {
+		return nil
 	}
 	return out
 }
@@ -394,6 +598,17 @@ func resolvePositionIndex(cfg map[string]interface{}, playLabel string) int {
 	return 0
 }
 
+// normalizeSchemeGroupContent 清理分组内容边缘空白，但保留换行空位（定位胆万千百十个）。
+// 禁止 TrimSpace：否则 "\n\n1,2\n\n"（百位）会被压成 "1,2" → 第三方变成万位 "12,,,,"。
+func normalizeSchemeGroupContent(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	if strings.Contains(s, "\n") {
+		return strings.Trim(s, " \t")
+	}
+	return strings.TrimSpace(s)
+}
+
 func extractSchemeGroups(cfg map[string]interface{}) []string {
 	raw, ok := cfg["schemeGroups"].([]interface{})
 	if !ok || len(raw) == 0 {
@@ -405,8 +620,8 @@ func extractSchemeGroups(cfg map[string]interface{}) []string {
 		if !ok {
 			continue
 		}
-		s = strings.TrimSpace(s)
-		if s != "" {
+		s = normalizeSchemeGroupContent(s)
+		if strings.TrimSpace(s) != "" {
 			out = append(out, s)
 		}
 	}

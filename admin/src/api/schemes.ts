@@ -1,5 +1,10 @@
 import { requestApi } from './client'
-import type { SchemeCustomSettings, SchemeInstanceRow, SchemeShareSnapshotRow } from '@/types/schemes'
+import type {
+  SchemeBetHistoryItem,
+  SchemeCustomSettings,
+  SchemeInstanceRow,
+  SchemeShareSnapshotRow,
+} from '@/types/schemes'
 
 export type { SchemeCustomSettings, SchemeInstanceRow, SchemeShareSnapshotRow }
 
@@ -186,6 +191,28 @@ export async function createShareSnapshot(input: CreateShareSnapshotInput): Prom
     },
   })
   return mapShareSnapshot(row)
+}
+
+export interface SchemeBetHistoryResult {
+  instanceId: string
+  schemeName: string
+  simBet: boolean
+  days: number
+  dateFrom: string
+  dateTo: string
+  items: SchemeBetHistoryItem[]
+}
+
+export async function fetchSchemeBetHistory(
+  instanceId: string,
+  days = 30,
+): Promise<SchemeBetHistoryResult> {
+  const params = new URLSearchParams()
+  if (days > 0) params.set('days', String(days))
+  const qs = params.toString()
+  return requestApi<SchemeBetHistoryResult>(
+    `/admin/schemes/instances/${encodeURIComponent(instanceId)}/bet-history${qs ? `?${qs}` : ''}`,
+  )
 }
 
 export async function forceStopSchemeInstance(instanceId: string): Promise<void> {

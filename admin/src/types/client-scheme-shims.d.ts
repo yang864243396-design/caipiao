@@ -46,8 +46,12 @@ declare module '@client/constants/lhcPlay' {
 declare module '@client/utils/pickPanelOptions' {
   import type { PlayConfig } from '@client/utils/betPayload'
   export function schemeGroupUsesPickPanel(config: PlayConfig): boolean
+  export function schemeGroupUsesDigitInput(config: PlayConfig): boolean
+  export function schemeGroupContentToInputBox(content: string, config: PlayConfig): string
+  export function groupDigitInputHint(config: PlayConfig): string
   export function digitOptionsForConfig(config: PlayConfig): string[]
   export function textPickOptionsForConfig(config: PlayConfig): string[]
+  export function poolMaxPicksForConfig(config: PlayConfig): number | null
   export function useCompactPickChips(config: PlayConfig): boolean
 }
 

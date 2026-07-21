@@ -112,6 +112,20 @@ func TestFormatBetContentForRule_dingwei(t *testing.T) {
 	}
 }
 
+func TestFormatBetContentForRule_dingweiKeepsEmptyLeadingSlots(t *testing.T) {
+	meta := dingweiMeta()
+	// 百位选 1、2：方案内容 ",,12,," / 换行位格式均不得压成 "12,,,,"
+	for _, in := range []string{",,12,,", "\n\n1,2\n\n"} {
+		got := FormatBetContentForRule(meta, in)
+		if got != ",,12,," {
+			t.Fatalf("in=%q wire=%q want ,,12,,", in, got)
+		}
+		if n := CountBetNums(meta, got); n != 2 {
+			t.Fatalf("in=%q betsNums=%d want 2", in, n)
+		}
+	}
+}
+
 func TestInferBetMode_qian3NotPollutedByDingweiTypeLabel(t *testing.T) {
 	meta := qian3FushiMeta()
 	meta.TypeLabel = "定位胆" // resolvePlayTypeLabel 旧默认值
@@ -612,13 +626,21 @@ func TestResolveSolo_sscQian2ZuxuanFs(t *testing.T) {
 	}
 }
 
-func TestGuajiGroupRequiresSoloFalse_typeID(t *testing.T) {
-	meta := ParseRuleMeta("ssc_std", "g014", "130", "直选复式", "", nil, "130")
-	if !guajiGroupRequiresSoloFalse(meta) {
-		t.Fatal("g014 前后四应 solo=false")
+func TestGuajiGroupRequiresSoloTrue_qianhou4Fushi(t *testing.T) {
+	// 正确 ruleId：复式 134（旧测试误用 130）
+	meta := ParseRuleMeta("ssc_std", "g014", "134", "直选复式", "", nil, "134")
+	if guajiGroupRequiresSoloFalse(meta) {
+		t.Fatal("g014 前后四复式不应走 solo=false 白名单")
 	}
-	if ResolveSolo(meta, "0\n1\n2\n3", 1) {
-		t.Fatal("前后四直选复式 ResolveSolo 应为 false")
+	if !guajiGroupRequiresSoloTrue(meta) {
+		t.Fatal("g014 前后四复式应 solo=true")
+	}
+	if !ResolveSolo(meta, "0\n1\n2\n3", 2) {
+		t.Fatal("前后四直选复式 ResolveSolo 应为 true（bets=段积×2）")
+	}
+	metaZuhe := ParseRuleMeta("ssc_std", "g014", "136", "直选组合", "", nil, "136")
+	if guajiGroupRequiresSoloTrue(metaZuhe) {
+		t.Fatal("前后四直选组合不应强制 solo=true")
 	}
 }
 

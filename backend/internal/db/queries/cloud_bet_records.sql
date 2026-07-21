@@ -54,6 +54,7 @@ SELECT
     c.amount::float8 AS amount,
     c.pnl::float8 AS pnl,
     c.status,
+    c.bet_content,
     c.placed_at
 FROM cloud_bet_records c
 WHERE c.member_id = $1

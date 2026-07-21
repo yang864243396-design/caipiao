@@ -191,6 +191,15 @@ function returnToEntry(extra: Record<string, string>) {
     router.back()
     return
   }
+  // 从方案详情→配置页→倍投设定：回配置页时恢复 returnName=scheme-detail 与运行时 query
+  const detailReturn = String(route.query.detailReturn ?? '')
+  if (detailReturn === 'scheme-detail') {
+    q.returnName = 'scheme-detail'
+  }
+  for (const key of ['turnover', 'sessionPnl', 'multiplier', 'status', 'detailReturn'] as const) {
+    const v = route.query[key]
+    if (v != null && String(v) !== '') q[key] = String(Array.isArray(v) ? v[0] : v)
+  }
   void router.push({ name: 'advanced-scheme-edit', params: { schemeId }, query: q })
 }
 
@@ -403,17 +412,32 @@ async function onConfirm() {
     return
   }
 
+  // 方案配置/详情：仅暂存，由编辑页「完成」统一提交（不在此页落库）
+  if (
+    persist &&
+    (returnName === 'advanced-scheme-edit' ||
+      returnName === 'scheme-detail' ||
+      String(route.query.detailReturn ?? '') === 'scheme-detail')
+  ) {
+    const kind = persistKindLabel()
+    try {
+      sessionStorage.setItem(
+        `scheme-edit-bm-pending:${schemeId}`,
+        JSON.stringify({ kind, payload: buildBetMultiplierPayload() }),
+      )
+    } catch {
+      /* ignore */
+    }
+    ElMessage.success('已选择倍投方式，点击「完成」后生效')
+    navigateBackToSchemeWithKind()
+    return
+  }
+
   if (persist) {
     try {
       await saveBetMultiplier(schemeId, buildBetMultiplierPayload())
     } catch (e) {
       const message = e instanceof ApiError ? e.message : e instanceof Error ? e.message : '保存失败'
-      // 云端中心方案详情：即便保存被拒（如运行中），仍回显所选倍投方式并提示
-      if (returnName === 'scheme-detail') {
-        ElMessage.warning(message)
-        navigateBackToSchemeWithKind()
-        return
-      }
       showConfirmError(message)
       return
     }

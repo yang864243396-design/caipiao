@@ -39,17 +39,20 @@
 
 ### 1.1 目标
 
-1. **回头停止**：将会员在「云端中心 → 回头设置」中的规则，完整作用于挂机过程中的「倍投 + 出号进度复位」。
+1. **回头停止**：将会员在「云端中心 → 回头设置」中的规则，完整作用于挂机过程中的**倍投轮次回起点**（对齐富联原版「回到倍投起点」；**不**复位出号游标）。
 2. **通道统一**：废弃 `run_mode` / `config.runMode(prod/sim)` / `real|sim` 字符串体系，**全项目只保留 `simBet: boolean` 表达正式/模拟**。
 
 ### 1.2 「回头停止」是什么
 
 | 是 | 否 |
 |----|-----|
-| 倍投轮次回第 1 轮 | 暂停方案（pause） |
-| 出号游标复位 | 方案止盈/止损停投 |
-| `lookback_pnl` 清零 | 云端总止盈/总止损 |
-| 方案保持「正在云端挂机中」 | 撤销/重算触发当期注单 |
+| 倍投轮次回第 1 轮（`round_index→0`） | 暂停方案（pause） |
+| `lookback_pnl` 清零 | 出号游标复位（`pick_index` / `current_pick` / `last_direction` **保持不变**） |
+| 方案保持「正在云端挂机中」 | 方案止盈/止损停投 |
+| | 云端总止盈/总止损 |
+| | 撤销/重算触发当期注单 |
+
+> **口径（已定稿）**：回头与出号体系正交。高级定码轮换「中后/挂后跳局」等出号进度不受回头影响；仅倍投从第 1 轮重跑。
 
 ### 1.3 不在范围
 
@@ -157,7 +160,7 @@ simBet: boolean
 |------|----------|----------|
 | 已下/已结算注单 | **不变** | — |
 | `round_index` | — | → `0`（第 1 轮） |
-| 出号游标 | — | 复位（pick_index / current_pick / last_direction） |
+| 出号游标 | — | **不变**（`pick_index` / `current_pick` / `last_direction` 保留） |
 | `lookback_pnl` | — | → `0` |
 | `status` | 保持 `running` | 保持 `running` |
 | `session_pnl` / `pnl` | 不变 | 不变 |
@@ -190,8 +193,8 @@ simBet: boolean
 |----|------|
 | `sim_bet` | **唯一通道字段** |
 | `lookback_pnl` | 个别判断累计 |
-| `round_index` | 倍投轮次 |
-| `pick_index` / `current_pick` / `last_direction` | 出号游标 |
+| `round_index` | 倍投轮次（回头复位目标） |
+| `pick_index` / `current_pick` / `last_direction` | 出号游标（回头**不**复位） |
 
 删除：`run_mode`（最终阶段）
 
@@ -247,14 +250,15 @@ simBet: boolean
                          │ 是
               ┌──────────▼──────────────────────────┐
               │ applyLookbackReset（同事务）           │
-              │ · round_index→0, 出号复位             │
+              │ · round_index→0（仅倍投轮次）         │
               │ · lookback_pnl→0                     │
+              │ · 出号游标不动                       │
               │ · 整体：同通道全部 running + runtime清零│
               │ · 审计日志                           │
               │ · 不 pause                           │
               └─────────────────────────────────────┘
                          │
-              下一期按第 1 轮倍投、出号从初始状态继续
+              下一期按第 1 轮倍投继续；出号仍按原游标推进
 ```
 
 ---
@@ -282,6 +286,7 @@ simBet: boolean
 |--|----------|---------------|
 | 触发后状态 | `running` | `pending`（pause） |
 | 倍投轮次 | 回第 1 轮 | — |
+| 出号游标 | **不变** | — |
 | 依据字段 | `lookback_pnl` / runtime | `session_pnl` vs config 阈值 |
 
 ---
@@ -623,5 +628,5 @@ s.q.AdminLotteryStatSummary(ctx, sqlcdb.AdminLotteryStatSummaryParams{
 | 模拟投注开关 | `simBet` |
 | 回头盈亏 | `lookback_pnl` |
 | 本次盈亏 | `session_pnl`（不因回头复位清零） |
-| 回头停止 | 复位轮次+出号，方案仍 running |
+| 回头停止 | 仅复位倍投轮次（`round_index`）+ 清 `lookback_pnl`；出号游标不变；方案仍 running |
 | 停方案 | pause（止盈/止损/手动等） |

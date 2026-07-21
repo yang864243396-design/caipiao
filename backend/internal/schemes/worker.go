@@ -572,10 +572,18 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 		resetIndividual = false
 		resetOverall = false
 		// 正式盘：轮次/出号游标待派奖后按实际中/未中推进，下单时仅累加流水与期号游标。
-		applyRoundIndex = inst.RoundIndex
-		applyPickIndex = inst.PickIndex
-		applyCurrentPick = inst.CurrentPick
-		applyLastDirection = inst.LastDirection
+		// 必须读锁内最新值写入，禁止用下单前旧快照覆盖派奖已推进的 pick_index。
+		if locked, lerr := qtx.GetSchemeInstanceFull(ctx, inst.ID); lerr == nil {
+			applyRoundIndex = locked.RoundIndex
+			applyPickIndex = locked.PickIndex
+			applyCurrentPick = locked.CurrentPick
+			applyLastDirection = locked.LastDirection
+		} else {
+			applyRoundIndex = inst.RoundIndex
+			applyPickIndex = inst.PickIndex
+			applyCurrentPick = inst.CurrentPick
+			applyLastDirection = inst.LastDirection
+		}
 	}
 
 	if _, err := qtx.ApplySchemeInstanceBet(ctx, sqlcdb.ApplySchemeInstanceBetParams{

@@ -4,6 +4,7 @@ import type {
   SchemeTriggerBet,
   SchemeHotColdWarm,
   SchemeRandomDraw,
+  SchemeFixedPick,
   UpdateSchemeInput,
 } from '@/api/schemes/definitions'
 import type { ClientSchemeKind } from '@/utils/schemeKind'
@@ -47,6 +48,7 @@ export interface SchemeDraftSnapshot {
   triggerBet?: SchemeTriggerBet
   hotColdWarm?: SchemeHotColdWarm
   randomDraw?: SchemeRandomDraw
+  fixedPick?: SchemeFixedPick
 }
 
 type LegacyDraft = SchemeDraftSnapshot & { runMode?: 'prod' | 'sim' }
@@ -107,6 +109,7 @@ export function draftPatchFromSnapshot(draft: SchemeDraftSnapshot): UpdateScheme
   const patch: UpdateSchemeInput = {
     simBet: draft.simBet,
     schemeFunds: draft.schemeFunds,
+    multCoeff: draft.multCoeff,
     startTime: draft.startTime,
     endTime: draft.endTime,
     stopLoss: draft.stopLoss,
@@ -126,6 +129,7 @@ export function draftPatchFromSnapshot(draft: SchemeDraftSnapshot): UpdateScheme
   if (draft.triggerBet) patch.triggerBet = draft.triggerBet
   if (draft.hotColdWarm) patch.hotColdWarm = draft.hotColdWarm
   if (draft.randomDraw) patch.randomDraw = draft.randomDraw
+  if (draft.fixedPick) patch.fixedPick = draft.fixedPick
   if (draft.builtinSnapshotId) {
     patch.builtinPlan = { snapshotId: draft.builtinSnapshotId }
   }

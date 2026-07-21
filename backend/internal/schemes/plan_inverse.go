@@ -88,7 +88,7 @@ func ComputePlanInverseDisplay(
 func resolveNextPlanPick(cfg parsedSchemeConfig, draws []sqlcdb.ListLotteryDrawsRow) string {
 	ordered := append([]sqlcdb.ListLotteryDrawsRow(nil), draws...)
 	if len(ordered) == 0 {
-		dec := resolvePickPreview(cfg, simPickState{}, "", nil)
+		dec := resolvePickPreview(cfg, simPickState{}, "", nil, nil)
 		if dec.Skip {
 			return strings.TrimSpace(cfg.GroupContent)
 		}
@@ -103,12 +103,17 @@ func resolveNextPlanPick(cfg parsedSchemeConfig, draws []sqlcdb.ListLotteryDraws
 
 	state := simPickState{}
 	var prevBalls []string
+	histDraws := make([][]string, 0, len(ordered))
 	lastIssue := ordered[len(ordered)-1].IssueNo
 
 	for _, draw := range ordered {
-		dec := resolvePickPreview(cfg, state, draw.IssueNo, prevBalls)
+		dec := resolvePickPreview(cfg, state, draw.IssueNo, prevBalls, histDraws)
 		if dec.Skip {
-			prevBalls = sqlcdb.ParseDrawBalls(draw.Balls)
+			balls := sqlcdb.ParseDrawBalls(draw.Balls)
+			if len(balls) > 0 {
+				histDraws = append(histDraws, balls)
+			}
+			prevBalls = balls
 			continue
 		}
 		content := strings.TrimSpace(dec.Content)
@@ -123,12 +128,15 @@ func resolveNextPlanPick(cfg parsedSchemeConfig, draws []sqlcdb.ListLotteryDraws
 		eval := evaluatePlayHit(cfg.Play, balls, content, cfg.Contrary, cfg.ContraryPlan, cfg.Play.PositionIdx)
 		pickIdx, curPick, lastDir := advancePickState(cfg, previewInstState(state), dec, eval.Hit)
 		state = simPickState{pickIndex: pickIdx, currentPick: curPick, lastDirection: lastDir}
+		if len(balls) > 0 {
+			histDraws = append(histDraws, balls)
+		}
 		prevBalls = balls
 		lastIssue = draw.IssueNo
 	}
 
 	nextIssue := bumpPreviewIssue(lastIssue)
-	dec := resolvePickPreview(cfg, state, nextIssue, prevBalls)
+	dec := resolvePickPreview(cfg, state, nextIssue, prevBalls, histDraws)
 	if dec.Skip {
 		return strings.TrimSpace(cfg.GroupContent)
 	}

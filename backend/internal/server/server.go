@@ -246,6 +246,7 @@ func (s *Server) registerRoutes(wsSrv *ws.Server) {
 
 	api.Handle("GET /client/schemes", clientAuth(http.HandlerFunc(s.handler.ListSchemes)))
 	api.Handle("GET /client/schemes/check-name", clientAuth(http.HandlerFunc(s.handler.CheckSchemeName)))
+	api.Handle("POST /client/schemes/hot-cold-warm/tiers", clientAuth(http.HandlerFunc(s.handler.HotColdWarmTiers)))
 	api.Handle("POST /client/schemes", clientAuth(http.HandlerFunc(s.handler.CreateScheme)))
 	api.Handle("GET /client/schemes/{definitionId}", clientAuth(http.HandlerFunc(s.handler.GetScheme)))
 	api.Handle("PATCH /client/schemes/{definitionId}", clientAuth(http.HandlerFunc(s.handler.PatchScheme)))
@@ -312,6 +313,7 @@ func (s *Server) registerRoutes(wsSrv *ws.Server) {
 	api.Handle("GET /admin/reports/daily-lottery", adminAuth(http.HandlerFunc(s.handler.AdminDailyLotteryReport)))
 
 	api.Handle("GET /admin/schemes/instances", adminAuth(http.HandlerFunc(s.handler.AdminSchemeMonitorList)))
+	api.Handle("GET /admin/schemes/instances/{instanceId}/bet-history", adminAuth(http.HandlerFunc(s.handler.AdminSchemeBetHistory)))
 	api.Handle("POST /admin/schemes/share", adminAuth(http.HandlerFunc(s.handler.AdminCreateShareSnapshot)))
 	api.Handle("PATCH /admin/schemes/share/{snapshotId}", adminAuth(http.HandlerFunc(s.handler.AdminPatchShareSnapshot)))
 	api.Handle("DELETE /admin/schemes/share/{snapshotId}", adminAuth(http.HandlerFunc(s.handler.AdminDeleteShareSnapshot)))

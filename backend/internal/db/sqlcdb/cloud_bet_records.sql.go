@@ -626,6 +626,7 @@ SELECT
     c.amount::float8 AS amount,
     c.pnl::float8 AS pnl,
     c.status,
+    c.bet_content,
     c.placed_at
 FROM cloud_bet_records c
 WHERE c.member_id = $1
@@ -656,6 +657,7 @@ type ListCloudBetRecordsBySchemeRow struct {
 	Amount           float64            `json:"amount"`
 	Pnl              float64            `json:"pnl"`
 	Status           string             `json:"status"`
+	BetContent       string             `json:"bet_content"`
 	PlacedAt         pgtype.Timestamptz `json:"placed_at"`
 }
 
@@ -686,6 +688,7 @@ func (q *Queries) ListCloudBetRecordsByScheme(ctx context.Context, arg ListCloud
 			&i.Amount,
 			&i.Pnl,
 			&i.Status,
+			&i.BetContent,
 			&i.PlacedAt,
 		); err != nil {
 			return nil, err

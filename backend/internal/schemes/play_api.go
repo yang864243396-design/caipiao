@@ -26,8 +26,15 @@ func NormalizeBetPayload(in BetPayload) ([]byte, error) {
 	if playMethod == "" {
 		playMethod = "定位胆万位"
 	}
-	content := strings.TrimSpace(in.GroupContent)
-	if content == "" {
+	// 定位胆多位内容含前导空行，禁止 TrimSpace（否则 \n\n1,2\n\n 会压成万位）
+	content := strings.ReplaceAll(in.GroupContent, "\r\n", "\n")
+	content = strings.ReplaceAll(content, "\r", "\n")
+	if strings.Contains(content, "\n") {
+		content = strings.Trim(content, " \t")
+	} else {
+		content = strings.TrimSpace(content)
+	}
+	if strings.TrimSpace(content) == "" {
 		return nil, fmt.Errorf("groupContent 不能为空")
 	}
 

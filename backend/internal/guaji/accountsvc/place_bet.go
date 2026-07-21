@@ -2,6 +2,7 @@ package accountsvc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -31,8 +32,23 @@ func (s *Service) Enabled() bool {
 	return s != nil && s.guaji != nil && s.guaji.Enabled()
 }
 
+func mapAuthErrToBet(err error) error {
+	if err == nil {
+		return nil
+	}
+	switch {
+	case errors.Is(err, ErrNoActiveAccount), errors.Is(err, ErrAccountNotFound):
+		return guajibet.ErrNoActiveAuth
+	case errors.Is(err, ErrTokenInvalid), errors.Is(err, ErrReauthNeedsBind):
+		return guajibet.ErrTokenInvalid
+	default:
+		return guajibet.ErrTokenInvalid
+	}
+}
+
 // PlaceRealBet 用会员启用授权下注（guajibet.Placer 实现，T4）：
 // 取启用授权 Token → 校验主币种余额 → web_bets/lott 接单。
+// token 失效时自动重新授权最多 3 次；成功则继续下注，失败则返回 ErrTokenInvalid（由 worker 按原逻辑停方案）。
 func (s *Service) PlaceRealBet(ctx context.Context, memberAccount string, req guajibet.Request) (guajibet.Result, error) {
 	if s == nil || s.guaji == nil || !s.guaji.Enabled() {
 		return guajibet.Result{}, guajibet.ErrPlaceRejected
@@ -45,6 +61,7 @@ func (s *Service) PlaceRealBet(ctx context.Context, memberAccount string, req gu
 	if err != nil {
 		return guajibet.Result{}, err
 	}
+
 	row, err := s.getActiveRow(ctx, m)
 	if err != nil {
 		if isNoRows(err) {
@@ -52,10 +69,51 @@ func (s *Service) PlaceRealBet(ctx context.Context, memberAccount string, req gu
 		}
 		return guajibet.Result{}, err
 	}
-	// 本平台无可用授权时直接返回，禁止继续探测/调用第三方。
+	if !s.tokenHealthy(row) {
+		if err := s.EnsureActiveAuth(ctx, memberAccount); err != nil {
+			return guajibet.Result{}, mapAuthErrToBet(err)
+		}
+		row, err = s.getActiveRow(ctx, m)
+		if err != nil {
+			if isNoRows(err) {
+				return guajibet.Result{}, guajibet.ErrNoActiveAuth
+			}
+			return guajibet.Result{}, err
+		}
+		if !s.tokenHealthy(row) {
+			return guajibet.Result{}, guajibet.ErrTokenInvalid
+		}
+	}
+
+	res, err := s.placeRealBetWithRow(ctx, memberAccount, m, currency, row, req)
+	if !errors.Is(err, guajibet.ErrTokenInvalid) {
+		return res, err
+	}
+	// 下注过程中令牌被上游判无效：强制自动授权最多 3 次后再试一单。
+	if ensureErr := s.ensureActiveAuth(ctx, memberAccount, true); ensureErr != nil {
+		return guajibet.Result{}, mapAuthErrToBet(ensureErr)
+	}
+	row, err = s.getActiveRow(ctx, m)
+	if err != nil {
+		if isNoRows(err) {
+			return guajibet.Result{}, guajibet.ErrNoActiveAuth
+		}
+		return guajibet.Result{}, err
+	}
 	if !s.tokenHealthy(row) {
 		return guajibet.Result{}, guajibet.ErrTokenInvalid
 	}
+	return s.placeRealBetWithRow(ctx, memberAccount, m, currency, row, req)
+}
+
+func (s *Service) placeRealBetWithRow(
+	ctx context.Context,
+	memberAccount string,
+	memberID int64,
+	currency string,
+	row row,
+	req guajibet.Request,
+) (guajibet.Result, error) {
 	token, err := guaji.DecryptSecret(s.credKey, row.accessTokenEnc.String)
 	if err != nil {
 		return guajibet.Result{}, err
@@ -68,7 +126,7 @@ func (s *Service) PlaceRealBet(ctx context.Context, memberAccount string, req gu
 	if err != nil {
 		fault := guaji.ClassifyUpstreamError(err)
 		if fault.IsTokenInvalid {
-			_ = s.markTokenError(ctx, m, row.id, fault.UserMessage)
+			_ = s.markTokenError(ctx, memberID, row.id, fault.UserMessage)
 			return guajibet.Result{}, guajibet.ErrTokenInvalid
 		}
 		return guajibet.Result{}, guajibet.ErrUpstream
@@ -104,7 +162,7 @@ func (s *Service) PlaceRealBet(ctx context.Context, memberAccount string, req gu
 	}
 	betAmount := roundLottBetAmount(unit, betsNums, mult)
 	solo := guajibet.ResolveSolo(req.RuleMeta, req.Content, betsNums)
-	res, err := s.guaji.PlaceLottBet(ctx, token, guaji.LottBetRequest{
+	betRes, err := s.guaji.PlaceLottBet(ctx, token, guaji.LottBetRequest{
 		AutoType: "platform",
 		BetContents: []guaji.LottBetContent{{
 			RuleID:     req.RuleID,
@@ -123,10 +181,15 @@ func (s *Service) PlaceRealBet(ctx context.Context, memberAccount string, req gu
 		if guaji.IsPeriodClosedError(err) {
 			return guajibet.Result{}, guajibet.ErrPeriodClosed
 		}
+		fault := guaji.ClassifyUpstreamError(err)
+		if fault.IsTokenInvalid {
+			_ = s.markTokenError(ctx, memberID, row.id, fault.UserMessage)
+			return guajibet.Result{}, guajibet.ErrTokenInvalid
+		}
 		slog.Warn("guaji place bet rejected", "member", memberAccount, "gameId", gameID, "ruleId", req.RuleID, "issue", req.IssueNo, "content", req.Content, "betsNums", betsNums, "solo", solo, "amount", betAmount, "err", err)
 		return guajibet.Result{}, fmt.Errorf("%w: %w", guajibet.ErrPlaceRejected, err)
 	}
-	periods := strings.TrimSpace(res.Periods)
+	periods := strings.TrimSpace(betRes.Periods)
 	if periods == "" {
 		return guajibet.Result{}, fmt.Errorf("%w: upstream did not return periods", guajibet.ErrPlaceRejected)
 	}
@@ -135,13 +198,13 @@ func (s *Service) PlaceRealBet(ctx context.Context, memberAccount string, req gu
 		slog.Warn("guaji place bet period mismatch, trust upstream periods",
 			"gameId", gameID, "expected", expected, "got", periods)
 	}
-	if strings.TrimSpace(res.ThirdPartyBetID) == "" {
+	if strings.TrimSpace(betRes.ThirdPartyBetID) == "" {
 		return guajibet.Result{}, guajibet.ErrPlaceRejected
 	}
 
 	return guajibet.Result{
 		GuajiAccountID:  row.id,
-		ThirdPartyBetID: res.ThirdPartyBetID,
+		ThirdPartyBetID: betRes.ThirdPartyBetID,
 		Periods:         periods,
 		Currency:        currency,
 	}, nil

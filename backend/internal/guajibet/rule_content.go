@@ -302,10 +302,20 @@ func SampleGroupContent(meta RuleMeta) string {
 	}
 }
 
+// normalizeGroupContentEdges 清理首尾空白；含换行时保留前导/尾随空行（定位胆位次）。
+func normalizeGroupContentEdges(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	if strings.Contains(s, "\n") {
+		return strings.Trim(s, " \t")
+	}
+	return strings.TrimSpace(s)
+}
+
 // FormatBetContentForRule 将 groupContent 转为第三方 bet_content。
 func FormatBetContentForRule(meta RuleMeta, groupContent string) string {
-	groupContent = strings.TrimSpace(groupContent)
-	if groupContent == "" {
+	groupContent = normalizeGroupContentEdges(groupContent)
+	if strings.TrimSpace(groupContent) == "" {
 		groupContent = SampleGroupContent(meta)
 	}
 	if meta.PlayTemplate == "k3_std" && (k3PairPickNeedsSolo(meta) || k3SantongMeta(meta)) {
@@ -412,10 +422,19 @@ func FormatBetContentForRule(meta RuleMeta, groupContent string) string {
 		}
 		return formatCommaPickDigits(groupContent)
 	case "zu24", "zu12", "zu4", "zu120", "zu60", "zu30", "zu20", "zu10", "zu5":
-		if mode == "zu120" {
+		switch mode {
+		case "zu120", "zu24":
+			// 单号池 C(n,4)/C(n,5)
 			return formatCommaPickDigits(groupContent)
+		case "zu12":
+			// 双区「二重号,单号」如 12,34；扁选 1,2,3,4 → 12,34
+			return formatZu12Wire(groupContent)
+		case "zu4":
+			// 双区「三重号,单号」如 1,2
+			return formatZu4Wire(groupContent)
+		default:
+			return formatWuxingZuWire(mode, groupContent)
 		}
-		return formatWuxingZuWire(mode, groupContent)
 	case "zuhe":
 		_, segStart, segLen := classifyRule(meta)
 		if usesPaddedDigits(meta.PlayTemplate) {
@@ -672,13 +691,14 @@ func NeedsSoloForRule(meta RuleMeta, wireContent string) bool {
 	}
 	mode := InferBetMode(meta)
 	group := strings.TrimSpace(meta.Group)
-	// 前后二/前后四：实测任意玩法 solo=true →「单挑参数错误」（含直选复式/单式）
-	if group == "前后二" || group == "前后四" || meta.TypeID == "g008" || meta.TypeID == "g014" {
+	// 前后二：实测任意玩法 solo=true →「单挑参数错误」。前后四相反，须 solo=true（见 ResolveSolo 实测）。
+	if group == "前后二" || meta.TypeID == "g008" {
 		return false
 	}
 	textQH := meta.Group + " " + meta.TypeLabel + " " + meta.Label + " " + meta.TeamLabel + " " + meta.FullName
-	if (strings.Contains(textQH, "前后二") || strings.Contains(textQH, "前后四")) &&
-		!strings.Contains(textQH, "前中后三") && !strings.Contains(textQH, "前后三") {
+	if strings.Contains(textQH, "前后二") &&
+		!strings.Contains(textQH, "前中后三") && !strings.Contains(textQH, "前后三") &&
+		!strings.Contains(textQH, "前后四") {
 		return false
 	}
 	if mode == "weishu" || mode == "teshu" || mode == "baodan" {
@@ -833,11 +853,15 @@ func IsFushiBaoziZeroBet(meta RuleMeta, wireContent string) bool {
 
 // ResolveSolo 是否须 solo=true；注数超过平台单挑上限时须 solo=false。
 func ResolveSolo(meta RuleMeta, wireContent string, betsNums int) bool {
-	if betsNums > guajiSoloMaxBets {
+	// 前后二：实测任意注数 solo=true →「单挑参数错误」，必须 solo=false。
+	// 前后四：实测须 solo=true（与前后二相反）；白名单优先于注数上限。
+	if guajiGroupRequiresSoloFalse(meta) {
 		return false
 	}
-	// 前后二/前后四：实测任意注数 solo=true →「单挑参数错误」，必须 solo=false。
-	if guajiGroupRequiresSoloFalse(meta) {
+	if guajiGroupRequiresSoloTrue(meta) {
+		return true
+	}
+	if betsNums > guajiSoloMaxBets {
 		return false
 	}
 	// SSC 前二/后二组选复式：实测任意注数 solo=true →「单挑参数错误」（与直选复式单注不同）。
@@ -912,24 +936,49 @@ func applySegmentMultiplier(meta RuleMeta, n int) int {
 }
 
 // guajiGroupRequiresSoloFalse 第三方要求 solo=false 的区位组合玩法。
-// 实测：前后二/前后四任意注数 solo=true →「单挑参数错误」。
-// 注意：前中后三/前后三相反，须 solo=true（勿列入此处）。
+// 实测：前后二任意注数 solo=true →「单挑参数错误」。
+// 注意：前后四 / 前中后三 / 前后三须 solo=true（勿列入此处）。
 func guajiGroupRequiresSoloFalse(meta RuleMeta) bool {
-	// rules/v2：g008=前后二、g014=前后四（segment 偶发缺 guajiGroup 文案）
-	switch strings.TrimSpace(meta.TypeID) {
-	case "g008", "g014":
+	// rules/v2：g008=前后二（segment 偶发缺 guajiGroup 文案）
+	if strings.TrimSpace(meta.TypeID) == "g008" {
 		return true
 	}
 	g := strings.TrimSpace(meta.Group)
-	switch g {
-	case "前后二", "前后四":
+	if g == "前后二" {
 		return true
 	}
 	text := meta.Group + " " + meta.TypeLabel + " " + meta.Label + " " + meta.TeamLabel + " " + meta.FullName
-	if strings.Contains(text, "前中后三") || strings.Contains(text, "前后三") {
+	if strings.Contains(text, "前中后三") || strings.Contains(text, "前后三") || strings.Contains(text, "前后四") {
 		return false
 	}
-	return strings.Contains(text, "前后二") || strings.Contains(text, "前后四")
+	return strings.Contains(text, "前后二")
+}
+
+// guajiGroupRequiresSoloTrue 第三方要求 solo=true 的区位组合玩法。
+// 实测（2026-07）：前后四直选复式/单式 bets=段积×2 时 solo=false →「单挑参数错误」，solo=true 才过。
+// 直选组合 / 组选24 等仍走 solo=false（勿一律 true）。
+func guajiGroupRequiresSoloTrue(meta RuleMeta) bool {
+	if !isQianhou4Meta(meta) {
+		return false
+	}
+	mode := InferBetMode(meta)
+	switch mode {
+	case "fushi", "danshi", "zuxuan_ds":
+		return true
+	default:
+		return false
+	}
+}
+
+func isQianhou4Meta(meta RuleMeta) bool {
+	if strings.TrimSpace(meta.TypeID) == "g014" {
+		return true
+	}
+	if strings.TrimSpace(meta.Group) == "前后四" {
+		return true
+	}
+	text := meta.Group + " " + meta.TypeLabel + " " + meta.Label + " " + meta.TeamLabel + " " + meta.FullName
+	return strings.Contains(text, "前后四")
 }
 
 func classifyRuleKind(meta RuleMeta) ContentKind {

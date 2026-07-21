@@ -11,9 +11,9 @@ const sscPositionCount = 5
 func FormatBetContent(template, betMode, playMethod string, positionIdx int, groupContent string) string {
 	template = strings.TrimSpace(template)
 	betMode = strings.TrimSpace(betMode)
-	groupContent = strings.TrimSpace(groupContent)
-	if groupContent == "" {
-		return groupContent
+	groupContent = normalizeGroupContentEdges(groupContent)
+	if strings.TrimSpace(groupContent) == "" {
+		return ""
 	}
 
 	mode := strings.ToLower(betMode)

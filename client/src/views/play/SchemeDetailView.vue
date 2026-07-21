@@ -5,21 +5,55 @@ import { ElMessage } from 'element-plus'
 import { ApiError } from '@/api/client'
 import {
   getSchemeDefinition,
-  updateSchemeDefinition,
   type SchemeDefinitionDto,
 } from '@/api/schemes/definitions'
 import { fetchLotterySchemeOptions } from '@/api/schemes/schemeOptions'
 import { countBetUnits } from '@/utils/betPayload'
 import { usePlayTreeConfig } from '@/composables/usePlayTreeConfig'
-import DateTimePickerModal from '@/components/ui/DateTimePickerModal.vue'
-import { BET_MODE_OPTIONS, betModeLabelOf, betUnitFromSchemeConfig, normalizeBetUnitValue } from '@/constants/betModeOptions'
-import { normalizeSchemeTimePairFromConfig, schemeTimeRangeError } from '@/utils/schemeDateTime'
-import { simBetFromLegacyRunMode, simBetFromSchemeConfig, simBetLabel } from '@/utils/schemeSimBet'
+import SchemeContentReadonlyPanel from '@/components/schemes/SchemeContentReadonlyPanel.vue'
+import { betModeLabelOf, betUnitFromSchemeConfig } from '@/constants/betModeOptions'
+import { normalizeSchemeTimePairFromConfig } from '@/utils/schemeDateTime'
+import { simBetFromSchemeConfig, simBetLabel } from '@/utils/schemeSimBet'
+import { formatSubPlayLabel } from '@/utils/playConfig'
+import type {
+  SchemeFixedPick,
+  SchemeHotColdPickType,
+  SchemeHotColdWarm,
+  SchemeJushuRow,
+  SchemeRandomDraw,
+  SchemeTriggerBet,
+} from '@/api/schemes/definitions'
+
+const RUN_TYPE_IDS = [
+  'fixed_rotate',
+  'adv_fixed_rotate',
+  'adv_trigger_bet',
+  'hot_cold_warm',
+  'random_draw',
+  'builtin_plan',
+  'fixed_number',
+] as const
+type RunTypeId = (typeof RUN_TYPE_IDS)[number]
+
+const RUN_TYPE_LABELS: Record<RunTypeId, string> = {
+  fixed_rotate: '定码轮换',
+  adv_fixed_rotate: '高级定码轮换',
+  adv_trigger_bet: '高级开某投某',
+  hot_cold_warm: '冷热出号',
+  random_draw: '随机出号',
+  builtin_plan: '内置计画',
+  fixed_number: '固定取码',
+}
+
+function normalizeRunTypeId(raw: unknown): RunTypeId {
+  const v = String(Array.isArray(raw) ? raw[0] ?? '' : raw ?? '').trim()
+  if ((RUN_TYPE_IDS as readonly string[]).includes(v)) return v as RunTypeId
+  return 'fixed_rotate'
+}
 
 /**
- * 方案详情：合并「新增方案 + 方案配置」全部字段。
- * 由云端中心运行方案点击进入；运行时数据(投注流水/本次盈亏/倍数系数)由列表页 query 带入，
- * 配置数据由 definitionId 加载。点击「编辑」整页进入编辑模式。
+ * 方案详情：只读展示；运行时数据由列表 query 带入，配置由 definitionId 加载。
+ * 点击「编辑」跳转完整方案配置页（AdvancedSchemeEditView）。
  */
 
 const route = useRoute()
@@ -28,8 +62,6 @@ const router = useRouter()
 const definitionId = String(route.params.definitionId ?? route.query.definitionId ?? '').trim()
 
 const loading = ref(false)
-const saving = ref(false)
-const editing = ref(false)
 
 // 运行时数据（来自云端中心列表 query）
 const turnover = ref(String(route.query.turnover ?? '0'))
@@ -38,25 +70,98 @@ const sessionPnl = ref(String(route.query.sessionPnl ?? '0'))
 const schemeStatus = ref(String(route.query.status ?? ''))
 const isRunning = computed(() => schemeStatus.value === 'running')
 
-// 只读信息
 const schemeName = ref('')
 const lotteryLabel = ref('')
 const betMultiplierKind = ref('')
-const multCoeff = ref(String(route.query.multiplier ?? ''))
+const queryMultiplier = String(route.query.multiplier ?? '')
+const multCoeff = ref(queryMultiplier)
 const betUnit = ref('')
+const runTypeId = ref<RunTypeId>('fixed_rotate')
+const runTypeLabel = computed(() => RUN_TYPE_LABELS[runTypeId.value])
 
-// 可编辑（运行设置）
+const lotteryRunTypeDisplay = computed(() => {
+  const lottery = (lotteryLabel.value || '').trim()
+  const runType = (runTypeLabel.value || '').trim()
+  if (lottery && runType) return `${lottery} · ${runType}`
+  return lottery || runType || '—'
+})
+
 const simBet = ref(false)
 const startTime = ref('')
 const endTime = ref('')
 const stopLoss = ref('')
 const takeProfit = ref('')
 
-// 方案资金计算所需
+const schemeFunds = ref('')
 const lotteryCode = ref('')
 const playTypeId = ref('')
 const subPlayId = ref('')
 const schemeGroups = ref<string[]>([])
+const jushuList = ref<SchemeJushuRow[]>([])
+const triggerBet = ref<SchemeTriggerBet | null>(null)
+const hotColdWarm = ref<SchemeHotColdWarm | null>(null)
+const randomDraw = ref<SchemeRandomDraw | null>(null)
+const fixedPick = ref<SchemeFixedPick | null>(null)
+const builtinPlanSnapshotId = ref('')
+const cachedPlayTypeLabel = ref('')
+const cachedSubPlayLabel = ref('')
+
+function asTriggerBet(raw: unknown): SchemeTriggerBet | null {
+  if (!raw || typeof raw !== 'object') return null
+  const tb = raw as Record<string, unknown>
+  const rows: SchemeTriggerBet['rows'] = []
+  if (Array.isArray(tb.rows)) {
+    for (const item of tb.rows) {
+      if (!item || typeof item !== 'object') continue
+      const r = item as Record<string, unknown>
+      rows.push({
+        enabled: r.enabled !== false,
+        open: asString(r.open),
+        pos: asString(r.pos),
+        neg: asString(r.neg),
+      })
+    }
+  }
+  const mode = asString(tb.mode) as SchemeTriggerBet['mode']
+  const okMode =
+    mode === 'always_pos' || mode === 'always_neg' || mode === 'alt_pos_first' || mode === 'alt_neg_first'
+      ? mode
+      : 'always_pos'
+  const positionIdxs: number[] = []
+  if (Array.isArray(tb.positionIdxs)) {
+    for (const n of tb.positionIdxs) {
+      const i = Number(n)
+      if (Number.isInteger(i) && i >= 0 && !positionIdxs.includes(i)) positionIdxs.push(i)
+    }
+  } else if (tb.positionIdx != null) {
+    const i = Number(tb.positionIdx)
+    if (Number.isInteger(i) && i >= 0) positionIdxs.push(i)
+  }
+  positionIdxs.sort((a, b) => a - b)
+  return {
+    rows,
+    mode: okMode,
+    ...(positionIdxs.length ? { positionIdxs } : {}),
+  }
+}
+
+function asJushuList(raw: unknown): SchemeJushuRow[] {
+  if (!Array.isArray(raw)) return []
+  const out: SchemeJushuRow[] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const r = item as Record<string, unknown>
+    const ju = Number(r.ju)
+    if (!Number.isFinite(ju) || ju <= 0) continue
+    out.push({
+      ju: Math.trunc(ju),
+      content: asString(r.content),
+      afterHit: Math.max(1, Math.trunc(Number(r.afterHit) || 1)),
+      afterMiss: Math.max(1, Math.trunc(Number(r.afterMiss) || 1)),
+    })
+  }
+  return out.sort((a, b) => a.ju - b.ju)
+}
 
 const { playConfig: schemePlayConfig, load: loadPlayTree } = usePlayTreeConfig(
   lotteryCode,
@@ -64,13 +169,19 @@ const { playConfig: schemePlayConfig, load: loadPlayTree } = usePlayTreeConfig(
   subPlayId,
 )
 
-
-const simBetModeSelect = computed({
-  get: () => (simBet.value ? 'sim' : 'prod'),
-  set: (v: 'prod' | 'sim') => {
-    simBet.value = v === 'sim'
-  },
+const playDisplay = computed(() => {
+  const cfg = schemePlayConfig.value as {
+    playTypeLabel?: string
+    playMethodLabel?: string
+  }
+  const typeLabel = (cfg.playTypeLabel || cachedPlayTypeLabel.value || '').trim()
+  const subLabel = formatSubPlayLabel(cfg.playMethodLabel || cachedSubPlayLabel.value || '').trim()
+  if (typeLabel && subLabel) return `${typeLabel} · ${subLabel}`
+  if (typeLabel) return typeLabel
+  if (subLabel) return subLabel
+  return '—'
 })
+
 const BET_MULTIPLIER_LABELS: Record<string, string> = {
   '0': '小白倍投',
   '1': '一键倍投',
@@ -90,55 +201,16 @@ function limitDisplay(v: string): string {
   return s
 }
 
-/** 编辑草稿：前往倍投设定页前暂存，返回后恢复（避免重新挂载丢失未保存编辑） */
-const DRAFT_KEY = `scheme-detail-draft:${definitionId}`
-
-function saveDraft(): void {
-  try {
-    sessionStorage.setItem(
-      DRAFT_KEY,
-      JSON.stringify({
-        simBet: simBet.value,
-        startTime: startTime.value,
-        endTime: endTime.value,
-        stopLoss: stopLoss.value,
-        takeProfit: takeProfit.value,
-        betUnit: betUnit.value,
-      }),
-    )
-  } catch {
-    /* ignore */
-  }
-}
-
-function applyDraftIfAny(): boolean {
-  try {
-    const raw = sessionStorage.getItem(DRAFT_KEY)
-    if (!raw) return false
-    sessionStorage.removeItem(DRAFT_KEY)
-    const d = JSON.parse(raw) as Record<string, unknown>
-    if (typeof d.simBet === 'boolean') simBet.value = d.simBet
-    else {
-      const legacy = simBetFromLegacyRunMode(d.runMode)
-      if (legacy !== undefined) simBet.value = legacy
-    }
-    const draftTimes = normalizeSchemeTimePairFromConfig(d.startTime, d.endTime)
-    startTime.value = draftTimes.start
-    endTime.value = draftTimes.end
-    if (typeof d.stopLoss === 'string') stopLoss.value = d.stopLoss
-    if (typeof d.takeProfit === 'string') takeProfit.value = d.takeProfit
-    if (typeof d.betUnit === 'string') betUnit.value = normalizeBetUnitValue(d.betUnit)
-    else if (typeof d.betMode === 'string') betUnit.value = normalizeBetUnitValue(d.betMode)
-    return true
-  } catch {
-    return false
-  }
-}
-
 const betMultiplierLabel = ref('未设置')
 const betUnitLabel = computed(() => betModeLabelOf(betUnit.value))
 
-/** 注数 = 各组内容按玩法自动计算之和 */
+const runTimeDisplay = computed(() => {
+  const s = startTime.value.trim()
+  const e = endTime.value.trim()
+  if (!s && !e) return '-'
+  return `${s}-${e}`
+})
+
 const betCount = computed(() => {
   const cfg = schemePlayConfig.value
   return schemeGroups.value.reduce((sum, g) => sum + countBetUnits(cfg, g), 0)
@@ -146,18 +218,28 @@ const betCount = computed(() => {
 
 const betUnitAmount = computed(() => Number(betUnit.value) || 0)
 
-/** 方案资金 = 注数 × 投注单位 */
 const schemeFundsDisplay = computed(() => {
+  const entered = Number(String(schemeFunds.value).trim())
+  if (Number.isFinite(entered) && entered > 0) {
+    return `${Number(entered.toFixed(3))} 元`
+  }
   const total = betCount.value * betUnitAmount.value
   if (!Number.isFinite(total) || total <= 0) return '—'
   const fixed = Number(total.toFixed(3))
   return `${fixed} 元`
 })
 
-async function applyOptionLabels(lotteryCode: string): Promise<void> {
-  if (!lotteryCode) return
+/** 倍数系数：优先配置 multCoeff，否则回退列表实例倍数 */
+const multCoeffDisplay = computed(() => {
+  const cfg = (multCoeff.value || '').trim()
+  if (cfg) return cfg
+  return queryMultiplier || '—'
+})
+
+async function applyOptionLabels(code: string): Promise<void> {
+  if (!code) return
   try {
-    await fetchLotterySchemeOptions(lotteryCode)
+    await fetchLotterySchemeOptions(code)
   } catch {
     /* ignore */
   }
@@ -176,29 +258,103 @@ async function load(): Promise<void> {
     const cfg = (d.config ?? {}) as Record<string, unknown>
     simBet.value = simBetFromSchemeConfig(cfg)
     lotteryCode.value = d.lotteryCode
+    schemeFunds.value = asString(cfg.schemeFunds)
+    runTypeId.value = normalizeRunTypeId(cfg.runTypeId)
     playTypeId.value = asString(cfg.playTypeId ?? cfg.typeId)
     subPlayId.value = asString(cfg.subPlayId ?? cfg.subId)
+    cachedPlayTypeLabel.value = asString(cfg.playTypeLabel)
+    cachedSubPlayLabel.value = asString(cfg.playMethodLabel ?? cfg.subPlayLabel)
     schemeGroups.value = Array.isArray(cfg.schemeGroups)
       ? cfg.schemeGroups.map((g) => asString(g))
       : []
+    jushuList.value = asJushuList(cfg.jushuList)
+    triggerBet.value = asTriggerBet(cfg.triggerBet)
+    {
+      const hcw = cfg.hotColdWarm
+      if (hcw && typeof hcw === 'object') {
+        const h = hcw as Record<string, unknown>
+        const st = asString(h.strategy)
+        const strategy: SchemeHotColdWarm['strategy'] =
+          st === 'every' || st === 'keep' || st === 'after_hit' || st === 'after_miss'
+            ? st
+            : h.winRotate === true
+              ? 'after_hit'
+              : 'keep'
+        const pickTypes: SchemeHotColdPickType[] = []
+        if (Array.isArray(h.pickTypes)) {
+          for (const t of h.pickTypes) {
+            const s = asString(t).toLowerCase()
+            if ((s === 'hot' || s === 'cold') && !pickTypes.includes(s)) pickTypes.push(s)
+          }
+        }
+        const fc = Math.trunc(Number(h.faultCount))
+        const faultCount =
+          Number.isFinite(fc) && fc >= 1 ? Math.min(10, fc) : undefined
+        hotColdWarm.value = {
+          totalPeriods: Math.max(1, Math.trunc(Number(h.totalPeriods) || 20)),
+          pool: Array.isArray(h.pool) ? h.pool.map((p) => asString(p)) : [],
+          strategy,
+          pickTypes: pickTypes.length ? pickTypes : undefined,
+          faultCount,
+          winRotate: strategy === 'after_hit',
+        }
+      } else {
+        hotColdWarm.value = null
+      }
+    }
+    {
+      const rd = cfg.randomDraw
+      if (rd && typeof rd === 'object') {
+        const r = rd as Record<string, unknown>
+        const st = asString(r.strategy)
+        const strategy: SchemeRandomDraw['strategy'] =
+          st === 'keep' || st === 'after_hit' || st === 'after_miss' ? st : 'every'
+        randomDraw.value = {
+          counts: Array.isArray(r.counts)
+            ? r.counts.map((n) => Math.max(1, Math.trunc(Number(n) || 1)))
+            : [],
+          strategy,
+        }
+      } else {
+        randomDraw.value = null
+      }
+    }
+    {
+      const fp = cfg.fixedPick
+      if (fp && typeof fp === 'object' && Array.isArray((fp as { rules?: unknown }).rules)) {
+        const rules = ((fp as { rules: unknown[] }).rules ?? [])
+          .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+          .map((r) => ({
+            posStart: Math.max(0, Math.trunc(Number(r.posStart) || 0)),
+            posEnd: Math.max(0, Math.trunc(Number(r.posEnd) || 0)),
+            codeMin: Math.trunc(Number(r.codeMin) || 0),
+            codeMax: Math.trunc(Number(r.codeMax) || 0),
+            numbers: asString(r.numbers),
+          }))
+        fixedPick.value = { rules }
+      } else {
+        fixedPick.value = null
+      }
+    }
+    {
+      const bp = cfg.builtinPlan
+      builtinPlanSnapshotId.value =
+        bp && typeof bp === 'object' ? asString((bp as Record<string, unknown>).snapshotId) : ''
+    }
     const times = normalizeSchemeTimePairFromConfig(cfg.startTime, cfg.endTime)
     startTime.value = times.start
     endTime.value = times.end
     stopLoss.value = cfg.stopLoss != null ? asString(cfg.stopLoss) : ''
     takeProfit.value = cfg.takeProfit != null ? asString(cfg.takeProfit) : ''
-    if (cfg.multCoeff != null && asString(cfg.multCoeff) !== '') multCoeff.value = asString(cfg.multCoeff)
+    if (cfg.multCoeff != null && asString(cfg.multCoeff) !== '') {
+      multCoeff.value = asString(cfg.multCoeff)
+    } else {
+      multCoeff.value = ''
+    }
     betUnit.value = betUnitFromSchemeConfig(cfg)
     const bm = (cfg.betMultiplier ?? {}) as Record<string, unknown>
     betMultiplierKind.value = asString(bm.kind)
-    // 从倍投设定页返回时，优先用 query.bmsKind 回显刚选择的 tab
-    const bmsKind = String(route.query.bmsKind ?? '')
-    if (bmsKind && BET_MULTIPLIER_LABELS[bmsKind]) {
-      betMultiplierKind.value = bmsKind
-      if (!isRunning.value) editing.value = true
-    }
     betMultiplierLabel.value = BET_MULTIPLIER_LABELS[betMultiplierKind.value] ?? '未设置'
-    // 恢复未保存编辑草稿（从倍投设定页返回时），保持编辑模式
-    if (applyDraftIfAny() && !isRunning.value) editing.value = true
     await loadPlayTree()
     await applyOptionLabels(d.lotteryCode)
   } catch (e) {
@@ -208,77 +364,30 @@ async function load(): Promise<void> {
   }
 }
 
-// 日期时间选择弹窗
-const timePickerVisible = ref(false)
-const timePickerField = ref<'start' | 'end'>('start')
-const timePickerValue = ref('')
-
-function openTimePicker(field: 'start' | 'end'): void {
-  timePickerField.value = field
-  timePickerValue.value = field === 'start' ? startTime.value : endTime.value
-  timePickerVisible.value = true
+function runtimeQuery(): Record<string, string> {
+  const q: Record<string, string> = {}
+  if (turnover.value) q.turnover = turnover.value
+  if (sessionPnl.value) q.sessionPnl = sessionPnl.value
+  if (queryMultiplier) q.multiplier = queryMultiplier
+  if (schemeStatus.value) q.status = schemeStatus.value
+  return q
 }
 
-function onTimePicked(dt: string): void {
-  if (timePickerField.value === 'start') startTime.value = dt
-  else endTime.value = dt
-}
-
-function toggleEdit(): void {
+function gotoEdit(): void {
   if (isRunning.value) {
     ElMessage.warning('运行中的方案不可编辑，请先暂停后再修改')
     return
   }
-  if (editing.value) void onSave()
-  else editing.value = true
-}
-
-async function onSave(): Promise<void> {
-  if (!definitionId) return
-  const timeErr = schemeTimeRangeError(startTime.value, endTime.value)
-  if (timeErr) {
-    ElMessage.warning(timeErr)
+  if (!definitionId) {
+    ElMessage.error('缺少方案标识')
     return
   }
-  saving.value = true
-  try {
-    await updateSchemeDefinition(definitionId, {
-      simBet: simBet.value,
-      startTime: startTime.value,
-      endTime: endTime.value,
-      stopLoss: stopLoss.value,
-      takeProfit: takeProfit.value,
-      betUnit: betUnit.value,
-    })
-    editing.value = false
-    ElMessage.success('方案已保存')
-  } catch (e) {
-    ElMessage.error(e instanceof ApiError ? e.message : '保存失败')
-  } finally {
-    saving.value = false
-  }
-}
-
-/** 编辑模式下，方案模式跳转到倍投设定页（返回时回到本页并回显所选 tab） */
-function gotoBetMultiplier(): void {
-  saveDraft()
-  const cfg = schemePlayConfig.value
   void router.push({
-    name: 'bet-multiplier-settings',
+    name: 'advanced-scheme-edit',
+    params: { schemeId: definitionId },
     query: {
-      schemeId: definitionId,
-      fromScheme: '1',
       returnName: 'scheme-detail',
-      activeTab: betMultiplierKind.value || '2',
-      title: encodeURIComponent(schemeName.value),
-      playType: playTypeId.value || cfg.playTypeId || '',
-      subPlay: subPlayId.value || cfg.subPlayId || '',
-      betMode: cfg.betMode || '',
-      playTypeLabel: cfg.playTypeLabel || '',
-      subPlayLabel: cfg.playMethodLabel || '',
-      playTemplate: cfg.playTemplate || '',
-      ...(cfg.segmentLen ? { segmentLen: String(cfg.segmentLen) } : {}),
-      ...(lotteryCode.value ? { lottery: lotteryCode.value } : {}),
+      ...runtimeQuery(),
     },
   })
 }
@@ -294,7 +403,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="sd" data-page="scheme-detail">
+  <div class="sd" data-page="scheme-detail" v-loading="loading">
     <header class="sd-head">
       <button type="button" class="sd-back" aria-label="返回" @click="goBack">
         <span class="material-sym">arrow_back_ios_new</span>
@@ -302,54 +411,46 @@ onMounted(() => {
       <h1 class="sd-title">方案详情</h1>
       <el-button
         type="primary"
-        :plain="!editing"
+        plain
         size="small"
         class="sd-edit-btn"
-        :loading="saving"
         :disabled="isRunning"
-        @click="toggleEdit"
+        @click="gotoEdit"
       >
-        {{ isRunning ? '运行中' : editing ? '完成' : '编辑' }}
+        {{ isRunning ? '运行中' : '编辑' }}
       </el-button>
     </header>
 
     <main class="sd-main">
       <section class="sd-card">
-        <!-- 模式 -->
         <div class="sd-field">
           <span class="sd-label">模式</span>
-          <el-select v-if="editing" v-model="simBetModeSelect" size="small" class="sd-edit-ctrl">
-            <el-option label="正式" value="prod" />
-            <el-option label="模拟" value="sim" />
-          </el-select>
-          <span v-else class="sd-value">{{ simBetLabel(simBet) }}</span>
+          <span class="sd-value">{{ simBetLabel(simBet) }}</span>
         </div>
-        <!-- 方案id -->
         <div class="sd-field">
           <span class="sd-label">方案ID</span>
           <span class="sd-value sd-value--mono">{{ definitionId || '—' }}</span>
         </div>
-        <!-- 方案名称 -->
         <div class="sd-field">
           <span class="sd-label">方案名称</span>
           <span class="sd-value sd-value--strong">{{ schemeName || '—' }}</span>
         </div>
-        <!-- 方案资金 -->
         <div class="sd-field">
           <span class="sd-label">方案资金</span>
           <span class="sd-value">{{ schemeFundsDisplay }}</span>
         </div>
-        <!-- 彩种 -->
         <div class="sd-field">
           <span class="sd-label">彩种</span>
-          <span class="sd-value">{{ lotteryLabel || '—' }}</span>
+          <span class="sd-value">{{ lotteryRunTypeDisplay }}</span>
         </div>
-        <!-- 投注流水 -->
+        <div class="sd-field">
+          <span class="sd-label">玩法</span>
+          <span class="sd-value">{{ playDisplay }}</span>
+        </div>
         <div class="sd-field">
           <span class="sd-label">投注流水</span>
           <span class="sd-value">{{ turnover }}</span>
         </div>
-        <!-- 本次盈亏 -->
         <div class="sd-field">
           <span class="sd-label">本次盈亏</span>
           <span
@@ -357,67 +458,48 @@ onMounted(() => {
             :class="Number(sessionPnl) > 0 ? 'sd-up' : Number(sessionPnl) < 0 ? 'sd-down' : ''"
           >{{ sessionPnl }}</span>
         </div>
-        <!-- 开始时间 -->
         <div class="sd-field">
-          <span class="sd-label">开始时间</span>
-          <button v-if="editing" type="button" class="sd-time-btn" @click="openTimePicker('start')">
-            {{ startTime || '选择时间' }}
-            <span class="material-sym sd-time-ico">event</span>
-          </button>
-          <span v-else class="sd-value">{{ startTime || '—' }}</span>
+          <span class="sd-label">运行时间</span>
+          <span class="sd-value">{{ runTimeDisplay }}</span>
         </div>
-        <!-- 结束时间 -->
-        <div class="sd-field">
-          <span class="sd-label">结束时间</span>
-          <button v-if="editing" type="button" class="sd-time-btn" @click="openTimePicker('end')">
-            {{ endTime || '选择时间' }}
-            <span class="material-sym sd-time-ico">event</span>
-          </button>
-          <span v-else class="sd-value">{{ endTime || '—' }}</span>
-        </div>
-        <!-- 方案止损 -->
         <div class="sd-field">
           <span class="sd-label">方案止损</span>
-          <el-input v-if="editing" v-model="stopLoss" size="small" class="sd-edit-ctrl" placeholder="不限" />
-          <span v-else class="sd-value">{{ limitDisplay(stopLoss) }}</span>
+          <span class="sd-value">{{ limitDisplay(stopLoss) }}</span>
         </div>
-        <!-- 方案止盈 -->
         <div class="sd-field">
           <span class="sd-label">方案止盈</span>
-          <el-input v-if="editing" v-model="takeProfit" size="small" class="sd-edit-ctrl" placeholder="不限" />
-          <span v-else class="sd-value">{{ limitDisplay(takeProfit) }}</span>
+          <span class="sd-value">{{ limitDisplay(takeProfit) }}</span>
         </div>
-        <!-- 倍数系数 -->
         <div class="sd-field">
           <span class="sd-label">倍数系数</span>
-          <span class="sd-value">{{ multCoeff || '—' }}</span>
+          <span class="sd-value">{{ multCoeffDisplay }}</span>
         </div>
-        <!-- 投注单位 -->
         <div class="sd-field">
           <span class="sd-label">投注单位</span>
-          <el-select v-if="editing" v-model="betUnit" size="small" class="sd-edit-ctrl">
-            <el-option v-for="o in BET_MODE_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
-          </el-select>
-          <span v-else class="sd-value">{{ betUnitLabel }}</span>
+          <span class="sd-value">{{ betUnitLabel }}</span>
         </div>
-        <!-- 方案模式 -->
         <div class="sd-field">
           <span class="sd-label">方案模式</span>
-          <button v-if="editing" type="button" class="sd-link-btn" @click="gotoBetMultiplier">
-            {{ betMultiplierLabel }}
-            <span class="material-sym sd-link-arrow">chevron_right</span>
-          </button>
-          <span v-else class="sd-value">{{ betMultiplierLabel }}</span>
+          <span class="sd-value">{{ betMultiplierLabel }}</span>
         </div>
       </section>
-    </main>
 
-    <DateTimePickerModal
-      v-model="timePickerVisible"
-      :value="timePickerValue"
-      :title="timePickerField === 'start' ? '开始时间' : '结束时间'"
-      @confirm="onTimePicked"
-    />
+      <SchemeContentReadonlyPanel
+        class="sd-content-panel"
+        :run-type-id="runTypeId"
+        :run-type-label="runTypeLabel"
+        :play-config="schemePlayConfig"
+        :scheme-groups="schemeGroups"
+        :jushu-list="jushuList"
+        :trigger-bet="triggerBet"
+        :hot-cold-warm="hotColdWarm"
+        :random-draw="randomDraw"
+        :fixed-pick="fixedPick"
+        :builtin-plan-snapshot-id="builtinPlanSnapshotId"
+        :scheme-name="schemeName"
+        :lottery-code="lotteryCode"
+      />
+    </main>
   </div>
 </template>
 
@@ -438,45 +520,56 @@ onMounted(() => {
   box-sizing: border-box;
   padding: 0 1.25rem;
   background: #fff;
-  box-shadow: 0 8px 24px -16px rgba(15, 35, 95, 0.18);
+  box-shadow: 0 4px 20px rgba(25, 28, 30, 0.04);
+  position: sticky;
+  top: 0;
+  z-index: 20;
 }
 
 .sd-back {
   display: grid;
   place-items: center;
-  width: var(--page-titlebar-action-size);
-  height: var(--page-titlebar-action-size);
-  border-radius: 0.65rem;
-  color: #0f172a;
-  background: #f1f5f9;
+  width: 2.25rem;
+  height: 2.25rem;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: #191c1e;
+  cursor: pointer;
 }
 
 .sd-back .material-sym {
-  font-size: var(--page-titlebar-icon-size);
+  font-size: 1.25rem;
 }
 
 .sd-title {
   margin: 0;
-  font-family: var(--font-display);
+  flex: 1;
+  text-align: center;
+  font-family: 'Plus Jakarta Sans', 'Noto Sans SC', system-ui, sans-serif;
+  font-size: 1.05rem;
   font-weight: 700;
-  font-size: 1.0625rem;
+  color: #191c1e;
 }
 
 .sd-edit-btn {
-  font-weight: 600;
+  min-width: 3.5rem;
 }
 
 .sd-main {
-  padding: 1.25rem;
-  max-width: 32rem;
-  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 1rem 1.25rem;
 }
 
 .sd-card {
   background: #fff;
-  border-radius: 1.15rem;
-  padding: 0.4rem 1.15rem;
-  box-shadow: 0 18px 44px -28px rgba(15, 35, 95, 0.16);
+  border-radius: 0.875rem;
+  padding: 0.35rem 1rem;
+  box-shadow: 0 4px 20px rgba(25, 28, 30, 0.04);
 }
 
 .sd-field {
@@ -484,8 +577,9 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  padding: 0.75rem 0;
-  border-bottom: 1px solid #f1f5f9;
+  min-height: 2.75rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid rgba(242, 244, 246, 0.95);
 }
 
 .sd-field:last-child {
@@ -493,72 +587,39 @@ onMounted(() => {
 }
 
 .sd-label {
-  font-size: 0.875rem;
-  color: #64748b;
-  flex-shrink: 0;
+  flex: none;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: #727687;
 }
 
 .sd-value {
-  font-size: 0.9375rem;
-  color: #0f172a;
+  min-width: 0;
   text-align: right;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #191c1e;
   word-break: break-all;
+}
+
+.sd-value--mono {
+  font-family: ui-monospace, 'Cascadia Code', 'Segoe UI Mono', monospace;
+  font-size: 0.8125rem;
 }
 
 .sd-value--strong {
   font-weight: 700;
 }
 
-.sd-value--mono {
-  font-family: 'Inter', monospace;
-  font-size: 0.8125rem;
-  color: #475569;
-}
-
 .sd-up {
-  color: #dc2626;
-  font-weight: 700;
+  color: #e53935;
 }
 
 .sd-down {
-  color: #16a34a;
-  font-weight: 700;
+  color: #2e7d32;
 }
 
-.sd-edit-ctrl {
-  max-width: 11rem;
-}
-
-.sd-time-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.35rem 0.7rem;
-  border-radius: 10px;
-  background: var(--el-color-primary-light-9, #e6ebfa);
-  color: var(--el-color-primary, #0050cb);
-  font-size: 0.875rem;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.sd-time-ico {
-  font-size: 1rem;
-}
-
-.sd-link-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.1rem;
-  padding: 0.2rem 0.5rem;
-  border-radius: 8px;
-  background: var(--el-color-primary-light-9, #e6ebfa);
-  color: var(--el-color-primary, #0050cb);
-  font-size: 0.9375rem;
-  font-weight: 600;
-}
-
-.sd-link-arrow {
-  font-size: 1.05rem;
+.sd-content-panel {
+  margin-top: 0.15rem;
 }
 </style>

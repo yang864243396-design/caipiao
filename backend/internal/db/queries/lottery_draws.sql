@@ -36,6 +36,15 @@ WHERE lottery_code = $1
 ORDER BY issue_no ASC
 LIMIT 1;
 
+-- name: GetPreviousLotteryDrawByIssue :one
+-- 按期号取严格小于当前期的最近一期（开某投某等依赖「上期开奖」）。
+SELECT id, lottery_code, issue_no, period_short, balls, sum_value, drawn_at
+FROM lottery_draws
+WHERE lottery_code = $1
+  AND issue_no < $2
+ORDER BY issue_no DESC
+LIMIT 1;
+
 -- name: InsertLotteryDraw :one
 INSERT INTO lottery_draws (lottery_code, issue_no, period_short, balls, sum_value, drawn_at)
 VALUES ($1, $2, $3, $4, $5, $6)

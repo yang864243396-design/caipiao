@@ -47,6 +47,7 @@ RETURNING member_id, sim_bet, session_pnl, period_issue, period_pnl, period_hit_
 
 
 -- name: ResetSchemeInstanceLookbackRound :one
+-- 仅归零倍投轮次/回头盈亏；保留出号游标（定码轮换/高级定码轮换跳局）
 
 UPDATE scheme_instances
 
@@ -55,12 +56,6 @@ SET round_index = 0,
     multiplier = $2,
 
     lookback_pnl = 0,
-
-    pick_index = 0,
-
-    current_pick = '',
-
-    last_direction = '',
 
     updated_at = now()
 

@@ -74,7 +74,9 @@ export function isPc28ModeType(typeLabel: string, typeId: string): boolean {
 
 export function isDingweiStarType(typeLabel: string, typeId: string, subLabel = ''): boolean {
   const label = typeLabel.trim()
-  return label === '一星' || typeId === 'dingwei' || subLabel.includes('定位胆')
+  const id = typeId.trim()
+  // g006 = rules/v2 定位胆/一星；仅认 dingwei 会漏掉新建方案的 typeId
+  return label === '一星' || id === 'dingwei' || id === 'g006' || subLabel.includes('定位胆')
 }
 
 /** rules/v2 同步后 bet_mode 可能为空，按 label / guajiGroup 推断（对齐后端 InferBetMode） */
@@ -258,15 +260,26 @@ export function filterPlayTypesForRunType<T extends { value: string | number }>(
   all: T[],
   playTreeTypes: PlayTypeNode[],
 ): T[] {
-  switch (runTypeId) {
-    case 'adv_trigger_bet':
-      return filterAdvTriggerPlayTypes(all, playTreeTypes)
-    case 'hot_cold_warm':
-    case 'random_draw':
-      return filterHotColdWarmPlayTypes(all, playTreeTypes)
-    default:
-      return all
-  }
+  // 对齐 V8：运行类型与玩法正交、无门禁——任意运行类型可配任意玩法类型。
+  void runTypeId
+  void playTreeTypes
+  return all
+}
+
+export function filterRandomDrawPlayTypes<T extends { value: string | number }>(
+  all: T[],
+  playTreeTypes: PlayTypeNode[],
+): T[] {
+  // 随机出号采用"选项宇宙+抽样"，覆盖按位/单式/组选/属性家族——仅保留至少有一个受支持子玩法的玩法类型。
+  return all.filter((o) => {
+    const id = String(o.value)
+    const node = findPlayTypeNode(playTreeTypes, id)
+    if (!node) return true
+    const lab = node.label.trim()
+    const subs = node.subPlays ?? []
+    if (!subs.length) return supportsRandomDrawSubPlay(lab, lab)
+    return subs.some((s) => supportsRandomDrawSubPlay(s.label, lab))
+  })
 }
 
 export function filterSubPlaysForRunType<T extends { value: string | number; label?: string }>(
@@ -275,12 +288,10 @@ export function filterSubPlaysForRunType<T extends { value: string | number; lab
   playTypeId: string,
   playTreeTypes: PlayTypeNode[],
 ): T[] {
-  if (runTypeId === 'adv_trigger_bet') {
-    return filterAdvTriggerSubPlays(all, playTypeId, playTreeTypes)
-  }
-  if (runTypeId === 'hot_cold_warm' || runTypeId === 'random_draw') {
-    return filterPositionSourceSubPlays(all, playTypeId, playTreeTypes)
-  }
+  // 对齐 V8：运行类型与玩法正交、无门禁——任意运行类型可配任意子玩法。
+  void runTypeId
+  void playTypeId
+  void playTreeTypes
   return all
 }
 
@@ -327,15 +338,15 @@ export function filterHotColdWarmPlayTypes<T extends { value: string | number }>
     if (!node) return id !== 'longhu'
     if (isLonghuPlayType(node.label, id)) return false
     const lab = node.label.trim()
-    if (lab === '大小单双' || lab === '不定位') return false
+    if (lab === '大小单双') return false
     const subs = node.subPlays ?? []
-    if (!subs.length) return true
-    return subs.some((s) => supportsPositionSourceSubPlay(s.label, lab))
+    if (!subs.length) return supportsHotColdWarmSubPlay(lab, lab)
+    return subs.some((s) => supportsHotColdWarmSubPlay(s.label, lab))
   })
 }
 
 /**
- * 冷热温 / 随机出号仅支持「按位产号」子玩法：
+ * 冷热出号 / 随机出号仅支持「按位产号」子玩法：
  * 直选复式、直选组合、定位胆、任选直选复式。
  * 单式/和值/组三组六/包胆/不定位/属性等须用定码轮换。
  */
@@ -376,6 +387,66 @@ export function filterPositionSourceSubPlays<T extends { value: string | number;
   })
 }
 
+/**
+ * 随机出号支持的子玩法 = 按位型 + 单式（整注随机）。
+ * 与后端 schemes.SupportsRandomDrawSubPlay 对齐。
+ */
+export function supportsRandomDrawSubPlay(subLabel: string, playTypeLabel = ''): boolean {
+  if (supportsPositionSourceSubPlay(subLabel, playTypeLabel)) return true
+  const sub = (subLabel || '').trim()
+  // 直选/组选单式 / 混合组选单式（整注随机）
+  if (sub.includes('单式') || sub.includes('混合')) return true
+  // 组合家族：组三/组六/组选N/组选复式（号码池随机）
+  if (/组三|组六|组选/.test(sub)) return true
+  // 属性/聚合家族：大小单双/龙虎/特殊号/庄闲/和值/跨度/不定位/包胆
+  if (/大小单双|大小|单双|龙虎|庄闲|特殊号|豹子|对子|顺子|和值|跨度|不定位|包胆/.test(sub)) return true
+  return false
+}
+
+/**
+ * 冷热出号支持的子玩法 = 按位型 + 号码池型（组选家族/不定位/包胆，号码整体频次分档）。
+ * 不含单式与属性/聚合（无按位频次维度）。与后端 schemes.SupportsHotColdWarmSubPlay 对齐。
+ */
+export function supportsHotColdWarmSubPlay(subLabel: string, playTypeLabel = ''): boolean {
+  if (supportsPositionSourceSubPlay(subLabel, playTypeLabel)) return true
+  const sub = (subLabel || '').trim()
+  const play = (playTypeLabel || '').trim()
+  if (sub.includes('单式')) return false
+  if (play === '龙虎' || sub.includes('龙虎')) return false
+  if (/和值|跨度|大小单双|特殊号|庄闲/.test(sub)) return false
+  return /组三|组六|组选|不定位|包胆/.test(sub)
+}
+
+export function filterHotColdWarmSubPlays<T extends { value: string | number; label?: string }>(
+  all: T[],
+  playTypeId: string,
+  playTreeTypes: PlayTypeNode[],
+): T[] {
+  const typeNode = findPlayTypeNode(playTreeTypes, playTypeId)
+  const playLabel = typeNode?.label?.trim() ?? ''
+  return all.filter((o) => {
+    const subId = String(o.value)
+    const sub = findSubPlayNode(typeNode, subId)
+    const label = (sub?.label ?? o.label ?? '').trim()
+    return supportsHotColdWarmSubPlay(label, playLabel)
+  })
+}
+
+export function filterRandomDrawSubPlays<T extends { value: string | number; label?: string }>(
+  all: T[],
+  playTypeId: string,
+  playTreeTypes: PlayTypeNode[],
+): T[] {
+  const typeNode = findPlayTypeNode(playTreeTypes, playTypeId)
+  const playLabel = typeNode?.label?.trim() ?? ''
+  return all.filter((o) => {
+    const subId = String(o.value)
+    const sub = findSubPlayNode(typeNode, subId)
+    const label = (sub?.label ?? o.label ?? '').trim()
+    return supportsRandomDrawSubPlay(label, playLabel)
+  })
+}
+
 /** 与后端 ValidateRunTypePlay 同源；返回错误文案或 null */
 export function validateRunTypePlaySelection(
   runTypeId: string,
@@ -383,34 +454,11 @@ export function validateRunTypePlaySelection(
   subPlayId: string,
   playTreeTypes: PlayTypeNode[],
 ): string | null {
-  const typeNode = findPlayTypeNode(playTreeTypes, playTypeId)
-  const subNode = findSubPlayNode(typeNode, subPlayId)
-  switch (runTypeId) {
-    case 'adv_trigger_bet':
-      if (
-        !supportsAdvTriggerBet(
-          playTypeId,
-          subPlayId,
-          typeNode?.label,
-          subNode?.label,
-        )
-      ) {
-        return '高级开某投某仅支持定位胆、龙虎及 PC28 和值/大小单双/龙虎豹'
-      }
-      break
-    case 'hot_cold_warm':
-    case 'random_draw':
-      if (typeNode && isLonghuPlayType(typeNode.label, playTypeId)) {
-        return '冷热温/随机出号不支持龙虎玩法'
-      }
-      if (
-        subNode &&
-        !supportsPositionSourceSubPlay(subNode.label, typeNode?.label ?? '')
-      ) {
-        return '冷热温/随机出号仅支持直选复式、直选组合、定位胆及任选直选复式'
-      }
-      break
-  }
+  // 对齐 V8：运行类型与玩法正交、无门禁——不再限制玩法。
+  void runTypeId
+  void playTypeId
+  void subPlayId
+  void playTreeTypes
   return null
 }
 

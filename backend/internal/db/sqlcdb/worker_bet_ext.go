@@ -194,15 +194,14 @@ WHERE scheme_id = $1 AND period_no = $2`, schemeID, periodNo).Scan(&tpID, &order
 	return out, nil
 }
 
-// ResetSchemeInstanceLookbackRoundEx 回头重置时仅归零轮次，保留基础倍数系数。
+// ResetSchemeInstanceLookbackRoundEx 回头重置时仅归零倍投轮次与回头盈亏，保留基础倍数系数。
+// 出号游标（pick_index / current_pick / last_direction）与倍投独立，不得清空，
+// 否则高级定码轮换「中后跳局」会被回头复位打回第 1 局。
 func (q *Queries) ResetSchemeInstanceLookbackRoundEx(ctx context.Context, id string) error {
 	_, err := q.db.Exec(ctx, `
 UPDATE scheme_instances
 SET round_index = 0,
     lookback_pnl = 0,
-    pick_index = 0,
-    current_pick = '',
-    last_direction = '',
     updated_at = now()
 WHERE id = $1 AND status = 'running'`, id)
 	return err

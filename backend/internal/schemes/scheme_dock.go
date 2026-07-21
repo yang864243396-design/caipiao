@@ -95,12 +95,17 @@ func resolveRoundIndexAfterDraws(
 	state := simPickState{}
 	roundIdx := 0
 	var prevBalls []string
+	histDraws := make([][]string, 0, len(ordered))
 
 	for _, draw := range ordered {
 		cfgRound := parseSchemeConfig(kind, configJSON, roundIdx, 0)
-		dec := resolvePickPreview(cfgRound, state, draw.IssueNo, prevBalls)
+		dec := resolvePickPreview(cfgRound, state, draw.IssueNo, prevBalls, histDraws)
 		if dec.Skip {
-			prevBalls = sqlcdb.ParseDrawBalls(draw.Balls)
+			balls := sqlcdb.ParseDrawBalls(draw.Balls)
+			if len(balls) > 0 {
+				histDraws = append(histDraws, balls)
+			}
+			prevBalls = balls
 			continue
 		}
 		content := strings.TrimSpace(dec.Content)
@@ -116,6 +121,9 @@ func resolveRoundIndexAfterDraws(
 		pickIdx, curPick, lastDir := advancePickState(cfgRound, previewInstState(state), dec, eval.Hit)
 		state = simPickState{pickIndex: pickIdx, currentPick: curPick, lastDirection: lastDir}
 		roundIdx = nextRoundIndex(cfgRound.Rounds, roundIdx, eval.Hit)
+		if len(balls) > 0 {
+			histDraws = append(histDraws, balls)
+		}
 		prevBalls = balls
 	}
 	return roundIdx
