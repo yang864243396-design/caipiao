@@ -20,6 +20,8 @@ import {
 const props = defineProps<{
   config: PlayConfig
   modelValue: string
+  /** 详情只读：禁止编辑 */
+  disabled?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -78,11 +80,13 @@ function syncFromModel(content: string): void {
 }
 
 function onInput(value: string): void {
+  if (props.disabled) return
   raw.value = value
   emit('update:modelValue', boxToContent(value))
 }
 
 function onBlur(): void {
+  if (props.disabled) return
   const content = boxToContent(raw.value)
   raw.value = contentToBox(content)
   emit('update:modelValue', content)
@@ -116,7 +120,7 @@ const poolHint = computed(() => groupDigitInputHint(props.config))
 </script>
 
 <template>
-  <div class="sgi-panel">
+  <div class="sgi-panel" :class="{ 'is-disabled': disabled }">
     <el-input
       :model-value="raw"
       type="textarea"
@@ -124,6 +128,7 @@ const poolHint = computed(() => groupDigitInputHint(props.config))
       resize="none"
       class="sgi-input"
       :placeholder="poolHint"
+      :disabled="disabled"
       @update:model-value="onInput"
       @blur="onBlur"
     />

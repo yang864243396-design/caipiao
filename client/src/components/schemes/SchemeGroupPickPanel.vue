@@ -23,6 +23,8 @@ import {
 const props = defineProps<{
   config: PlayConfig
   modelValue: string
+  /** 详情只读：禁止点选 */
+  disabled?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -77,7 +79,7 @@ function syncFromModel(content: string) {
 
 function emitContent() {
   // 未展示选号面板时禁止回写，否则会覆盖同绑定的 textarea（直选单式等）
-  if (!showPanel.value) return
+  if (!showPanel.value || props.disabled) return
   const next = buildGroupContent(props.config, {
     digits: pickDigits.value,
     lines: pickLines.value,
@@ -120,10 +122,12 @@ watch(
 watch([pickDigits, pickLines], emitContent, { deep: true })
 
 function togglePickDigit(d: string) {
+  if (props.disabled) return
   pickDigits.value = togglePoolPick(pickDigits.value, d, poolMaxPicksForConfig(props.config))
 }
 
 function toggleLineDigit(lineIndex: number, d: string) {
+  if (props.disabled) return
   const lines = pickLines.value.map((line) => [...line])
   while (lines.length < props.config.segmentLen) {
     lines.push([])
@@ -141,7 +145,7 @@ function isLineDigitSelected(lineIndex: number, d: string) {
 </script>
 
 <template>
-  <div v-if="showPanel" class="sgp-panel">
+  <div v-if="showPanel" class="sgp-panel" :class="{ 'is-disabled': disabled }">
     <template v-if="textPickOptions.length && config.inputMode === 'multiline'">
       <div v-for="(label, li) in config.segmentLabels" :key="label" class="sgp-row">
         <span class="sgp-pos">{{ label }}</span>
@@ -152,6 +156,7 @@ function isLineDigitSelected(lineIndex: number, d: string) {
             type="button"
             class="sgp-chip"
             :class="{ 'is-active': isLineDigitSelected(li, d) }"
+            :disabled="disabled"
             @click="toggleLineDigit(li, d)"
           >
             {{ d }}
@@ -167,6 +172,7 @@ function isLineDigitSelected(lineIndex: number, d: string) {
           type="button"
           class="sgp-chip"
           :class="{ 'is-active': pickDigits.includes(d) }"
+          :disabled="disabled"
           @click="togglePickDigit(d)"
         >
           {{ d }}
@@ -188,6 +194,7 @@ function isLineDigitSelected(lineIndex: number, d: string) {
           type="button"
           class="sgp-chip sgp-chip--lhc"
           :class="{ 'is-active': pickDigits.includes(d) }"
+          :disabled="disabled"
           @click="togglePickDigit(d)"
         >
           {{ d }}
@@ -207,6 +214,7 @@ function isLineDigitSelected(lineIndex: number, d: string) {
             type="button"
             class="sgp-chip"
             :class="{ 'sgp-chip--lhc': compactChips, 'is-active': isLineDigitSelected(li, d) }"
+            :disabled="disabled"
             @click="toggleLineDigit(li, d)"
           >
             {{ d }}
@@ -225,6 +233,7 @@ function isLineDigitSelected(lineIndex: number, d: string) {
           type="button"
           class="sgp-chip"
           :class="{ 'sgp-chip--lhc': compactChips, 'is-active': pickDigits.includes(d) }"
+          :disabled="disabled"
           @click="togglePickDigit(d)"
         >
           {{ d }}
@@ -306,5 +315,14 @@ function isLineDigitSelected(lineIndex: number, d: string) {
   background: rgb(0 102 255 / 8%);
   color: var(--el-color-primary);
   font-weight: 600;
+}
+
+.sgp-chip:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.sgp-panel.is-disabled .sgp-chip:not(.is-active) {
+  opacity: 0.85;
 }
 </style>

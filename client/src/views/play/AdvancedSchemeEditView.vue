@@ -1296,6 +1296,52 @@ function generateRdPreview(): void {
   })
 }
 
+interface RdPreviewTag {
+  key: string
+  /** 展示文案（无逗号） */
+  label: string
+  kind: 'whole' | 'pos'
+  index: number
+}
+
+/** 预览 tag：每位（或每注）一个，展示在换号策略下方 */
+const rdPreviewTags = computed<RdPreviewTag[]>(() => {
+  if (rdWholePreview.value.length) {
+    return rdWholePreview.value.map((ticket, index) => ({
+      key: `w-${index}-${ticket}`,
+      label: ticket.includes(',')
+        ? ticket.split(/[,，]/).filter(Boolean).join('\u2009')
+        : ticket,
+      kind: 'whole' as const,
+      index,
+    }))
+  }
+  const rows = rdPreview.value
+  if (!rows.length) return []
+  const out: RdPreviewTag[] = []
+  rows.forEach((row, index) => {
+    if (!row?.length) return
+    out.push({
+      key: `p-${index}-${row.join('-')}`,
+      // 仅号码，窄空格缩短间距
+      label: row.join('\u2009'),
+      kind: 'pos',
+      index,
+    })
+  })
+  return out
+})
+
+function removeRdPreviewTag(tag: RdPreviewTag): void {
+  if (tag.kind === 'whole') {
+    rdWholePreview.value = rdWholePreview.value.filter((_, i) => i !== tag.index)
+    return
+  }
+  const next = [...rdPreview.value]
+  next[tag.index] = []
+  rdPreview.value = next
+}
+
 /** 预估注数：按预览（或每位数量占位）走同一套 countBetUnits，含直选组合×段长 */
 const rdEstimatedUnits = computed(() => {
   // 单式整注随机：注数即 rdCounts[0]
@@ -3121,29 +3167,37 @@ function onTimeDialogOpened() {
               <span class="scf-rd-pos">{{ rdSingleCountLabel }}</span>
               <el-input-number v-model="rdCounts[0]" :min="rdSingleCountMin" :max="rdSingleCountMax" size="small" />
             </div>
-            <p v-if="rdWholePreview.length" class="scf-rd-preview">预览：{{ rdWholePreview.join(' ') }}</p>
           </template>
-          <!-- 按位型：每位配号码数量 -->
-          <template v-else>
+          <!-- 按位型：每位配号码数量（一行三个） -->
+          <div v-else class="scf-rd-pos-grid">
             <div v-for="(label, pi) in positionLabels" :key="pi" class="scf-rd-row">
               <span class="scf-rd-pos">{{ label }}</span>
               <el-input-number v-model="rdCounts[pi]" :min="1" :max="10" size="small" />
-              <span v-if="(rdPreview[pi] ?? []).length" class="scf-rd-preview">
-                预览：{{ (rdPreview[pi] ?? []).join(',') }}
-              </span>
             </div>
-          </template>
+          </div>
           <div class="scf-rd-actions">
             <el-button type="primary" plain size="small" @click="generateRdPreview">生成预览</el-button>
             <span class="scf-rd-units">预估 {{ rdEstimatedUnits }} 注</span>
           </div>
-          <div class="scf-field scf-panel-field">
-            <span class="scf-lbl">换号策略</span>
-            <el-radio-group v-model="rdStrategy" class="scf-radio-wrap">
+          <div class="scf-rd-strategy-bar">
+            <el-radio-group v-model="rdStrategy" class="scf-rd-strategy" aria-label="换号策略">
               <el-radio v-for="o in RD_STRATEGY_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</el-radio>
             </el-radio-group>
           </div>
-          <p class="scf-run-tip">云端运行时每期由引擎按数量自动随机，实际号码见投注明细</p>
+          <div class="scf-rd-preview-box" role="group" aria-label="预览号码">
+            <template v-if="rdPreviewTags.length">
+              <el-tag
+                v-for="tag in rdPreviewTags"
+                :key="tag.key"
+                class="scf-rd-tag"
+                effect="dark"
+                closable
+                disable-transitions
+                @close="removeRdPreviewTag(tag)"
+              >{{ tag.label }}</el-tag>
+            </template>
+            <span v-else class="scf-rd-preview-empty">点击「生成预览」后在此显示</span>
+          </div>
         </div>
 
         <!-- 7. 内置计画 -->
@@ -4789,27 +4843,73 @@ function onTimeDialogOpened() {
 }
 
 /* 随机出号 */
+.scf-rd-pos-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem 0.55rem;
+  width: 100%;
+}
+
 .scf-rd-row {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.5rem;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .scf-rd-pos {
   flex-shrink: 0;
-  min-width: 3.2rem;
+  min-width: 2rem;
   font-size: 0.8125rem;
   font-weight: 700;
   color: var(--scf-on-variant);
 }
 
-.scf-rd-preview {
+.scf-rd-preview-box {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 2.75rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 0.55rem;
+  background: rgba(242, 244, 246, 0.55);
+}
+
+.scf-rd-preview-empty {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: #94a3b8;
+}
+
+.scf-rd-tag {
+  --el-tag-bg-color: #40a9ff;
+  --el-tag-border-color: #40a9ff;
+  --el-tag-hover-color: #1890ff;
+  --el-tag-text-color: #fff;
+  border: none;
+  border-radius: 0.25rem;
   font-size: 0.8125rem;
   font-weight: 600;
-  font-family: ui-monospace, 'Cascadia Code', 'Segoe UI Mono', monospace;
-  color: var(--scf-primary-strong);
-  word-break: break-all;
+  font-family: Inter, 'Noto Sans SC', system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  line-height: 1.4;
+  padding: 0 0.3rem 0 0.4rem;
+  height: auto;
+  min-height: 1.6rem;
+  box-shadow: 0 2px 8px rgba(24, 144, 255, 0.28);
+}
+
+.scf-rd-tag :deep(.el-tag__close) {
+  color: #fff;
+  margin-left: 0.2rem;
+}
+
+.scf-rd-tag :deep(.el-tag__close:hover) {
+  background: rgba(255, 255, 255, 0.28);
+  color: #fff;
 }
 
 .scf-rd-actions {
@@ -4821,6 +4921,40 @@ function onTimeDialogOpened() {
 .scf-rd-units {
   font-size: 0.8125rem;
   color: var(--el-text-color-secondary, #64748b);
+}
+
+.scf-rd-strategy-bar {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.scf-rd-strategy {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.1rem 0.35rem;
+  min-width: 0;
+  width: 100%;
+}
+
+.scf-rd-strategy :deep(.el-radio) {
+  margin-right: 0;
+  height: auto;
+  margin-left: 0;
+  flex: 1 1 0;
+  justify-content: center;
+}
+
+.scf-rd-strategy :deep(.el-radio__label) {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding-left: 0.2rem;
+}
+
+.scf-rd-strategy :deep(.el-radio__inner) {
+  width: 0.875rem;
+  height: 0.875rem;
 }
 
 /* 内置计画 */

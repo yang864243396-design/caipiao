@@ -2,11 +2,20 @@
 import { computed, ref, watch } from 'vue'
 import { fetchGameDraws } from '@/api/games/detail'
 import { fetchHotColdWarmTiers } from '@/api/schemes/definitions'
+import SchemeGroupInputPanel from '@/components/schemes/SchemeGroupInputPanel.vue'
+import SchemeGroupPickPanel from '@/components/schemes/SchemeGroupPickPanel.vue'
+import SchemeRenxuanDanshiPanel from '@/components/schemes/SchemeRenxuanDanshiPanel.vue'
 import type { PlayConfig } from '@/utils/betPayload'
-import { countBetUnits, playConfigSummary } from '@/utils/betPayload'
+import {
+  countBetUnits,
+  groupContentPlaceholder,
+  isRenxuanPositionDanshiConfig,
+  playConfigSummary,
+} from '@/utils/betPayload'
 import {
   schemeGroupContentToInputBox,
   schemeGroupUsesDigitInput,
+  schemeGroupUsesPickPanel,
   textPickOptionsForConfig,
 } from '@/utils/pickPanelOptions'
 import { isLonghuPlayConfigLike } from '@/utils/runTypeMatrix'
@@ -46,10 +55,10 @@ const TRIGGER_MODE_OPTIONS = [
 ] as const
 
 const RD_STRATEGY_OPTIONS = [
-  { label: '每期换号', value: 'every' },
+  { label: '每期换', value: 'every' },
   { label: '不换号', value: 'keep' },
-  { label: '中后换号', value: 'after_hit' },
-  { label: '挂后换号', value: 'after_miss' },
+  { label: '中后换', value: 'after_hit' },
+  { label: '挂后换', value: 'after_miss' },
 ] as const
 
 const HCW_STRATEGY_OPTIONS = [
@@ -449,8 +458,121 @@ watch(
   { immediate: true },
 )
 
-const rdCounts = computed(() => props.randomDraw?.counts ?? [])
-const rdSingleCountMode = computed(() => rdCounts.value.length <= 1)
+const schemeUsesPickPanel = computed(() => schemeGroupUsesPickPanel(props.playConfig))
+const schemeUsesDigitInput = computed(() => schemeGroupUsesDigitInput(props.playConfig))
+const schemeUsesRenxuanDanshi = computed(() => isRenxuanPositionDanshiConfig(props.playConfig))
+const groupInputPlaceholder = computed(() => groupContentPlaceholder(props.playConfig))
+
+const displayedGroupIndexes = computed(() => {
+  if (props.runTypeId === 'fixed_number') return [0]
+  return props.schemeGroups.map((_, i) => i)
+})
+
+const fixedPickRulesDisplay = computed(() =>
+  (props.fixedPick?.rules ?? []).map((r) => ({
+    posStart: Math.max(0, Math.trunc(Number(r.posStart)) || 0) + 1,
+    posEnd: Math.max(0, Math.trunc(Number(r.posEnd)) || 0) + 1,
+    codeMin: Math.max(0, Math.trunc(Number(r.codeMin)) || 0),
+    codeMax: Math.max(0, Math.trunc(Number(r.codeMax)) || 0),
+    numbers: String(r.numbers ?? ''),
+  })),
+)
+
+const rdCounts = computed(() => {
+  const raw = props.randomDraw?.counts ?? []
+  if (raw.length) return raw.map((n) => Math.max(1, Math.trunc(Number(n) || 1)))
+  return [1]
+})
+
+const rdStrategy = computed(() => {
+  const st = props.randomDraw?.strategy
+  if (st === 'every' || st === 'keep' || st === 'after_hit' || st === 'after_miss') return st
+  return 'every'
+})
+
+/** 单式/组选单式：整注随机 */
+const rdWholeTicket = computed(() => {
+  const cfg = props.playConfig as { betMode?: string; subPlayId?: string; playMethodLabel?: string }
+  const bm = String(cfg.betMode ?? '').toLowerCase()
+  const sub = String(cfg.subPlayId ?? '').toLowerCase()
+  if (['danshi', 'zhixuan_ds', 'zuxuan_ds', 'hunhe'].includes(bm)) return true
+  if (['zhixuan_ds', 'zuxuan_ds'].includes(sub)) return true
+  const label = String(cfg.playMethodLabel ?? '')
+  return label.includes('单式') || label.includes('混合')
+})
+
+const rdZuxuanPool = computed(() => {
+  if (rdWholeTicket.value) return false
+  const cfg = props.playConfig as {
+    betMode?: string
+    subPlayId?: string
+    catalogSubId?: string
+    playMethodLabel?: string
+  }
+  const bm = String(cfg.betMode ?? '').toLowerCase()
+  if (['zu3', 'zu6', 'zu24', 'zu12', 'zu60', 'zu30', 'zu120'].includes(bm)) return true
+  const cat = `${String(cfg.subPlayId ?? '')} ${String(cfg.catalogSubId ?? '')}`.toLowerCase()
+  if (/zuxuan_fs|zuxuan|zu3|zu6|zu24|zu12|zu60|zu30|zu120/.test(cat)) return true
+  return /组三|组六|组选/.test(String(cfg.playMethodLabel ?? ''))
+})
+
+const rdAttribute = computed(() => {
+  if (rdWholeTicket.value || rdZuxuanPool.value) return false
+  const bm = String(props.playConfig.betMode ?? '').toLowerCase()
+  return [
+    'daxiao',
+    'danshuang',
+    'dxds',
+    'zhuangxian',
+    'longhu',
+    'longhuhe',
+    'longhubao',
+    'teshu',
+    'hezhi',
+    'kuadu',
+    'budingwei',
+    'baodan',
+  ].includes(bm)
+})
+
+const rdSingleCountMode = computed(
+  () => rdWholeTicket.value || rdZuxuanPool.value || rdAttribute.value,
+)
+const rdSingleCountLabel = computed(() => {
+  if (rdWholeTicket.value) return '注数'
+  if (rdZuxuanPool.value) return '选码个数'
+  return '选项个数'
+})
+const rdSingleCountMax = computed(() => {
+  if (rdWholeTicket.value) return 200
+  if (rdZuxuanPool.value) return Math.max(3, numberPoolTokens.value.length)
+  return 28
+})
+const rdSingleCountMin = computed(() => {
+  if (rdWholeTicket.value) return 1
+  if (rdZuxuanPool.value) return Math.max(2, positionCount.value)
+  return 1
+})
+
+const rdEstimatedUnits = computed(() => {
+  if (rdWholeTicket.value) return Math.min(200, Math.max(1, rdCounts.value[0] ?? 1))
+  if (rdZuxuanPool.value) {
+    const pool = [...numberPoolTokens.value]
+    const k = Math.min(
+      pool.length,
+      Math.max(rdSingleCountMin.value, rdCounts.value[0] ?? rdSingleCountMin.value),
+    )
+    return countBetUnits(props.playConfig, pool.slice(0, k).join(','))
+  }
+  if (rdAttribute.value) return Math.max(1, rdCounts.value[0] ?? 1)
+  const n = positionCount.value
+  if (n <= 0) return 0
+  const lines = Array.from({ length: n }, (_, i) => {
+    const count = Math.min(10, Math.max(1, rdCounts.value[i] ?? 1))
+    return Array.from({ length: count }, (_, j) => String(j % 10)).join(',')
+  })
+  return countBetUnits(props.playConfig, lines.join('\n'))
+})
 
 function groupBetUnits(content: string): number {
   return countBetUnits(props.playConfig, content)
@@ -474,7 +596,6 @@ function formatGroupContent(content: string): string {
 }
 
 </script>
-
 <template>
   <section class="scr" data-panel="scheme-content-readonly">
     <div class="scr-head">
@@ -484,57 +605,135 @@ function formatGroupContent(content: string): string {
       </div>
     </div>
 
-    <!-- 固定取码规则 -->
-    <div v-if="runTypeId === 'fixed_number' && (fixedPick?.rules?.length ?? 0) > 0" class="scr-card scr-panel">
-      <p class="scr-fp-title">取码规则</p>
-      <div v-for="(rule, ri) in fixedPick?.rules ?? []" :key="ri" class="scr-fp-rule">
+    <!-- 固定取码：条件规则（与新建页同布局，只读） -->
+    <div v-if="runTypeId === 'fixed_number'" class="scr-fp-rules">
+      <div class="scr-fp-head">
+        <span class="scr-fp-title">取码规则（可选）</span>
+      </div>
+      <p class="scr-run-tip">
+        当上期开奖在「位区间」内任一号码落在「号码区间」时，命中即投该条固定号码；按序匹配、首条命中即投。留空则每期复投下方固定号码。
+      </p>
+      <el-empty
+        v-if="!fixedPickRulesDisplay.length"
+        description="未设置取码规则"
+        :image-size="48"
+      />
+      <div v-for="(rule, ri) in fixedPickRulesDisplay" :key="ri" class="scr-fp-rule">
         <div class="scr-fp-line">
           <span class="scr-fp-lbl">位区间</span>
-          <span class="scr-fp-val">{{ rule.posStart + 1 }} - {{ rule.posEnd + 1 }}</span>
-          <span class="scr-fp-lbl">号码区间</span>
-          <span class="scr-fp-val">{{ rule.codeMin }} - {{ rule.codeMax }}</span>
+          <el-input-number
+            :model-value="rule.posStart"
+            :min="1"
+            :max="20"
+            size="small"
+            controls-position="right"
+            class="scr-fp-num"
+            disabled
+          />
+          <span class="scr-fp-dash">-</span>
+          <el-input-number
+            :model-value="rule.posEnd"
+            :min="1"
+            :max="20"
+            size="small"
+            controls-position="right"
+            class="scr-fp-num"
+            disabled
+          />
+          <span class="scr-fp-lbl scr-fp-lbl--code">号码区间</span>
+          <el-input-number
+            :model-value="rule.codeMin"
+            :min="0"
+            :max="99"
+            size="small"
+            controls-position="right"
+            class="scr-fp-num"
+            disabled
+          />
+          <span class="scr-fp-dash">-</span>
+          <el-input-number
+            :model-value="rule.codeMax"
+            :min="0"
+            :max="99"
+            size="small"
+            controls-position="right"
+            class="scr-fp-num"
+            disabled
+          />
         </div>
         <div class="scr-fp-line">
           <span class="scr-fp-lbl">投注号码</span>
-          <span class="scr-fp-nums">{{ formatGroupContent(rule.numbers) }}</span>
+          <el-input
+            :model-value="rule.numbers"
+            size="small"
+            placeholder="命中后投注的号码，多个用逗号分隔"
+            class="scr-fp-nums"
+            disabled
+          />
         </div>
       </div>
     </div>
 
-    <!-- 定码轮换 / 固定取码号码 -->
+    <!-- 定码轮换 / 固定取码号码（与新建页同选号面板，只读） -->
     <div
       v-if="runTypeId === 'fixed_rotate' || runTypeId === 'fixed_number'"
-      class="scr-groups"
+      class="scr-groups-stack"
     >
-      <p v-if="runTypeId === 'fixed_number'" class="scr-tip scr-tip--banner">
+      <p v-if="runTypeId === 'fixed_number'" class="scr-run-tip scr-run-tip--banner">
         固定取码：未设置取码规则时，每期原样复投以下固定号码
       </p>
       <el-empty
-        v-if="!schemeGroups.filter((g) => g.trim()).length"
+        v-if="!displayedGroupIndexes.length"
         description="暂无号码内容"
         :image-size="56"
       />
       <div
-        v-for="(g, idx) in schemeGroups"
-        v-show="String(g).trim()"
+        v-for="idx in displayedGroupIndexes"
         :key="idx"
-        class="scr-card"
+        class="scr-content-card"
       >
         <div class="scr-group-bar">
           <h3 class="scr-group-title">
             {{ runTypeId === 'fixed_number' ? '固定取码' : `第 ${idx + 1} 组` }}
           </h3>
-          <span class="scr-group-units">注数: {{ groupBetUnits(g) }}</span>
+          <span class="scr-group-units">注数: {{ groupBetUnits(schemeGroups[idx] ?? '') }}</span>
         </div>
-        <div class="scr-group-body">
-          <p class="scr-group-content">{{ formatGroupContent(g) }}</p>
+        <div class="scr-textarea-wrap">
+          <SchemeRenxuanDanshiPanel
+            v-if="schemeUsesRenxuanDanshi"
+            :model-value="schemeGroups[idx] ?? ''"
+            :config="playConfig"
+            disabled
+          />
+          <SchemeGroupInputPanel
+            v-else-if="schemeUsesDigitInput"
+            :model-value="schemeGroups[idx] ?? ''"
+            :config="playConfig"
+            disabled
+          />
+          <SchemeGroupPickPanel
+            v-else-if="schemeUsesPickPanel"
+            :model-value="schemeGroups[idx] ?? ''"
+            :config="playConfig"
+            disabled
+          />
+          <el-input
+            v-else
+            :model-value="schemeGroups[idx] ?? ''"
+            type="textarea"
+            :rows="8"
+            resize="none"
+            class="scr-area"
+            :placeholder="groupInputPlaceholder"
+            disabled
+          />
         </div>
       </div>
     </div>
 
     <!-- 高级定码轮换 -->
-    <div v-else-if="runTypeId === 'adv_fixed_rotate'" class="scr-card scr-panel">
-      <p class="scr-tip">跳转到不存在的局数时，自动回到第 1 局</p>
+    <div v-else-if="runTypeId === 'adv_fixed_rotate'" class="scr-content-card scr-panel">
+      <p class="scr-run-tip">跳转到不存在的局数时，自动回到第 1 局</p>
       <el-empty v-if="!jushuDisplayList.length" description="暂无局数" :image-size="56" />
       <ul v-else class="scr-jushu-list">
         <li v-for="row in jushuDisplayList" :key="row.ju" class="scr-jushu-row">
@@ -551,7 +750,7 @@ function formatGroupContent(content: string): string {
     </div>
 
     <!-- 高级开某投某 -->
-    <div v-else-if="runTypeId === 'adv_trigger_bet'" class="scr-card scr-panel">
+    <div v-else-if="runTypeId === 'adv_trigger_bet'" class="scr-content-card scr-panel">
       <div v-if="showTriggerPositionPicker" class="scr-field">
         <span class="scr-lbl">投注位</span>
         <div
@@ -593,7 +792,7 @@ function formatGroupContent(content: string): string {
           </el-radio>
         </el-radio-group>
       </div>
-      <p class="scr-tip">
+      <p class="scr-run-tip">
         <template v-if="showTriggerPositionPicker">
           可多选投注位：每位按该位上期开奖各自查映射下注；某位无映射时用启用行第 1 行正投
         </template>
@@ -604,7 +803,7 @@ function formatGroupContent(content: string): string {
     </div>
 
     <!-- 冷热出号（与新建页同布局，只读） -->
-    <div v-else-if="runTypeId === 'hot_cold_warm'" class="scr-card scr-panel">
+    <div v-else-if="runTypeId === 'hot_cold_warm'" class="scr-content-card scr-panel">
       <div class="scr-hcw-bar scr-hcw-bar--top">
         <div class="scr-hcw-ctrl">
           <span class="scr-hcw-lbl">总期数</span>
@@ -667,22 +866,28 @@ function formatGroupContent(content: string): string {
         <div class="scr-hcw-pos-head">
           <p class="scr-hcw-pos-name">{{ label }}</p>
           <div class="scr-hcw-quick" role="group" :aria-label="`${label}快捷选号`">
-            <span
+            <button
+              type="button"
               class="scr-hcw-qbtn"
               :class="{ 'is-on': hcwQuickActive(pi, 'cold') }"
-            >冷</span>
-            <span
+              disabled
+            >冷</button>
+            <button
+              type="button"
               class="scr-hcw-qbtn"
               :class="{ 'is-on': hcwQuickActive(pi, 'hot') }"
-            >热</span>
-            <span
+              disabled
+            >热</button>
+            <button
+              type="button"
               class="scr-hcw-qbtn"
               :class="{ 'is-on': hcwQuickActive(pi, 'all') }"
-            >全</span>
-            <span class="scr-hcw-qbtn">清</span>
+              disabled
+            >全</button>
+            <button type="button" class="scr-hcw-qbtn" disabled>清</button>
           </div>
         </div>
-        <p v-if="!hcwStatsReady && !hcwLoading" class="scr-tip">
+        <p v-if="!hcwStatsReady && !hcwLoading" class="scr-run-tip">
           {{ hcwAttribute ? '暂无选项频次，可点刷新重试' : '暂无开奖统计，已选号码见高亮' }}
         </p>
         <div
@@ -692,71 +897,80 @@ function formatGroupContent(content: string): string {
             '--hcw-cols': String(Math.min(10, (hcwCellsByPos[pi] ?? []).length) || 10),
           }"
         >
-          <div
+          <button
             v-for="cell in hcwCellsByPos[pi]"
             :key="cell.token"
+            type="button"
             class="scr-hcw-cell"
             :class="{
               'is-hot': cell.tier === 'hot',
               'is-cold': cell.tier === 'cold',
               'is-on': poolHasToken(hcwPools[pi], cell.token),
             }"
+            disabled
           >
             <span class="scr-hcw-cell-num">{{ cell.token }}</span>
             <span class="scr-hcw-cell-cnt">{{ cell.count == null ? '—' : cell.count }}</span>
-          </div>
+          </button>
         </div>
       </div>
     </div>
 
-    <!-- 随机出号 -->
-    <div v-else-if="runTypeId === 'random_draw'" class="scr-card scr-panel">
+    <!-- 随机出号（与新建页同布局，只读） -->
+    <div v-else-if="runTypeId === 'random_draw'" class="scr-content-card scr-panel">
       <template v-if="rdSingleCountMode">
         <div class="scr-rd-row">
-          <span class="scr-rd-pos">选号个数</span>
-          <span class="scr-fp-val">{{ rdCounts[0] ?? '—' }}</span>
+          <span class="scr-rd-pos">{{ rdSingleCountLabel }}</span>
+          <el-input-number
+            :model-value="rdCounts[0] ?? 1"
+            :min="rdSingleCountMin"
+            :max="rdSingleCountMax"
+            size="small"
+            disabled
+          />
         </div>
       </template>
-      <template v-else>
+      <div v-else class="scr-rd-pos-grid">
         <div v-for="(label, pi) in positionLabels" :key="pi" class="scr-rd-row">
           <span class="scr-rd-pos">{{ label }}</span>
-          <span class="scr-fp-val">{{ rdCounts[pi] ?? '—' }} 个</span>
+          <el-input-number
+            :model-value="rdCounts[pi] ?? 1"
+            :min="1"
+            :max="10"
+            size="small"
+            disabled
+          />
         </div>
-      </template>
-      <div class="scr-field">
-        <span class="scr-lbl">换号策略</span>
-        <el-radio-group :model-value="randomDraw?.strategy ?? 'every'" class="scr-radio-wrap" disabled>
+      </div>
+      <div class="scr-rd-actions">
+        <el-button type="primary" plain size="small" disabled>生成预览</el-button>
+        <span class="scr-rd-units">预估 {{ rdEstimatedUnits }} 注</span>
+      </div>
+      <div class="scr-rd-strategy-bar">
+        <el-radio-group :model-value="rdStrategy" class="scr-rd-strategy" disabled aria-label="换号策略">
           <el-radio v-for="o in RD_STRATEGY_OPTIONS" :key="o.value" :value="o.value">
             {{ o.label }}
           </el-radio>
         </el-radio-group>
       </div>
-      <p class="scr-tip">云端运行时每期由引擎按数量自动随机，实际号码见投注明细</p>
+      <div class="scr-rd-preview-box" role="group" aria-label="预览号码">
+        <span class="scr-rd-preview-empty">实际号码由引擎按期生成，详见投注明细</span>
+      </div>
     </div>
 
     <!-- 内置计画 -->
-    <div v-else-if="runTypeId === 'builtin_plan'" class="scr-card scr-panel">
+    <div v-else-if="runTypeId === 'builtin_plan'" class="scr-content-card scr-panel">
       <div class="scr-bp-summary">
-        <p class="scr-bp-title">
-          已跟随：{{ schemeName || '内置计画' }}
-          <template v-if="builtinPlanSnapshotId"> · {{ builtinPlanSnapshotId }}</template>
-        </p>
-        <p class="scr-tip">内置计画配置只读，与收藏计划保持一致</p>
-      </div>
-      <div v-if="schemeGroups.some((g) => g.trim())" class="scr-groups">
-        <div v-for="(g, idx) in schemeGroups" v-show="String(g).trim()" :key="idx" class="scr-card">
-          <div class="scr-group-bar">
-            <h3 class="scr-group-title">第 {{ idx + 1 }} 组</h3>
-            <span class="scr-group-units">注数: {{ groupBetUnits(g) }}</span>
-          </div>
-          <div class="scr-group-body">
-            <p class="scr-group-content">{{ formatGroupContent(g) }}</p>
-          </div>
+        <div class="scr-bp-summary-main">
+          <p class="scr-bp-summary-title">
+            已跟随：{{ schemeName || '内置计画' }} · {{ playModeSummary }}
+          </p>
+          <p class="scr-run-tip">内置计画配置只读，与收藏计划保持一致</p>
         </div>
       </div>
     </div>
 
-    <div v-else class="scr-card scr-panel">
+    <div v-else class="scr-content-card scr-panel">
       <el-empty description="暂无方案内容" :image-size="56" />
     </div>
   </section>
@@ -796,7 +1010,7 @@ function formatGroupContent(content: string): string {
   line-height: 1.45;
 }
 
-.scr-card {
+.scr-content-card {
   background: #fff;
   border-radius: 0.875rem;
   overflow: hidden;
@@ -810,10 +1024,10 @@ function formatGroupContent(content: string): string {
   gap: 0.85rem;
 }
 
-.scr-groups {
+.scr-groups-stack {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 1rem;
 }
 
 .scr-group-bar {
@@ -822,7 +1036,9 @@ function formatGroupContent(content: string): string {
   gap: 0.5rem 0.75rem;
   flex-wrap: wrap;
   padding: 0.65rem 1rem;
+  border-bottom: 1px solid rgba(194, 198, 216, 0.2);
   background: #fff;
+  min-width: 0;
 }
 
 .scr-group-title {
@@ -831,6 +1047,7 @@ function formatGroupContent(content: string): string {
   font-size: 0.875rem;
   font-weight: 700;
   font-family: 'Plus Jakarta Sans', 'Noto Sans SC', system-ui, sans-serif;
+  letter-spacing: -0.01em;
   color: var(--scr-primary-strong);
 }
 
@@ -843,22 +1060,24 @@ function formatGroupContent(content: string): string {
   color: #64748b;
 }
 
-.scr-group-body {
-  padding: 0.85rem 1rem 1rem;
-  background: rgba(242, 244, 246, 0.45);
+.scr-textarea-wrap {
+  padding: 1rem;
 }
 
-.scr-group-content {
-  margin: 0;
-  font-size: 0.875rem;
+.scr-area :deep(.el-textarea__inner) {
+  border: none;
+  border-radius: 0.75rem;
+  background: rgba(242, 244, 246, 0.65);
+  padding: 1rem 1.1rem;
+  min-height: 9.5rem;
+  font-size: 0.9375rem;
+  font-family: Inter, 'Noto Sans SC', system-ui, sans-serif;
   line-height: 1.65;
-  font-family: ui-monospace, 'Cascadia Code', 'Segoe UI Mono', monospace;
-  color: #191c1e;
-  word-break: break-all;
+  box-shadow: none;
   white-space: pre-wrap;
 }
 
-.scr-tip {
+.scr-run-tip {
   margin: 0;
   font-size: 11px;
   font-weight: 500;
@@ -866,11 +1085,72 @@ function formatGroupContent(content: string): string {
   color: #727687;
 }
 
-.scr-tip--banner {
+.scr-run-tip--banner {
   padding: 0.65rem 1rem;
   border-radius: 0.75rem;
   background: rgba(0, 80, 203, 0.06);
   color: var(--scr-primary);
+}
+
+.scr-fp-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 0;
+  padding: 1rem;
+  background: var(--el-fill-color-lighter, #f7f9fb);
+  border-radius: 0.75rem;
+}
+
+.scr-fp-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.scr-fp-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.scr-fp-rule {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  background: #fff;
+  border-radius: 0.5rem;
+}
+
+.scr-fp-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.scr-fp-lbl {
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+  white-space: nowrap;
+}
+
+.scr-fp-lbl--code {
+  margin-left: 0.75rem;
+}
+
+.scr-fp-dash {
+  color: var(--el-text-color-secondary);
+}
+
+.scr-fp-num {
+  width: 6rem;
+}
+
+.scr-fp-nums {
+  flex: 1;
+  min-width: 12rem;
 }
 
 .scr-field {
@@ -1005,50 +1285,6 @@ function formatGroupContent(content: string): string {
   font-size: 11px;
   font-weight: 600;
   color: var(--scr-on-variant);
-}
-
-.scr-fp-title {
-  margin: 0;
-  font-size: 0.875rem;
-  font-weight: 700;
-  color: var(--scr-primary-strong);
-}
-
-.scr-fp-rule {
-  display: flex;
-  flex-direction: column;
-  gap: 0.45rem;
-  padding: 0.7rem 0.8rem;
-  border-radius: 0.7rem;
-  background: rgba(242, 244, 246, 0.65);
-}
-
-.scr-fp-line {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.4rem 0.55rem;
-}
-
-.scr-fp-lbl {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--scr-on-variant);
-}
-
-.scr-fp-val {
-  font-size: 0.875rem;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  color: #191c1e;
-}
-
-.scr-fp-nums {
-  font-size: 0.875rem;
-  font-weight: 600;
-  font-family: ui-monospace, 'Cascadia Code', 'Segoe UI Mono', monospace;
-  color: #191c1e;
-  word-break: break-all;
 }
 
 .scr-ms-sm {
@@ -1237,17 +1473,23 @@ function formatGroupContent(content: string): string {
   min-width: 1.7rem;
   height: 1.55rem;
   padding: 0 0.35rem;
+  border: none;
   border-radius: 0.4rem;
   font-size: 0.75rem;
   font-weight: 700;
   color: var(--scr-on-variant);
   background: #f2f4f6;
   user-select: none;
+  cursor: default;
 }
 
 .scr-hcw-qbtn.is-on {
   color: #fff;
   background: var(--scr-primary-strong);
+}
+
+.scr-hcw-qbtn:disabled {
+  opacity: 1;
 }
 
 .scr-hcw-grid {
@@ -1269,6 +1511,11 @@ function formatGroupContent(content: string): string {
   border: 1px solid transparent;
   background: #f2f4f6;
   user-select: none;
+  cursor: default;
+}
+
+.scr-hcw-cell:disabled {
+  opacity: 1;
 }
 
 .scr-hcw-cell-num {
@@ -1315,31 +1562,115 @@ function formatGroupContent(content: string): string {
   box-shadow: none;
 }
 
+.scr-rd-pos-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem 0.55rem;
+  width: 100%;
+}
+
 .scr-rd-row {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .scr-rd-pos {
-  flex: none;
-  min-width: 3rem;
+  flex-shrink: 0;
+  min-width: 2rem;
   font-size: 0.8125rem;
   font-weight: 700;
-  color: var(--scr-primary-strong);
+  color: var(--scr-on-variant);
+}
+
+.scr-rd-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.5rem 0 0.75rem;
+}
+
+.scr-rd-units {
+  font-size: 0.8125rem;
+  color: var(--el-text-color-secondary, #64748b);
+}
+
+.scr-rd-strategy-bar {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.scr-rd-strategy {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.1rem 0.35rem;
+  min-width: 0;
+  width: 100%;
+}
+
+.scr-rd-strategy :deep(.el-radio) {
+  margin-right: 0;
+  height: auto;
+  margin-left: 0;
+  flex: 1 1 0;
+  justify-content: center;
+}
+
+.scr-rd-strategy :deep(.el-radio__label) {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding-left: 0.2rem;
+}
+
+.scr-rd-strategy :deep(.el-radio__inner) {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.scr-rd-preview-box {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 2.75rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 0.55rem;
+  background: rgba(242, 244, 246, 0.55);
+}
+
+.scr-rd-preview-empty {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: #94a3b8;
 }
 
 .scr-bp-summary {
   display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  border-radius: 0.75rem;
+  background: rgba(0, 80, 203, 0.06);
 }
 
-.scr-bp-title {
+.scr-bp-summary-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.scr-bp-summary-title {
   margin: 0;
   font-size: 0.875rem;
   font-weight: 700;
-  color: #191c1e;
-  line-height: 1.5;
+  line-height: 1.6;
+  color: var(--scr-primary);
+  word-break: break-all;
 }
 </style>

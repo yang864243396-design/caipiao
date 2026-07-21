@@ -863,15 +863,15 @@ function statusBadgeClass(s: CloudSchemeCard): string {
         <div v-for="s in displayedSchemes" :key="s.id" :class="schemeCardClass(s)" role="button" tabindex="0"
           @click="openSchemeDetail(s)" @keyup.enter="openSchemeDetail(s)">
           <div class="cc-card-hd">
-            <div class="cc-card-title-row">
-              <h3 class="cc-card-h3">{{ s.lotteryName }}</h3>
-              <el-tag v-if="s.runTypeLabel" size="small" type="info" effect="plain" class="cc-runtype-tag">
-                {{ s.runTypeLabel }}
-              </el-tag>
+            <h3 class="cc-card-h3">{{ s.lotteryName }}</h3>
+            <el-tag v-if="s.runTypeLabel" size="small" type="info" effect="plain" class="cc-runtype-tag">
+              {{ s.runTypeLabel }}
+            </el-tag>
+            <div class="cc-card-hd-right">
+              <span class="cc-badge" :class="statusBadgeClass(s)" :title="schemeCardDisplayStatus(s).label">{{
+                schemeCardDisplayStatus(s).label }}</span>
               <span class="cc-ms cc-card-title-arrow" aria-hidden="true">chevron_right</span>
             </div>
-            <span class="cc-badge" :class="statusBadgeClass(s)" :title="schemeCardDisplayStatus(s).label">{{
-              schemeCardDisplayStatus(s).label }}</span>
           </div>
 
           <div class="cc-kv-grid">
@@ -1503,23 +1503,12 @@ function statusBadgeClass(s: CloudSchemeCard): string {
 
 .cc-card-hd {
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 0.45rem;
-  margin-bottom: 1.15rem;
-}
-
-.cc-card-title-row {
-  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 0.35rem;
   min-width: 0;
-  width: 100%;
-}
-
-.cc-card-hd>.cc-badge {
-  align-self: flex-end;
-  max-width: 100%;
+  margin-bottom: 1.15rem;
 }
 
 .cc-card--clickable {
@@ -1550,15 +1539,25 @@ function statusBadgeClass(s: CloudSchemeCard): string {
   font-weight: 700;
 }
 
+.cc-card-hd-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
 .cc-card-title-arrow {
+  flex-shrink: 0;
   font-size: 1.05rem;
   color: #94a3b8;
 }
 
 .cc-card-h3 {
   margin: 0;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
+  max-width: 48%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1568,16 +1567,28 @@ function statusBadgeClass(s: CloudSchemeCard): string {
 }
 
 .cc-runtype-tag {
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 36%;
   font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cc-runtype-tag :deep(.el-tag__content) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .cc-badge {
-  flex-shrink: 0;
-  max-width: 100%;
-  text-align: right;
+  flex-shrink: 1;
+  max-width: 9.5rem;
+  text-align: center;
   line-height: 1.35;
-  word-break: break-word;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 0.6875rem;
   font-weight: 600;
   color: var(--cc-on-var);

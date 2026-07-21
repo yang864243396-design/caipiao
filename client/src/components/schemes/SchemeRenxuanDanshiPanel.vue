@@ -11,6 +11,8 @@ import {
 const props = defineProps<{
   config: PlayConfig
   modelValue: string
+  /** 详情只读：禁止编辑 */
+  disabled?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -39,7 +41,7 @@ function syncFromModel(raw: string) {
 }
 
 function emitContent() {
-  if (syncing) return
+  if (syncing || props.disabled) return
   const next = buildRenxuanPositionContent(positions.value, picksText.value)
   if (next !== props.modelValue) {
     emit('update:modelValue', next)
@@ -66,6 +68,7 @@ watch(
 watch([positions, picksText], emitContent, { deep: true })
 
 function togglePosition(lab: string) {
+  if (props.disabled) return
   const set = new Set(positions.value)
   if (set.has(lab)) {
     set.delete(lab)
@@ -88,7 +91,7 @@ const placeholder = computed(() => {
 </script>
 
 <template>
-  <div class="srd-panel">
+  <div class="srd-panel" :class="{ 'is-disabled': disabled }">
     <div class="srd-pos-row">
       <span class="srd-pos-label">选位（{{ pickCount }}）</span>
       <div class="srd-chips" role="group" :aria-label="`从万千百十个中选 ${pickCount} 个位置`">
@@ -98,6 +101,7 @@ const placeholder = computed(() => {
           type="button"
           class="srd-chip"
           :class="{ 'is-active': positions.includes(lab) }"
+          :disabled="disabled"
           @click="togglePosition(lab)"
         >
           {{ lab }}
@@ -105,12 +109,14 @@ const placeholder = computed(() => {
       </div>
     </div>
     <el-input
-      v-model="picksText"
+      :model-value="picksText"
       type="textarea"
       :rows="6"
       resize="none"
       class="srd-area"
       :placeholder="placeholder"
+      :disabled="disabled"
+      @update:model-value="(v: string) => { if (!disabled) picksText = v }"
     />
   </div>
 </template>
@@ -166,6 +172,18 @@ const placeholder = computed(() => {
   background: #0066ff;
   color: #fff;
   box-shadow: 0 4px 12px rgba(0, 102, 255, 0.22);
+}
+
+.srd-chip:disabled {
+  cursor: default;
+}
+
+.srd-chip:disabled:hover {
+  background: #eef2f7;
+}
+
+.srd-chip.is-active:disabled:hover {
+  background: #0066ff;
 }
 
 .srd-area {

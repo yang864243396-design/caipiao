@@ -11,6 +11,7 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    _scr_tail: typeof import('./src/components/schemes/_scr_tail.vue')['default']
     ConfirmDialog: typeof import('./src/components/ui/ConfirmDialog.vue')['default']
     ContentDialog: typeof import('./src/components/ui/ContentDialog.vue')['default']
     DateRangePickerField: typeof import('./src/components/ui/DateRangePickerField.vue')['default']
