@@ -13,6 +13,8 @@
   /* 标题栏内返回/搜索等操作按钮（不撑高标题栏） */
   --page-titlebar-action-size: 2.35rem;
   --page-titlebar-icon-size: 1.85rem;
+  /* 返回箭头：与方案详情页 arrow_back_ios_new 对齐 */
+  --page-titlebar-back-icon-size: 1.25rem;
 
   /* Dark shell（跟单、玩法详情） */
   --color-surface: #0c1324;

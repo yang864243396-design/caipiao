@@ -39,7 +39,7 @@ function openItem(id: string): void {
       <div class="mss-head-deco" aria-hidden="true" />
       <div class="mss-head-bar">
         <button type="button" class="mss-back" aria-label="返回会员中心" @click="goBack">
-          <span class="mss-ms" aria-hidden="true">arrow_back</span>
+          <span class="mss-ms" aria-hidden="true">arrow_back_ios_new</span>
         </button>
         <h1 class="mss-title">常见问题</h1>
         <span class="mss-head-spacer" aria-hidden="true" />

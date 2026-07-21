@@ -308,9 +308,7 @@ function reloadRounds() {
     <header class="ase-header">
       <div class="ase-header-bar">
         <button type="button" class="ase-back" aria-label="返回" @click="goBack">
-          <svg class="ase-back-ico" viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">
-            <path fill="currentColor" d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
-          </svg>
+          <span class="material-sym" aria-hidden="true">arrow_back_ios_new</span>
         </button>
         <div class="ase-title-wrap">
           <template v-if="!editingTitle">
@@ -429,10 +427,9 @@ function reloadRounds() {
   justify-content: center;
 }
 
-.ase-back-ico {
-  display: block;
-  width: var(--page-titlebar-icon-size);
-  height: var(--page-titlebar-icon-size);
+.ase-back .material-sym {
+  font-size: var(--page-titlebar-back-icon-size);
+  color: #191c1e;
 }
 
 .ase-title-wrap {

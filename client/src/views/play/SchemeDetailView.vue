@@ -382,7 +382,8 @@ function gotoEdit(): void {
     ElMessage.error('缺少方案标识')
     return
   }
-  void router.push({
+  // replace：避免 [详情→编辑→详情] 叠栈后与 history.back 互相顶，回不了云端中心
+  void router.replace({
     name: 'advanced-scheme-edit',
     params: { schemeId: definitionId },
     query: {
@@ -541,7 +542,7 @@ onMounted(() => {
 }
 
 .sd-back .material-sym {
-  font-size: 1.25rem;
+  font-size: var(--page-titlebar-back-icon-size);
 }
 
 .sd-title {

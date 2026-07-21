@@ -192,7 +192,7 @@ function goBack() {
   <div class="ann">
     <header class="ann-header" role="banner">
       <button type="button" class="ann-icon-btn ann-back" aria-label="返回" @click="goBack">
-        <span class="ann-ms" aria-hidden="true">arrow_back</span>
+        <span class="ann-ms" aria-hidden="true">arrow_back_ios_new</span>
       </button>
       <h1 class="ann-header-title">公告详情</h1>
       <span class="ann-head-spacer" aria-hidden="true" />
@@ -358,6 +358,10 @@ function goBack() {
 
 .ann-back {
   justify-self: start;
+}
+
+.ann-back .ann-ms {
+  font-size: var(--page-titlebar-back-icon-size);
 }
 
 .ann-head-spacer {

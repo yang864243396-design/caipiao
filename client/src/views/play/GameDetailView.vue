@@ -78,7 +78,6 @@ import type { WsDrawResultPayload } from '@shared/types/ws'
 const route = useRoute()
 const router = useRouter()
 
-const ICON_BACK = '/images/lobby/icon-back.png'
 const ICON_TIMER = '/images/lobby/icon-timer.png'
 const ICON_DRAG = '/images/lobby/icon-drag-handle.png'
 
@@ -1159,8 +1158,8 @@ async function handleBetError(e: unknown, fallback = '投注失败'): Promise<vo
     <header class="header-wrap">
       <div class="head-row">
         <div class="head-left">
-          <button type="button" class="icon-link" aria-label="返回" @click="goBack">
-            <img :src="ICON_BACK" alt="" width="30" height="30" class="primary-ico-img" decoding="async" />
+          <button type="button" class="icon-link gd-back" aria-label="返回" @click="goBack">
+            <span class="material-sym" aria-hidden="true">arrow_back_ios_new</span>
           </button>
           <h1 class="head-title">{{ pageTitle }}</h1>
         </div>
@@ -1741,6 +1740,11 @@ async function handleBetError(e: unknown, fallback = '投注失败'): Promise<vo
   align-items: center;
   gap: 1rem;
   min-width: 0;
+}
+
+.gd-back .material-sym {
+  font-size: var(--page-titlebar-back-icon-size);
+  color: #191c1e;
 }
 
 .icon-link {

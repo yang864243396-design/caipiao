@@ -115,7 +115,7 @@ onMounted(load)
       <div class="mss-head-deco" aria-hidden="true" />
       <div class="mss-head-bar">
         <button type="button" class="mss-back" aria-label="返回个人中心" @click="router.push('/member')">
-          <span class="mss-ms" aria-hidden="true">arrow_back</span>
+          <span class="mss-ms" aria-hidden="true">arrow_back_ios_new</span>
         </button>
         <h1 class="mss-title">授权账号</h1>
         <button type="button" class="mss-head-icon-btn" aria-label="添加授权账号"

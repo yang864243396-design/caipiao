@@ -11,7 +11,6 @@ import { shareSnapshotToRankSlot, useCopyHallShareSchemes } from '@/composables/
 import type { CopyHallBoardKind, CopyHallRankSlot } from '@shared/mock/copyHallRankings'
 
 /** 工具栏 / 列表图标 */
-const ICON_BACK = '/images/lobby/icon-back.png'
 const ICON_SCHEME = '/images/lobby/icon-scheme.png'
 const ICON_FILTER = '/images/lobby/icon-filter.png'
 const ICON_CHEVRON = '/images/lobby/icon-chevron-down.png'
@@ -150,14 +149,7 @@ onUnmounted(stopCopyHallRankingsSync)
     <header class="topbar">
       <div class="topbar-inner">
         <RouterLink to="/" class="icon-btn topbar-side" aria-label="返回">
-<img
-              :src="ICON_BACK"
-              alt=""
-              width="30"
-              height="30"
-              class="toolbar-ico"
-              decoding="async"
-            />
+          <span class="material-sym" aria-hidden="true">arrow_back_ios_new</span>
         </RouterLink>
         <div class="topbar-center">
           <button
@@ -426,6 +418,11 @@ onUnmounted(stopCopyHallRankingsSync)
   color: var(--secondary);
   opacity: 0.85;
 }
+.icon-btn .material-sym {
+  font-size: var(--page-titlebar-back-icon-size);
+  color: #191c1e;
+}
+
 .icon-btn {
   display: flex;
   align-items: center;

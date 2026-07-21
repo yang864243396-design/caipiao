@@ -10,8 +10,6 @@ import {
 } from '@/api/cloud/betRecords'
 import type { MoneySummary } from '@/api/types'
 
-const BACK_ICO = '/images/lobby/icon-back.png'
-
 const router = useRouter()
 const route = useRoute()
 
@@ -163,9 +161,7 @@ function onRefresh() {
     <header class="br-head" role="banner">
 
       <button type="button" class="br-back-btn br-back" aria-label="返回" @click="goBack">
-
-        <img :src="BACK_ICO" alt="" width="30" height="30" class="br-back-img" decoding="async" />
-
+        <span class="material-sym" aria-hidden="true">arrow_back_ios_new</span>
       </button>
 
       <h1 class="br-title">最近三日投注记录</h1>

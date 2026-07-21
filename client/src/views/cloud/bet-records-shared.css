@@ -83,12 +83,9 @@
   outline-offset: 2px;
 }
 
-.br-back-img {
-  width: var(--page-titlebar-icon-size);
-  height: var(--page-titlebar-icon-size);
-  object-fit: contain;
-  display: block;
-  pointer-events: none;
+.br-back-btn .material-sym {
+  font-size: var(--page-titlebar-back-icon-size);
+  color: #191c1e;
 }
 
 .br-icon-btn {

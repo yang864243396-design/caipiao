@@ -10,8 +10,6 @@ import {
   type BetRecordMode,
 } from '@/api/cloud/betRecords'
 
-const BACK_ICO = '/images/lobby/icon-back.png'
-
 const route = useRoute()
 const router = useRouter()
 
@@ -116,7 +114,7 @@ function goBack() {
   <div class="br br-detail" data-page="bet-records-scheme">
     <header class="br-head" role="banner">
       <button type="button" class="br-back-btn br-back" aria-label="返回" @click="goBack">
-        <img :src="BACK_ICO" alt="" width="30" height="30" class="br-back-img" decoding="async" />
+        <span class="material-sym" aria-hidden="true">arrow_back_ios_new</span>
       </button>
       <h1 class="br-title">{{ schemeName }}</h1>
       <span class="br-head-spacer" aria-hidden="true" />

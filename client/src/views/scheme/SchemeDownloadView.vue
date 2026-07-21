@@ -84,9 +84,7 @@ onMounted(() => {
     <header class="sdw-header" role="banner">
       <div class="sdw-header-top">
         <button type="button" class="sdw-back" aria-label="返回" @click="goBack">
-          <svg class="sdw-back-ico" viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">
-            <path fill="currentColor" d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
-          </svg>
+          <span class="material-sym" aria-hidden="true">arrow_back_ios_new</span>
         </button>
         <h1 class="sdw-title">方案下载</h1>
         <span class="sdw-header-spacer" aria-hidden="true" />
@@ -221,10 +219,9 @@ onMounted(() => {
   outline-offset: 2px;
 }
 
-.sdw-back-ico {
-  display: block;
-  width: var(--page-titlebar-icon-size);
-  height: var(--page-titlebar-icon-size);
+.sdw-back .material-sym {
+  font-size: var(--page-titlebar-back-icon-size);
+  color: #191c1e;
 }
 
 .sdw-title {

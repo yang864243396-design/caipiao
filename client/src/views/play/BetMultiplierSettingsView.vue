@@ -200,7 +200,8 @@ function returnToEntry(extra: Record<string, string>) {
     const v = route.query[key]
     if (v != null && String(v) !== '') q[key] = String(Array.isArray(v) ? v[0] : v)
   }
-  void router.push({ name: 'advanced-scheme-edit', params: { schemeId }, query: q })
+  // replace：避免在编辑页之上再叠一层同页，破坏详情↔云端的返回栈
+  void router.replace({ name: 'advanced-scheme-edit', params: { schemeId }, query: q })
 }
 
 /** 是否从方案相关页面进入（需将校验错误带回上一页） */
@@ -429,7 +430,9 @@ async function onConfirm() {
       /* ignore */
     }
     ElMessage.success('已选择倍投方式，点击「完成」后生效')
-    navigateBackToSchemeWithKind()
+    // 配置页已用 sessionStorage 暂存；back 避免再 push 一层编辑页导致详情/编辑历史环
+    if (window.history.length > 1) router.back()
+    else navigateBackToSchemeWithKind()
     return
   }
 
@@ -726,9 +729,7 @@ const showPlanTable = computed(() => activeSubTab.value === '0' || activeSubTab.
     <header class="bms-header">
       <div class="bms-header-top">
         <button type="button" class="bms-back" aria-label="返回" @click="goBack">
-          <svg class="bms-back-ico" viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">
-            <path fill="currentColor" d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
-          </svg>
+          <span class="material-sym" aria-hidden="true">arrow_back_ios_new</span>
         </button>
         <h1 class="bms-title">倍投设定</h1>
         <div class="bms-header-right">
@@ -973,10 +974,9 @@ const showPlanTable = computed(() => activeSubTab.value === '0' || activeSubTab.
   outline-offset: 2px;
 }
 
-.bms-back-ico {
-  display: block;
-  width: var(--page-titlebar-icon-size);
-  height: var(--page-titlebar-icon-size);
+.bms-back .material-sym {
+  font-size: var(--page-titlebar-back-icon-size);
+  color: #191c1e;
 }
 
 .bms-title {

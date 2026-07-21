@@ -103,7 +103,6 @@ const identityEditable = computed(() => isDraftScheme.value)
 const returnFromDetail = computed(() => String(route.query.returnName ?? '') === 'scheme-detail')
 const editBlockedRunning = computed(() => String(route.query.status ?? '') === 'running')
 
-const BACK_ICO = '/images/lobby/icon-back.png'
 /** 开始/结束时间说明（气泡展示，不占文档流） */
 const TIME_RANGE_HINT =
   '方案保存后将自动同步至精算云中心。开始时间与结束时间须同时填写，或同时留空表示无限期运行。'
@@ -1890,7 +1889,8 @@ function goBackToDetail(): void {
     void router.push({ name: 'cloud' })
     return
   }
-  void router.push({
+  // replace：与详情页 gotoEdit 对称，历史栈保持 [云端中心, 详情]，返回可回到云端
+  void router.replace({
     name: 'scheme-detail',
     params: { definitionId: id },
     query: detailReturnQuery(),
@@ -2571,7 +2571,7 @@ function onTimeDialogOpened() {
   <div class="scf">
     <header class="scf-header">
       <button type="button" class="scf-back" aria-label="返回" @click="goBack">
-        <img :src="BACK_ICO" alt="" width="30" height="30" class="scf-back-img" decoding="async" />
+        <span class="material-sym" aria-hidden="true">arrow_back_ios_new</span>
       </button>
       <h1 class="scf-title">{{ isDraftScheme ? '新增方案' : '方案配置' }}</h1>
       <div class="scf-header-right">
@@ -3476,12 +3476,9 @@ function onTimeDialogOpened() {
   line-height: 0;
 }
 
-.scf-back-img {
-  width: var(--page-titlebar-icon-size);
-  height: var(--page-titlebar-icon-size);
-  object-fit: contain;
-  display: block;
-  pointer-events: none;
+.scf-back .material-sym {
+  font-size: var(--page-titlebar-back-icon-size);
+  color: #191c1e;
 }
 
 .scf-back:focus-visible {
