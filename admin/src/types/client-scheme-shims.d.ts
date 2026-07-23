@@ -48,6 +48,7 @@ declare module '@client/utils/pickPanelOptions' {
   export function schemeGroupUsesPickPanel(config: PlayConfig): boolean
   export function schemeGroupUsesDigitInput(config: PlayConfig): boolean
   export function schemeGroupContentToInputBox(content: string, config: PlayConfig): string
+  export function schemeGroupInputBoxToContent(box: string, config: PlayConfig): string
   export function groupDigitInputHint(config: PlayConfig): string
   export function digitOptionsForConfig(config: PlayConfig): string[]
   export function textPickOptionsForConfig(config: PlayConfig): string[]
