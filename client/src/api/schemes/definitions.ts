@@ -186,28 +186,15 @@ export interface SchemeRandomDraw {
   strategy: 'every' | 'keep' | 'after_hit' | 'after_miss'
 }
 
-export interface SchemeFixedPickRule {
-  /** 上期开奖位区间（0-based ball 下标） */
-  posStart: number
-  posEnd: number
-  /** 号码值区间（含端点） */
-  codeMin: number
-  codeMax: number
-  /** 命中后投注的固定号码（逗号分隔） */
-  numbers: string
-}
-
-export interface SchemeFixedPick {
-  /** 多条条件规则，按序匹配、首条命中即投；留空则回退静态固定号码 */
-  rules: SchemeFixedPickRule[]
-}
-
 export interface UpdateSchemeInput {
 
   /** false=正式盘，true=模拟盘 */
   simBet?: boolean
 
   schemeFunds?: string
+
+  /** 方案币种：USDT / TRX / CNY；未填历史方案默认 USDT */
+  schemeCurrency?: string
 
   /** 方案倍数系数（非负整数） */
   multCoeff?: string
@@ -216,6 +203,7 @@ export interface UpdateSchemeInput {
 
   endTime?: string
 
+  /** 方案内容分组；固定取码仅用 [0]，每期复投 */
   schemeGroups?: string[]
 
   stopLoss?: string
@@ -248,9 +236,6 @@ export interface UpdateSchemeInput {
 
   /** 随机出号配置 */
   randomDraw?: SchemeRandomDraw
-
-  /** 固定取码：条件规则（命中→投固定号），留空回退静态固定号码 */
-  fixedPick?: SchemeFixedPick
 
   /** 内置计画：选择收藏快照（服务端物化复制配置） */
   builtinPlan?: { snapshotId: string }

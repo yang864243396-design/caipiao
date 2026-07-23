@@ -23,6 +23,8 @@ type CloudCenterChannelStats struct {
 type CloudCenterStats struct {
 	Formal CloudCenterChannelStats `json:"formal"`
 	Sim    CloudCenterChannelStats `json:"sim"`
+	// 模拟方案配额（北京时间自然日 / 同时运行）
+	SimQuota SimSchemeQuota `json:"simQuota"`
 }
 
 func (s *Service) GetCloudCenterStats(ctx context.Context, account string) (CloudCenterStats, error) {
@@ -40,7 +42,12 @@ func (s *Service) GetCloudCenterStats(ctx context.Context, account string) (Clou
 	if err != nil {
 		return CloudCenterStats{}, err
 	}
-	out := CloudCenterStats{}
+	out := CloudCenterStats{
+		SimQuota: SimSchemeQuota{
+			TodayStartsLimit: maxSimSchemeDailyStarts,
+			RunningLimit:     maxSimSchemeConcurrent,
+		},
+	}
 	for _, row := range rows {
 		ch := mapCloudCenterChannelStats(row)
 		if row.SimBet {
@@ -48,6 +55,10 @@ func (s *Service) GetCloudCenterStats(ctx context.Context, account string) (Clou
 		} else {
 			out.Formal = ch
 		}
+	}
+	quota, qerr := s.simSchemeQuotaForMember(ctx, m.ID)
+	if qerr == nil {
+		out.SimQuota = quota
 	}
 	return out, nil
 }

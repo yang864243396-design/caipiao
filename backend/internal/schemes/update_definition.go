@@ -15,9 +15,10 @@ import (
 )
 
 var (
-	ErrDeleteWhileRunning      = errors.New("delete while instance running")
-	ErrPatchWhileRunning       = errors.New("patch bet settings while instance running")
-	ErrPatchSimBetWhileRunning = errors.New("patch simBet while instance running")
+	ErrDeleteWhileRunning         = errors.New("delete while instance running")
+	ErrPatchWhileRunning          = errors.New("patch bet settings while instance running")
+	ErrPatchSimBetWhileRunning    = errors.New("patch simBet while instance running")
+	ErrPatchCurrencyWhileRunning  = errors.New("patch schemeCurrency while instance running")
 	ErrInvalidUpdatePatch      = errors.New("invalid update patch")
 	ErrFavoriteRequired   = errors.New("favorite required for builtin plan")
 )
@@ -42,7 +43,7 @@ func (s *Service) materializeBuiltinPlan(
 	cfg := map[string]interface{}{}
 	_ = json.Unmarshal(existingConfig, &cfg)
 	if rt, _ := cfg["runTypeId"].(string); NormalizeRunTypeID(rt) != RunTypeBuiltinPlan {
-		return nil, nil, fmt.Errorf("%w: 仅内置计画方案可选择收藏方案", ErrInvalidUpdatePatch)
+		return nil, nil, fmt.Errorf("%w: 仅内置计划方案可选择收藏方案", ErrInvalidUpdatePatch)
 	}
 
 	fav, err := s.q.ExistsMemberSchemeFavorite(ctx, sqlcdb.ExistsMemberSchemeFavoriteParams{
@@ -106,9 +107,11 @@ type UpdateDefinitionPatch struct {
 	RunMode        string
 	SimBet         bool
 	HasSimBet      bool
-	SchemeFunds    string
-	MultCoeff      string
-	HasMultCoeff   bool
+	SchemeFunds      string
+	SchemeCurrency   string
+	HasSchemeCurrency bool
+	MultCoeff        string
+	HasMultCoeff     bool
 	StartTime      string
 	EndTime        string
 	HasStartTime   bool
@@ -164,6 +167,10 @@ func ParseUpdatePatch(raw map[string]json.RawMessage) (UpdateDefinitionPatch, er
 	}
 	if v, ok := raw["schemeFunds"]; ok {
 		patch.SchemeFunds = strings.TrimSpace(unquoteJSONString(v))
+	}
+	if v, ok := raw["schemeCurrency"]; ok {
+		patch.HasSchemeCurrency = true
+		patch.SchemeCurrency = normalizeSchemeCurrency(unquoteJSONString(v))
 	}
 	if v, ok := raw["multCoeff"]; ok {
 		mc := strings.TrimSpace(unquoteJSONString(v))
@@ -295,9 +302,12 @@ func (s *Service) UpdateDefinition(
 		return Definition{}, err
 	}
 
-	if patch.HasBetMultiplier || patch.HasRounds {
+	if patch.HasBetMultiplier || patch.HasRounds || patch.HasSchemeCurrency {
 		inst, instErr := s.q.GetSchemeInstanceByDefinitionID(ctx, definitionID)
 		if instErr == nil && inst.Status == "running" {
+			if patch.HasSchemeCurrency && !patch.HasBetMultiplier && !patch.HasRounds {
+				return Definition{}, ErrPatchCurrencyWhileRunning
+			}
 			return Definition{}, ErrPatchWhileRunning
 		}
 		if instErr != nil && !errors.Is(instErr, pgx.ErrNoRows) {
@@ -374,18 +384,19 @@ func (s *Service) UpdateDefinition(
 
 func mergeUpdateDefinitionConfig(existing []byte, patch UpdateDefinitionPatch, planOverlay map[string]interface{}) ([]byte, error) {
 	base := AddToCloudConfigPatch{
-		RunMode:      patch.RunMode,
-		SchemeFunds:  patch.SchemeFunds,
-		StartTime:    patch.StartTime,
-		EndTime:      patch.EndTime,
-		SchemeGroups: patch.SchemeGroups,
-		StopLoss:     patch.StopLoss,
-		TakeProfit:   patch.TakeProfit,
-		BetUnit:      patch.BetUnit,
-		BetMode:      patch.BetMode,
-		PlayTemplate: patch.PlayTemplate,
-		TypeID:       patch.TypeID,
-		SubID:        patch.SubID,
+		RunMode:        patch.RunMode,
+		SchemeFunds:    patch.SchemeFunds,
+		SchemeCurrency: patch.SchemeCurrency,
+		StartTime:      patch.StartTime,
+		EndTime:        patch.EndTime,
+		SchemeGroups:   patch.SchemeGroups,
+		StopLoss:       patch.StopLoss,
+		TakeProfit:     patch.TakeProfit,
+		BetUnit:        patch.BetUnit,
+		BetMode:        patch.BetMode,
+		PlayTemplate:   patch.PlayTemplate,
+		TypeID:         patch.TypeID,
+		SubID:          patch.SubID,
 	}
 	cfgBytes, err := mergeDefinitionConfig(existing, base)
 	if err != nil {

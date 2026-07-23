@@ -17,6 +17,9 @@ export interface AddToCloudInput {
 
   schemeFunds?: string
 
+  /** 方案币种：USDT / TRX / CNY */
+  schemeCurrency?: string
+
   startTime?: string
 
   endTime?: string

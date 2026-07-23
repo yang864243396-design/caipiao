@@ -20,9 +20,15 @@ export interface GuajiAuthStatus {
 }
 
 export interface GuajiBalance {
+  /** 当前主币种（兼容旧调用方） */
   currency: string
+  /** 主币种可用余额（兼容旧调用方） */
   amount: number
   username?: string
+  /** 三币种可用余额（新接口字段；旧响应可能缺省） */
+  usdt?: number
+  trx?: number
+  cny?: number
 }
 
 export interface GuajiBindResult {

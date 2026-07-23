@@ -7,13 +7,10 @@ import { fetchMemberProfile } from '@/api/member/profile'
 import {
   fetchGuajiAuthStatus,
   fetchGuajiBalance,
-  fetchPrimaryCurrency,
-  setPrimaryCurrency,
   PRIMARY_CURRENCIES,
   type GuajiBalance,
   type PrimaryCurrency,
 } from '@/api/guaji/accounts'
-import { fetchCloudCenterStats } from '@/api/cloud/center'
 import { demoUser } from '@/demo/demoAccount'
 import { confirmDialog } from '@/utils/confirmDialog'
 import { copyText } from '@/utils/clipboard'
@@ -28,6 +25,7 @@ import {
   tgDisplayLabel,
   type CustomerServiceAgent,
 } from '@/api/customerService'
+import { currencySymbol } from '@/utils/currencyDisplay'
 
 /**
  * 会员中心首页；「卡片管理」跳转至独立银行卡 / 渠道页
@@ -60,11 +58,12 @@ const user = ref({
 
 const AVATAR_IMG = '/images/lobby/avatar-user.png'
 
-const stats = ref({
-  betting: '0.00',
-  pnl: '0.00',
-  balance: '',
-  currency: '¥',
+type BalanceMap = Record<PrimaryCurrency, number | null>
+
+const balances = ref<BalanceMap>({
+  USDT: null,
+  TRX: null,
+  CNY: null,
 })
 
 const memberIdText = computed(() => {
@@ -78,10 +77,10 @@ const accountFeatures: FeatureItem[] = [
   { id: 'auth', icon: 'verified_user', label: '授权账号', tone: 'indigo' },
 ]
 
-// §4.5：钱包流水（fund-records）保留；帐变(ledger)/追号(chase) 下线
+// §4.5：钱包流水（fund-records）保留；帐变(ledger)/追号(chase) 下线；方案盈亏入口暂屏蔽
 const systemFeatures: FeatureItem[] = [
   { id: 'bet', icon: 'list_alt', label: '投注纪录', tone: 'primary' },
-  { id: 'scheme-pnl', icon: 'monitoring', label: '方案盈亏', tone: 'success' },
+  // { id: 'scheme-pnl', icon: 'monitoring', label: '方案盈亏', tone: 'success' },
   { id: 'wallet', icon: 'receipt_long', label: '钱包流水', tone: 'cyan' },
   { id: 'faq', icon: 'help', label: '常见问题', tone: 'amber' },
   { id: 'notice', icon: 'campaign', label: '公告', tone: 'magenta' },
@@ -89,11 +88,7 @@ const systemFeatures: FeatureItem[] = [
   { id: 'feedback', icon: 'forum', label: '意见回馈', tone: 'cyan' },
 ]
 
-const refreshing = ref(false)
 const activeGuajiUsername = ref('')
-const primaryCurrency = ref<PrimaryCurrency>('CNY')
-const switchingCurrency = ref(false)
-const currencyOptions = PRIMARY_CURRENCIES
 
 /** 头部齿轮：账户设置 / 登出面板 */
 const settingsOpen = ref(false)
@@ -131,125 +126,78 @@ function openTgLink(link: string): void {
   window.open(href, '_blank', 'noopener,noreferrer')
 }
 
-const formattedBalance = computed(() => {
-  const sym = stats.value.currency || '¥'
-  if (!stats.value.balance) return `${sym} --`
-  return `${sym} ${formatMoney(parseFloat(stats.value.balance))}`
-})
-const formattedBetting = computed(() => formatMoney(parseFloat(stats.value.betting)))
-const pnlValue = computed(() => parseFloat(stats.value.pnl))
-const formattedPnl = computed(() => {
-  const v = pnlValue.value
-  const abs = formatMoney(Math.abs(v))
-  if (!Number.isFinite(v) || v === 0) return abs
-  return v > 0 ? `+${abs}` : `-${abs}`
-})
-const pnlTone = computed<'flat' | 'up' | 'down'>(() => {
-  const v = pnlValue.value
-  if (!Number.isFinite(v) || v === 0) return 'flat'
-  return v > 0 ? 'up' : 'down'
-})
+const balanceRows = computed(() =>
+  PRIMARY_CURRENCIES.map((currency) => {
+    const amount = balances.value[currency]
+    return {
+      currency,
+      symbol: currencySymbol(currency),
+      text: amount == null || !Number.isFinite(amount) ? '--' : formatMoney(amount),
+    }
+  }),
+)
 
 function formatMoney(n: number): string {
   if (!Number.isFinite(n)) return '0.00'
-  return n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-}
-
-/** 币种符号：CNY ¥ / USDT ₮（Tether 通用符）/ TRX Ŧ（无官方 Unicode 符号，取近似字符） */
-function currencySymbol(code: string): string {
-  switch (code) {
-    case 'CNY':
-      return '¥'
-    case 'USDT':
-      return '₮'
-    case 'TRX':
-      return 'Ŧ'
-    default:
-      return code
-  }
+  // 不加千分位，保证窄屏三列能单行放下 9999999.99
+  return n.toLocaleString('zh-CN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+    useGrouping: false,
+  })
 }
 
 function todo(label: string): void {
   ElMessage.info(`${label}：二级页面待对接`)
 }
 
-/** 先读本地缓存（按授权账号 + 币种），供切换账号时立即展示 */
-function applyCachedBalance(username: string, currency: string): boolean {
-  const cached = readGuajiBalanceCache(username, currency)
-  if (!cached) return false
-  stats.value = {
-    ...stats.value,
-    balance: String(cached.amount),
-    currency: currencySymbol(cached.currency),
+function amountOf(bal: GuajiBalance, currency: PrimaryCurrency): number {
+  const raw =
+    currency === 'USDT' ? bal.usdt : currency === 'TRX' ? bal.trx : bal.cny
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw
+  // 兼容仅返回主币种 amount 的旧响应
+  if (String(bal.currency ?? '').toUpperCase() === currency && Number.isFinite(bal.amount)) {
+    return bal.amount
   }
-  return true
+  return Number.NaN
+}
+
+/** 先读本地缓存（按授权账号 + 三币种），供切换账号时立即展示 */
+function applyCachedBalances(username: string): void {
+  const next: BalanceMap = { USDT: null, TRX: null, CNY: null }
+  for (const c of PRIMARY_CURRENCIES) {
+    const cached = readGuajiBalanceCache(username, c)
+    if (cached) next[c] = cached.amount
+  }
+  balances.value = next
 }
 
 /**
- * 用第三方余额更新展示：默认仅在与当前显示不同时重绘；成功后写入本地缓存。
- * @returns 是否更新了界面上的余额
+ * 用第三方三币种余额更新展示；成功后写入本地缓存。
  */
-function syncBalanceFromRemote(bal: GuajiBalance, force = false): boolean {
+function syncBalancesFromRemote(bal: GuajiBalance, force = false): void {
   const username = bal.username ?? activeGuajiUsername.value
-  const sym = currencySymbol(bal.currency)
-  const prevAmount = parseFloat(stats.value.balance)
-  const changed =
-    force ||
-    !stats.value.balance ||
-    stats.value.currency !== sym ||
-    !guajiAmountsEqual(prevAmount, bal.amount)
-
-  if (changed) {
-    stats.value = {
-      ...stats.value,
-      balance: String(bal.amount),
-      currency: sym,
+  const next: BalanceMap = { ...balances.value }
+  let changed = force
+  for (const c of PRIMARY_CURRENCIES) {
+    const amount = amountOf(bal, c)
+    const prev = next[c]
+    if (!Number.isFinite(amount)) continue
+    if (prev == null || !guajiAmountsEqual(prev, amount)) {
+      next[c] = amount
+      changed = true
+    }
+    if (username) {
+      writeGuajiBalanceCache({
+        username,
+        currency: c,
+        amount,
+        updatedAt: Date.now(),
+      })
     }
   }
-
-  if (username) {
-    writeGuajiBalanceCache({
-      username,
-      currency: bal.currency,
-      amount: bal.amount,
-      updatedAt: Date.now(),
-    })
-    activeGuajiUsername.value = username
-  }
-  return changed
-}
-
-/** §20.1：顶栏余额展示第三方实账；手动刷新时强制更新 */
-async function refreshBalance(): Promise<void> {
-  if (refreshing.value) return
-  refreshing.value = true
-  try {
-    const bal = await fetchGuajiBalance()
-    syncBalanceFromRemote(bal, true)
-    await loadKpiFromCloudStats()
-    ElMessage.success('余额已刷新')
-  } catch {
-    ElMessage.error('余额刷新失败')
-  } finally {
-    refreshing.value = false
-  }
-}
-
-/** 当前下注 / 当前盈亏：与云端中心 stats 同源（正式通道） */
-async function loadKpiFromCloudStats(): Promise<void> {
-  try {
-    const s = await fetchCloudCenterStats()
-    const formal = s.formal
-    stats.value = {
-      ...stats.value,
-      // 总投注（方案实例 turnover 之和）
-      betting: String(formal?.totalTurnover ?? 0),
-      // 运行中方案本次盈亏之和
-      pnl: String(formal?.runningSessionPnl ?? 0),
-    }
-  } catch {
-    // 未挂机/接口失败时保持 0，不打断其它加载
-  }
+  if (changed) balances.value = next
+  if (username) activeGuajiUsername.value = username
 }
 
 async function loadMemberCenter(): Promise<void> {
@@ -260,11 +208,6 @@ async function loadMemberCenter(): Promise<void> {
       account: profile.account,
       memberId: Number(profile.memberId) || 0,
     }
-    // 余额仅来自第三方（下方 fetchGuajiBalance）；资料接口只提供币种兜底符号
-    stats.value = {
-      ...stats.value,
-      currency: currencySymbol(profile.currency),
-    }
   } catch {
     ElMessage.error('会员资料加载失败')
   }
@@ -274,43 +217,15 @@ async function loadMemberCenter(): Promise<void> {
   } catch {
     // 第三方未启用时忽略，沿用本地展示
   }
-  try {
-    primaryCurrency.value = await fetchPrimaryCurrency()
-  } catch {
-    // 第三方未启用时默认 CNY
-  }
-  // 切换授权账号后：先展示该账号上次记录的余额，再静默拉第三方对比更新
+  // 切换授权账号后：先展示该账号上次记录的三币种余额，再静默拉第三方对比更新
   if (activeGuajiUsername.value) {
-    applyCachedBalance(activeGuajiUsername.value, primaryCurrency.value)
+    applyCachedBalances(activeGuajiUsername.value)
   }
   try {
     const bal = await fetchGuajiBalance()
-    syncBalanceFromRemote(bal)
+    syncBalancesFromRemote(bal)
   } catch {
     // 拉取失败时保留缓存值；无缓存则继续显示 --
-  }
-  await loadKpiFromCloudStats()
-}
-
-/** §4.4：切换主币种与切换授权同逻辑——弹窗确认后全部 running/pending 方案暂停 */
-async function onSwitchCurrency(next: PrimaryCurrency): Promise<void> {
-  if (next === primaryCurrency.value || switchingCurrency.value) return
-  const ok = await confirmDialog({
-    title: '切换主币种',
-    message: `切换主币种为 ${next} 将停止全部挂机方案，确定继续？`,
-    confirmText: '切换',
-    cancelText: '取消',
-  })
-  if (!ok) return
-  switchingCurrency.value = true
-  try {
-    primaryCurrency.value = await setPrimaryCurrency(next)
-    ElMessage.success('主币种已切换；方案已暂停，请到云端中心开启')
-    await refreshBalance()
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '切换主币种失败')
-  } finally {
-    switchingCurrency.value = false
   }
 }
 
@@ -376,7 +291,7 @@ const personalFeatureCount = computed(() => personalFeaturesAll.value.length)
 
 <template>
   <div class="mc" data-page="member-center">
-    <!-- ===== 头部：身份卡 + 当前下注 / 当前盈亏 ===== -->
+    <!-- ===== 头部：身份卡 ===== -->
     <header class="mc-head" role="banner">
       <div class="mc-head-deco" aria-hidden="true" />
       <div class="mc-head-inner">
@@ -422,48 +337,21 @@ const personalFeatureCount = computed(() => personalFeaturesAll.value.length)
             </div>
           </el-popover>
         </div>
-
-        <div class="mc-kpi">
-          <div class="mc-kpi-col">
-            <div class="mc-kpi-val">{{ formattedBetting }}</div>
-            <div class="mc-kpi-lbl">当前下注</div>
-          </div>
-          <div class="mc-kpi-divider" aria-hidden="true" />
-          <div class="mc-kpi-col">
-            <div class="mc-kpi-val" :class="{ 'is-up': pnlTone === 'up', 'is-down': pnlTone === 'down' }">
-              {{ formattedPnl }}
-            </div>
-            <div class="mc-kpi-lbl">当前盈亏</div>
-          </div>
-        </div>
       </div>
     </header>
 
     <main class="mc-main">
-      <!-- ===== 余额卡：充值 / 提现 / 客服 + 个人 / 团队 ===== -->
+      <!-- ===== 余额卡：三币种可用余额 ===== -->
       <section class="mc-card mc-balance">
-        <div class="mc-balance-head">
-          <div class="mc-balance-meta">
-            <span class="mc-balance-lbl">帐户余额</span>
-            <span class="mc-balance-amt">{{ formattedBalance }}</span>
-          </div>
-          <button type="button" class="mc-refresh" :class="{ 'is-loading': refreshing }" aria-label="刷新余额"
-            @click="refreshBalance">
-            <span class="mc-ms" aria-hidden="true">refresh</span>
-          </button>
-        </div>
-
-        <div class="mc-currency" role="group" aria-label="主币种切换">
-          <span class="mc-currency-lbl">主币种</span>
-          <div class="mc-currency-seg">
-            <button v-for="c in currencyOptions" :key="c" type="button" class="mc-currency-opt"
-              :class="{ 'is-active': primaryCurrency === c }" :disabled="switchingCurrency"
-              @click="onSwitchCurrency(c)">
-              {{ c }}
-            </button>
+        <div class="mc-bal-grid" role="group" aria-label="三币种帐户余额">
+          <div v-for="row in balanceRows" :key="row.currency" class="mc-bal-col">
+            <div class="mc-bal-cur">
+              <span class="mc-bal-ico" :data-cur="row.currency" aria-hidden="true">{{ row.symbol }}</span>
+              <span class="mc-bal-code">{{ row.currency }}</span>
+            </div>
+            <div class="mc-bal-amt">{{ row.text }}</div>
           </div>
         </div>
-
       </section>
 
       <!-- ===== 个人中心：帐户 + 系统功能合并展示 ===== -->
@@ -542,7 +430,8 @@ const personalFeatureCount = computed(() => personalFeaturesAll.value.length)
   background: var(--mc-surface);
   color: var(--mc-on);
   font-family: Inter, 'Noto Sans SC', system-ui, sans-serif;
-  padding-bottom: calc(5.5rem + env(safe-area-inset-bottom));
+  /* 仅留底栏避让，避免多余空白造成空滚（与游戏大厅一致） */
+  padding-bottom: calc(3.75rem + env(safe-area-inset-bottom));
   -webkit-font-smoothing: antialiased;
 }
 
@@ -562,7 +451,7 @@ const personalFeatureCount = computed(() => personalFeaturesAll.value.length)
   position: relative;
   background: linear-gradient(180deg, var(--mc-primary-strong) 0%, var(--mc-primary) 100%);
   color: #fff;
-  padding: max(1.75rem, env(safe-area-inset-top)) 1.25rem 5rem;
+  padding: max(1.75rem, env(safe-area-inset-top)) var(--page-gutter) 3.5rem;
   border-radius: 0 0 2rem 2rem;
   box-shadow: 0 20px 40px -24px rgba(0, 80, 203, 0.45);
   overflow: hidden;
@@ -677,64 +566,13 @@ const personalFeatureCount = computed(() => personalFeaturesAll.value.length)
   font-size: 1.25rem;
 }
 
-/* ---- KPI（当前下注 / 当前盈亏） ---- */
-.mc-kpi {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: stretch;
-  margin-top: 0.25rem;
-}
-
-.mc-kpi-col {
-  text-align: center;
-  padding: 0 0.5rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.mc-kpi-val {
-  font-family: 'Plus Jakarta Sans', 'Inter', 'Noto Sans SC', system-ui, sans-serif;
-  font-size: 2rem;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.05;
-}
-
-.mc-kpi-val.is-up {
-  color: #b9f5d0;
-}
-
-.mc-kpi-val.is-down {
-  color: #ffd7d1;
-}
-
-.mc-kpi-lbl {
-  font-size: 0.75rem;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.82);
-  letter-spacing: 0.02em;
-}
-
-.mc-kpi-divider {
-  width: 1px;
-  align-self: stretch;
-  min-height: 3.25rem;
-  background: linear-gradient(180deg,
-      transparent,
-      rgba(255, 255, 255, 0.22) 15%,
-      rgba(255, 255, 255, 0.22) 85%,
-      transparent);
-}
-
 /* =====================================================
    Main 容器
    ===================================================== */
 .mc-main {
   max-width: 40rem;
-  margin: -3rem auto 0;
-  padding: 0 1.15rem 2rem;
+  margin: -2.25rem auto 0;
+  padding: 0 var(--page-gutter) 0.75rem;
   display: flex;
   flex-direction: column;
   gap: 1.15rem;
@@ -744,122 +582,86 @@ const personalFeatureCount = computed(() => personalFeaturesAll.value.length)
 .mc-card {
   background: var(--mc-card);
   border-radius: 1.25rem;
-  padding: 1.25rem;
+  padding: var(--card-pad);
   box-shadow:
     0 24px 48px -28px rgba(15, 23, 42, 0.18),
     0 4px 16px -8px rgba(15, 23, 42, 0.06);
 }
 
 /* =====================================================
-   余额卡
+   余额卡（三币种）
    ===================================================== */
 .mc-balance {
   display: flex;
   flex-direction: column;
-  gap: 1.1rem;
 }
 
-.mc-balance-head {
+.mc-bal-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.35rem;
+}
+
+.mc-bal-col {
+  min-width: 0;
+  padding: 0.55rem 0.35rem;
+  border-radius: 0.85rem;
+  background: var(--mc-container);
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  overflow: hidden;
+}
+
+.mc-bal-cur {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-}
-
-.mc-balance-meta {
-  display: flex;
-  align-items: baseline;
-  gap: 0.6rem;
+  gap: 0.35rem;
   min-width: 0;
 }
 
-.mc-balance-lbl {
-  font-size: 0.8125rem;
-  font-weight: 700;
-  color: var(--mc-on-var);
-  letter-spacing: 0.01em;
-}
-
-.mc-balance-amt {
-  font-family: 'Plus Jakarta Sans', 'Inter', 'Noto Sans SC', system-ui, sans-serif;
-  font-size: 1.35rem;
-  font-weight: 800;
-  color: var(--mc-primary);
-  letter-spacing: -0.02em;
-  font-variant-numeric: tabular-nums;
-}
-
-.mc-refresh {
-  width: 2.1rem;
-  height: 2.1rem;
+.mc-bal-ico {
+  width: 1.35rem;
+  height: 1.35rem;
   border-radius: 999px;
-  background: var(--mc-primary-soft);
-  color: var(--mc-primary);
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.15s;
+  font-size: 0.75rem;
+  font-weight: 800;
+  color: #fff;
+  flex-shrink: 0;
+  background: var(--mc-primary);
 }
 
-.mc-refresh:hover {
-  background: rgba(0, 102, 255, 0.14);
+.mc-bal-ico[data-cur='USDT'] {
+  background: #26a17b;
 }
 
-.mc-refresh .mc-ms {
-  font-size: 1.125rem;
-  transition: transform 0.45s ease;
+.mc-bal-ico[data-cur='TRX'] {
+  background: #ef0027;
 }
 
-.mc-refresh.is-loading .mc-ms {
-  animation: mc-spin 0.8s linear infinite;
+.mc-bal-ico[data-cur='CNY'] {
+  background: var(--mc-primary);
 }
 
-@keyframes mc-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.mc-currency {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
-
-.mc-currency-lbl {
-  font-size: 0.8125rem;
-  font-weight: 700;
-  color: var(--mc-on-var);
-}
-
-.mc-currency-seg {
-  display: inline-flex;
-  padding: 0.2rem;
-  border-radius: 999px;
-  background: var(--mc-container);
-  gap: 0.15rem;
-}
-
-.mc-currency-opt {
-  min-width: 3.4rem;
-  padding: 0.4rem 0.75rem;
-  border-radius: 999px;
-  font-size: 0.8125rem;
+.mc-bal-code {
+  font-size: 0.75rem;
   font-weight: 700;
   color: var(--mc-on-mute);
+  letter-spacing: 0.02em;
+}
+
+.mc-bal-amt {
+  font-family: 'Plus Jakarta Sans', 'Inter', 'Noto Sans SC', system-ui, sans-serif;
+  font-size: 1rem;
+  font-weight: 800;
+  color: var(--mc-on);
+  letter-spacing: -0.03em;
   font-variant-numeric: tabular-nums;
-  transition: background 0.15s, color 0.15s;
-}
-
-.mc-currency-opt.is-active {
-  background: var(--mc-card);
-  color: var(--mc-primary);
-  box-shadow: 0 4px 12px -6px rgba(0, 80, 203, 0.35);
-}
-
-.mc-currency-opt:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
 .mc-balance-foot {
@@ -1237,7 +1039,7 @@ const personalFeatureCount = computed(() => personalFeaturesAll.value.length)
 }
 
 .mc-cs-item {
-  padding: 0.85rem 1rem;
+  padding: var(--card-pad);
   border-radius: 0.85rem;
   background: #f7f9fb;
 }
@@ -1308,7 +1110,7 @@ const personalFeatureCount = computed(() => personalFeaturesAll.value.length)
 <!-- popper 挂载到 body，需非 scoped -->
 <style>
 .mc-settings-popper.el-popover.el-popper {
-  padding: 1rem 1.1rem;
+  padding: var(--card-pad);
   border-radius: 1rem;
   border: none;
   background: rgba(255, 255, 255, 0.96);

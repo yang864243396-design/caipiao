@@ -402,7 +402,7 @@ function onRefresh() {
 
   flex: 1;
 
-  padding: 0 1rem 1.5rem;
+  padding: 0 var(--page-gutter) 1.5rem;
 
   background: var(--br-surface-low);
 
@@ -462,7 +462,7 @@ function onRefresh() {
 
   border-radius: 0.75rem;
 
-  padding: 1rem;
+  padding: var(--card-pad);
 
   box-shadow: 0 4px 20px rgba(15, 23, 42, 0.06);
 

@@ -124,7 +124,7 @@ async function onBack() {
 .page-body {
   max-width: 28rem;
   margin: 0 auto;
-  padding: 1.25rem 1rem 0;
+  padding: 1.25rem var(--page-gutter) 0;
 }
 .page-hint {
   margin: 0 0 1.25rem;

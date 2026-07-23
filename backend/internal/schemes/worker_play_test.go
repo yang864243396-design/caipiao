@@ -16,6 +16,50 @@ func TestEvaluateDingwei(t *testing.T) {
 	}
 }
 
+func TestEvaluateZhixuanDanshiPositionPool(t *testing.T) {
+	// 冷热出号按位选号：万4,5 千3,5 百2,5 → 8 注
+	rule := playRule{
+		PlayTypeID: "qian3", BetMode: "danshi", SubPlayID: "zhixuan_ds",
+		SegmentStart: 0, SegmentLen: 3,
+	}
+	balls := []string{"4", "3", "2", "7", "5"}
+	ev := evaluatePlayHit(rule, balls, "4,5\n3,5\n2,5", false, "", 0)
+	if !ev.Hit {
+		t.Fatalf("expected hit, got %+v", ev)
+	}
+	if ev.BetUnits != 8 {
+		t.Fatalf("units=%d want 8", ev.BetUnits)
+	}
+	miss := evaluatePlayHit(rule, []string{"1", "1", "1", "7", "5"}, "4,5\n3,5\n2,5", false, "", 0)
+	if miss.Hit {
+		t.Fatal("expected miss")
+	}
+	if miss.BetUnits != 8 {
+		t.Fatalf("miss units=%d want 8", miss.BetUnits)
+	}
+}
+
+func TestNormalizeZhixuanDanshiContent_positionPool(t *testing.T) {
+	rule := playRule{BetMode: "danshi", SubPlayID: "zhixuan_ds", SegmentLen: 3}
+	got := normalizeZhixuanDanshiContent(rule, "5\n5\n5")
+	if got != "555" {
+		t.Fatalf("got %q want 555", got)
+	}
+	if err := validateGroupContent(rule, "5\n5\n5"); err != nil {
+		t.Fatalf("validate after normalize path: %v", err)
+	}
+}
+
+func TestHotColdPickNeedsRebuild_danshiExpanded(t *testing.T) {
+	cfg := parsedSchemeConfig{Play: playRule{BetMode: "danshi", SubPlayID: "zhixuan_ds", SegmentLen: 3, SegmentStart: 0}}
+	if hotColdPickNeedsRebuild(cfg, "555") {
+		t.Fatal("expanded danshi ticket should not rebuild")
+	}
+	if !hotColdPickNeedsRebuild(cfg, "5") {
+		t.Fatal("bare single digit on multi-pos play should rebuild")
+	}
+}
+
 func TestEvaluateDingweiMultiline(t *testing.T) {
 	rule := playRule{PlayTypeID: "dingwei", BetMode: "dingwei", SegmentLen: 1, PositionIdx: 0}
 	balls := []string{"3", "9", "2", "7", "5"}

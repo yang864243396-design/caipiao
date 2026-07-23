@@ -386,7 +386,7 @@ function goBack() {
   width: 100%;
   max-width: 36rem;
   margin: 0 auto;
-  padding: 1.5rem 1rem 4rem;
+  padding: 1.5rem var(--page-gutter) 4rem;
   display: flex;
   flex-direction: column;
   gap: 2rem;
@@ -398,7 +398,7 @@ function goBack() {
   overflow-x: hidden;
   background: var(--ann-surface-lowest);
   border-radius: 1.5rem;
-  padding: 1.75rem 1.5rem 2rem;
+  padding: var(--card-pad);
   box-shadow: 0 24px 60px -28px rgba(15, 23, 42, 0.18),
     0 4px 16px -8px rgba(15, 23, 42, 0.06);
   animation: ann-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
@@ -551,7 +551,7 @@ function goBack() {
   display: flex;
   align-items: flex-start;
   gap: 0.875rem;
-  padding: 1.125rem 1.25rem;
+  padding: var(--card-pad);
   background: var(--ann-primary-soft);
   border-radius: 1rem;
   border-left: 4px solid var(--ann-primary);
@@ -599,7 +599,7 @@ function goBack() {
   margin-top: 0.5rem;
   background: var(--ann-surface-low);
   border-radius: 1.25rem;
-  padding: 1.5rem 1.5rem 1.5rem;
+  padding: var(--card-pad);
 }
 
 .ann-notes-head {

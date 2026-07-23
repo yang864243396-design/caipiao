@@ -487,7 +487,7 @@ function reloadRounds() {
 
 .ase-hint {
   margin: 0;
-  padding: 0.5rem 1rem;
+  padding: 0.5rem var(--page-gutter);
   font-size: 0.6875rem;
   line-height: 1.45;
 }
@@ -500,7 +500,7 @@ function reloadRounds() {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 1rem;
+  padding: 1rem var(--page-gutter);
 }
 
 .ase-table-card {
@@ -608,7 +608,7 @@ function reloadRounds() {
 
 .ase-footer {
   flex-shrink: 0;
-  padding: 0.75rem 1rem max(0.75rem, env(safe-area-inset-bottom));
+  padding: 0.75rem var(--page-gutter) max(0.75rem, env(safe-area-inset-bottom));
   padding-top: 0.5rem;
   background: rgba(255, 255, 255, 0.96);
   border-top: 1px solid #e2e8f0;

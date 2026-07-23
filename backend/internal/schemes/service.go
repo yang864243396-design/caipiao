@@ -24,9 +24,13 @@ type Service struct {
 	authChecker memberAuthChecker
 }
 
-// memberAuthChecker 由 accountsvc 注入，开启真实投注方案前校验本平台授权。
+// memberAuthChecker 由 accountsvc 注入：开启真实投注前校验授权与第三方可用余额。
 type memberAuthChecker interface {
 	HasHealthyAuthForMember(ctx context.Context, memberAccount string) (bool, error)
+	// PrimaryUsableBalance 拉取启用授权的主币种可用余额；对接关闭时返回 ok=false。
+	PrimaryUsableBalance(ctx context.Context, memberAccount string) (amount float64, ok bool, err error)
+	// UsableBalance 按币种拉取可用余额；对接关闭时返回 ok=false。
+	UsableBalance(ctx context.Context, memberAccount, currency string) (amount float64, ok bool, err error)
 }
 
 func NewService(pool *db.Pool, periodSync *periodsync.Syncer) *Service {

@@ -47,7 +47,7 @@ func (w *Worker) resolvePick(
 	case RunTypeRandomDraw:
 		return pickRandomDraw(cfg, inst)
 	case RunTypeFixedNumber:
-		return w.pickFixedPick(ctx, cfg, inst, draw)
+		return pickFixedNumber(cfg)
 	case RunTypeBuiltinPlan:
 		// 未物化的内置计画（尚未选择收藏方案）：跳过不下注
 		return pickDecision{Skip: true}
@@ -236,49 +236,14 @@ func pickJushuList(cfg parsedSchemeConfig, inst sqlcdb.SchemeInstance) pickDecis
 	return pickDecision{Content: row.Content}
 }
 
-// ---------- 固定号码 ----------
+// ---------- 固定取码 ----------
 
+// pickFixedNumber 固定取码：每期复投 schemeGroups[0] 指定号码。
 func pickFixedNumber(cfg parsedSchemeConfig) pickDecision {
 	if len(cfg.Groups) > 0 && strings.TrimSpace(cfg.Groups[0]) != "" {
 		return pickDecision{Content: cfg.Groups[0]}
 	}
 	return pickDecision{Content: cfg.GroupContent}
-}
-
-// pickFixedPick 固定取码（V8 GDQM）：按上期开奖对多条规则求命中，首条命中即投其固定号码；
-// 无 fixedPick 规则时回退静态固定号（兼容存量）。
-func (w *Worker) pickFixedPick(
-	ctx context.Context,
-	cfg parsedSchemeConfig,
-	inst sqlcdb.SchemeInstance,
-	draw sqlcdb.LotteryDraw,
-) pickDecision {
-	if cfg.FixedPick == nil || len(cfg.FixedPick.Rules) == 0 {
-		return pickFixedNumber(cfg) // 静态兜底（存量固定号码）
-	}
-	prevBalls := w.previousDrawBalls(ctx, inst.LotteryCode, draw)
-	return decideFixedPick(cfg.FixedPick, prevBalls)
-}
-
-// decideFixedPick 固定取码纯决策（可单测）：逐条规则，位置区间[PosStart,PosEnd]内
-// 任一开奖号落在[CodeMin,CodeMax] → 命中（甲：命中→投），投该条固定号码；
-// 首条命中即投；无上期开奖 / 无命中 → 本期不投。
-func decideFixedPick(fp *fixedPickCfg, prevBalls []string) pickDecision {
-	if fp == nil || len(fp.Rules) == 0 || len(prevBalls) == 0 {
-		return pickDecision{Skip: true}
-	}
-	for _, r := range fp.Rules {
-		if strings.TrimSpace(r.Numbers) == "" {
-			continue
-		}
-		for p := r.PosStart; p <= r.PosEnd && p >= 0 && p < len(prevBalls); p++ {
-			v := atoiBall(prevBalls[p])
-			if v >= r.CodeMin && v <= r.CodeMax {
-				return pickDecision{Content: r.Numbers}
-			}
-		}
-	}
-	return pickDecision{Skip: true}
 }
 
 // ---------- 随机出号 ----------
@@ -637,34 +602,47 @@ func (w *Worker) pickHotColdWarm(
 	content := buildHotColdPickContent(cfg, draws)
 	if strings.TrimSpace(content) == "" {
 		if cfg.HotCold != nil && len(cfg.HotCold.Pool) > 0 {
-			return pickDecision{Content: strings.Join(cfg.HotCold.Pool, "\n")}
+			content = strings.Join(cfg.HotCold.Pool, "\n")
+		} else {
+			content = cfg.GroupContent
 		}
-		return pickDecision{Content: cfg.GroupContent}
 	}
-	return pickDecision{Content: content}
+	return pickDecision{Content: normalizeZhixuanDanshiContent(cfg.Play, content)}
 }
 
 // pickHotColdWarmFromDraws 供预览/单测：无 DB 时用传入开奖序列取码。
 func pickHotColdWarmFromDraws(cfg parsedSchemeConfig, inst sqlcdb.SchemeInstance, draws [][]string) pickDecision {
 	if cur := strings.TrimSpace(inst.CurrentPick); cur != "" && !hotColdPickNeedsRebuild(cfg, cur) {
-		return pickDecision{Content: cur}
+		return pickDecision{Content: normalizeZhixuanDanshiContent(cfg.Play, cur)}
 	}
 	content := buildHotColdPickContent(cfg, draws)
 	if strings.TrimSpace(content) == "" {
 		if cfg.HotCold != nil && len(cfg.HotCold.Pool) > 0 {
-			return pickDecision{Content: strings.Join(cfg.HotCold.Pool, "\n")}
+			content = strings.Join(cfg.HotCold.Pool, "\n")
+		} else {
+			content = cfg.GroupContent
 		}
-		return pickDecision{Content: cfg.GroupContent}
 	}
-	return pickDecision{Content: content}
+	return pickDecision{Content: normalizeZhixuanDanshiContent(cfg.Play, content)}
 }
 
 // hotColdPickNeedsRebuild 多位面板却保了单位内容（无换行）时强制重取，避免旧引擎单号锁死。
+// 直选单式展开后的整注串（如 "555" / "432,435"）无换行，属合法保号，不重取。
 func hotColdPickNeedsRebuild(cfg parsedSchemeConfig, currentPick string) bool {
 	if playPositionCount(cfg.Play) <= 1 {
 		return false
 	}
-	return !strings.Contains(currentPick, "\n")
+	if strings.Contains(currentPick, "\n") {
+		return false
+	}
+	seg := cfg.Play.SegmentLen
+	if seg <= 0 {
+		seg = playPositionCount(cfg.Play)
+	}
+	if seg > 1 && len(parseNumberTokens(currentPick, seg)) > 0 {
+		return false
+	}
+	return true
 }
 
 // recentDrawBalls 取当期之前最近 N 期开奖球（不含当期）。

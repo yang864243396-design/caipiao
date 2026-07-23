@@ -452,7 +452,7 @@ onUnmounted(stopCopyHallRankingsSync)
   pointer-events: none;
 }
 .main {
-  padding: calc(var(--page-titlebar-height) + 0.75rem) 1rem 2rem;
+  padding: calc(var(--page-titlebar-height) + 0.75rem) var(--page-gutter) 2rem;
   max-width: 42rem;
   margin: 0 auto;
   display: flex;
@@ -496,12 +496,12 @@ onUnmounted(stopCopyHallRankingsSync)
 .rank-card {
   background: var(--surface-lowest);
   border-radius: 1rem;
-  padding: 0.55rem 0.75rem;
+  padding: var(--card-pad);
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.04);
   border: 1px solid rgba(194, 198, 216, 0.1);
 }
 .hall-empty-card {
-  padding: 2rem 1rem 2.5rem;
+  padding: var(--card-pad);
 }
 .hall-empty {
   --el-empty-padding: 0;
@@ -588,7 +588,7 @@ onUnmounted(stopCopyHallRankingsSync)
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.75rem 1.25rem;
+  padding: var(--card-pad);
   background: rgba(255, 255, 255, 0.8);
   backdrop-filter: blur(8px);
   border-radius: 1rem;

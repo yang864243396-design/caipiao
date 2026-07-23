@@ -14,6 +14,20 @@ func TestMapLotteryCodeFilter(t *testing.T) {
 	}
 }
 
+func TestMapCurrencyFilter(t *testing.T) {
+	c, err := mapCurrencyFilter("all")
+	if err != nil || c.Valid {
+		t.Fatal("all should be null")
+	}
+	c, err = mapCurrencyFilter("usdt")
+	if err != nil || !c.Valid || c.String != "USDT" {
+		t.Fatal("usdt should normalize")
+	}
+	if _, err = mapCurrencyFilter("BTC"); err == nil {
+		t.Fatal("btc should reject")
+	}
+}
+
 func TestStatusLabel(t *testing.T) {
 	if statusLabel("pending") != "未开奖" {
 		t.Fatal("label")

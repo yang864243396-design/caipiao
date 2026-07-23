@@ -30,18 +30,19 @@ var (
 var addCloudLastAt sync.Map // key: memberAccount:definitionID -> unix ms
 
 type AddToCloudConfigPatch struct {
-	RunMode      string
-	SchemeFunds  string
-	StartTime    string
-	EndTime      string
-	SchemeGroups []string
-	StopLoss     string
-	TakeProfit   string
-	BetUnit      string
-	BetMode      string
-	PlayTemplate string
-	TypeID       string
-	SubID        string
+	RunMode        string
+	SchemeFunds    string
+	SchemeCurrency string
+	StartTime      string
+	EndTime        string
+	SchemeGroups   []string
+	StopLoss       string
+	TakeProfit     string
+	BetUnit        string
+	BetMode        string
+	PlayTemplate   string
+	TypeID         string
+	SubID          string
 }
 
 type AddToCloudResult struct {
@@ -172,9 +173,11 @@ func (s *Service) AddDefinitionToCloud(
 		return AddToCloudResult{}, err
 	}
 
+	inst := mapInstanceFromInsertRow(instRow)
+	inst.SchemeCurrency = schemeCurrencyFromConfig(cfgBytes)
 	return AddToCloudResult{
 		Definition:      mapDefinitionFromUpdateRow(defRow, true),
-		Instance:        mapInstanceFromInsertRow(instRow),
+		Instance:        inst,
 		ShareSnapshotID: shareSnapshotID,
 	}, nil
 }
@@ -216,6 +219,9 @@ func mergeDefinitionConfig(existing []byte, patch AddToCloudConfigPatch) ([]byte
 	}
 	if patch.SchemeFunds != "" {
 		cfg["schemeFunds"] = patch.SchemeFunds
+	}
+	if cur := strings.TrimSpace(patch.SchemeCurrency); cur != "" {
+		cfg["schemeCurrency"] = normalizeSchemeCurrency(cur)
 	}
 	if patch.StopLoss != "" {
 		cfg["stopLoss"] = patch.StopLoss

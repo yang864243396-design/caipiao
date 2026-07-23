@@ -18,8 +18,8 @@ export const SCHEME_RUN_TYPE_OPTIONS: SchemeOptionItem[] = [
   { label: '高级开某投某', value: 'adv_trigger_bet' },
   { label: '冷热出号', value: 'hot_cold_warm' },
   { label: '随机出号', value: 'random_draw' },
-  { label: '内置计画', value: 'builtin_plan' },
-  { label: '固定取码', value: 'fixed_number' },
+  { label: '内置计划', value: 'builtin_plan' },
+  { label: '固定号码', value: 'fixed_number' },
 ]
 
 /** 废弃运行类型：存量数据已由后端迁移映射到 adv_fixed_rotate，仅用于旧值展示兜底 */

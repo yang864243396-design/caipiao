@@ -184,7 +184,7 @@ html.layout-web .bottom--web {
   justify-content: center;
   align-items: center;
   gap: 0;
-  padding: 0 var(--layout-web-gutter, 1.5rem);
+  padding: 0 var(--layout-web-gutter, var(--page-gutter, 8px));
   border-radius: 0;
   background: rgba(255, 255, 255, 0.92);
   backdrop-filter: blur(28px);

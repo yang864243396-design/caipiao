@@ -65,21 +65,6 @@ type randomDrawCfg struct {
 	Strategy string `json:"strategy"`
 }
 
-// fixedPickRule 固定取码单条规则（V8 GDQM）：上期开奖在[PosStart,PosEnd]位区间内
-// 任一位号码落在[CodeMin,CodeMax]范围时命中，命中即投 Numbers 固定号码组。
-type fixedPickRule struct {
-	PosStart int    `json:"posStart"`
-	PosEnd   int    `json:"posEnd"`
-	CodeMin  int    `json:"codeMin"`
-	CodeMax  int    `json:"codeMax"`
-	Numbers  string `json:"numbers"`
-}
-
-// fixedPickCfg 固定取码：多条条件规则，按序匹配、首条命中即投（甲：命中→投）。
-type fixedPickCfg struct {
-	Rules []fixedPickRule `json:"rules"`
-}
-
 
 type parsedSchemeConfig struct {
 	Kind          string
@@ -87,6 +72,7 @@ type parsedSchemeConfig struct {
 	PlayTypeLabel string
 	Play          playRule
 	BetUnitYuan   float64
+	Currency      string
 	GroupContent  string
 	Groups        []string
 	Contrary      bool
@@ -94,10 +80,9 @@ type parsedSchemeConfig struct {
 	Rounds        []schemeRound
 	GroupCount    int
 	Jushu         []jushuRow
-	Trigger       *triggerBetCfg
-	HotCold       *hotColdWarmCfg
-	Random        *randomDrawCfg
-	FixedPick     *fixedPickCfg
+	Trigger *triggerBetCfg
+	HotCold *hotColdWarmCfg
+	Random  *randomDrawCfg
 }
 
 func parseSchemeConfig(kind string, raw []byte, roundIndex, groupIndex int) parsedSchemeConfig {
@@ -108,16 +93,19 @@ func parseSchemeConfig(kind string, raw []byte, roundIndex, groupIndex int) pars
 	}
 	if len(raw) == 0 {
 		out.Play = playRule{PlayTypeID: "dingwei", SegmentLen: 1}
+		out.Currency = normalizeSchemeCurrency("")
 		return out
 	}
 	var cfg map[string]interface{}
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		out.Play = playRule{PlayTypeID: "dingwei", SegmentLen: 1}
+		out.Currency = normalizeSchemeCurrency("")
 		return out
 	}
 
 	out.PlayTypeLabel = resolvePlayTypeLabel(cfg)
 	out.BetUnitYuan = schemeBetUnitFromConfig(cfg)
+	out.Currency = normalizeSchemeCurrency(stringVal(cfg, "schemeCurrency"))
 	if rule, ok := resolveCatalogPlayRule(cfg); ok {
 		out.Play = rule
 	} else {
@@ -147,7 +135,6 @@ func parseSchemeConfig(kind string, raw []byte, roundIndex, groupIndex int) pars
 	applyTriggerBetPosition(&out)
 	out.HotCold = resolveHotColdWarm(cfg)
 	out.Random = resolveRandomDraw(cfg)
-	out.FixedPick = resolveFixedPick(cfg)
 	_ = roundIndex
 	return out
 }
@@ -433,44 +420,6 @@ func resolveRandomDraw(cfg map[string]interface{}) *randomDrawCfg {
 			}
 			out.Counts = append(out.Counts, n)
 		}
-	}
-	return out
-}
-
-// resolveFixedPick 解析固定取码规则列表（V8 GDQM）。
-func resolveFixedPick(cfg map[string]interface{}) *fixedPickCfg {
-	raw, ok := cfg["fixedPick"].(map[string]interface{})
-	if !ok {
-		return nil
-	}
-	rules, _ := raw["rules"].([]interface{})
-	out := &fixedPickCfg{}
-	for _, item := range rules {
-		m, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		r := fixedPickRule{
-			PosStart: toInt(m["posStart"], 0),
-			PosEnd:   toInt(m["posEnd"], 0),
-			CodeMin:  toInt(m["codeMin"], 0),
-			CodeMax:  toInt(m["codeMax"], 0),
-		}
-		if v, ok := m["numbers"].(string); ok {
-			r.Numbers = strings.TrimSpace(v)
-		}
-		if r.PosEnd < r.PosStart {
-			r.PosStart, r.PosEnd = r.PosEnd, r.PosStart
-		}
-		if r.CodeMax < r.CodeMin {
-			r.CodeMin, r.CodeMax = r.CodeMax, r.CodeMin
-		}
-		if r.Numbers != "" {
-			out.Rules = append(out.Rules, r)
-		}
-	}
-	if len(out.Rules) == 0 {
-		return nil
 	}
 	return out
 }

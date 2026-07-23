@@ -99,6 +99,8 @@ export interface CloudRunningScheme {
   sessionPnl: number
   multiplier: number
   simBet: boolean
+  /** 方案币种：USDT / TRX / CNY；缺省 USDT */
+  schemeCurrency?: string
 }
 
 export interface CloudLookbackSettings {

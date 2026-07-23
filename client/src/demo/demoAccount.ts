@@ -10,7 +10,7 @@ export const demoAppBrand = '精密终端'
 export const demoUser = {
   name: 'vs8888',
   account: 'vs8888',
-  platform: '精密娱乐',
+  platform: 'V6哈希',
   logoText: '富联',
 } as const
 

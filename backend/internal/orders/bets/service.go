@@ -47,9 +47,18 @@ type PageMeta struct {
 	HasMore    bool   `json:"hasMore"`
 }
 
+// CurrencySummary 投注记录筛选结果按币种汇总。
+type CurrencySummary struct {
+	Currency    string  `json:"currency"`
+	OrderCount  int64   `json:"orderCount"`
+	ValidAmount float64 `json:"validAmount"`
+	Pnl         float64 `json:"pnl"`
+}
+
 type Result struct {
-	Items []Item   `json:"items"`
-	Page  PageMeta `json:"page"`
+	Items   []Item            `json:"items"`
+	Page    PageMeta          `json:"page"`
+	Summary []CurrencySummary `json:"summary,omitempty"`
 }
 
 type Query struct {
@@ -59,6 +68,7 @@ type Query struct {
 	GameCode           string
 	SchemeDefinitionID string
 	OrderNo            string
+	Currency           string
 	Cursor             string
 	Limit              int
 }
@@ -90,33 +100,112 @@ func (s *Service) List(ctx context.Context, q Query) (Result, error) {
 		orderNo = pgtype.Text{String: q.OrderNo, Valid: true}
 	}
 
-	schemeDefID := strings.TrimSpace(q.SchemeDefinitionID)
-	if schemeDefID != "" && schemeDefID != "all" {
-		return s.listBySchemeDefinition(ctx, m.ID, schemeDefID, timeFrom, timeTo, orderNo, q.Cursor, limit)
+	currency, err := mapCurrencyFilter(q.Currency)
+	if err != nil {
+		return Result{}, err
 	}
 
+	schemeDefID := strings.TrimSpace(q.SchemeDefinitionID)
 	lotteryCode := mapLotteryCodeFilter(q.GameCode)
 	if q.GameCode != "" && q.GameCode != "all" && lotteryCode.Valid && lotteryCode.String == "__invalid__" {
 		return Result{}, fmt.Errorf("%w: gameCode 参数无效", ErrInvalidQuery)
 	}
 
-	if schemeDefID == "all" {
-		if !lotteryCode.Valid || lotteryCode.String == "" {
-			return Result{}, fmt.Errorf("%w: 请选择彩种", ErrInvalidQuery)
+	var (
+		result Result
+		errList error
+	)
+	switch {
+	case schemeDefID != "" && schemeDefID != "all":
+		result, errList = s.listBySchemeDefinition(ctx, m.ID, schemeDefID, timeFrom, timeTo, orderNo, currency, q.Cursor, limit)
+	case schemeDefID == "all":
+		code := ""
+		if lotteryCode.Valid {
+			code = lotteryCode.String
 		}
-		return s.listByLottery(ctx, m.ID, lotteryCode.String, timeFrom, timeTo, orderNo, q.Cursor, limit)
+		result, errList = s.listByLottery(ctx, m.ID, code, timeFrom, timeTo, orderNo, currency, q.Cursor, limit)
+	default:
+		params := sqlcdb.ListBetOrdersParams{
+			MemberID:    m.ID,
+			TimeFrom:    pgtype.Timestamptz{Time: timeFrom, Valid: true},
+			TimeTo:      pgtype.Timestamptz{Time: timeTo, Valid: true},
+			LotteryCode: lotteryCode,
+			OrderNo:     orderNo,
+			RowLimit:    int32(limit + 1),
+		}
+		result, errList = s.listBetOrders(ctx, params, currency, q.Cursor, limit)
+	}
+	if errList != nil {
+		return Result{}, errList
 	}
 
-	params := sqlcdb.ListBetOrdersParams{
-		MemberID:        m.ID,
-		TimeFrom:        pgtype.Timestamptz{Time: timeFrom, Valid: true},
-		TimeTo:          pgtype.Timestamptz{Time: timeTo, Valid: true},
-		LotteryCode:     lotteryCode,
-		OrderNo:         orderNo,
-		RowLimit:        int32(limit + 1),
+	// 首页带币种汇总（不受列表币种筛选项限制，始终返回 USDT/TRX/CNY 三行）
+	if q.Cursor == "" {
+		summary, serr := s.summarizeByCurrency(ctx, m.ID, schemeDefID, lotteryCode, timeFrom, timeTo, orderNo)
+		if serr != nil {
+			return Result{}, serr
+		}
+		result.Summary = summary
+	}
+	return result, nil
+}
+
+func (s *Service) summarizeByCurrency(
+	ctx context.Context,
+	memberID int64,
+	schemeDefID string,
+	lotteryCode pgtype.Text,
+	timeFrom, timeTo time.Time,
+	orderNo pgtype.Text,
+) ([]CurrencySummary, error) {
+	since := pgtype.Timestamptz{Time: timeFrom, Valid: true}
+	until := pgtype.Timestamptz{Time: timeTo, Valid: true}
+
+	var (
+		rows []sqlcdb.CloudBetCurrencySummaryRow
+		err  error
+	)
+	if schemeDefID == "" {
+		rows, err = s.q.SummarizeBetOrdersByCurrencyEx(ctx, memberID, since, until, lotteryCode, orderNo)
+	} else {
+		guajiID, gerr := member.LookupActiveGuajiAccountID(ctx, s.q, memberID)
+		if gerr != nil {
+			return nil, gerr
+		}
+		defID := ""
+		if schemeDefID != "all" {
+			defID = schemeDefID
+		}
+		lotCode := ""
+		if lotteryCode.Valid {
+			lotCode = lotteryCode.String
+		}
+		rows, err = s.q.SummarizeCloudBetRecordsByCurrencyEx(ctx, memberID, defID, lotCode, since, until, orderNo, guajiID)
+	}
+	if err != nil {
+		return nil, err
 	}
 
-	return s.listBetOrders(ctx, params, q.Cursor, limit)
+	byCur := make(map[string]sqlcdb.CloudBetCurrencySummaryRow, len(rows))
+	for _, row := range rows {
+		cur := strings.ToUpper(strings.TrimSpace(row.Currency))
+		if cur == "" {
+			continue
+		}
+		byCur[cur] = row
+	}
+
+	out := make([]CurrencySummary, 0, 3)
+	for _, cur := range []string{"USDT", "TRX", "CNY"} {
+		row := byCur[cur]
+		out = append(out, CurrencySummary{
+			Currency:    cur,
+			OrderCount:  row.OrderCount,
+			ValidAmount: roundMoney(row.ValidAmount),
+			Pnl:         roundMoney(row.Pnl),
+		})
+	}
+	return out, nil
 }
 
 func (s *Service) listBySchemeDefinition(
@@ -125,6 +214,7 @@ func (s *Service) listBySchemeDefinition(
 	definitionID string,
 	timeFrom, timeTo time.Time,
 	orderNo pgtype.Text,
+	currency pgtype.Text,
 	cursor string,
 	limit int,
 ) (Result, error) {
@@ -156,7 +246,7 @@ func (s *Service) listBySchemeDefinition(
 
 	var rows []sqlcdb.CloudBetListRow
 	if cursor == "" {
-		rows, err = s.q.ListCloudBetRecordsByDefinitionEx(ctx, baseParams)
+		rows, err = s.q.ListCloudBetRecordsByDefinitionEx(ctx, baseParams, currency)
 	} else {
 		anchor, aerr := s.q.GetCloudBetRecordCursorAnchor(ctx, sqlcdb.GetCloudBetRecordCursorAnchorParams{
 			MemberID: memberID,
@@ -178,7 +268,7 @@ func (s *Service) listBySchemeDefinition(
 			CursorTime:     anchor.PlacedAt,
 			CursorID:       anchor.ID,
 			RowLimit:       baseParams.RowLimit,
-		})
+		}, currency)
 	}
 	if err != nil {
 		return Result{}, err
@@ -218,6 +308,7 @@ func (s *Service) listByLottery(
 	lotteryCode string,
 	timeFrom, timeTo time.Time,
 	orderNo pgtype.Text,
+	currency pgtype.Text,
 	cursor string,
 	limit int,
 ) (Result, error) {
@@ -238,7 +329,7 @@ func (s *Service) listByLottery(
 
 	var rows []sqlcdb.CloudBetListRow
 	if cursor == "" {
-		rows, err = s.q.ListCloudBetRecordsByLotteryEx(ctx, baseParams)
+		rows, err = s.q.ListCloudBetRecordsByLotteryEx(ctx, baseParams, currency)
 	} else {
 		anchor, aerr := s.q.GetCloudBetRecordCursorAnchor(ctx, sqlcdb.GetCloudBetRecordCursorAnchorParams{
 			MemberID: memberID,
@@ -260,7 +351,7 @@ func (s *Service) listByLottery(
 			CursorTime:     anchor.PlacedAt,
 			CursorID:       anchor.ID,
 			RowLimit:       baseParams.RowLimit,
-		})
+		}, currency)
 	}
 	if err != nil {
 		return Result{}, err
@@ -294,11 +385,11 @@ func (s *Service) listByLottery(
 	}, nil
 }
 
-func (s *Service) listBetOrders(ctx context.Context, params sqlcdb.ListBetOrdersParams, cursor string, limit int) (Result, error) {
+func (s *Service) listBetOrders(ctx context.Context, params sqlcdb.ListBetOrdersParams, currency pgtype.Text, cursor string, limit int) (Result, error) {
 	var rows []sqlcdb.BetOrderListRow
 	var err error
 	if cursor == "" {
-		rows, err = s.q.ListBetOrdersEx(ctx, params)
+		rows, err = s.q.ListBetOrdersEx(ctx, params, currency)
 	} else {
 		anchor, aerr := s.q.GetBetOrderCursorAnchor(ctx, sqlcdb.GetBetOrderCursorAnchorParams{
 			MemberID: params.MemberID,
@@ -321,7 +412,7 @@ func (s *Service) listBetOrders(ctx context.Context, params sqlcdb.ListBetOrders
 			CursorTime:      anchor.PlacedAt,
 			CursorID:        anchor.ID,
 			RowLimit:        int32(limit + 1),
-		})
+		}, currency)
 	}
 	if err != nil {
 		return Result{}, err
@@ -364,6 +455,19 @@ func mapLotteryCodeFilter(raw string) pgtype.Text {
 		return pgtype.Text{String: "__invalid__", Valid: true}
 	}
 	return pgtype.Text{String: raw, Valid: true}
+}
+
+func mapCurrencyFilter(raw string) (pgtype.Text, error) {
+	raw = strings.TrimSpace(strings.ToUpper(raw))
+	if raw == "" || raw == "ALL" {
+		return pgtype.Text{}, nil
+	}
+	switch raw {
+	case "USDT", "TRX", "CNY":
+		return pgtype.Text{String: raw, Valid: true}, nil
+	default:
+		return pgtype.Text{}, fmt.Errorf("%w: currency 参数无效", ErrInvalidQuery)
+	}
 }
 
 func cloudStatusLabel(code string) string {

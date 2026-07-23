@@ -83,7 +83,7 @@ function openItem(id: string): void {
 .mfq-main {
   max-width: 40rem;
   margin: 0 auto;
-  padding: 1.15rem 1.15rem 2rem;
+  padding: 1.15rem var(--page-gutter) 2rem;
 }
 
 .mfq-card {
@@ -102,7 +102,7 @@ function openItem(id: string): void {
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  padding: 1rem 1.15rem;
+  padding: 1rem var(--page-gutter);
   border: none;
   background: transparent;
   cursor: pointer;

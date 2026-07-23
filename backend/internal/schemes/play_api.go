@@ -58,6 +58,7 @@ func NormalizeBetPayload(in BetPayload) ([]byte, error) {
 		SubPlayID:    in.SubPlayID,
 	})
 
+	content = normalizeZhixuanDanshiContent(rule, content)
 	if err := validateGroupContent(rule, content); err != nil {
 		return nil, err
 	}
@@ -97,50 +98,71 @@ func validateGroupContent(rule playRule, content string) error {
 	if strings.TrimSpace(content) == "" {
 		return fmt.Errorf("groupContent 不能为空")
 	}
+	content = normalizeZhixuanDanshiContent(rule, content)
 	sub := rule.SubPlayID
-	if sub == "zhixuan_ds" {
+	if sub == "zhixuan_ds" || rule.BetMode == "danshi" {
 		tokens := parseNumberTokens(content, rule.SegmentLen)
 		if len(tokens) == 0 {
 			return fmt.Errorf("直选单式须为 %d 位数字", rule.SegmentLen)
 		}
 		return nil
 	}
-	if sub == "zhixuan_fs" && rule.SegmentLen > 1 {
-		lines := splitGroupLines(content)
-		if len(lines) >= rule.SegmentLen {
+	// 直选复式：按位号池，每一位都必须有号。含换行时保留空位，禁止把「1,2,3\n\n」当成单行号池放过。
+	if (sub == "zhixuan_fs" || rule.BetMode == "fushi" || rule.BetMode == "zhixuan_fs") && rule.SegmentLen > 1 {
+		if strings.Contains(content, "\n") {
+			lines := splitGroupLinesPad(content, rule.SegmentLen)
 			for i := 0; i < rule.SegmentLen; i++ {
-				if len(parseDigitTokens(lines[i])) == 0 {
-					return fmt.Errorf("第 %d 位选号无效", i+1)
+				line := ""
+				if i < len(lines) {
+					line = strings.TrimSpace(lines[i])
+				}
+				// parseDigitTokens 空串会回落成 ["0"]，空位必须显式拒绝
+				if line == "" || !hasDigitPickToken(line) {
+					return fmt.Errorf("第 %d 位选号不能为空", i+1)
 				}
 			}
 			return nil
 		}
-		if len(parseDigitTokens(content)) == 0 {
+		if !hasDigitPickToken(content) {
 			return fmt.Errorf("选号池不能为空")
 		}
 		return nil
 	}
-	if rule.BetMode == "dingwei" && strings.Contains(content, "\n") {
-		lines := splitDingweiPositionLines(content)
-		hasAny := false
-		for i := 0; i < 5; i++ {
-			line := ""
-			if i < len(lines) {
-				line = lines[i]
+	if rule.BetMode == "dingwei" || rule.PlayTypeID == "dingwei" || rule.PlayTypeID == "g006" {
+		const yixingMaxPicksPerPos = 9
+		if strings.Contains(content, "\n") {
+			lines := splitDingweiPositionLines(content)
+			hasAny := false
+			segN := rule.SegmentLen
+			if segN <= 1 {
+				segN = 5
 			}
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
+			for i := 0; i < segN; i++ {
+				line := ""
+				if i < len(lines) {
+					line = lines[i]
+				}
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+				digits := parseDigitTokens(line)
+				if len(digits) == 0 {
+					return fmt.Errorf("第 %d 位选号无效", i+1)
+				}
+				if len(digits) > yixingMaxPicksPerPos {
+					return fmt.Errorf("每个位置最多只能投注9个号码")
+				}
+				hasAny = true
 			}
-			if len(parseDigitTokens(line)) == 0 {
-				return fmt.Errorf("第 %d 位选号无效", i+1)
+			if !hasAny {
+				return fmt.Errorf("请至少在一位选择号码")
 			}
-			hasAny = true
+			return nil
 		}
-		if !hasAny {
-			return fmt.Errorf("请至少在一位选择号码")
+		if n := len(parseDigitTokens(content)); n > yixingMaxPicksPerPos {
+			return fmt.Errorf("每个位置最多只能投注9个号码")
 		}
-		return nil
 	}
 	if rule.PlayTemplate == "lhc_std" || isLHCPlayRule(rule) {
 		if validateLHCGroupContent(rule, content) {

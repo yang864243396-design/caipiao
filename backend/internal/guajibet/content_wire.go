@@ -312,11 +312,67 @@ func formatSSCZuxuanDanshiDigits(segLen int, groupContent string) string {
 	return strings.Join(out, ",")
 }
 
+// expandPositionPoolToDanshiTickets 将按位号池（每位一行单码）展开为直选单式票。
+// 例：segLen=3, "4,5\n3,5\n2,5" → "432,435,452,455,532,535,552,555"。
+func expandPositionPoolToDanshiTickets(segLen int, groupContent string) (string, bool) {
+	if segLen <= 1 {
+		return "", false
+	}
+	raw := strings.ReplaceAll(groupContent, "\r\n", "\n")
+	raw = strings.ReplaceAll(raw, "\r", "\n")
+	if !strings.Contains(raw, "\n") {
+		return "", false
+	}
+	lines := splitPositionLines(raw)
+	for len(lines) < segLen {
+		lines = append(lines, "")
+	}
+	pools := make([][]string, segLen)
+	for i := 0; i < segLen; i++ {
+		toks := splitPickTokens(lines[i])
+		seen := make(map[string]struct{}, len(toks))
+		out := make([]string, 0, len(toks))
+		for _, t := range toks {
+			d := digitsOnly(t)
+			if len(d) != 1 {
+				return "", false
+			}
+			if _, ok := seen[d]; ok {
+				continue
+			}
+			seen[d] = struct{}{}
+			out = append(out, d)
+		}
+		if len(out) == 0 {
+			return "", false
+		}
+		pools[i] = out
+	}
+	cur := []string{""}
+	for _, pool := range pools {
+		next := make([]string, 0, len(cur)*len(pool))
+		for _, prefix := range cur {
+			for _, d := range pool {
+				next = append(next, prefix+d)
+			}
+		}
+		cur = next
+	}
+	if len(cur) == 0 {
+		return "", false
+	}
+	return strings.Join(uniqueStringsPreserve(cur), ","), true
+}
+
 // formatSSCDanshiDigits 直选单式：保留「N 位一注、逗号分隔」。
 // 勿把 "012,345" 压成 "012345"（第三方会报投注数字格式不正确）。
+// 冷热出号等按位号池（"4,5\n3,5\n2,5"）先展开为笛卡尔积单式票。
 func formatSSCDanshiDigits(segLen int, groupContent string) string {
 	if segLen <= 0 {
 		segLen = 1
+	}
+	if expanded, ok := expandPositionPoolToDanshiTickets(segLen, groupContent); ok {
+		return expanded
 	}
 	tokens := splitPickTokens(groupContent)
 	if len(tokens) == 0 {

@@ -2,9 +2,20 @@ package sqlcdb
 
 import (
 	"context"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
+
+// EscapeILIKEPattern 转义 ILIKE 通配符，避免用户输入 %/_ 扩大匹配范围。
+func EscapeILIKEPattern(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return replacer.Replace(s)
+}
 
 type instanceDisplayFields struct {
 	ID, DefinitionID, Kind, SchemeName, LotteryCode, LotteryLabel string
@@ -278,13 +289,16 @@ func SchemeInstanceFromAdminStatusRow(r UpdateSchemeInstanceStatusByAdminRow) Sc
 }
 
 type SchemeDefinitionRunTypeRow struct {
-	ID      string
-	RunType string
+	ID             string
+	RunType        string
+	SchemeCurrency string
 }
 
 func (q *Queries) ListSchemeDefinitionRunTypesByMember(ctx context.Context, memberID int64) ([]SchemeDefinitionRunTypeRow, error) {
 	rows, err := q.db.Query(ctx, `
-SELECT id, COALESCE(config->>'runTypeId', '') AS run_type
+SELECT id,
+  COALESCE(config->>'runTypeId', '') AS run_type,
+  COALESCE(config->>'schemeCurrency', '') AS scheme_currency
 FROM scheme_definitions
 WHERE member_id = $1`, memberID)
 	if err != nil {
@@ -294,10 +308,107 @@ WHERE member_id = $1`, memberID)
 	var out []SchemeDefinitionRunTypeRow
 	for rows.Next() {
 		var row SchemeDefinitionRunTypeRow
-		if err := rows.Scan(&row.ID, &row.RunType); err != nil {
+		if err := rows.Scan(&row.ID, &row.RunType, &row.SchemeCurrency); err != nil {
 			return nil, err
 		}
 		out = append(out, row)
 	}
 	return out, rows.Err()
+}
+
+type CountSchemeInstancesByMemberSearchParams struct {
+	MemberID int64
+	RunMode  string
+	Search   string
+}
+
+func (q *Queries) CountSchemeInstancesByMemberSearch(ctx context.Context, arg CountSchemeInstancesByMemberSearchParams) (int64, error) {
+	const sql = `
+SELECT COUNT(*)::bigint
+FROM scheme_instances
+WHERE member_id = $1
+  AND ($2::text IS NULL OR $2::text = '' OR ($2::text = 'real' AND sim_bet = false) OR ($2::text = 'sim' AND sim_bet = true))
+  AND (
+    $3::text IS NULL OR $3::text = ''
+    OR scheme_name ILIKE '%' || $3 || '%' ESCAPE '\'
+    OR lottery_label ILIKE '%' || $3 || '%' ESCAPE '\'
+    OR definition_id ILIKE '%' || $3 || '%' ESCAPE '\'
+    OR id ILIKE '%' || $3 || '%' ESCAPE '\'
+  )`
+	var total int64
+	err := q.db.QueryRow(ctx, sql, arg.MemberID, arg.RunMode, arg.Search).Scan(&total)
+	return total, err
+}
+
+type ListSchemeInstancesByMemberPaginatedSearchParams struct {
+	MemberID int64
+	RunMode  string
+	CursorAt pgtype.Timestamptz
+	CursorID string
+	Search   string
+	Limit    int32
+}
+
+func (q *Queries) ListSchemeInstancesByMemberPaginatedSearch(
+	ctx context.Context,
+	arg ListSchemeInstancesByMemberPaginatedSearchParams,
+) ([]ListSchemeInstancesByMemberPaginatedRow, error) {
+	const sql = `
+SELECT
+    id, definition_id, member_id, kind, scheme_name, lottery_code, lottery_label,
+    status, status_reason, bet_failed_detail, turnover, pnl, run_time_sec, lookback_pnl, session_pnl, multiplier, countdown_sec, sim_bet,
+    running_since, created_at, updated_at
+FROM scheme_instances
+WHERE member_id = $1
+  AND ($2::text IS NULL OR $2::text = '' OR ($2::text = 'real' AND sim_bet = false) OR ($2::text = 'sim' AND sim_bet = true))
+  AND (
+    $3::timestamptz IS NULL
+    OR updated_at < $3
+    OR (updated_at = $3 AND id < $4::text)
+  )
+  AND (
+    $5::text IS NULL OR $5::text = ''
+    OR scheme_name ILIKE '%' || $5 || '%' ESCAPE '\'
+    OR lottery_label ILIKE '%' || $5 || '%' ESCAPE '\'
+    OR definition_id ILIKE '%' || $5 || '%' ESCAPE '\'
+    OR id ILIKE '%' || $5 || '%' ESCAPE '\'
+  )
+ORDER BY updated_at DESC, id DESC
+LIMIT $6`
+	rows, err := q.db.Query(ctx, sql, arg.MemberID, arg.RunMode, arg.CursorAt, arg.CursorID, arg.Search, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSchemeInstancesByMemberPaginatedRow{}
+	for rows.Next() {
+		var i ListSchemeInstancesByMemberPaginatedRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.DefinitionID,
+			&i.MemberID,
+			&i.Kind,
+			&i.SchemeName,
+			&i.LotteryCode,
+			&i.LotteryLabel,
+			&i.Status,
+			&i.StatusReason,
+			&i.BetFailedDetail,
+			&i.Turnover,
+			&i.Pnl,
+			&i.RunTimeSec,
+			&i.LookbackPnl,
+			&i.SessionPnl,
+			&i.Multiplier,
+			&i.CountdownSec,
+			&i.SimBet,
+			&i.RunningSince,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	return items, rows.Err()
 }

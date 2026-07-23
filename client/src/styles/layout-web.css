@@ -9,7 +9,7 @@
   --layout-web-nav-height: 3.75rem;
   --layout-web-shell: 75rem; /* ~1200px，对齐第三方内容壳 */
   --layout-web-shell-wide: 90rem;
-  --layout-web-gutter: 1.5rem;
+  --layout-web-gutter: var(--page-gutter, 8px);
 }
 
 /* —— 全局：为顶栏让位 —— */
@@ -45,7 +45,8 @@ html.layout-web #app .lobby {
 }
 
 /* 桌面顶栏已有「游戏大厅」导航，隐藏页内标题 */
-html.layout-web #app .lobby .lobby-page-head {
+html.layout-web #app .lobby .lobby-page-head,
+html.layout-web #app .lobby .lobby-mss-head {
   display: none;
 }
 

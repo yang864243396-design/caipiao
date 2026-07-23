@@ -670,6 +670,19 @@ func TestResolveSolo_qian2FushiMulti(t *testing.T) {
 	}
 }
 
+func TestFormatBetContentForRule_danshiPositionPool(t *testing.T) {
+	// 冷热出号按位号池 → 直选单式笛卡尔积
+	meta := ParseRuleMeta("ssc_std", "g001", "2", "前三直选单式", "前三码", nil, "2")
+	wire := FormatBetContentForRule(meta, "4,5\n3,5\n2,5")
+	want := "432,435,452,455,532,535,552,555"
+	if wire != want {
+		t.Fatalf("wire=%q want %q", wire, want)
+	}
+	if n := CountBetNums(meta, wire); n != 8 {
+		t.Fatalf("bets=%d want 8", n)
+	}
+}
+
 func TestFormatBetContentForRule_renxuanHezhi(t *testing.T) {
 	seg, _ := json.Marshal(map[string]string{"guajiGroup": "任选", "guajiTeam": "任选二"})
 	meta := ParseRuleMeta("ssc_std", "g011", "76", "直选和值", "任选", seg, "76")
@@ -1122,6 +1135,16 @@ func TestCountBetNums_qian3Hunhe(t *testing.T) {
 	}
 	if n := countSSCHunheBetNums("123", 3); n != 1 {
 		t.Fatalf("single zu6=%d want 1", n)
+	}
+	// wire 必须滤掉豹子，否则第三方「投注数字不合规」
+	if got := FormatBetContentForRule(meta, "111，，123，"); got != "123" {
+		t.Fatalf("hunhe wire filter baozi=%q want 123", got)
+	}
+	if got := FormatBetContentForRule(meta, "111,123,321,222"); got != "123" {
+		t.Fatalf("hunhe wire dedupe=%q want 123", got)
+	}
+	if n := CountBetNums(meta, FormatBetContentForRule(meta, "111，123")); n != 1 {
+		t.Fatalf("filtered hunhe bets=%d want 1", n)
 	}
 }
 

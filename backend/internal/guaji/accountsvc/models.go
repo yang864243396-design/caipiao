@@ -24,9 +24,14 @@ type AuthStatus struct {
 }
 
 type BalanceResult struct {
+	// Currency / Amount：当前主币种及其可用余额（兼容旧调用方）
 	Currency string  `json:"currency"`
 	Amount   float64 `json:"amount"`
 	Username string  `json:"username,omitempty"`
+	// 三币种可用余额（与第三方 users/i/info 同步后的快照）
+	USDT float64 `json:"usdt"`
+	TRX  float64 `json:"trx"`
+	CNY  float64 `json:"cny"`
 }
 
 type BindInput struct {

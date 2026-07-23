@@ -26,6 +26,8 @@ type InstanceListQuery struct {
 	Limit   int
 	Cursor  string
 	IDs     []string
+	// Search 方案名称 / 彩种 / definitionId / 实例 id（服务端过滤，非仅已加载页）
+	Search string
 }
 
 func (s *Service) ListInstances(ctx context.Context, account string, runMode string) (InstanceListResult, error) {
@@ -47,7 +49,7 @@ func (s *Service) ListInstancesQuery(ctx context.Context, account string, q Inst
 		return s.listInstancesByIDs(ctx, m.ID, q.IDs)
 	}
 	if q.Limit > 0 {
-		return s.listInstancesPaginated(ctx, m.ID, q.RunMode, q.Limit, q.Cursor)
+		return s.listInstancesPaginated(ctx, m.ID, q.RunMode, q.Limit, q.Cursor, q.Search)
 	}
 	return s.listAllInstances(ctx, m.ID, q.RunMode)
 }
@@ -71,7 +73,7 @@ func (s *Service) listInstancesByIDs(ctx context.Context, memberID int64, ids []
 	return s.mapInstanceRows(ctx, memberID, sqlcdb.SchemeInstanceFromListIDsRows(rows), "", 0, PageMeta{})
 }
 
-func (s *Service) listInstancesPaginated(ctx context.Context, memberID int64, runMode string, limit int, cursor string) (InstanceListResult, error) {
+func (s *Service) listInstancesPaginated(ctx context.Context, memberID int64, runMode string, limit int, cursor, search string) (InstanceListResult, error) {
 	if limit <= 0 {
 		limit = 10
 	}
@@ -82,18 +84,21 @@ func (s *Service) listInstancesPaginated(ctx context.Context, memberID int64, ru
 	if err != nil {
 		return InstanceListResult{}, ErrInvalidInstanceAction
 	}
-	total, err := s.q.CountSchemeInstancesByMember(ctx, sqlcdb.CountSchemeInstancesByMemberParams{
+	search = sqlcdb.EscapeILIKEPattern(search)
+	total, err := s.q.CountSchemeInstancesByMemberSearch(ctx, sqlcdb.CountSchemeInstancesByMemberSearchParams{
 		MemberID: memberID,
-		Column2:  runMode,
+		RunMode:  runMode,
+		Search:   search,
 	})
 	if err != nil {
 		return InstanceListResult{}, err
 	}
-	rows, err := s.q.ListSchemeInstancesByMemberPaginated(ctx, sqlcdb.ListSchemeInstancesByMemberPaginatedParams{
+	rows, err := s.q.ListSchemeInstancesByMemberPaginatedSearch(ctx, sqlcdb.ListSchemeInstancesByMemberPaginatedSearchParams{
 		MemberID: memberID,
-		Column2:  runMode,
-		Column3:  cursorAt,
-		Column4:  cursorID,
+		RunMode:  runMode,
+		CursorAt: cursorAt,
+		CursorID: cursorID,
+		Search:   search,
 		Limit:    int32(limit + 1),
 	})
 	if err != nil {
@@ -119,10 +124,10 @@ func (s *Service) mapInstanceRows(
 	total int64,
 	page PageMeta,
 ) (InstanceListResult, error) {
-	runTypes := map[string]string{}
+	defMeta := map[string]sqlcdb.SchemeDefinitionRunTypeRow{}
 	if rtRows, rtErr := s.q.ListSchemeDefinitionRunTypesByMember(ctx, memberID); rtErr == nil {
 		for _, r := range rtRows {
-			runTypes[r.ID] = r.RunType
+			defMeta[r.ID] = r
 		}
 	}
 	lotterySeen := map[string]bool{}
@@ -144,9 +149,11 @@ func (s *Service) mapInstanceRows(
 			}
 		}
 		row = s.maybeActivateAfterStartPeriod(ctx, row, now)
-		item := enrichInstanceForDisplay(ctx, s.q, row, now)
+		// 与 Start/Stop 一致：币种从 definition.config 完整读取，避免轻量 meta 缺字段时被默认成 USDT
+		item := s.enrichInstanceForDisplay(ctx, row, now)
+		meta := defMeta[row.DefinitionID]
 		if row.Kind == "custom" {
-			rt := NormalizeRunTypeID(runTypes[row.DefinitionID])
+			rt := NormalizeRunTypeID(meta.RunType)
 			item.RunTypeID = rt
 			item.RunTypeLabel = RunTypeLabels[rt]
 		}

@@ -73,7 +73,10 @@ function syncFromModel(content: string) {
       ? parsed.digits.slice(0, max)
       : parsed.digits
   if (props.config.inputMode === 'multiline') {
-    pickLines.value = parsed.lines
+    pickLines.value =
+      max != null && max > 0
+        ? parsed.lines.map((line) => (line.length > max ? line.slice(0, max) : line))
+        : parsed.lines
   }
 }
 
@@ -132,10 +135,8 @@ function toggleLineDigit(lineIndex: number, d: string) {
   while (lines.length < props.config.segmentLen) {
     lines.push([])
   }
-  const line = new Set(lines[lineIndex] ?? [])
-  if (line.has(d)) line.delete(d)
-  else line.add(d)
-  lines[lineIndex] = [...line].sort()
+  const max = poolMaxPicksForConfig(props.config)
+  lines[lineIndex] = togglePoolPick(lines[lineIndex] ?? [], d, max)
   pickLines.value = lines
 }
 

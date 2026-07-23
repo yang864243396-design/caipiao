@@ -10,6 +10,8 @@ const GUAJI_AUTH_LIST = '/member/auth/list'
 const GUAJI_WHITELIST = new Set([GUAJI_AUTH_BIND, GUAJI_AUTH_LIST, '/login'])
 
 let cached: { status: GuajiAuthStatus; at: number } | null = null
+let inflight: Promise<GuajiAuthStatus> | null = null
+let fetchGen = 0
 const CACHE_TTL_MS = 15_000
 
 export function guajiAuthWhitelistPaths(): readonly string[] {
@@ -65,12 +67,34 @@ export async function resolveGuajiAuthStatus(force = false): Promise<GuajiAuthSt
   if (!force && cached && Date.now() - cached.at < CACHE_TTL_MS) {
     return cached.status
   }
-  const status = await fetchGuajiAuthStatus()
+  if (!force && inflight) {
+    return inflight
+  }
+  const gen = ++fetchGen
+  const p = fetchGuajiAuthStatus()
+    .then((status) => {
+      if (gen === fetchGen) {
+        cached = { status, at: Date.now() }
+      }
+      return status
+    })
+    .finally(() => {
+      if (inflight === p) inflight = null
+    })
+  inflight = p
+  return p
+}
+
+/** 重新授权等正向操作后写入缓存，避免导航瞬间被旧负向状态挡住 */
+export function seedGuajiAuthCache(status: GuajiAuthStatus): void {
+  fetchGen += 1
+  inflight = null
   cached = { status, at: Date.now() }
-  return status
 }
 
 export function invalidateGuajiAuthCache(): void {
+  fetchGen += 1
+  inflight = null
   cached = null
 }
 

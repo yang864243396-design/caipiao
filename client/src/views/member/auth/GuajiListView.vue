@@ -6,12 +6,16 @@ import {
   activateGuajiAccount,
   deleteGuajiAccount,
   fetchGuajiAccounts,
-  fetchGuajiAuthStatus,
   reauthGuajiAccount,
   type GuajiAccountRow,
   type GuajiAuthStatus,
 } from '@/api/guaji/accounts'
-import { invalidateGuajiAuthCache, resolveGuajiAuthStatus } from '@/composables/useGuajiAuthGuard'
+import {
+  guajiGateToastMessage,
+  invalidateGuajiAuthCache,
+  resolveGuajiAuthStatus,
+  seedGuajiAuthCache,
+} from '@/composables/useGuajiAuthGuard'
 import { confirmDialog } from '@/utils/confirmDialog'
 import { formatClientApiError, formatGuajiAccountError } from '@/utils/guajiError'
 
@@ -19,6 +23,8 @@ const router = useRouter()
 const loading = ref(false)
 const rows = ref<GuajiAccountRow[]>([])
 const authStatus = ref<GuajiAuthStatus | null>(null)
+/** 行级加载：正在重新授权的账号 id，防重复点击 */
+const reauthingId = ref<number | null>(null)
 
 const showExpiredBanner = computed(
   () => authStatus.value?.activeAuthExpired || rows.value.some((r) => r.authExpired),
@@ -27,13 +33,32 @@ const showExpiredBanner = computed(
 async function load() {
   loading.value = true
   try {
-    const [items, status] = await Promise.all([fetchGuajiAccounts(), fetchGuajiAuthStatus()])
+    const [items, status] = await Promise.all([
+      fetchGuajiAccounts(),
+      resolveGuajiAuthStatus(true),
+    ])
     rows.value = items
     authStatus.value = status
   } catch (e) {
     ElMessage.error(formatClientApiError(e, '加载失败'))
   } finally {
     loading.value = false
+  }
+}
+
+async function goBack() {
+  if (reauthingId.value !== null) return
+  try {
+    const status = await resolveGuajiAuthStatus(true)
+    authStatus.value = status
+    if (status.hasActiveGuajiAuth) {
+      seedGuajiAuthCache(status)
+      await router.push('/member')
+      return
+    }
+    ElMessage.warning(guajiGateToastMessage(status))
+  } catch (e) {
+    ElMessage.error(formatClientApiError(e, '无法确认授权状态'))
   }
 }
 
@@ -53,9 +78,6 @@ async function onActivate(row: GuajiAccountRow) {
   }
 }
 
-/** 行级加载：正在重新授权的账号 id，防重复点击 */
-const reauthingId = ref<number | null>(null)
-
 async function onReauth(row: GuajiAccountRow) {
   if (reauthingId.value !== null) return
   reauthingId.value = row.id
@@ -63,20 +85,27 @@ async function onReauth(row: GuajiAccountRow) {
     const acct = await reauthGuajiAccount(row.id)
     invalidateGuajiAuthCache()
     await load()
-    if (acct.authExpired) {
-      ElMessage.error(formatGuajiAccountError(acct.lastTokenError) || '重新授权失败，请解绑后重新绑定')
+    const refreshed = rows.value.find((r) => r.id === row.id)
+    if (acct.authExpired || refreshed?.authExpired) {
+      ElMessage.error(
+        formatGuajiAccountError(acct.lastTokenError || refreshed?.lastTokenError) ||
+          '重新授权失败，请解绑后重新绑定',
+      )
       return
     }
-    const status = await resolveGuajiAuthStatus(true)
+    const status = authStatus.value ?? (await resolveGuajiAuthStatus(true))
     if (row.isActive && !status.hasActiveGuajiAuth) {
       ElMessage.error('重新授权失败，启用账号仍未恢复')
       return
     }
     ElMessage.success('重新授权成功')
     if (row.isActive && status.hasActiveGuajiAuth) {
+      seedGuajiAuthCache(status)
       await router.replace('/member')
     }
   } catch (e) {
+    invalidateGuajiAuthCache()
+    await load()
     ElMessage.error(formatClientApiError(e, '重新授权失败'))
   } finally {
     reauthingId.value = null
@@ -114,7 +143,13 @@ onMounted(load)
     <header class="mss-head" role="banner">
       <div class="mss-head-deco" aria-hidden="true" />
       <div class="mss-head-bar">
-        <button type="button" class="mss-back" aria-label="返回个人中心" @click="router.push('/member')">
+        <button
+          type="button"
+          class="mss-back"
+          aria-label="返回个人中心"
+          :disabled="reauthingId !== null"
+          @click="goBack"
+        >
           <span class="mss-ms" aria-hidden="true">arrow_back_ios_new</span>
         </button>
         <h1 class="mss-title">授权账号</h1>
@@ -171,7 +206,7 @@ onMounted(load)
 .auth-expired-banner {
   max-width: 36rem;
   margin: 0.75rem auto 0;
-  padding: 0 1rem;
+  padding: 0 var(--page-gutter);
 }
 
 .card-list,

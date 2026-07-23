@@ -193,7 +193,7 @@
 }
 
 .br-summary-wrap {
-  padding: 0 1rem 1rem;
+  padding: 0 var(--page-gutter) 1rem;
 }
 
 .br-summary {
@@ -203,7 +203,7 @@
   gap: 0.75rem;
   background: #fff;
   border-radius: 0.75rem;
-  padding: 1rem;
+  padding: var(--card-pad);
   border: 1px solid rgba(194, 198, 216, 0.35);
   box-shadow: 0 4px 20px rgba(15, 23, 42, 0.06);
 }
@@ -272,7 +272,7 @@
   flex-direction: column;
   background: var(--br-surface-low);
   min-height: 12rem;
-  padding: 0 1rem 1.5rem;
+  padding: 0 var(--page-gutter) 1.5rem;
 }
 
 .br-table-card {

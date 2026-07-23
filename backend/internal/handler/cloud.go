@@ -65,7 +65,8 @@ func (h *Handler) CloudRunningSchemes(w http.ResponseWriter, r *http.Request) {
 			}
 			limit := parsePositiveIntQuery(r.URL.Query().Get("limit"), 0)
 			cursor := strings.TrimSpace(r.URL.Query().Get("cursor"))
-			if limit > 0 || cursor != "" {
+			search := strings.TrimSpace(r.URL.Query().Get("q"))
+			if limit > 0 || cursor != "" || search != "" {
 				if limit <= 0 {
 					limit = 10
 				}
@@ -73,6 +74,7 @@ func (h *Handler) CloudRunningSchemes(w http.ResponseWriter, r *http.Request) {
 					RunMode: runMode,
 					Limit:   limit,
 					Cursor:  cursor,
+					Search:  search,
 				})
 				if err != nil {
 					h.handleSchemeErr(w, err)
@@ -362,8 +364,11 @@ func (h *Handler) handleCloudInstanceErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, instances.ErrNotFound), errors.Is(err, schemes.ErrDefinitionNotFound):
 		apix.Fail(w, http.StatusNotFound, apix.CodeNotFound, "实例不存在")
-	case errors.Is(err, schemes.ErrStartTimeNotAfterNow), errors.Is(err, schemes.ErrEndTimeReached), errors.Is(err, schemes.ErrMinBetAmountTooLow):
+	case errors.Is(err, schemes.ErrStartTimeNotAfterNow), errors.Is(err, schemes.ErrEndTimeReached), errors.Is(err, schemes.ErrMinBetAmountTooLow),
+		errors.Is(err, schemes.ErrSimSchemeConcurrentLimit), errors.Is(err, schemes.ErrSimSchemeDailyStartLimit):
 		apix.Fail(w, http.StatusOK, apix.CodeValidation, err.Error())
+	case errors.Is(err, schemes.ErrStartInsufficientFunds), errors.Is(err, guajibet.ErrInsufficient), errors.Is(err, member.ErrInsufficientFunds):
+		apix.Fail(w, http.StatusOK, apix.CodeForbidden, "可用余额不足，请充值后再开启")
 	case errors.Is(err, schemes.ErrMaintenanceResumeBlocked):
 		apix.Fail(w, http.StatusOK, apix.CodeValidation, err.Error())
 	case errors.Is(err, instances.ErrInvalidAction), errors.Is(err, schemes.ErrInvalidInstanceAction):
@@ -374,6 +379,8 @@ func (h *Handler) handleCloudInstanceErr(w http.ResponseWriter, err error) {
 		apix.Fail(w, http.StatusOK, apix.CodeForbidden, "无启用中的授权账号，请先启用授权")
 	case errors.Is(err, guajibet.ErrTokenInvalid):
 		apix.Fail(w, http.StatusOK, apix.CodeUnauthorized, "授权已失效，请在授权列表页重新授权")
+	case errors.Is(err, guajibet.ErrUpstream):
+		apix.Fail(w, http.StatusServiceUnavailable, apix.CodeInternal, "暂时无法校验余额，请稍后重试")
 	case errors.Is(err, schemes.ErrUnavailable):
 		apix.Fail(w, http.StatusServiceUnavailable, apix.CodeInternal, "数据库未就绪")
 	case errors.Is(err, member.ErrNotFound):

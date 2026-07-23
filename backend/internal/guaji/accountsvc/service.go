@@ -13,6 +13,7 @@ import (
 
 	"caipiao/backend/internal/db"
 	"caipiao/backend/internal/guaji"
+	"caipiao/backend/internal/guajibet"
 	"caipiao/backend/internal/member"
 )
 
@@ -277,7 +278,7 @@ func (s *Service) Reauth(ctx context.Context, memberAccount string, accountID in
 			} else if err != nil {
 				msg = guaji.ClassifyUpstreamError(err).UserMessage
 			}
-			_ = s.markTokenError(ctx, m, accountID, msg)
+			_ = s.markTokenError(ctx, m, accountID, row.accessTokenEnc.String, msg)
 			if row.reauthFailCount+1 >= maxReauthFailures {
 				return Account{}, ErrReauthNeedsBind
 			}
@@ -378,16 +379,20 @@ func (s *Service) Balance(ctx context.Context, memberAccount string) (BalanceRes
 	if err != nil {
 		fault := guaji.ClassifyUpstreamError(err)
 		if fault.IsTokenInvalid {
-			_ = s.markTokenError(ctx, m, row.id, fault.UserMessage)
+			_ = s.markTokenError(ctx, m, row.id, row.accessTokenEnc.String, fault.UserMessage)
 			return BalanceResult{}, ErrTokenInvalid
 		}
 		return BalanceResult{}, ErrGuajiUpstream
 	}
-	s.persistGuajiBalances(ctx, row.id, multiCurrencyFromInfo(info))
+	multi := multiCurrencyFromInfo(info)
+	s.persistGuajiBalances(ctx, row.id, multi)
 	return BalanceResult{
 		Currency: currency,
 		Amount:   info.BalanceByCurrency(currency),
 		Username: info.Username,
+		USDT:     multi.USDT,
+		TRX:      multi.TRX,
+		CNY:      multi.CNY,
 	}, nil
 }
 
@@ -463,6 +468,54 @@ func (s *Service) HasHealthyAuthForMember(ctx context.Context, memberAccount str
 		return false, err
 	}
 	return st.HasActiveGuajiAuth, nil
+}
+
+// PrimaryUsableBalance 拉取启用授权主币种可用余额（开启真实投注方案前预检）。
+// ok=false 表示第三方对接未启用，调用方应跳过余额门槛；其它失败返回 guajibet 错误。
+func (s *Service) PrimaryUsableBalance(ctx context.Context, memberAccount string) (amount float64, ok bool, err error) {
+	bal, err := s.Balance(ctx, memberAccount)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrGuajiDisabled):
+			return 0, false, nil
+		case errors.Is(err, ErrNoActiveAccount):
+			return 0, false, guajibet.ErrNoActiveAuth
+		case errors.Is(err, ErrTokenInvalid):
+			return 0, false, guajibet.ErrTokenInvalid
+		case errors.Is(err, ErrGuajiUpstream):
+			return 0, false, guajibet.ErrUpstream
+		default:
+			return 0, false, err
+		}
+	}
+	return bal.Amount, true, nil
+}
+
+// UsableBalance 按币种拉取启用授权可用余额；对接关闭时 ok=false。
+func (s *Service) UsableBalance(ctx context.Context, memberAccount, currency string) (amount float64, ok bool, err error) {
+	bal, err := s.Balance(ctx, memberAccount)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrGuajiDisabled):
+			return 0, false, nil
+		case errors.Is(err, ErrNoActiveAccount):
+			return 0, false, guajibet.ErrNoActiveAuth
+		case errors.Is(err, ErrTokenInvalid):
+			return 0, false, guajibet.ErrTokenInvalid
+		case errors.Is(err, ErrGuajiUpstream):
+			return 0, false, guajibet.ErrUpstream
+		default:
+			return 0, false, err
+		}
+	}
+	switch guaji.NormalizeCurrency(currency) {
+	case guaji.CurrencyTRX:
+		return bal.TRX, true, nil
+	case guaji.CurrencyCNY:
+		return bal.CNY, true, nil
+	default:
+		return bal.USDT, true, nil
+	}
 }
 
 func (s *Service) AuthStatus(ctx context.Context, memberAccount string) (AuthStatus, error) {

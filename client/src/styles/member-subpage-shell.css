@@ -159,7 +159,7 @@
 .mss-quick {
   max-width: 40rem;
   margin: -0.35rem auto 0;
-  padding: 0 1.15rem;
+  padding: 0 var(--page-gutter);
   position: relative;
   z-index: 1;
   box-sizing: border-box;

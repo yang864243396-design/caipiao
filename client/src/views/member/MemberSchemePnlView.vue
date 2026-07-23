@@ -37,18 +37,26 @@ function todayRange(): [string, string] {
 const router = useRouter()
 
 const ALL_SCHEMES = 'all'
+const ALL_LOTTERIES = 'all'
 
-const gameId = ref('')
-const schemeId = ref('')
+const gameId = ref(ALL_LOTTERIES)
+const schemeId = ref(ALL_SCHEMES)
 const dateRange = ref<[string, string] | null>(todayRange())
 const gameOptions = ref<SelectOption[]>([])
 const cloudSchemes = ref<CloudSchemeOption[]>([])
+
+const lotteryOptions = computed<SelectOption[]>(() => [
+  { value: ALL_LOTTERIES, label: '全部彩种' },
+  ...gameOptions.value,
+])
 
 const schemeOptions = computed<SelectOption[]>(() => {
   const seen = new Set<string>()
   const opts: SelectOption[] = []
   for (const s of cloudSchemes.value) {
-    if (s.lotteryCode !== gameId.value || seen.has(s.definitionId)) continue
+    if ((gameId.value !== ALL_LOTTERIES && s.lotteryCode !== gameId.value) || seen.has(s.definitionId)) {
+      continue
+    }
     seen.add(s.definitionId)
     opts.push({ value: s.definitionId, label: s.schemeName })
   }
@@ -56,6 +64,7 @@ const schemeOptions = computed<SelectOption[]>(() => {
 })
 
 const ready = ref(false)
+const filtersReady = ref(false)
 const loading = ref(false)
 
 interface SchemePnlSummary {
@@ -82,9 +91,7 @@ const metricRows = computed(() => {
   ]
 })
 
-watch(gameId, () => {
-  syncSchemeToGame()
-})
+let searchQueued = false
 
 function syncSchemeToGame(): void {
   const opts = schemeOptions.value
@@ -98,20 +105,20 @@ function syncSchemeToGame(): void {
 }
 
 function instanceIdsForGame(): Set<string> {
+  if (gameId.value === ALL_LOTTERIES) {
+    return new Set(cloudSchemes.value.map((s) => s.instanceId))
+  }
   return new Set(
     cloudSchemes.value.filter((s) => s.lotteryCode === gameId.value).map((s) => s.instanceId),
   )
 }
 
-function pickDefaultGameId(): string {
-  const codesWithSchemes = new Set(cloudSchemes.value.map((s) => s.lotteryCode))
-  const preferred = gameOptions.value.find((g) => codesWithSchemes.has(g.value))
-  return preferred?.value ?? gameOptions.value[0]?.value ?? ''
-}
-
 function applyDefaultFilters(): void {
   if (!gameId.value) {
-    gameId.value = pickDefaultGameId()
+    gameId.value = ALL_LOTTERIES
+  }
+  if (!schemeId.value) {
+    schemeId.value = ALL_SCHEMES
   }
   syncSchemeToGame()
 }
@@ -121,6 +128,24 @@ function instanceIdsForDefinition(definitionId: string): Set<string> {
     cloudSchemes.value.filter((s) => s.definitionId === definitionId).map((s) => s.instanceId),
   )
 }
+
+function requestSearch(): void {
+  if (!filtersReady.value || searchQueued) return
+  searchQueued = true
+  queueMicrotask(() => {
+    searchQueued = false
+    void runSearch(true)
+  })
+}
+
+watch(gameId, () => {
+  syncSchemeToGame()
+  requestSearch()
+})
+
+watch([schemeId, dateRange], () => {
+  requestSearch()
+})
 
 watch(dateRange, (v) => {
   if (!v || !v[0] || !v[1]) {
@@ -146,10 +171,7 @@ function signed(n: number): string {
 
 async function runSearch(auto = false): Promise<void> {
   if (!gameId.value) {
-    if (!auto) ElMessage.warning('请选择彩种')
-    summary.value = null
-    ready.value = true
-    return
+    gameId.value = ALL_LOTTERIES
   }
   if (!schemeId.value) {
     schemeId.value = ALL_SCHEMES
@@ -164,7 +186,7 @@ async function runSearch(auto = false): Promise<void> {
       mode: 'real',
       dateFrom: dateRange.value[0],
       dateTo: dateRange.value[1],
-      lotteryCode: gameId.value,
+      lotteryCode: gameId.value === ALL_LOTTERIES ? undefined : gameId.value,
       limit: 200,
     })
     const ids =
@@ -187,10 +209,6 @@ async function runSearch(auto = false): Promise<void> {
     loading.value = false
     ready.value = true
   }
-}
-
-async function onSearch(): Promise<void> {
-  await runSearch(false)
 }
 
 async function loadGameOptions() {
@@ -229,6 +247,7 @@ async function loadFilters() {
   await Promise.all([loadGameOptions(), loadCloudSchemeOptions()])
   applyDefaultFilters()
   await runSearch(true)
+  filtersReady.value = true
 }
 
 onMounted(() => {
@@ -251,36 +270,14 @@ onMounted(() => {
 
     <main class="sp-main">
       <section class="sp-card sp-filters">
-        <div class="sp-field sp-field--inline">
-          <div class="sp-lbl">
-            <span class="sp-lbl-bar" aria-hidden="true" />
-            <span>彩种</span>
-          </div>
-          <el-select v-model="gameId" size="large" class="sp-select" placeholder="请选择彩种">
-            <el-option v-for="o in gameOptions" :key="o.value" :label="o.label" :value="o.value" />
+        <div class="sp-filter-grid">
+          <el-select v-model="gameId" class="sp-select" placeholder="全部彩种">
+            <el-option v-for="o in lotteryOptions" :key="o.value" :label="o.label" :value="o.value" />
           </el-select>
-        </div>
-        <div class="sp-field sp-field--inline">
-          <div class="sp-lbl">
-            <span class="sp-lbl-bar" aria-hidden="true" />
-            <span>方案</span>
-          </div>
-          <el-select v-model="schemeId" size="large" class="sp-select">
+          <el-select v-model="schemeId" class="sp-select" placeholder="全部方案">
             <el-option v-for="o in schemeOptions" :key="o.value" :label="o.label" :value="o.value" />
           </el-select>
-        </div>
-        <div class="sp-field sp-field--inline">
-          <div class="sp-lbl">
-            <span class="sp-lbl-bar" aria-hidden="true" />
-            <span>时间</span>
-          </div>
-          <DateRangePickerField v-model="dateRange" size="large" class="sp-drp" />
-        </div>
-
-        <div class="sp-actions">
-          <el-button type="primary" size="large" round class="sp-query" :loading="loading" @click="onSearch">
-            查询
-          </el-button>
+          <DateRangePickerField v-model="dateRange" class="sp-drp" />
         </div>
       </section>
 
@@ -312,7 +309,7 @@ onMounted(() => {
 .sp-main {
   max-width: 40rem;
   margin: 0 auto;
-  padding: 1rem 1.15rem 2rem;
+  padding: 1rem var(--page-gutter) 2rem;
   display: flex;
   flex-direction: column;
   gap: 1rem;
@@ -321,7 +318,7 @@ onMounted(() => {
 .sp-card {
   background: #fff;
   border-radius: 1.25rem;
-  padding: 1.15rem;
+  padding: var(--card-pad);
   box-shadow:
     0 24px 48px -28px rgba(15, 23, 42, 0.18),
     0 4px 16px -8px rgba(15, 23, 42, 0.06);
@@ -330,49 +327,18 @@ onMounted(() => {
 .sp-filters {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  padding: var(--card-pad);
 }
 
-.sp-field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.45rem;
-  min-width: 0;
+.sp-filter-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.35rem;
 }
 
-.sp-field--inline {
-  flex-direction: row;
-  align-items: center;
-  gap: 0.65rem;
-}
-
-.sp-field--inline .sp-lbl {
-  flex: 0 0 4.75rem;
-  white-space: nowrap;
-}
-
-.sp-field--inline .sp-select,
-.sp-field--inline .sp-drp {
-  flex: 1 1 0;
+.sp-filter-grid > * {
   min-width: 0;
   width: 100%;
-}
-
-.sp-lbl {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  font-size: 0.8125rem;
-  font-weight: 800;
-  color: #191c1e;
-  letter-spacing: 0.02em;
-}
-
-.sp-lbl-bar {
-  width: 3px;
-  height: 1rem;
-  border-radius: 999px;
-  background: rgba(0, 80, 203, 0.35);
 }
 
 .sp-select {
@@ -387,20 +353,6 @@ onMounted(() => {
 .sp-drp {
   width: 100%;
   min-width: 0;
-}
-
-.sp-actions {
-  display: flex;
-  justify-content: flex-end;
-  padding-top: 0.125rem;
-}
-
-.sp-query {
-  font-weight: 800;
-  letter-spacing: 0.03em;
-  padding-left: 1.5rem;
-  padding-right: 1.5rem;
-  box-shadow: 0 14px 32px -16px rgba(0, 80, 203, 0.55);
 }
 
 .sp-results {
@@ -441,7 +393,7 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 0.95rem 1.15rem;
+  padding: var(--card-pad);
   font-size: 0.9375rem;
 }
 

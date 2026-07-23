@@ -57,9 +57,14 @@ func (s *Service) PlaceRealBet(ctx context.Context, memberAccount string, req gu
 	if err != nil {
 		return guajibet.Result{}, err
 	}
-	currency, err := s.primaryCurrency(ctx, m)
-	if err != nil {
-		return guajibet.Result{}, err
+	currency := strings.TrimSpace(req.Currency)
+	if currency != "" {
+		currency = guaji.NormalizeCurrency(currency)
+	} else {
+		currency, err = s.primaryCurrency(ctx, m)
+		if err != nil {
+			return guajibet.Result{}, err
+		}
 	}
 
 	row, err := s.getActiveRow(ctx, m)
@@ -126,7 +131,7 @@ func (s *Service) placeRealBetWithRow(
 	if err != nil {
 		fault := guaji.ClassifyUpstreamError(err)
 		if fault.IsTokenInvalid {
-			_ = s.markTokenError(ctx, memberID, row.id, fault.UserMessage)
+			_ = s.markTokenError(ctx, memberID, row.id, row.accessTokenEnc.String, fault.UserMessage)
 			return guajibet.Result{}, guajibet.ErrTokenInvalid
 		}
 		return guajibet.Result{}, guajibet.ErrUpstream
@@ -183,7 +188,7 @@ func (s *Service) placeRealBetWithRow(
 		}
 		fault := guaji.ClassifyUpstreamError(err)
 		if fault.IsTokenInvalid {
-			_ = s.markTokenError(ctx, memberID, row.id, fault.UserMessage)
+			_ = s.markTokenError(ctx, memberID, row.id, row.accessTokenEnc.String, fault.UserMessage)
 			return guajibet.Result{}, guajibet.ErrTokenInvalid
 		}
 		slog.Warn("guaji place bet rejected", "member", memberAccount, "gameId", gameID, "ruleId", req.RuleID, "issue", req.IssueNo, "content", req.Content, "betsNums", betsNums, "solo", solo, "amount", betAmount, "err", err)

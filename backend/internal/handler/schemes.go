@@ -349,18 +349,19 @@ func (h *Handler) AddDefinitionToCloud(w http.ResponseWriter, r *http.Request) {
 	}
 	h.withMember(w, r, func(_ *member.Service, account string) {
 		result, err := h.schemes.AddDefinitionToCloud(r.Context(), account, definitionID, req.ShareStatus, schemes.AddToCloudConfigPatch{
-			RunMode:      runModeFromAddCloudRequest(req),
-			SchemeFunds:  req.SchemeFunds,
-			StartTime:    req.StartTime,
-			EndTime:      req.EndTime,
-			SchemeGroups: req.SchemeGroups,
-			StopLoss:     req.StopLoss,
-			TakeProfit:   req.TakeProfit,
-			BetUnit:      req.BetUnit,
-			BetMode:      req.BetMode,
-			PlayTemplate: req.PlayTemplate,
-			TypeID:       req.TypeID,
-			SubID:        req.SubID,
+			RunMode:        runModeFromAddCloudRequest(req),
+			SchemeFunds:    req.SchemeFunds,
+			SchemeCurrency: req.SchemeCurrency,
+			StartTime:      req.StartTime,
+			EndTime:        req.EndTime,
+			SchemeGroups:   req.SchemeGroups,
+			StopLoss:       req.StopLoss,
+			TakeProfit:     req.TakeProfit,
+			BetUnit:        req.BetUnit,
+			BetMode:        req.BetMode,
+			PlayTemplate:   req.PlayTemplate,
+			TypeID:         req.TypeID,
+			SubID:          req.SubID,
 		})
 		if err != nil {
 			h.handleSchemeErr(w, err)
@@ -387,18 +388,19 @@ func (h *Handler) ForkDefinitionToCloud(w http.ResponseWriter, r *http.Request) 
 	}
 	h.withMember(w, r, func(_ *member.Service, account string) {
 		result, err := h.schemes.ForkDefinitionToCloud(r.Context(), account, definitionID, schemes.AddToCloudConfigPatch{
-			RunMode:      runModeFromAddCloudRequest(req),
-			SchemeFunds:  req.SchemeFunds,
-			StartTime:    req.StartTime,
-			EndTime:      req.EndTime,
-			SchemeGroups: req.SchemeGroups,
-			StopLoss:     req.StopLoss,
-			TakeProfit:   req.TakeProfit,
-			BetUnit:      req.BetUnit,
-			BetMode:      req.BetMode,
-			PlayTemplate: req.PlayTemplate,
-			TypeID:       req.TypeID,
-			SubID:        req.SubID,
+			RunMode:        runModeFromAddCloudRequest(req),
+			SchemeFunds:    req.SchemeFunds,
+			SchemeCurrency: req.SchemeCurrency,
+			StartTime:      req.StartTime,
+			EndTime:        req.EndTime,
+			SchemeGroups:   req.SchemeGroups,
+			StopLoss:       req.StopLoss,
+			TakeProfit:     req.TakeProfit,
+			BetUnit:        req.BetUnit,
+			BetMode:        req.BetMode,
+			PlayTemplate:   req.PlayTemplate,
+			TypeID:         req.TypeID,
+			SubID:          req.SubID,
 		})
 		if err != nil {
 			h.handleSchemeErr(w, err)
@@ -409,20 +411,21 @@ func (h *Handler) ForkDefinitionToCloud(w http.ResponseWriter, r *http.Request) 
 }
 
 type addToCloudRequest struct {
-	ShareStatus  string   `json:"shareStatus"`
-	RunMode      string   `json:"runMode"`
-	SimBet       *bool    `json:"simBet"`
-	SchemeFunds  string   `json:"schemeFunds"`
-	StartTime    string   `json:"startTime"`
-	EndTime      string   `json:"endTime"`
-	SchemeGroups []string `json:"schemeGroups"`
-	StopLoss     string   `json:"stopLoss"`
-	TakeProfit   string   `json:"takeProfit"`
-	BetUnit      string   `json:"betUnit"`
-	BetMode      string   `json:"betMode"`
-	PlayTemplate string   `json:"playTemplate"`
-	TypeID       string   `json:"typeId"`
-	SubID        string   `json:"subId"`
+	ShareStatus    string   `json:"shareStatus"`
+	RunMode        string   `json:"runMode"`
+	SimBet         *bool    `json:"simBet"`
+	SchemeFunds    string   `json:"schemeFunds"`
+	SchemeCurrency string   `json:"schemeCurrency"`
+	StartTime      string   `json:"startTime"`
+	EndTime        string   `json:"endTime"`
+	SchemeGroups   []string `json:"schemeGroups"`
+	StopLoss       string   `json:"stopLoss"`
+	TakeProfit     string   `json:"takeProfit"`
+	BetUnit        string   `json:"betUnit"`
+	BetMode        string   `json:"betMode"`
+	PlayTemplate   string   `json:"playTemplate"`
+	TypeID         string   `json:"typeId"`
+	SubID          string   `json:"subId"`
 }
 
 func runModeFromAddCloudRequest(req addToCloudRequest) string {
@@ -569,8 +572,11 @@ func (h *Handler) handleSchemeErr(w http.ResponseWriter, err error) {
 		apix.Fail(w, http.StatusConflict, 40902, "运行中不可修改倍投或期次设定")
 	case errors.Is(err, schemes.ErrPatchSimBetWhileRunning):
 		apix.Fail(w, http.StatusConflict, 40902, "运行中不可修改投注通道")
+	case errors.Is(err, schemes.ErrPatchCurrencyWhileRunning):
+		apix.Fail(w, http.StatusConflict, 40902, "运行中不可修改方案币种")
 	case errors.Is(err, schemes.ErrInvalidUpdatePatch):
 		apix.Validation(w, "更新参数无效")
+
 	case errors.Is(err, member.ErrNotFound):
 		apix.Fail(w, http.StatusNotFound, apix.CodeNotFound, "会员不存在")
 	case errors.Is(err, schemes.ErrInvalidKind):

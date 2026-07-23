@@ -33,13 +33,12 @@ function goBack(): void {
 }
 
 function openRow(row: AnnouncementListItem): void {
-  row.read = true
   void router.push({ name: 'announcement-detail', params: { id: row.id } })
 }
 </script>
 
 <template>
-  <div class="man member-subpage" data-page="member-announcements">
+  <div class="man member-subpage" data-page="member-announcements" v-loading="loading">
     <header class="mss-head" role="banner">
       <div class="mss-head-deco" aria-hidden="true" />
       <div class="mss-head-bar">
@@ -61,12 +60,9 @@ function openRow(row: AnnouncementListItem): void {
           @click="openRow(row)"
         >
           <span class="man-bar" aria-hidden="true" />
-          <span class="man-row-title">{{ row.title }}</span>
-          <span class="man-row-meta">
+          <span class="man-row-body">
+            <span class="man-row-title">{{ row.title }}</span>
             <span class="man-row-date">{{ row.date }}</span>
-            <span class="man-row-status" :class="{ 'is-read': row.read }">{{
-              row.read ? '已读' : '未读'
-            }}</span>
           </span>
         </button>
       </section>
@@ -82,7 +78,6 @@ function openRow(row: AnnouncementListItem): void {
   --man-card: #ffffff;
   --man-on: #191c1e;
   --man-on-mute: #727687;
-  --man-danger: #ba1a1a;
   min-height: 100dvh;
   background: var(--man-surface);
   color: var(--man-on);
@@ -93,13 +88,13 @@ function openRow(row: AnnouncementListItem): void {
 .man-main {
   max-width: 40rem;
   margin: 0 auto;
-  padding: 1.15rem 1.15rem 2rem;
+  padding: 1rem var(--page-gutter) 2rem;
 }
 
 .man-list {
   background: var(--man-card);
   border-radius: 1.25rem;
-  padding: 0.35rem 0;
+  padding: 0.2rem 0;
   box-shadow:
     0 24px 48px -28px rgba(15, 23, 42, 0.18),
     0 4px 16px -8px rgba(15, 23, 42, 0.06);
@@ -112,10 +107,10 @@ function openRow(row: AnnouncementListItem): void {
   cursor: pointer;
   background: transparent;
   display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: start;
-  gap: 0.65rem 0.75rem;
-  padding: 1rem 1.15rem;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.55rem var(--page-gutter);
   text-align: left;
   color: inherit;
   font: inherit;
@@ -131,57 +126,34 @@ function openRow(row: AnnouncementListItem): void {
 }
 
 .man-bar {
-  width: 4px;
+  width: 3px;
   border-radius: 999px;
-  min-height: 2.25rem;
-  margin-top: 0.15rem;
+  height: 1.85rem;
   background: linear-gradient(180deg, var(--man-primary-strong), var(--man-primary));
-  align-self: stretch;
+  align-self: center;
+}
+
+.man-row-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
 }
 
 .man-row-title {
-  font-size: 0.9375rem;
-  font-weight: 650;
-  line-height: 1.5;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.35;
   letter-spacing: 0.01em;
-}
-
-.man-row-meta {
-  grid-column: 2 / -1;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0.65rem;
-  font-size: 0.75rem;
-}
-
-@media (min-width: 400px) {
-  .man-row {
-    grid-template-columns: auto 1fr auto;
-    align-items: center;
-  }
-
-  .man-row-meta {
-    grid-column: unset;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 0.2rem;
-  }
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .man-row-date {
-  color: var(--man-on-mute);
+  font-size: 0.6875rem;
   font-weight: 500;
-}
-
-.man-row-status {
-  font-weight: 700;
-  color: var(--man-danger);
-  letter-spacing: 0.02em;
-}
-
-.man-row-status.is-read {
+  line-height: 1.3;
   color: var(--man-on-mute);
-  font-weight: 600;
 }
 </style>

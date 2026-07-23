@@ -132,9 +132,11 @@ func (s *Service) ForkDefinitionToCloud(
 		return ForkToCloudResult{}, err
 	}
 
+	inst := mapInstanceFromInsertRow(instRow)
+	inst.SchemeCurrency = schemeCurrencyFromConfig(cfgBytes)
 	return ForkToCloudResult{
 		SourceDefinitionID: sourceDefinitionID,
 		Definition:         mapDefinitionRow(defRow, true),
-		Instance:           mapInstanceFromInsertRow(instRow),
+		Instance:           inst,
 	}, nil
 }

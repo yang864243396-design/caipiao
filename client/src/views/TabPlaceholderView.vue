@@ -42,7 +42,7 @@ function goLobby() {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 1.5rem 1.5rem 6.5rem;
+  padding: 1.5rem var(--page-gutter) 6.5rem;
   background: #f7f9fb;
   color: #191c1e;
   text-align: center;

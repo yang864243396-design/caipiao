@@ -6,10 +6,14 @@
   --layout-web-nav-height: 3.75rem;
   /* 手机版内容壳最大宽度（layout-mobile.css） */
   --layout-mobile-shell: 500px;
+  /* 页面内容区左右边距（贴屏 gutter） */
+  --page-gutter: 8px;
+  /* 卡片内部四边 padding */
+  --card-pad: 8px;
   /* 页面标题栏：与首页「游戏大厅」lobby-page-head 对齐 */
   --page-titlebar-height: 2.5rem;
   --page-titlebar-pad-y: 0.4rem;
-  --page-titlebar-pad-x: 1rem;
+  --page-titlebar-pad-x: var(--page-gutter);
   /* 标题栏内返回/搜索等操作按钮（不撑高标题栏） */
   --page-titlebar-action-size: 2.35rem;
   --page-titlebar-icon-size: 1.85rem;

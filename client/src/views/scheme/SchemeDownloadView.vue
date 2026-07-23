@@ -242,7 +242,7 @@ onMounted(() => {
 .sdw-main {
   flex: 1;
   min-height: 0;
-  padding: 1rem 0.75rem;
+  padding: 1rem var(--page-gutter);
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -257,7 +257,7 @@ onMounted(() => {
   flex-wrap: wrap;
   gap: 0.65rem;
   align-items: center;
-  padding: 1rem;
+  padding: var(--card-pad);
   background: #fff;
   border-radius: 0.75rem;
   box-shadow: 0 8px 30px rgba(25, 28, 30, 0.06);

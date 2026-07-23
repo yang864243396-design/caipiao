@@ -16,7 +16,6 @@ import { normalizeSchemeTimePairFromConfig } from '@/utils/schemeDateTime'
 import { simBetFromSchemeConfig, simBetLabel } from '@/utils/schemeSimBet'
 import { formatSubPlayLabel } from '@/utils/playConfig'
 import type {
-  SchemeFixedPick,
   SchemeHotColdPickType,
   SchemeHotColdWarm,
   SchemeJushuRow,
@@ -41,8 +40,8 @@ const RUN_TYPE_LABELS: Record<RunTypeId, string> = {
   adv_trigger_bet: '高级开某投某',
   hot_cold_warm: '冷热出号',
   random_draw: '随机出号',
-  builtin_plan: '内置计画',
-  fixed_number: '固定取码',
+  builtin_plan: '内置计划',
+  fixed_number: '固定号码',
 }
 
 function normalizeRunTypeId(raw: unknown): RunTypeId {
@@ -93,6 +92,7 @@ const stopLoss = ref('')
 const takeProfit = ref('')
 
 const schemeFunds = ref('')
+const schemeCurrency = ref('USDT')
 const lotteryCode = ref('')
 const playTypeId = ref('')
 const subPlayId = ref('')
@@ -101,7 +101,6 @@ const jushuList = ref<SchemeJushuRow[]>([])
 const triggerBet = ref<SchemeTriggerBet | null>(null)
 const hotColdWarm = ref<SchemeHotColdWarm | null>(null)
 const randomDraw = ref<SchemeRandomDraw | null>(null)
-const fixedPick = ref<SchemeFixedPick | null>(null)
 const builtinPlanSnapshotId = ref('')
 const cachedPlayTypeLabel = ref('')
 const cachedSubPlayLabel = ref('')
@@ -204,11 +203,11 @@ function limitDisplay(v: string): string {
 const betMultiplierLabel = ref('未设置')
 const betUnitLabel = computed(() => betModeLabelOf(betUnit.value))
 
-const runTimeDisplay = computed(() => {
+const runTimeLines = computed(() => {
   const s = startTime.value.trim()
   const e = endTime.value.trim()
-  if (!s && !e) return '-'
-  return `${s}-${e}`
+  if (!s && !e) return [] as string[]
+  return [s || '—', e || '—']
 })
 
 const betCount = computed(() => {
@@ -218,15 +217,19 @@ const betCount = computed(() => {
 
 const betUnitAmount = computed(() => Number(betUnit.value) || 0)
 
+const schemeCurrencyDisplay = computed(() => {
+  const cur = String(schemeCurrency.value || 'USDT').trim().toUpperCase()
+  return cur === 'TRX' || cur === 'CNY' || cur === 'USDT' ? cur : 'USDT'
+})
+
 const schemeFundsDisplay = computed(() => {
   const entered = Number(String(schemeFunds.value).trim())
   if (Number.isFinite(entered) && entered > 0) {
-    return `${Number(entered.toFixed(3))} 元`
+    return String(Number(entered.toFixed(3)))
   }
   const total = betCount.value * betUnitAmount.value
   if (!Number.isFinite(total) || total <= 0) return '—'
-  const fixed = Number(total.toFixed(3))
-  return `${fixed} 元`
+  return String(Number(total.toFixed(3)))
 })
 
 /** 倍数系数：优先配置 multCoeff，否则回退列表实例倍数 */
@@ -259,6 +262,10 @@ async function load(): Promise<void> {
     simBet.value = simBetFromSchemeConfig(cfg)
     lotteryCode.value = d.lotteryCode
     schemeFunds.value = asString(cfg.schemeFunds)
+    {
+      const cur = asString(cfg.schemeCurrency).trim().toUpperCase()
+      schemeCurrency.value = cur === 'TRX' || cur === 'CNY' ? cur : 'USDT'
+    }
     runTypeId.value = normalizeRunTypeId(cfg.runTypeId)
     playTypeId.value = asString(cfg.playTypeId ?? cfg.typeId)
     subPlayId.value = asString(cfg.subPlayId ?? cfg.subId)
@@ -317,23 +324,6 @@ async function load(): Promise<void> {
         }
       } else {
         randomDraw.value = null
-      }
-    }
-    {
-      const fp = cfg.fixedPick
-      if (fp && typeof fp === 'object' && Array.isArray((fp as { rules?: unknown }).rules)) {
-        const rules = ((fp as { rules: unknown[] }).rules ?? [])
-          .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
-          .map((r) => ({
-            posStart: Math.max(0, Math.trunc(Number(r.posStart) || 0)),
-            posEnd: Math.max(0, Math.trunc(Number(r.posEnd) || 0)),
-            codeMin: Math.trunc(Number(r.codeMin) || 0),
-            codeMax: Math.trunc(Number(r.codeMax) || 0),
-            numbers: asString(r.numbers),
-          }))
-        fixedPick.value = { rules }
-      } else {
-        fixedPick.value = null
       }
     }
     {
@@ -441,6 +431,10 @@ onMounted(() => {
           <span class="sd-value">{{ schemeFundsDisplay }}</span>
         </div>
         <div class="sd-field">
+          <span class="sd-label">币种</span>
+          <span class="sd-value">{{ schemeCurrencyDisplay }}</span>
+        </div>
+        <div class="sd-field">
           <span class="sd-label">彩种</span>
           <span class="sd-value">{{ lotteryRunTypeDisplay }}</span>
         </div>
@@ -459,9 +453,13 @@ onMounted(() => {
             :class="Number(sessionPnl) > 0 ? 'sd-up' : Number(sessionPnl) < 0 ? 'sd-down' : ''"
           >{{ sessionPnl }}</span>
         </div>
-        <div class="sd-field">
+        <div class="sd-field sd-field--runtime">
           <span class="sd-label">运行时间</span>
-          <span class="sd-value">{{ runTimeDisplay }}</span>
+          <span v-if="!runTimeLines.length" class="sd-value">-</span>
+          <span v-else class="sd-value sd-value--runtime" aria-label="开始时间与结束时间">
+            <span class="sd-runtime-line">{{ runTimeLines[0] }}</span>
+            <span class="sd-runtime-line">{{ runTimeLines[1] }}</span>
+          </span>
         </div>
         <div class="sd-field">
           <span class="sd-label">方案止损</span>
@@ -495,7 +493,6 @@ onMounted(() => {
         :trigger-bet="triggerBet"
         :hot-cold-warm="hotColdWarm"
         :random-draw="randomDraw"
-        :fixed-pick="fixedPick"
         :builtin-plan-snapshot-id="builtinPlanSnapshotId"
         :scheme-name="schemeName"
         :lottery-code="lotteryCode"
@@ -519,7 +516,7 @@ onMounted(() => {
   height: var(--page-titlebar-height);
   min-height: var(--page-titlebar-height);
   box-sizing: border-box;
-  padding: 0 1.25rem;
+  padding: 0 var(--page-gutter);
   background: #fff;
   box-shadow: 0 4px 20px rgba(25, 28, 30, 0.04);
   position: sticky;
@@ -563,13 +560,13 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 0.85rem;
-  padding: 1rem 1.25rem;
+  padding: 1rem var(--page-gutter);
 }
 
 .sd-card {
   background: #fff;
   border-radius: 0.875rem;
-  padding: 0.35rem 1rem;
+  padding: var(--card-pad);
   box-shadow: 0 4px 20px rgba(25, 28, 30, 0.04);
 }
 
@@ -578,8 +575,10 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  min-height: 2.75rem;
-  padding: 0.35rem 0;
+  height: 36px;
+  min-height: 36px;
+  box-sizing: border-box;
+  padding: 0;
   border-bottom: 1px solid rgba(242, 244, 246, 0.95);
 }
 
@@ -601,6 +600,29 @@ onMounted(() => {
   font-weight: 600;
   color: #191c1e;
   word-break: break-all;
+}
+
+.sd-field--runtime {
+  align-items: center;
+}
+
+.sd-value--runtime {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 0.1rem;
+  line-height: 1.25;
+  /* 两行叠在「运行时间」同一字段内，不另起列表行 */
+  max-height: 2.5rem;
+  overflow: hidden;
+}
+
+.sd-runtime-line {
+  display: block;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8125rem;
 }
 
 .sd-value--mono {

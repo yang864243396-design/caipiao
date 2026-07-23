@@ -64,6 +64,8 @@ export interface CloudRunningScheme {
   sessionPnl: number
   multiplier: number
   simBet: boolean
+  /** 方案币种：USDT / TRX / CNY；缺省 USDT */
+  schemeCurrency?: string
   /** 运行类型（仅自创方案）：fixed_rotate / adv_fixed_rotate / adv_trigger_bet / hot_cold_warm / random_draw / builtin_plan / fixed_number */
   runTypeId?: string
   runTypeLabel?: string

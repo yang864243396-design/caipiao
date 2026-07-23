@@ -32,6 +32,8 @@ type Request struct {
 	Multiplier int
 	BetsNums   int
 	AmountUnit float64
+	// Currency 方案币种（USDT/TRX/CNY）；空则回退会员主币种。
+	Currency string
 	// RuleMeta 来自 sub_plays.segment_rule；非空 PlayTemplate 时用于 bets_nums / solo 计算。
 	RuleMeta RuleMeta
 }

@@ -4,7 +4,6 @@ import type {
   SchemeTriggerBet,
   SchemeHotColdWarm,
   SchemeRandomDraw,
-  SchemeFixedPick,
   UpdateSchemeInput,
 } from '@/api/schemes/definitions'
 import type { ClientSchemeKind } from '@/utils/schemeKind'
@@ -33,6 +32,8 @@ export interface SchemeDraftSnapshot {
   /** false=正式，true=模拟 */
   simBet: boolean
   schemeFunds: string
+  /** 方案币种；缺省按 USDT */
+  schemeCurrency: string
   startTime: string
   endTime: string
   schemeGroups: string[]
@@ -48,7 +49,6 @@ export interface SchemeDraftSnapshot {
   triggerBet?: SchemeTriggerBet
   hotColdWarm?: SchemeHotColdWarm
   randomDraw?: SchemeRandomDraw
-  fixedPick?: SchemeFixedPick
 }
 
 type LegacyDraft = SchemeDraftSnapshot & { runMode?: 'prod' | 'sim' }
@@ -59,6 +59,8 @@ function normalizeDraft(parsed: LegacyDraft): SchemeDraftSnapshot {
     parsed.simBet = legacy ?? false
   }
   delete parsed.runMode
+  const cur = String(parsed.schemeCurrency ?? '').trim().toUpperCase()
+  parsed.schemeCurrency = cur === 'TRX' || cur === 'CNY' ? cur : 'USDT'
   return parsed
 }
 
@@ -109,6 +111,7 @@ export function draftPatchFromSnapshot(draft: SchemeDraftSnapshot): UpdateScheme
   const patch: UpdateSchemeInput = {
     simBet: draft.simBet,
     schemeFunds: draft.schemeFunds,
+    schemeCurrency: draft.schemeCurrency || 'USDT',
     multCoeff: draft.multCoeff,
     startTime: draft.startTime,
     endTime: draft.endTime,
@@ -129,7 +132,6 @@ export function draftPatchFromSnapshot(draft: SchemeDraftSnapshot): UpdateScheme
   if (draft.triggerBet) patch.triggerBet = draft.triggerBet
   if (draft.hotColdWarm) patch.hotColdWarm = draft.hotColdWarm
   if (draft.randomDraw) patch.randomDraw = draft.randomDraw
-  if (draft.fixedPick) patch.fixedPick = draft.fixedPick
   if (draft.builtinSnapshotId) {
     patch.builtinPlan = { snapshotId: draft.builtinSnapshotId }
   }

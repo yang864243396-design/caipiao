@@ -73,13 +73,13 @@ function goBack(): void {
 .mfd-main {
   max-width: 40rem;
   margin: 0 auto;
-  padding: 1.15rem 1.15rem 2rem;
+  padding: 1.15rem var(--page-gutter) 2rem;
 }
 
 .mfd-card {
   background: var(--mfd-card);
   border-radius: 1rem;
-  padding: 1.25rem 1.15rem;
+  padding: var(--card-pad);
   box-shadow: 0 12px 40px rgba(0, 80, 203, 0.06);
 }
 

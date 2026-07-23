@@ -94,6 +94,13 @@ func schemeMinBetUnits(kind string, cfgBytes []byte) int {
 			minUnits = u
 		}
 	}
+	// 冷热出号内容在 hotColdWarm.pool（按位号池），不一定写入 schemeGroups
+	if minUnits <= 0 && parsed.HotCold != nil && len(parsed.HotCold.Pool) > 0 {
+		u := planPickBetUnits(parsed, strings.Join(parsed.HotCold.Pool, "\n"))
+		if u > 0 {
+			minUnits = u
+		}
+	}
 	if minUnits <= 0 {
 		return 1
 	}
@@ -141,4 +148,30 @@ func (s *Service) memberPrimaryCurrency(ctx context.Context, memberID int64) str
 		return guaji.CurrencyCNY
 	}
 	return guaji.NormalizeCurrency(c)
+}
+
+// normalizeSchemeCurrency 方案币种：仅接受 USDT/TRX/CNY；非法或空值默认 USDT（历史未填方案）。
+func normalizeSchemeCurrency(c string) string {
+	switch strings.ToUpper(strings.TrimSpace(c)) {
+	case guaji.CurrencyTRX:
+		return guaji.CurrencyTRX
+	case guaji.CurrencyCNY:
+		return guaji.CurrencyCNY
+	case guaji.CurrencyUSDT:
+		return guaji.CurrencyUSDT
+	default:
+		return guaji.CurrencyUSDT
+	}
+}
+
+// schemeCurrencyFromConfig 读取方案 config.schemeCurrency；缺省 USDT。
+func schemeCurrencyFromConfig(cfgBytes []byte) string {
+	if len(cfgBytes) == 0 {
+		return guaji.CurrencyUSDT
+	}
+	cfg := map[string]interface{}{}
+	if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
+		return guaji.CurrencyUSDT
+	}
+	return normalizeSchemeCurrency(stringVal(cfg, "schemeCurrency"))
 }

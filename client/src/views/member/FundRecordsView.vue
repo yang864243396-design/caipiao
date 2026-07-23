@@ -40,7 +40,7 @@ const flowType = ref<FundFlowType>('all')
 const currency = ref<FundCurrency>('all')
 
 const flowTypeOptions: SelectOption<FundFlowType>[] = [
-  { value: 'all', label: '全部' },
+  { value: 'all', label: '全部类型' },
   { value: 'income', label: '收入' },
   { value: 'expense', label: '支出' },
 ]
@@ -51,6 +51,7 @@ const currencyOptions = computed<SelectOption<FundCurrency>[]>(() => [
 ])
 
 const ready = ref(false)
+const filtersReady = ref(false)
 const loading = ref(false)
 const loadingMore = ref(false)
 const hasMore = ref(false)
@@ -59,6 +60,20 @@ const rows = ref<FundRecordDisplayRow[]>([])
 const loadSentinel = ref<HTMLElement | null>(null)
 
 let loadObserver: IntersectionObserver | null = null
+let searchQueued = false
+
+function requestSearch(): void {
+  if (!filtersReady.value || searchQueued) return
+  searchQueued = true
+  queueMicrotask(() => {
+    searchQueued = false
+    void runSearch(true)
+  })
+}
+
+watch([dateRange, flowType, currency], () => {
+  requestSearch()
+})
 
 watch(dateRange, (v) => {
   if (!v || !v[0] || !v[1]) {
@@ -110,10 +125,6 @@ async function runSearch(auto = false): Promise<void> {
   }
 }
 
-async function onSearch(): Promise<void> {
-  await runSearch(false)
-}
-
 async function loadMore(): Promise<void> {
   if (!ready.value || !hasMore.value || !nextCursor.value || loading.value || loadingMore.value) return
   loadingMore.value = true
@@ -148,7 +159,10 @@ watch(ready, (v) => {
 })
 
 onMounted(() => {
-  void runSearch(true)
+  void (async () => {
+    await runSearch(true)
+    filtersReady.value = true
+  })()
   setupLoadObserver()
 })
 
@@ -173,36 +187,16 @@ onUnmounted(() => {
 
     <main class="fr-main">
       <section class="fr-card fr-filters">
-        <div class="fr-field fr-field--inline">
-          <div class="fr-lbl">
-            <span class="fr-lbl-bar" aria-hidden="true" />
-            <span>日期</span>
-          </div>
-          <DateRangePickerField v-model="dateRange" size="large" class="fr-drp" />
-        </div>
-        <div class="fr-field fr-field--inline">
-          <div class="fr-lbl">
-            <span class="fr-lbl-bar" aria-hidden="true" />
-            <span>类型</span>
-          </div>
-          <el-select v-model="flowType" size="large" class="fr-select">
+        <div class="fr-filter-grid fr-filter-grid--2">
+          <el-select v-model="currency" class="fr-select" placeholder="全部币种">
+            <el-option v-for="o in currencyOptions" :key="o.value" :label="o.label" :value="o.value" />
+          </el-select>
+          <el-select v-model="flowType" class="fr-select" placeholder="全部类型">
             <el-option v-for="o in flowTypeOptions" :key="o.value" :label="o.label" :value="o.value" />
           </el-select>
         </div>
-        <div class="fr-field fr-field--inline">
-          <div class="fr-lbl">
-            <span class="fr-lbl-bar" aria-hidden="true" />
-            <span>币种</span>
-          </div>
-          <el-select v-model="currency" size="large" class="fr-select">
-            <el-option v-for="o in currencyOptions" :key="o.value" :label="o.label" :value="o.value" />
-          </el-select>
-        </div>
-
-        <div class="fr-actions">
-          <el-button type="primary" size="large" round class="fr-query" :loading="loading" @click="onSearch">
-            查询
-          </el-button>
+        <div class="fr-filter-grid fr-filter-grid--1">
+          <DateRangePickerField v-model="dateRange" class="fr-drp" />
         </div>
       </section>
 
@@ -259,7 +253,7 @@ onUnmounted(() => {
 .fr-main {
   max-width: 40rem;
   margin: 0 auto;
-  padding: 1rem 1.15rem 2rem;
+  padding: 1rem var(--page-gutter) 2rem;
   display: flex;
   flex-direction: column;
   gap: 1rem;
@@ -268,7 +262,7 @@ onUnmounted(() => {
 .fr-card {
   background: #fff;
   border-radius: 1.25rem;
-  padding: 1.15rem;
+  padding: var(--card-pad);
   box-shadow:
     0 24px 48px -28px rgba(15, 23, 42, 0.18),
     0 4px 16px -8px rgba(15, 23, 42, 0.06);
@@ -277,49 +271,26 @@ onUnmounted(() => {
 .fr-filters {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.35rem;
+  padding: var(--card-pad);
 }
 
-.fr-field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.45rem;
-  min-width: 0;
+.fr-filter-grid {
+  display: grid;
+  gap: 0.35rem;
 }
 
-.fr-field--inline {
-  flex-direction: row;
-  align-items: center;
-  gap: 0.65rem;
+.fr-filter-grid--2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.fr-field--inline .fr-lbl {
-  flex: 0 0 4.75rem;
-  white-space: nowrap;
+.fr-filter-grid--1 {
+  grid-template-columns: minmax(0, 1fr);
 }
 
-.fr-field--inline .fr-select,
-.fr-field--inline .fr-drp {
-  flex: 1 1 0;
+.fr-filter-grid > * {
   min-width: 0;
   width: 100%;
-}
-
-.fr-lbl {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  font-size: 0.8125rem;
-  font-weight: 800;
-  color: #191c1e;
-  letter-spacing: 0.02em;
-}
-
-.fr-lbl-bar {
-  width: 3px;
-  height: 1rem;
-  border-radius: 999px;
-  background: rgba(0, 80, 203, 0.35);
 }
 
 .fr-select {
@@ -334,20 +305,6 @@ onUnmounted(() => {
 .fr-drp {
   width: 100%;
   min-width: 0;
-}
-
-.fr-actions {
-  display: flex;
-  justify-content: flex-end;
-  padding-top: 0.125rem;
-}
-
-.fr-query {
-  font-weight: 800;
-  letter-spacing: 0.03em;
-  padding-left: 1.5rem;
-  padding-right: 1.5rem;
-  box-shadow: 0 14px 32px -16px rgba(0, 80, 203, 0.55);
 }
 
 .fr-results {
@@ -388,7 +345,7 @@ onUnmounted(() => {
 .fr-item {
   background: #fff;
   border-radius: 1rem;
-  padding: 1rem 1.125rem;
+  padding: var(--card-pad);
   box-shadow: 0 12px 32px -22px rgba(15, 35, 95, 0.18);
 }
 

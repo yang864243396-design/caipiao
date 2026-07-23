@@ -667,13 +667,13 @@ func TestHotColdWarmDigitPoolFamilies(t *testing.T) {
 			t.Logf("%s → %q (units=%d) 换号后=%q", c.name, dec.Content, ev.BetUnits, cur)
 		})
 	}
-	// 矩阵：冷热温放行组选/不定位/包胆；单式/属性仍不放行
-	for _, sub := range []string{"前三组选复式", "前三组三", "前三二码不定位", "前三包胆"} {
+	// 矩阵：冷热温放行组选/不定位/包胆 + 属性/聚合；单式仍不放行
+	for _, sub := range []string{"前三组选复式", "前三组三", "前三二码不定位", "前三包胆", "前三特殊号", "和值", "龙虎", "大小单双"} {
 		if !SupportsHotColdWarmSubPlay("前三码", sub) {
 			t.Errorf("冷热温应支持 %s", sub)
 		}
 	}
-	for _, sub := range []string{"前三直选单式", "前三组选单式", "和值", "龙虎", "大小单双"} {
+	for _, sub := range []string{"前三直选单式", "前三组选单式"} {
 		if SupportsHotColdWarmSubPlay("", sub) {
 			t.Errorf("冷热温不应支持 %s", sub)
 		}
@@ -1052,48 +1052,13 @@ func TestSimFormalPayoutAllRunTypes(t *testing.T) {
 	})
 }
 
-func TestDecideFixedPick(t *testing.T) {
-	// 固定取码：规则1 位0-1 落[0-2]→投"1,2,3"；规则2 位2-4 落[7-9]→投"4,5,6"
-	fp := &fixedPickCfg{Rules: []fixedPickRule{
-		{PosStart: 0, PosEnd: 1, CodeMin: 0, CodeMax: 2, Numbers: "1,2,3"},
-		{PosStart: 2, PosEnd: 4, CodeMin: 7, CodeMax: 9, Numbers: "4,5,6"},
-	}}
-	// 上期 万1(∈0-2)→规则1命中→投 1,2,3
-	if dec := decideFixedPick(fp, []string{"1", "5", "5", "5", "5"}); dec.Skip || dec.Content != "1,2,3" {
-		t.Fatalf("规则1命中应投1,2,3, got %+v", dec)
-	}
-	// 万3/千4 不在0-2；位2-4含8(∈7-9)→规则2命中→投4,5,6
-	if dec := decideFixedPick(fp, []string{"3", "4", "8", "5", "5"}); dec.Skip || dec.Content != "4,5,6" {
-		t.Fatalf("规则2命中应投4,5,6, got %+v", dec)
-	}
-	// 全不命中 → 跳过
-	if dec := decideFixedPick(fp, []string{"3", "4", "5", "6", "3"}); !dec.Skip {
-		t.Fatalf("无命中应跳过, got %+v", dec)
-	}
-	// 无上期开奖 → 跳过
-	if dec := decideFixedPick(fp, nil); !dec.Skip {
-		t.Fatalf("无上期开奖应跳过, got %+v", dec)
-	}
-	// 首条命中优先：万0(规则1)命中即投1,2,3（即使规则2也可能命中）
-	if dec := decideFixedPick(fp, []string{"0", "0", "9", "9", "9"}); dec.Content != "1,2,3" {
-		t.Fatalf("首条命中优先应投1,2,3, got %+v", dec)
-	}
-}
-
-func TestFixedPickConfigAndFallback(t *testing.T) {
-	// fixedPick 规则解析
+func TestPickFixedNumberIgnoresLegacyFixedPick(t *testing.T) {
+	// 存量 fixedPick 条件规则忽略，固定取码只认 schemeGroups
 	cfg := pickTestConfig(t, `{"runTypeId":"fixed_number","playTypeId":"dingwei","subPlayId":"sub_ge",
+		"schemeGroups":["6,8"],
 		"fixedPick":{"rules":[{"posStart":0,"posEnd":4,"codeMin":0,"codeMax":2,"numbers":"1,2,3"}]}}`)
-	if cfg.FixedPick == nil || len(cfg.FixedPick.Rules) != 1 {
-		t.Fatalf("fixedPick 解析失败: %+v", cfg.FixedPick)
-	}
-	// 无 fixedPick → 回退静态固定号
-	cfg2 := pickTestConfig(t, `{"runTypeId":"fixed_number","playTypeId":"dingwei","subPlayId":"sub_ge","schemeGroups":["6,8"]}`)
-	if cfg2.FixedPick != nil {
-		t.Fatalf("无 fixedPick 应为 nil")
-	}
-	if dec := pickFixedNumber(cfg2); dec.Content != "6,8" {
-		t.Fatalf("静态兜底应投 6,8, got %+v", dec)
+	if dec := pickFixedNumber(cfg); dec.Content != "6,8" {
+		t.Fatalf("应投 schemeGroups 固定号 6,8, got %+v", dec)
 	}
 }
 

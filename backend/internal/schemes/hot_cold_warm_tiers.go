@@ -33,6 +33,9 @@ func HotColdWarmAttributeTiers(rule playRule, draws [][]string) HotColdWarmTiers
 		origIdx[opt] = i
 	}
 	counts := make(map[string]int, len(universe))
+	for _, opt := range universe {
+		counts[opt] = 0
+	}
 	counted := 0
 	for _, balls := range draws {
 		if len(balls) == 0 {

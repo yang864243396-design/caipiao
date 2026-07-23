@@ -420,6 +420,11 @@ func FormatBetContentForRule(meta RuleMeta, groupContent string) string {
 		if mode == "budingwei" {
 			return formatBudingweiContent(meta, groupContent)
 		}
+		// 混合组选：与计注一致，排除豹子并按组选形态去重（避免 wire 含 111 被第三方拒「投注数字不合规」）
+		if mode == "hunhe" {
+			_, segLen := segmentRange(meta)
+			return formatSSCZuxuanDanshiDigits(segLen, groupContent)
+		}
 		return formatCommaPickDigits(groupContent)
 	case "zu24", "zu12", "zu4", "zu120", "zu60", "zu30", "zu20", "zu10", "zu5":
 		switch mode {
@@ -1825,6 +1830,8 @@ func formatLHCPickDigits(groupContent string) string {
 }
 
 func splitCommaParts(s string) []string {
+	// 兼容中文逗号/换行分注（如「111，123」「111\n123」）；勿把普通空格当分隔（避免拆坏其它 wire）
+	s = strings.NewReplacer("，", ",", "\n", ",", "\r", ",").Replace(s)
 	parts := strings.Split(s, ",")
 	out := make([]string, 0, len(parts))
 	for _, p := range parts {

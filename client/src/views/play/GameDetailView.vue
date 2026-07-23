@@ -734,7 +734,7 @@ async function toggleFavorite() {
     } else {
       await addSchemeFavorite(snapshotId.value)
       isFavorite.value = true
-      ElMessage.success('已收藏，可在内置计画方案中跟投')
+      ElMessage.success('已收藏，可在内置计划方案中跟投')
     }
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '操作失败')
@@ -1731,7 +1731,7 @@ async function handleBetError(e: unknown, fallback = '投注失败'): Promise<vo
   height: var(--page-titlebar-height);
   min-height: var(--page-titlebar-height);
   box-sizing: border-box;
-  padding: 0 1.5rem;
+  padding: 0 var(--page-gutter);
   width: 100%;
 }
 
@@ -1791,7 +1791,7 @@ async function handleBetError(e: unknown, fallback = '投注失败'): Promise<vo
 
 .draw-block {
   background: #f7f9fb;
-  padding: 1rem 1.5rem 1.25rem;
+  padding: 1rem var(--page-gutter) 1.25rem;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -1990,7 +1990,7 @@ async function handleBetError(e: unknown, fallback = '投注失败'): Promise<vo
   width: 100%;
   display: flex;
   justify-content: center;
-  padding: 2.5rem 1.5rem 2rem;
+  padding: 2.5rem var(--page-gutter) 2rem;
   box-sizing: border-box;
 }
 
@@ -2008,7 +2008,7 @@ async function handleBetError(e: unknown, fallback = '投注失败'): Promise<vo
 }
 
 .plan-inverse-card :deep(.el-card__body) {
-  padding: 1.5rem;
+  padding: var(--card-pad);
 }
 
 .plan-inverse-empty {
@@ -2048,7 +2048,7 @@ async function handleBetError(e: unknown, fallback = '投注失败'): Promise<vo
 .plan-trend-chart-card {
   background: #fff;
   border-radius: 0.75rem;
-  padding: 1.5rem;
+  padding: var(--card-pad);
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.04);
   overflow: hidden;
 }
@@ -2207,7 +2207,7 @@ async function handleBetError(e: unknown, fallback = '投注失败'): Promise<vo
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 1rem 1.5rem;
+  padding: var(--card-pad);
   border-bottom: 1px solid #f8fafc;
 }
 
@@ -2253,14 +2253,14 @@ async function handleBetError(e: unknown, fallback = '投注失败'): Promise<vo
 
 /* —— 历史开奖（仅 tab 3）—— */
 .history-page {
-  padding: 0.5rem 1rem 2rem;
+  padding: 0.5rem var(--page-gutter) 2rem;
   width: 100%;
   box-sizing: border-box;
 }
 
 .history-subtabs-wrap {
-  margin: 0 -0.5rem 0.5rem;
-  padding: 0.5rem 1rem;
+  margin: 0 calc(-1 * var(--page-gutter)) 0.5rem;
+  padding: 0.5rem var(--page-gutter);
   background: rgba(248, 250, 252, 0.92);
   border-bottom: 1px solid #f1f5f9;
 }
@@ -2297,7 +2297,7 @@ async function handleBetError(e: unknown, fallback = '投注失败'): Promise<vo
 
 .history-card {
   background: #fff;
-  padding: 0.875rem 1rem 0.75rem;
+  padding: var(--card-pad);
   border-radius: 0.75rem;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.04);
   transition: box-shadow 0.3s ease;

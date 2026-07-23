@@ -11,8 +11,8 @@ const (
 	RunTypeAdvTriggerBet  = "adv_trigger_bet"  // 高级开某投某
 	RunTypeHotColdWarm    = "hot_cold_warm"    // 冷热出号（v6 仅冷/热两档；id 兼容保留）
 	RunTypeRandomDraw     = "random_draw"      // 随机出号
-	RunTypeBuiltinPlan    = "builtin_plan"     // 内置计画
-	RunTypeFixedNumber    = "fixed_number"     // 固定取码（条件规则→投固定号，V8 GDQM）
+	RunTypeBuiltinPlan    = "builtin_plan"     // 内置计划
+	RunTypeFixedNumber    = "fixed_number"     // 固定号码（每期复投指定号码）
 )
 
 // RunTypeLabels 运行类型展示名（与 lottery_scheme_option_sets 种子同源）。
@@ -22,8 +22,8 @@ var RunTypeLabels = map[string]string{
 	RunTypeAdvTriggerBet:  "高级开某投某",
 	RunTypeHotColdWarm:    "冷热出号",
 	RunTypeRandomDraw:     "随机出号",
-	RunTypeBuiltinPlan:    "内置计画",
-	RunTypeFixedNumber:    "固定取码",
+	RunTypeBuiltinPlan:    "内置计划",
+	RunTypeFixedNumber:    "固定号码",
 }
 
 // legacyRunTypeMap 废弃枚举映射（Q9=B：统一映射高级定码轮换）。
@@ -122,8 +122,9 @@ func ValidateRunTypePlay(runTypeID, playTypeID, subPlayID, guajiGroup, subLabel 
 // SupportsHotColdWarmSubPlay 冷热出号支持的子玩法：
 //   - 按位型：直选复式/直选组合/定位胆/任选直选复式（按位频次分档）
 //   - 号码池型：组三/组六/组选N/组选复式/不定位/包胆（号码整体频次分档）
+//   - 属性/聚合型：大小单双/龙虎/特殊号/庄闲/和值/跨度（选项命中频次分档）
 //
-// 不含单式（组合频次≈0，不适合分档）与属性/聚合（无按位频次维度：和值/跨度/大小单双/龙虎/特殊号/庄闲）。
+// 不含单式（组合频次≈0，不适合分档）。
 func SupportsHotColdWarmSubPlay(guajiGroup, subLabel string) bool {
 	if SupportsPositionSourceSubPlay(guajiGroup, subLabel) {
 		return true
@@ -132,13 +133,13 @@ func SupportsHotColdWarmSubPlay(guajiGroup, subLabel string) bool {
 	if strings.Contains(sub, "单式") {
 		return false
 	}
-	group := strings.TrimSpace(guajiGroup)
-	if strings.Contains(group, "龙虎") || strings.Contains(sub, "龙虎") {
-		return false
-	}
-	if strings.Contains(sub, "和值") || strings.Contains(sub, "跨度") ||
-		strings.Contains(sub, "大小单双") || strings.Contains(sub, "特殊号") || strings.Contains(sub, "庄闲") {
-		return false
+	// 属性/聚合家族：选项命中频次分档（HotColdWarmAttributeTiers）
+	for _, kw := range []string{
+		"大小单双", "特殊号", "庄闲", "龙虎豹", "直选和值", "组选和值", "和值尾数", "跨度", "龙虎", "和值",
+	} {
+		if strings.Contains(sub, kw) || strings.Contains(guajiGroup, kw) {
+			return true
+		}
 	}
 	// 号码池型：组选家族 + 不定位 + 包胆
 	if strings.Contains(sub, "组三") || strings.Contains(sub, "组六") || strings.Contains(sub, "组选") ||

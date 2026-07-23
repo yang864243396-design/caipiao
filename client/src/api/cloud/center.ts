@@ -8,7 +8,7 @@ import type { CloudLookbackSettings, CloudRunningScheme } from '@/api/types'
 
 export type { CloudLookbackSettings, CloudRunningScheme }
 
-export const CLOUD_SCHEME_PAGE_SIZE = 10
+export const CLOUD_SCHEME_PAGE_SIZE = 20
 
 export interface CloudSchemeListPage {
   items: CloudRunningScheme[]
@@ -29,6 +29,8 @@ export async function fetchRunningSchemesPage(opts?: {
   limit?: number
   cursor?: string
   runMode?: 'real' | 'sim'
+  /** 服务端搜索：方案名称 / 彩种 / 方案定义 ID / 实例 ID */
+  q?: string
 }): Promise<CloudSchemeListPage> {
   await ensureClientSession()
   const params = new URLSearchParams()
@@ -41,6 +43,10 @@ export async function fetchRunningSchemesPage(opts?: {
   }
   if (opts?.runMode) {
     params.set('runMode', opts.runMode)
+  }
+  const q = opts?.q?.trim()
+  if (q) {
+    params.set('q', q)
   }
   const qs = params.toString()
   const data = await requestApi<CloudSchemeListPage>(
@@ -71,9 +77,17 @@ export interface CloudCenterChannelStatsDto {
   runningSessionPnl: number
 }
 
+export interface CloudSimSchemeQuotaDto {
+  todayStarts: number
+  todayStartsLimit: number
+  running: number
+  runningLimit: number
+}
+
 export interface CloudCenterStatsDto {
   formal: CloudCenterChannelStatsDto
   sim: CloudCenterChannelStatsDto
+  simQuota: CloudSimSchemeQuotaDto
 }
 
 const emptyCloudCenterChannelStats = (): CloudCenterChannelStatsDto => ({
@@ -82,10 +96,18 @@ const emptyCloudCenterChannelStats = (): CloudCenterChannelStatsDto => ({
   runningSessionPnl: 0,
 })
 
+const emptySimSchemeQuota = (): CloudSimSchemeQuotaDto => ({
+  todayStarts: 0,
+  todayStartsLimit: 5,
+  running: 0,
+  runningLimit: 5,
+})
+
 export function emptyCloudCenterStats(): CloudCenterStatsDto {
   return {
     formal: emptyCloudCenterChannelStats(),
     sim: emptyCloudCenterChannelStats(),
+    simQuota: emptySimSchemeQuota(),
   }
 }
 
@@ -95,7 +117,15 @@ export function formatCloudStatAmount(n: number): string {
 
 export async function fetchCloudCenterStats(): Promise<CloudCenterStatsDto> {
   await ensureClientSession()
-  return requestApi<CloudCenterStatsDto>('/client/cloud/schemes/stats')
+  const raw = await requestApi<CloudCenterStatsDto>('/client/cloud/schemes/stats')
+  return {
+    formal: raw?.formal ?? emptyCloudCenterChannelStats(),
+    sim: raw?.sim ?? emptyCloudCenterChannelStats(),
+    simQuota: {
+      ...emptySimSchemeQuota(),
+      ...(raw?.simQuota ?? {}),
+    },
+  }
 }
 
 export async function fetchLookbackSettings(): Promise<CloudLookbackSettings> {
@@ -499,6 +529,10 @@ export function mergeSchemeCountdownOnPoll(
     countdownEndTime: endTime,
     countdownPeriod: next.countdownPeriod ?? prev.countdownPeriod,
     lotteryCode: next.lotteryCode || prev.lotteryCode,
+    schemeCurrency: normalizeSchemeCurrency(
+      next.schemeCurrencyFromApi ? next.schemeCurrency : prev.schemeCurrency || next.schemeCurrency,
+    ),
+    schemeCurrencyFromApi: next.schemeCurrencyFromApi || prev.schemeCurrencyFromApi,
   }
   const computed = schemeCountdownDisplayFields(mergedBase)
 
@@ -545,8 +579,16 @@ export function normalizeSchemeMultiplier(v: string | number | null | undefined)
   return n >= 1 ? String(n) : '1'
 }
 
+/** 方案币种：仅 USDT/TRX/CNY，缺省 USDT */
+export function normalizeSchemeCurrency(v: string | null | undefined): 'USDT' | 'TRX' | 'CNY' {
+  const cur = String(v ?? '').trim().toUpperCase()
+  if (cur === 'TRX' || cur === 'CNY') return cur
+  return 'USDT'
+}
+
 export function instanceToDisplay(row: CloudRunningScheme) {
   const display = schemeCountdownDisplayFields(row)
+  const currencyFromApi = row.schemeCurrency != null && String(row.schemeCurrency).trim() !== ''
 
   return {
 
@@ -591,6 +633,11 @@ export function instanceToDisplay(row: CloudRunningScheme) {
     multiplier: normalizeSchemeMultiplier(row.multiplier),
 
     simBet: row.simBet,
+
+    schemeCurrency: normalizeSchemeCurrency(row.schemeCurrency),
+
+    /** 接口是否显式返回了币种；缺省时合并列表勿用默认 USDT 覆盖本地已选 */
+    schemeCurrencyFromApi: currencyFromApi,
 
   }
 

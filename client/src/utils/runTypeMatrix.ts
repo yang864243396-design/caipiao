@@ -404,16 +404,23 @@ export function supportsRandomDrawSubPlay(subLabel: string, playTypeLabel = ''):
 }
 
 /**
- * 冷热出号支持的子玩法 = 按位型 + 号码池型（组选家族/不定位/包胆，号码整体频次分档）。
- * 不含单式与属性/聚合（无按位频次维度）。与后端 schemes.SupportsHotColdWarmSubPlay 对齐。
+ * 冷热出号支持的子玩法 = 按位型 + 号码池型 + 属性/聚合型（选项命中频次分档）。
+ * 不含单式。与后端 schemes.SupportsHotColdWarmSubPlay 对齐。
  */
 export function supportsHotColdWarmSubPlay(subLabel: string, playTypeLabel = ''): boolean {
   if (supportsPositionSourceSubPlay(subLabel, playTypeLabel)) return true
   const sub = (subLabel || '').trim()
   const play = (playTypeLabel || '').trim()
   if (sub.includes('单式')) return false
-  if (play === '龙虎' || sub.includes('龙虎')) return false
-  if (/和值|跨度|大小单双|特殊号|庄闲/.test(sub)) return false
+  // 属性/聚合家族：选项命中频次分档（特殊号→豹子/对子/顺子 等）
+  if (
+    /大小单双|特殊号|庄闲|龙虎豹|直选和值|组选和值|和值尾数|跨度|龙虎/.test(sub) ||
+    sub === '和值' ||
+    play === '龙虎' ||
+    /和值|特殊号|大小单双/.test(play)
+  ) {
+    return true
+  }
   return /组三|组六|组选|不定位|包胆/.test(sub)
 }
 

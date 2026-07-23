@@ -22,6 +22,7 @@ func (h *Handler) OrdersBets(w http.ResponseWriter, r *http.Request) {
 			GameCode:           r.URL.Query().Get("gameCode"),
 			SchemeDefinitionID: r.URL.Query().Get("schemeDefinitionId"),
 			OrderNo:            r.URL.Query().Get("orderNo"),
+			Currency:           r.URL.Query().Get("currency"),
 			Cursor:             r.URL.Query().Get("cursor"),
 			Limit:              queryInt(r, "limit", 20),
 		})

@@ -49,6 +49,7 @@ func (s *Service) GetSchemeOptions(ctx context.Context, lotteryCode string) (Lot
 	if err != nil {
 		return LotterySchemeOptionsResult{}, err
 	}
+	runTypes = normalizeRunTypeOptionLabels(runTypes)
 	playTypes, err := parseOptionItems(row.PlayTypes)
 	if err != nil {
 		return LotterySchemeOptionsResult{}, err
@@ -69,6 +70,21 @@ func (s *Service) GetSchemeOptions(ctx context.Context, lotteryCode string) (Lot
 		PlayTypes:   playTypes,
 		SubPlays:    subPlays,
 	}, nil
+}
+
+// normalizeRunTypeOptionLabels 以 RunTypeLabels 为准覆盖 DB 种子中的旧展示名。
+func normalizeRunTypeOptionLabels(items []SchemeOptionItem) []SchemeOptionItem {
+	if len(items) == 0 {
+		return items
+	}
+	out := make([]SchemeOptionItem, len(items))
+	for i, it := range items {
+		out[i] = it
+		if label, ok := RunTypeLabels[strings.TrimSpace(it.Value)]; ok {
+			out[i].Label = label
+		}
+	}
+	return out
 }
 
 func parseOptionItems(raw []byte) ([]SchemeOptionItem, error) {

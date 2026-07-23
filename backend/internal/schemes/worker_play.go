@@ -261,6 +261,10 @@ func isZhixuanFushiBaoziPools(pools [][]string) bool {
 }
 
 func evaluateZhixuanDanshi(rule playRule, balls []string, groupContent string) betEvaluation {
+	// 冷热出号按位号池（每位一行）按直选复式位积评估，避免误计 0/1 注。
+	if looksLikeZhixuanPositionPool(groupContent, rule.SegmentLen) {
+		return evaluateZhixuanFushi(rule, balls, groupContent)
+	}
 	seg := drawSegment(balls, rule.SegmentStart, rule.SegmentLen)
 	if len(seg) != rule.SegmentLen {
 		return betEvaluation{BetUnits: 1, Odds: oddsZhixuan(rule.SegmentLen, rule.OddsBase)}
@@ -285,6 +289,144 @@ func evaluateZhixuanDanshi(rule playRule, balls []string, groupContent string) b
 		}
 	}
 	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(rule.SegmentLen, rule.OddsBase)}
+}
+
+// looksLikeZhixuanPositionPool 判断内容是否为按位号池（冷热出号 UI）：segLen 行、每行单码池。
+func looksLikeZhixuanPositionPool(content string, segLen int) bool {
+	if segLen <= 1 || !strings.Contains(content, "\n") {
+		return false
+	}
+	raw := strings.ReplaceAll(content, "\r\n", "\n")
+	raw = strings.ReplaceAll(raw, "\r", "\n")
+	lines := strings.Split(raw, "\n")
+	for len(lines) < segLen {
+		lines = append(lines, "")
+	}
+	for i := 0; i < segLen; i++ {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			return false
+		}
+		parts := strings.FieldsFunc(line, func(r rune) bool {
+			return r == ',' || r == ' ' || r == '，' || r == '\t'
+		})
+		if len(parts) == 0 {
+			return false
+		}
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if len(p) != 1 || p[0] < '0' || p[0] > '9' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// expandZhixuanPositionPoolToDanshi 按位号池 → 直选单式票（笛卡尔积）。
+// 例：segLen=3, "5\n5\n5" → "555"；"4,5\n3,5\n2,5" → "432,435,..."。
+func expandZhixuanPositionPoolToDanshi(content string, segLen int) (string, bool) {
+	if !looksLikeZhixuanPositionPool(content, segLen) {
+		return "", false
+	}
+	raw := strings.ReplaceAll(content, "\r\n", "\n")
+	raw = strings.ReplaceAll(raw, "\r", "\n")
+	lines := strings.Split(raw, "\n")
+	for len(lines) < segLen {
+		lines = append(lines, "")
+	}
+	pools := make([][]string, segLen)
+	for i := 0; i < segLen; i++ {
+		parts := strings.FieldsFunc(strings.TrimSpace(lines[i]), func(r rune) bool {
+			return r == ',' || r == ' ' || r == '，' || r == '\t'
+		})
+		seen := make(map[string]struct{}, len(parts))
+		out := make([]string, 0, len(parts))
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if len(p) != 1 {
+				return "", false
+			}
+			if _, ok := seen[p]; ok {
+				continue
+			}
+			seen[p] = struct{}{}
+			out = append(out, p)
+		}
+		if len(out) == 0 {
+			return "", false
+		}
+		pools[i] = out
+	}
+	cur := []string{""}
+	for _, pool := range pools {
+		next := make([]string, 0, len(cur)*len(pool))
+		for _, prefix := range cur {
+			for _, d := range pool {
+				next = append(next, prefix+d)
+			}
+		}
+		cur = next
+	}
+	if len(cur) == 0 {
+		return "", false
+	}
+	return strings.Join(uniqueStringTokens(cur), ","), true
+}
+
+// joinPositionPoolGroupsIfNeeded 将「每位一组」的 schemeGroups 拼成按位号池。
+func joinPositionPoolGroupsIfNeeded(cfg parsedSchemeConfig, content string) string {
+	seg := cfg.Play.SegmentLen
+	if seg <= 1 {
+		seg = playPositionCount(cfg.Play)
+	}
+	if seg <= 1 || len(cfg.Groups) < seg {
+		return content
+	}
+	bm := strings.ToLower(strings.TrimSpace(cfg.Play.BetMode))
+	sub := strings.ToLower(strings.TrimSpace(cfg.Play.SubPlayID))
+	isDanshi := bm == "danshi" || bm == "zhixuan_ds" || sub == "zhixuan_ds" || strings.HasSuffix(sub, "_ds")
+	isFushi := bm == "fushi" || sub == "zhixuan_fs"
+	if !isDanshi && !isFushi {
+		return content
+	}
+	if strings.Contains(content, "\n") && looksLikeZhixuanPositionPool(content, seg) {
+		return content
+	}
+	joined := strings.Join(cfg.Groups[:seg], "\n")
+	if looksLikeZhixuanPositionPool(joined, seg) {
+		return joined
+	}
+	return content
+}
+
+// normalizeZhixuanDanshiContent 冷热按位号池在进入单式校验/落库前展开为整注串。
+func normalizeZhixuanDanshiContent(rule playRule, content string) string {
+	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	sub := strings.ToLower(strings.TrimSpace(rule.SubPlayID))
+	if bm == "zuxuan_ds" || sub == "zuxuan_ds" {
+		return content
+	}
+	// 复式/组选复式按位内容勿展成单式票
+	if bm == "fushi" || bm == "zhixuan_fs" || sub == "zhixuan_fs" ||
+		bm == "zuxuan_fs" || sub == "zuxuan_fs" || bm == "zuhe" {
+		return content
+	}
+	isDanshi := bm == "danshi" || bm == "zhixuan_ds" || sub == "zhixuan_ds" || strings.HasSuffix(sub, "_ds")
+	seg := rule.SegmentLen
+	if seg <= 0 {
+		seg = playPositionCount(rule)
+	}
+	// betMode 偶发丢失时：内容已是按位号池且段长≥2，仍按单式展开（对齐 guajibet Format）
+	if !isDanshi {
+		if seg <= 1 || !looksLikeZhixuanPositionPool(content, seg) {
+			return content
+		}
+	}
+	if expanded, ok := expandZhixuanPositionPoolToDanshi(content, seg); ok {
+		return expanded
+	}
+	return content
 }
 
 func uniqueStringTokens(items []string) []string {
@@ -378,6 +520,33 @@ func splitGroupLines(content string) []string {
 		}
 	}
 	return out
+}
+
+/** 保留空行并补齐到 n（直选复式按位校验用，禁止把缺位压成单行号池） */
+func splitGroupLinesPad(content string, n int) []string {
+	if n <= 0 {
+		n = 1
+	}
+	raw := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	out := make([]string, n)
+	for i := 0; i < n; i++ {
+		if i < len(raw) {
+			out[i] = strings.TrimSpace(raw[i])
+		}
+	}
+	return out
+}
+
+/** 是否含至少 1 个 0-9 单 digit（与 parseDigitTokens 不同：空串不算） */
+func hasDigitPickToken(raw string) bool {
+	raw = strings.NewReplacer("\n", ",", "，", ",", " ", ",").Replace(raw)
+	for _, p := range strings.Split(raw, ",") {
+		p = strings.TrimSpace(p)
+		if len(p) == 1 && p[0] >= '0' && p[0] <= '9' {
+			return true
+		}
+	}
+	return false
 }
 
 func parseNumberTokens(raw string, expectLen int) []string {

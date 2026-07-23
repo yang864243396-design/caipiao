@@ -357,6 +357,10 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 	if strings.TrimSpace(betContent) == "" {
 		betContent = cfg.GroupContent
 	}
+	// 前端冷热按位常把每位存成独立 schemeGroups 项（["1,9","1,9","1,9"]），
+	// 单取 GroupContent 只有一位；拼回按位号池后再走单式展开。
+	betContent = joinPositionPoolGroupsIfNeeded(cfg, betContent)
+	betContent = normalizeZhixuanDanshiContent(cfg.Play, betContent)
 
 	balls := sqlcdb.ParseDrawBalls(draw.Balls)
 	playEval := evaluatePlayHit(cfg.Play, balls, betContent, cfg.Contrary, cfg.ContraryPlan, cfg.Play.PositionIdx)
@@ -457,21 +461,9 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 		return nil
 	}
 
-	if !guajiReal {
-		dedup, herr := w.evaluateGuajiBetDedup(ctx, qtx, inst)
-		if herr != nil {
-			return herr
-		}
-		if dedup.Skip {
-			slog.Debug("scheme worker bet skipped: period dedup in tx",
-				"id", inst.ID, "reason", dedup.Reason, "currentOpen", dedup.CurrentOpen, "lastBet", dedup.LastBet, "simBet", inst.SimBet)
-			if dedup.CurrentOpen != "" {
-				w.syncPeriodBetCursor(ctx, qtx, inst, dedup.CurrentOpen)
-			}
-			return nil
-		}
-		draw.IssueNo = dedup.CurrentOpen
-	}
+	// 模拟盘：期号已在 reserveCloudBetPeriod 占位；此处不可再跑 evaluateGuajiBetDedup，
+	// 否则 GuajiPeriodAlreadyTaken 会把刚插入的 cloud_bet_records 判成 period_record_exists，
+	// 返回后 defer 删除占位，表现为永远无模拟投注记录/流水。
 
 	var guajiTargetPeriodNo string
 	if guajiReal {

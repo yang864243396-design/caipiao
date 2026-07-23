@@ -57,10 +57,12 @@ type Instance struct {
 	CountdownWindowSec int   `json:"countdownWindowSec,omitempty"` // 单期投注窗口秒数（start→end），展示倒计时封顶
 	CountdownLabel   string  `json:"countdownLabel,omitempty"`
 	SimBet         bool    `json:"simBet"`
-	RunTypeID    string  `json:"runTypeId,omitempty"`
-	RunTypeLabel string  `json:"runTypeLabel,omitempty"`
-	CreatedAt    string  `json:"createdAt"`
-	UpdatedAt    string  `json:"updatedAt"`
+	// 方案币种（来自 definition config.schemeCurrency；缺省 USDT）
+	SchemeCurrency string `json:"schemeCurrency,omitempty"`
+	RunTypeID      string `json:"runTypeId,omitempty"`
+	RunTypeLabel   string `json:"runTypeLabel,omitempty"`
+	CreatedAt      string `json:"createdAt"`
+	UpdatedAt      string `json:"updatedAt"`
 }
 
 type ShareFollowActionResult struct {

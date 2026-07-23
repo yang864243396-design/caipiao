@@ -1008,7 +1008,7 @@ const showPlanTable = computed(() => activeSubTab.value === '0' || activeSubTab.
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 0.75rem 0.75rem 1rem;
+  padding: 0.75rem var(--page-gutter) 1rem;
   display: flex;
   flex-direction: column;
   gap: 0.65rem;
@@ -1018,12 +1018,12 @@ const showPlanTable = computed(() => activeSubTab.value === '0' || activeSubTab.
 .bms-card {
   background: #fff;
   border-radius: 0.75rem;
-  padding: 1rem 0.875rem;
+  padding: var(--card-pad);
   box-shadow: 0 8px 30px rgba(25, 28, 30, 0.06);
 }
 
 .bms-card--simple {
-  padding: 0.75rem;
+  padding: var(--card-pad);
 }
 
 .bms-field-row {

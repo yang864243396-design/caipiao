@@ -195,7 +195,7 @@ const placeholder = computed(() => {
   border: none;
   border-radius: 0.75rem;
   background: rgba(242, 244, 246, 0.65);
-  padding: 1rem 1.1rem;
+  padding: var(--card-pad);
   font-family: 'Inter', 'Noto Sans SC', sans-serif;
   font-size: 0.9375rem;
   line-height: 1.65;

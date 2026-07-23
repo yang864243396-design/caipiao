@@ -80,8 +80,13 @@ const ANNOUNCE_IMG = '/images/lobby/announce-placeholder.png'
 
 <template>
   <div class="lobby" data-page="stitch-lobby">
-    <header class="lobby-page-head" role="banner">
-      <h1 class="lobby-page-title">游戏大厅</h1>
+    <header class="mss-head lobby-mss-head" role="banner">
+      <div class="mss-head-deco" aria-hidden="true" />
+      <div class="mss-head-bar">
+        <span class="mss-head-spacer" aria-hidden="true" />
+        <h1 class="mss-title">游戏大厅</h1>
+        <span class="mss-head-spacer" aria-hidden="true" />
+      </div>
     </header>
 
     <main class="main">
@@ -266,6 +271,9 @@ const ANNOUNCE_IMG = '/images/lobby/announce-placeholder.png'
 
 <style scoped>
 .lobby {
+  /* 复用会员二级页顶栏（mss-head）色板 */
+  --mss-primary: #0050cb;
+  --mss-primary-strong: #0066ff;
   --c-surface: #f7f9fb;
   --c-on-surface: #191c1e;
   --c-on-surface-variant: #424656;
@@ -283,9 +291,8 @@ const ANNOUNCE_IMG = '/images/lobby/announce-placeholder.png'
   color: var(--c-on-surface);
   font-family: 'Inter', 'Noto Sans SC', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
-  /* 仅留底栏避让，避免多余空白造成空滚 */
+  /* 仅留底栏避让，避免多余空白造成空滚；顶栏自带 safe-area */
   padding-bottom: calc(3.75rem + env(safe-area-inset-bottom));
-  padding-top: env(safe-area-inset-top);
 }
 .material {
   font-family: 'Material Symbols Outlined', sans-serif;
@@ -301,33 +308,10 @@ const ANNOUNCE_IMG = '/images/lobby/announce-placeholder.png'
 .material.m-sm {
   font-size: 0.875rem;
 }
-.lobby-page-head {
-  position: sticky;
-  top: 0;
-  z-index: 40;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: var(--page-titlebar-height);
-  box-sizing: border-box;
-  padding: var(--page-titlebar-pad-y) 1.5rem;
-  background: rgba(247, 249, 251, 0.88);
-  backdrop-filter: blur(28px);
-  -webkit-backdrop-filter: blur(28px);
-}
-.lobby-page-title {
-  margin: 0;
-  font-family: 'Plus Jakarta Sans', 'Noto Sans SC', system-ui, sans-serif;
-  font-size: 1.4375rem;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  color: #0f172a;
-  line-height: 1.2;
-}
 .main {
   max-width: 64rem;
   margin: 0 auto;
-  padding: 0.75rem 1.5rem 1.5rem;
+  padding: 0.75rem var(--page-gutter) 1.5rem;
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
@@ -395,7 +379,7 @@ const ANNOUNCE_IMG = '/images/lobby/announce-placeholder.png'
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  padding: 0.75rem 1.25rem;
+  padding: var(--card-pad);
   background: var(--c-surface-c-low);
   border-radius: 1rem;
 }
@@ -682,14 +666,14 @@ const ANNOUNCE_IMG = '/images/lobby/announce-placeholder.png'
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 1.25rem;
+  padding: var(--card-pad);
   background: rgb(15 23 42 / 42%);
   backdrop-filter: blur(20px);
 }
 
 .lobby-maint-panel {
   width: min(100%, 22rem);
-  padding: 1.5rem;
+  padding: var(--card-pad);
   border-radius: 1rem;
   background: var(--c-surface-c-lowest);
   box-shadow: 0 24px 48px rgb(26 62 138 / 12%);

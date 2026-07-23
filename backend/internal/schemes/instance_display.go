@@ -52,6 +52,13 @@ func (s *Service) ensurePeriodsFreshForDisplay(ctx context.Context, lotteryCode 
 func (s *Service) enrichInstanceForDisplay(ctx context.Context, row sqlcdb.SchemeInstance, now time.Time) Instance {
 	// 开启/启停响应路径：不要同步刷新 periods（ForceRefresh 持锁，易被 worker 拖死）。
 	// 倒计时字段走本地缓存即可；列表轮询会另行刷新。
-	_ = ctx
-	return enrichInstanceForDisplay(ctx, s.q, row, now)
+	item := enrichInstanceForDisplay(ctx, s.q, row, now)
+	if s != nil && s.q != nil {
+		if def, err := s.q.GetSchemeDefinitionByID(ctx, row.DefinitionID); err == nil {
+			item.SchemeCurrency = schemeCurrencyFromConfig(def.Config)
+		} else {
+			item.SchemeCurrency = normalizeSchemeCurrency("")
+		}
+	}
+	return item
 }

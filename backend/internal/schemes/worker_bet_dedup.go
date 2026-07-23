@@ -51,7 +51,7 @@ func (w *Worker) evaluateGuajiBetDedup(
 		return betPeriodDedup{Skip: false, CurrentOpen: ""}, nil
 	}
 
-	lastBet, err := q.SchemeLastThirdPartyBetPeriod(ctx, inst.ID)
+	lastBet, err := q.SchemeLastThirdPartyBetPeriod(ctx, inst.ID, inst.SimBet)
 	if err != nil {
 		return betPeriodDedup{}, err
 	}
@@ -83,9 +83,16 @@ func (w *Worker) evaluateGuajiBetDedup(
 		}
 	}
 
-	taken, err := q.GuajiPeriodAlreadyTaken(ctx, inst.ID, inst.MemberID, currentOpen)
-	if err != nil {
-		return betPeriodDedup{}, err
+	// 模拟盘只看本方案 cloud 记录；正式盘另检会员 pending 第三方注单占期。
+	var taken bool
+	var errTaken error
+	if inst.SimBet {
+		taken, errTaken = q.CloudBetPeriodHandled(ctx, inst.ID, currentOpen)
+	} else {
+		taken, errTaken = q.GuajiPeriodAlreadyTaken(ctx, inst.ID, inst.MemberID, currentOpen)
+	}
+	if errTaken != nil {
+		return betPeriodDedup{}, errTaken
 	}
 	if taken {
 		return betPeriodDedup{

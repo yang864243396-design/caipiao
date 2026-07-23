@@ -231,7 +231,7 @@ onMounted(() => {
 .mlg-main {
   max-width: 40rem;
   margin: 0 auto;
-  padding: 1rem 1.15rem 2rem;
+  padding: 1rem var(--page-gutter) 2rem;
   display: flex;
   flex-direction: column;
   gap: 1rem;
@@ -240,7 +240,7 @@ onMounted(() => {
 .mlg-card {
   background: var(--mlg-card);
   border-radius: 1.25rem;
-  padding: 1.15rem;
+  padding: var(--card-pad);
   box-shadow:
     0 24px 48px -28px rgba(15, 23, 42, 0.18),
     0 4px 16px -8px rgba(15, 23, 42, 0.06);

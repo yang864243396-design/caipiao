@@ -20,7 +20,6 @@ import {
 } from '@/utils/pickPanelOptions'
 import { isLonghuPlayConfigLike } from '@/utils/runTypeMatrix'
 import type {
-  SchemeFixedPick,
   SchemeHotColdWarm,
   SchemeJushuRow,
   SchemeRandomDraw,
@@ -37,7 +36,6 @@ const props = defineProps<{
   triggerBet: SchemeTriggerBet | null
   hotColdWarm: SchemeHotColdWarm | null
   randomDraw: SchemeRandomDraw | null
-  fixedPick: SchemeFixedPick | null
   builtinPlanSnapshotId?: string
   schemeName?: string
   /** 冷热出号拉统计用 */
@@ -468,16 +466,6 @@ const displayedGroupIndexes = computed(() => {
   return props.schemeGroups.map((_, i) => i)
 })
 
-const fixedPickRulesDisplay = computed(() =>
-  (props.fixedPick?.rules ?? []).map((r) => ({
-    posStart: Math.max(0, Math.trunc(Number(r.posStart)) || 0) + 1,
-    posEnd: Math.max(0, Math.trunc(Number(r.posEnd)) || 0) + 1,
-    codeMin: Math.max(0, Math.trunc(Number(r.codeMin)) || 0),
-    codeMax: Math.max(0, Math.trunc(Number(r.codeMax)) || 0),
-    numbers: String(r.numbers ?? ''),
-  })),
-)
-
 const rdCounts = computed(() => {
   const raw = props.randomDraw?.counts ?? []
   if (raw.length) return raw.map((n) => Math.max(1, Math.trunc(Number(n) || 1)))
@@ -605,83 +593,11 @@ function formatGroupContent(content: string): string {
       </div>
     </div>
 
-    <!-- 固定取码：条件规则（与新建页同布局，只读） -->
-    <div v-if="runTypeId === 'fixed_number'" class="scr-fp-rules">
-      <div class="scr-fp-head">
-        <span class="scr-fp-title">取码规则（可选）</span>
-      </div>
-      <p class="scr-run-tip">
-        当上期开奖在「位区间」内任一号码落在「号码区间」时，命中即投该条固定号码；按序匹配、首条命中即投。留空则每期复投下方固定号码。
-      </p>
-      <el-empty
-        v-if="!fixedPickRulesDisplay.length"
-        description="未设置取码规则"
-        :image-size="48"
-      />
-      <div v-for="(rule, ri) in fixedPickRulesDisplay" :key="ri" class="scr-fp-rule">
-        <div class="scr-fp-line">
-          <span class="scr-fp-lbl">位区间</span>
-          <el-input-number
-            :model-value="rule.posStart"
-            :min="1"
-            :max="20"
-            size="small"
-            controls-position="right"
-            class="scr-fp-num"
-            disabled
-          />
-          <span class="scr-fp-dash">-</span>
-          <el-input-number
-            :model-value="rule.posEnd"
-            :min="1"
-            :max="20"
-            size="small"
-            controls-position="right"
-            class="scr-fp-num"
-            disabled
-          />
-          <span class="scr-fp-lbl scr-fp-lbl--code">号码区间</span>
-          <el-input-number
-            :model-value="rule.codeMin"
-            :min="0"
-            :max="99"
-            size="small"
-            controls-position="right"
-            class="scr-fp-num"
-            disabled
-          />
-          <span class="scr-fp-dash">-</span>
-          <el-input-number
-            :model-value="rule.codeMax"
-            :min="0"
-            :max="99"
-            size="small"
-            controls-position="right"
-            class="scr-fp-num"
-            disabled
-          />
-        </div>
-        <div class="scr-fp-line">
-          <span class="scr-fp-lbl">投注号码</span>
-          <el-input
-            :model-value="rule.numbers"
-            size="small"
-            placeholder="命中后投注的号码，多个用逗号分隔"
-            class="scr-fp-nums"
-            disabled
-          />
-        </div>
-      </div>
-    </div>
-
-    <!-- 定码轮换 / 固定取码号码（与新建页同选号面板，只读） -->
+    <!-- 定码轮换 / 固定取码（与新建页同选号面板，只读） -->
     <div
       v-if="runTypeId === 'fixed_rotate' || runTypeId === 'fixed_number'"
       class="scr-groups-stack"
     >
-      <p v-if="runTypeId === 'fixed_number'" class="scr-run-tip scr-run-tip--banner">
-        固定取码：未设置取码规则时，每期原样复投以下固定号码
-      </p>
       <el-empty
         v-if="!displayedGroupIndexes.length"
         description="暂无号码内容"
@@ -694,7 +610,7 @@ function formatGroupContent(content: string): string {
       >
         <div class="scr-group-bar">
           <h3 class="scr-group-title">
-            {{ runTypeId === 'fixed_number' ? '固定取码' : `第 ${idx + 1} 组` }}
+            {{ runTypeId === 'fixed_number' ? '固定号码' : `第 ${idx + 1} 组` }}
           </h3>
           <span class="scr-group-units">注数: {{ groupBetUnits(schemeGroups[idx] ?? '') }}</span>
         </div>
@@ -942,11 +858,9 @@ function formatGroupContent(content: string): string {
           />
         </div>
       </div>
-      <div class="scr-rd-actions">
+      <div class="scr-rd-toolbar">
         <el-button type="primary" plain size="small" disabled>生成预览</el-button>
         <span class="scr-rd-units">预估 {{ rdEstimatedUnits }} 注</span>
-      </div>
-      <div class="scr-rd-strategy-bar">
         <el-radio-group :model-value="rdStrategy" class="scr-rd-strategy" disabled aria-label="换号策略">
           <el-radio v-for="o in RD_STRATEGY_OPTIONS" :key="o.value" :value="o.value">
             {{ o.label }}
@@ -963,9 +877,9 @@ function formatGroupContent(content: string): string {
       <div class="scr-bp-summary">
         <div class="scr-bp-summary-main">
           <p class="scr-bp-summary-title">
-            已跟随：{{ schemeName || '内置计画' }} · {{ playModeSummary }}
+            已跟随：{{ schemeName || '内置计划' }} · {{ playModeSummary }}
           </p>
-          <p class="scr-run-tip">内置计画配置只读，与收藏计划保持一致</p>
+          <p class="scr-run-tip">内置计划配置只读，与收藏计划保持一致</p>
         </div>
       </div>
     </div>
@@ -1018,7 +932,7 @@ function formatGroupContent(content: string): string {
 }
 
 .scr-panel {
-  padding: 1rem;
+  padding: var(--card-pad);
   display: flex;
   flex-direction: column;
   gap: 0.85rem;
@@ -1061,14 +975,14 @@ function formatGroupContent(content: string): string {
 }
 
 .scr-textarea-wrap {
-  padding: 1rem;
+  padding: var(--card-pad);
 }
 
 .scr-area :deep(.el-textarea__inner) {
   border: none;
   border-radius: 0.75rem;
   background: rgba(242, 244, 246, 0.65);
-  padding: 1rem 1.1rem;
+  padding: var(--card-pad);
   min-height: 9.5rem;
   font-size: 0.9375rem;
   font-family: Inter, 'Noto Sans SC', system-ui, sans-serif;
@@ -1090,67 +1004,6 @@ function formatGroupContent(content: string): string {
   border-radius: 0.75rem;
   background: rgba(0, 80, 203, 0.06);
   color: var(--scr-primary);
-}
-
-.scr-fp-rules {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  margin-bottom: 0;
-  padding: 1rem;
-  background: var(--el-fill-color-lighter, #f7f9fb);
-  border-radius: 0.75rem;
-}
-
-.scr-fp-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.scr-fp-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--el-text-color-primary);
-}
-
-.scr-fp-rule {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  padding: 0.75rem;
-  background: #fff;
-  border-radius: 0.5rem;
-}
-
-.scr-fp-line {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-
-.scr-fp-lbl {
-  font-size: 12px;
-  color: var(--el-text-color-regular);
-  white-space: nowrap;
-}
-
-.scr-fp-lbl--code {
-  margin-left: 0.75rem;
-}
-
-.scr-fp-dash {
-  color: var(--el-text-color-secondary);
-}
-
-.scr-fp-num {
-  width: 6rem;
-}
-
-.scr-fp-nums {
-  flex: 1;
-  min-width: 12rem;
 }
 
 .scr-field {
@@ -1585,22 +1438,19 @@ function formatGroupContent(content: string): string {
   color: var(--scr-on-variant);
 }
 
-.scr-rd-actions {
+.scr-rd-toolbar {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.65rem 0.85rem;
+  flex-wrap: wrap;
   margin: 0.5rem 0 0.75rem;
+  width: 100%;
 }
 
 .scr-rd-units {
+  flex-shrink: 0;
   font-size: 0.8125rem;
   color: var(--el-text-color-secondary, #64748b);
-}
-
-.scr-rd-strategy-bar {
-  display: flex;
-  align-items: center;
-  width: 100%;
 }
 
 .scr-rd-strategy {
@@ -1608,8 +1458,8 @@ function formatGroupContent(content: string): string {
   flex-wrap: nowrap;
   align-items: center;
   gap: 0.1rem 0.35rem;
+  flex: 1 1 12rem;
   min-width: 0;
-  width: 100%;
 }
 
 .scr-rd-strategy :deep(.el-radio) {
@@ -1623,7 +1473,8 @@ function formatGroupContent(content: string): string {
 .scr-rd-strategy :deep(.el-radio__label) {
   font-size: 0.75rem;
   font-weight: 600;
-  padding-left: 0.2rem;
+  padding-left: 0.3rem;
+  white-space: nowrap;
 }
 
 .scr-rd-strategy :deep(.el-radio__inner) {

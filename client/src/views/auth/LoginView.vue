@@ -110,7 +110,7 @@ async function onSubmit() {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 1.5rem;
+  padding: 1.5rem var(--page-gutter);
   background:
     radial-gradient(140% 90% at 50% -10%, #e6ebfa 0%, #f7f9fb 55%, #f7f9fb 100%);
   overflow: hidden;
@@ -171,7 +171,7 @@ async function onSubmit() {
 }
 
 .login-card {
-  padding: 1.75rem;
+  padding: var(--card-pad);
   border-radius: 20px;
   background: #ffffff;
   box-shadow: 0 24px 60px rgba(15, 35, 95, 0.08);

@@ -134,7 +134,7 @@ const RUN_TYPE_OPTIONS = [
   { label: '高级开某投某', value: 'adv_trigger_bet' },
   { label: '冷热出号', value: 'hot_cold_warm' },
   { label: '随机出号', value: 'random_draw' },
-  { label: '固定取码', value: 'fixed_number' },
+  { label: '固定号码', value: 'fixed_number' },
 ] as const
 
 const BET_MULTIPLIER_KIND_LABELS: Record<string, string> = {
@@ -623,7 +623,7 @@ watch(resolvedSubPlayOptions, (opts) => {
             class="scheme-group-card"
           >
             <div class="scheme-group-head">
-              <strong>{{ runTypeId === 'fixed_number' ? '固定取码' : `第 ${idx + 1} 组` }}</strong>
+              <strong>{{ runTypeId === 'fixed_number' ? '固定号码' : `第 ${idx + 1} 组` }}</strong>
               <el-button
                 v-if="runTypeId === 'fixed_rotate' && schemeGroups.length > 1"
                 link

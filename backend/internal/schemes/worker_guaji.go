@@ -2,6 +2,7 @@ package schemes
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -88,7 +89,25 @@ func (w *Worker) placeGuajiSchemeBet(
 		subPlay.SegmentRule,
 		ruleID,
 	)
-	guajiContent := guajibet.FormatBetContentForRule(ruleMeta, betContent)
+	// 冷热按位号池先展开为单式整注，并在调用第三方之前完成本端校验落库载荷。
+	// 避免「先下到第三方、后 Normalize 失败」造成对账孤儿单。
+	normalizedContent := normalizeZhixuanDanshiContent(cfg.Play, betContent)
+	payload, err := NormalizeBetPayload(BetPayload{
+		PlayTemplate: cfg.Play.PlayTemplate,
+		TypeID:       cfg.Play.PlayTypeID,
+		SubID:        cfg.Play.SubPlayID,
+		BetMode:      cfg.Play.BetMode,
+		GroupContent: normalizedContent,
+		PlayMethod:   playMethodForPayload(cfg.PlayTypeLabel, subPlay.Label),
+	})
+	if err != nil {
+		return schemeGuajiBetMeta{}, err
+	}
+	var normalizedPayload BetPayload
+	if err := json.Unmarshal(payload, &normalizedPayload); err == nil && strings.TrimSpace(normalizedPayload.GroupContent) != "" {
+		normalizedContent = normalizedPayload.GroupContent
+	}
+	guajiContent := guajibet.FormatBetContentForRule(ruleMeta, normalizedContent)
 	if guajibet.IsFushiBaoziZeroBet(ruleMeta, guajiContent) {
 		return schemeGuajiBetMeta{}, fmt.Errorf("%w: %w", guajibet.ErrPlaceRejected, guajibet.ErrZeroBets)
 	}
@@ -106,16 +125,17 @@ func (w *Worker) placeGuajiSchemeBet(
 
 	betRes, err := w.guajiBets.PlaceRealBet(ctx, account, guajibet.Request{
 		LotteryCode: inst.LotteryCode,
-		GameID:     gameID,
-		RuleID:     ruleID,
-		IssueNo:    draw.IssueNo,
-		Content:    guajiContent,
-		PlayMethod: cfg.PlayTypeLabel,
-		Amount:     amount,
-		Multiplier: multInt,
-		BetsNums:   betsNums,
-		AmountUnit: amountUnit,
-		RuleMeta:   ruleMeta,
+		GameID:      gameID,
+		RuleID:      ruleID,
+		IssueNo:     draw.IssueNo,
+		Content:     guajiContent,
+		PlayMethod:  cfg.PlayTypeLabel,
+		Amount:      amount,
+		Multiplier:  multInt,
+		BetsNums:    betsNums,
+		AmountUnit:  amountUnit,
+		Currency:    cfg.Currency,
+		RuleMeta:    ruleMeta,
 	})
 	if err != nil {
 		if errors.Is(err, guajibet.ErrInsufficient) {
@@ -134,17 +154,6 @@ func (w *Worker) placeGuajiSchemeBet(
 	orderNo := fmt.Sprintf("BO%d%d", inst.MemberID, time.Now().UnixMilli())
 	outLottery := pgtype.Text{String: gameID, Valid: gameID != ""}
 	outPlay := pgtype.Text{String: ruleID, Valid: ruleID != ""}
-	payload, err := NormalizeBetPayload(BetPayload{
-		PlayTemplate: cfg.Play.PlayTemplate,
-		TypeID:       cfg.Play.PlayTypeID,
-		SubID:        cfg.Play.SubPlayID,
-		BetMode:      cfg.Play.BetMode,
-		GroupContent: betContent,
-		PlayMethod:   playMethodForPayload(cfg.PlayTypeLabel, subPlay.Label),
-	})
-	if err != nil {
-		return schemeGuajiBetMeta{}, err
-	}
 	_, err = qtx.InsertBetOrder(ctx, sqlcdb.InsertBetOrderParams{
 		OrderNo:             orderNo,
 		MemberID:            inst.MemberID,

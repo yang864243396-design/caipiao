@@ -2,10 +2,10 @@
 import { computed, ref, watch } from 'vue'
 import type { PlayConfig } from '@/utils/betPayload'
 import {
-  digitOptionsForConfig,
   groupDigitInputHint,
-  poolMaxPicksForConfig,
+  schemeGroupContentHasDigits,
   schemeGroupContentToInputBox,
+  schemeGroupInputBoxToContent,
 } from '@/utils/pickPanelOptions'
 
 /**
@@ -17,58 +17,27 @@ import {
  * 内部按号池 token 宽度拆分（0-9 按 1 位、11选5 等按 2 位补零），并与引擎所需的
  * 「每位一行、逗号分隔」内容格式双向转换（显示压缩、存储按位换行）。
  */
-const props = defineProps<{
-  config: PlayConfig
-  modelValue: string
-  /** 详情只读：禁止编辑 */
-  disabled?: boolean
-}>()
+const props = withDefaults(
+  defineProps<{
+    config: PlayConfig
+    modelValue: string
+    /** 详情只读：禁止编辑 */
+    disabled?: boolean
+    /** 文本行数（紧凑场景可缩小） */
+    rows?: number
+  }>(),
+  { rows: 6 },
+)
 
 const emit = defineEmits<{
   'update:modelValue': [string]
 }>()
 
-const options = computed(() => digitOptionsForConfig(props.config))
-const tokenWidth = computed(() => options.value[0]?.length || 1)
-const segLen = computed(() => Math.max(1, props.config.segmentLen || 1))
-const maxPicks = computed(() => poolMaxPicksForConfig(props.config))
-
 const raw = ref('')
+const rowCount = computed(() => Math.max(2, Math.trunc(props.rows || 6)))
 
-/** 解析单位内的连写号码为号池合法 token（按 token 宽度切块、去重、补零形态） */
-function parseSegment(seg: string): string[] {
-  const digits = String(seg ?? '').replace(/\D/g, '')
-  const w = tokenWidth.value
-  const seen = new Set<string>()
-  const out: string[] = []
-  for (let i = 0; i + w <= digits.length; i += w) {
-    const chunk = digits.slice(i, i + w)
-    const n = Number(chunk)
-    const match = options.value.find((o) => Number(o) === n)
-    if (!match || seen.has(match)) continue
-    seen.add(match)
-    out.push(match)
-  }
-  return out
-}
-
-/** 录入框（压缩格式）→ 引擎内容（单位型单行、多位型按位换行） */
 function boxToContent(box: string): string {
-  if (segLen.value <= 1) {
-    let toks = parseSegment(box)
-    const cap = maxPicks.value
-    if (cap != null && cap > 0) toks = toks.slice(0, cap)
-    return toks.join(',')
-  }
-  const segs = String(box ?? '').split(/[,，]/)
-  const lines: string[] = []
-  let any = false
-  for (let i = 0; i < segLen.value; i++) {
-    const toks = parseSegment(segs[i] ?? '')
-    if (toks.length) any = true
-    lines.push(toks.join(','))
-  }
-  return any ? lines.join('\n') : ''
+  return schemeGroupInputBoxToContent(box, props.config)
 }
 
 function contentToBox(content: string): string {
@@ -76,7 +45,12 @@ function contentToBox(content: string): string {
 }
 
 function syncFromModel(content: string): void {
-  raw.value = contentToBox(content)
+  const src = String(content ?? '')
+  raw.value = contentToBox(src)
+  // 仅逗号/空白的空槽（如历史误存的 ,,,,）归一为空，露出 placeholder
+  if (src !== '' && !schemeGroupContentHasDigits(src)) {
+    emit('update:modelValue', '')
+  }
 }
 
 function onInput(value: string): void {
@@ -120,11 +94,11 @@ const poolHint = computed(() => groupDigitInputHint(props.config))
 </script>
 
 <template>
-  <div class="sgi-panel" :class="{ 'is-disabled': disabled }">
+  <div class="sgi-panel" :class="{ 'is-disabled': disabled, 'is-compact': rowCount <= 3 }">
     <el-input
       :model-value="raw"
       type="textarea"
-      :rows="6"
+      :rows="rowCount"
       resize="none"
       class="sgi-input"
       :placeholder="poolHint"
@@ -149,12 +123,19 @@ const poolHint = computed(() => groupDigitInputHint(props.config))
   border: none;
   border-radius: 0.75rem;
   background: rgba(242, 244, 246, 0.65);
-  padding: 1rem 1.1rem;
+  padding: var(--card-pad);
   font-size: 0.9375rem;
   font-family: 'Inter', 'Noto Sans SC', system-ui, sans-serif;
   line-height: 1.65;
   box-shadow: none;
   white-space: pre-wrap;
+}
+
+.sgi-panel.is-compact .sgi-input :deep(.el-textarea__inner) {
+  min-height: 4.5rem;
+  padding: var(--card-pad);
+  font-size: 0.875rem;
+  line-height: 1.5;
 }
 
 .sgi-input :deep(.el-textarea__inner:focus) {

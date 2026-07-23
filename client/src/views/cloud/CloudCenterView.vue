@@ -5,11 +5,16 @@ import { ElMessage } from 'element-plus'
 import ContentDialog from '@/components/ui/ContentDialog.vue'
 import { startCloudRunningSync, cloudRunningPollMs } from '@/composables/useCloudRunningPoll'
 import { ApiError } from '@/api/client'
-import { deleteSchemeDefinition, getSchemeDefinition } from '@/api/schemes/definitions'
+import { deleteSchemeDefinition, getSchemeDefinition, updateSchemeDefinition } from '@/api/schemes/definitions'
+import {
+  PRIMARY_CURRENCIES,
+  fetchGuajiBalance,
+  type GuajiBalance,
+  type PrimaryCurrency,
+} from '@/api/guaji/accounts'
 import { confirmDialog } from '@/utils/confirmDialog'
 import { normalizeSchemeTimePairFromConfig, schemeStartTimeOpenError } from '@/utils/schemeDateTime'
-import { minBetOpenMessage, schemeMinBetOpenError } from '@/utils/schemeMinBet'
-import { fetchPrimaryCurrency } from '@/api/guaji/accounts'
+import { minBetOpenMessage, schemeMinBetOpenError, schemeMinSingleBetAmount } from '@/utils/schemeMinBet'
 import { redirectToGuajiAuthIfNeeded, isGuajiAuthRequiredError } from '@/composables/useGuajiAuthGuard'
 import {
   fetchCloudGlobalSettings,
@@ -41,8 +46,11 @@ import {
   saveCloudInstanceMultiplier,
   saveCloudInstanceSimBet,
   normalizeSchemeMultiplier,
+  normalizeSchemeCurrency,
   type CloudSchemeCard,
 } from '@/api/cloud/center'
+
+const SCHEME_CURRENCY_OPTIONS = PRIMARY_CURRENCIES
 
 const router = useRouter()
 
@@ -63,6 +71,7 @@ const loadMoreSentinel = ref<HTMLElement | null>(null)
 /** 各方案倍数系数上次已保存值，用于弹窗确定时判断是否需要提交 */
 const multiplierSaved = ref<Record<string, string>>({})
 const multiplierSavingId = ref<string | null>(null)
+const currencySavingId = ref<string | null>(null)
 const simBetSavingId = ref<string | null>(null)
 const multiplierDialogVisible = ref(false)
 const multiplierEditScheme = ref<CloudSchemeCard | null>(null)
@@ -72,14 +81,8 @@ const searchDialogVisible = ref(false)
 const searchDraft = ref('')
 const schemeSearchKeyword = ref('')
 
-const displayedSchemes = computed(() => {
-  const q = schemeSearchKeyword.value.trim().toLowerCase()
-  if (!q) return runningSchemes.value
-  return runningSchemes.value.filter((s) => {
-    const hay = `${s.schemeName} ${s.lotteryName} ${s.definitionId} ${s.id}`.toLowerCase()
-    return hay.includes(q)
-  })
-})
+/** 列表即服务端结果（含搜索）；不再仅过滤已加载页 */
+const displayedSchemes = computed(() => runningSchemes.value)
 
 const lookbackDialogVisible = ref(false)
 
@@ -116,9 +119,18 @@ function setupLoadMoreObserver() {
         void loadSchemePage(false)
       }
     },
-    { root: null, rootMargin: '120px', threshold: 0 },
+    { root: null, rootMargin: '160px', threshold: 0 },
   )
   loadMoreObserver.observe(loadMoreSentinel.value)
+  // 哨兵已在视口内时 IO 不一定二次回调，补一次探测
+  requestAnimationFrame(() => {
+    const el = loadMoreSentinel.value
+    if (!el || !listHasMore.value || listLoadingMore.value || pageLoading.value) return
+    const rect = el.getBoundingClientRect()
+    if (rect.top < window.innerHeight + 160) {
+      void loadSchemePage(false)
+    }
+  })
 }
 
 function applyRunningSchemes(cards: CloudSchemeCard[], preserveOrder = false) {
@@ -159,13 +171,15 @@ async function loadSchemePage(reset = false) {
     listLoadingMore.value = true
   }
   try {
+    const q = schemeSearchKeyword.value.trim()
     const res = await fetchRunningSchemesPage({
       limit: CLOUD_SCHEME_PAGE_SIZE,
       cursor: reset ? undefined : listNextCursor.value,
+      ...(q ? { q } : {}),
     })
     const cards = res.items.map(instanceToDisplay)
-    listTotal.value = res.total ?? cards.length
-    listHasMore.value = res.page?.hasMore ?? false
+    listTotal.value = res.total ?? (reset ? cards.length : Math.max(listTotal.value, runningSchemes.value.length + cards.length))
+    listHasMore.value = Boolean(res.page?.hasMore)
     listNextCursor.value = res.page?.nextCursor
     if (reset) {
       applyRunningSchemes(cards)
@@ -406,6 +420,46 @@ async function toggleSimBet(s: CloudSchemeCard, simBet: boolean) {
   }
 }
 
+function guajiBalanceOf(bal: GuajiBalance, currency: PrimaryCurrency): number {
+  const raw = currency === 'USDT' ? bal.usdt : currency === 'TRX' ? bal.trx : bal.cny
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw
+  if (String(bal.currency ?? '').toUpperCase() === currency && Number.isFinite(bal.amount)) {
+    return bal.amount
+  }
+  return Number.NaN
+}
+
+async function onSchemeCurrencyChange(s: CloudSchemeCard, raw: string | number) {
+  if (!s.definitionId || currencySavingId.value !== null || s.status === 'running') return
+  const next = normalizeSchemeCurrency(String(raw))
+  const prev = normalizeSchemeCurrency(s.schemeCurrency)
+  if (next === prev) return
+  const idx = runningSchemes.value.findIndex((x) => x.id === s.id)
+  if (idx >= 0) {
+    runningSchemes.value[idx] = {
+      ...runningSchemes.value[idx],
+      schemeCurrency: next,
+      schemeCurrencyFromApi: true,
+    }
+  }
+  currencySavingId.value = s.id
+  try {
+    await updateSchemeDefinition(s.definitionId, { schemeCurrency: next as PrimaryCurrency })
+    ElMessage.success(`币种已切换为 ${next}`)
+  } catch (e) {
+    if (idx >= 0) {
+      runningSchemes.value[idx] = {
+        ...runningSchemes.value[idx],
+        schemeCurrency: prev,
+        schemeCurrencyFromApi: true,
+      }
+    }
+    ElMessage.error(e instanceof ApiError ? e.message : '币种切换失败')
+  } finally {
+    currencySavingId.value = null
+  }
+}
+
 function toggleLookbackJudgment(mode: Exclude<LookbackJudgment, ''>) {
   lookback.judgment = lookback.judgment === mode ? '' : mode
 }
@@ -447,21 +501,25 @@ async function confirmLookback() {
 }
 
 function onHeaderSearch() {
-  searchDraft.value = schemeSearchKeyword.value
+  searchDraft.value = ''
   searchDialogVisible.value = true
 }
 
-function applySchemeSearch() {
-  schemeSearchKeyword.value = searchDraft.value.trim()
+async function applySchemeSearch() {
+  const q = searchDraft.value.trim()
   searchDialogVisible.value = false
-  if (schemeSearchKeyword.value && displayedSchemes.value.length === 0) {
-    ElMessage.info('未找到匹配的运行中方案')
+  searchDraft.value = ''
+  schemeSearchKeyword.value = q
+  await loadSchemePage(true)
+  if (q && displayedSchemes.value.length === 0) {
+    ElMessage.info('未找到匹配的方案')
   }
 }
 
-function clearSchemeSearch() {
+async function clearSchemeSearch() {
   schemeSearchKeyword.value = ''
   searchDraft.value = ''
+  await loadSchemePage(true)
 }
 
 function onHeaderAdd() {
@@ -507,12 +565,25 @@ async function enableAllSchemes() {
         const msg =
           e instanceof ApiError && e.message.includes('预计开启时间')
             ? START_TIME_OPEN_MSG
-            : e instanceof ApiError && (e.message.includes('单次投注金额') || e.message.includes('低于0.1'))
-              ? minBetOpenMessage('CNY')
-              : e instanceof Error
-                ? e.message
-                : '失败'
+            : e instanceof ApiError && e.message.includes('余额不足')
+              ? START_INSUFFICIENT_FUNDS_MSG
+              : e instanceof ApiError && e.message.includes('最多可同时开启5个模拟')
+                ? SIM_CONCURRENT_LIMIT_MSG
+              : e instanceof ApiError && e.message.includes('今天模拟投注运行次数已达上限')
+                ? SIM_DAILY_START_LIMIT_MSG
+                : e instanceof ApiError && (e.message.includes('单次投注金额') || e.message.includes('低于0.1'))
+                    ? minBetOpenMessage(s.schemeCurrency)
+                    : e instanceof Error
+                      ? e.message
+                      : '失败'
         failed.push(`${s.schemeName}：${msg}`)
+        // 模拟配额打满时后续大概率同样失败，提前结束一键开启
+        if (
+          e instanceof ApiError &&
+          (e.message.includes('最多可同时开启5个模拟') || e.message.includes('今天模拟投注运行次数已达上限'))
+        ) {
+          break
+        }
       }
     }
     if (okCount > 0) {
@@ -553,6 +624,21 @@ function openSchemeDetail(s: CloudSchemeCard) {
 }
 
 const START_TIME_OPEN_MSG = '预计开启时间小于现在时间 请修改后再执行开启'
+const START_INSUFFICIENT_FUNDS_MSG = '可用余额不足，请充值后再开启'
+const SIM_CONCURRENT_LIMIT_MSG =
+  '最多可同时开启5个模拟测试方案，如需开启新方案，请先关闭一个已开启的方案'
+const SIM_DAILY_START_LIMIT_MSG = '今天模拟投注运行次数已达上限'
+
+const simQuota = computed(() => centerStats.value.simQuota ?? {
+  todayStarts: 0,
+  todayStartsLimit: 5,
+  running: 0,
+  runningLimit: 5,
+})
+/** 今日模拟剩余可开启次数：5/5 → 0/5（用完后当日不可再开） */
+const simTodayRemaining = computed(() =>
+  Math.max(0, (simQuota.value.todayStartsLimit || 5) - (simQuota.value.todayStarts || 0)),
+)
 
 async function validateBeforeOpen(s: CloudSchemeCard): Promise<boolean> {
   if (!s.definitionId) return true
@@ -573,7 +659,9 @@ async function validateBeforeOpen(s: CloudSchemeCard): Promise<boolean> {
       })
       return false
     }
-    const currency = await fetchPrimaryCurrency().catch(() => 'CNY')
+    const currency = normalizeSchemeCurrency(
+      String((def.config as Record<string, unknown> | undefined)?.schemeCurrency ?? s.schemeCurrency),
+    )
     const minBetErr = schemeMinBetOpenError(
       (def.config ?? {}) as Record<string, unknown>,
       s.multiplier,
@@ -589,13 +677,36 @@ async function validateBeforeOpen(s: CloudSchemeCard): Promise<boolean> {
       })
       return false
     }
+    // 真实投注：开启前本地预检余额（与后端门槛一致；最终以后端为准）
+    if (!s.simBet) {
+      const need = schemeMinSingleBetAmount(
+        (def.config ?? {}) as Record<string, unknown>,
+        s.multiplier,
+      )
+      try {
+        const bal = await fetchGuajiBalance()
+        const available = guajiBalanceOf(bal, currency)
+        if (Number.isFinite(available) && available + 1e-9 < need) {
+          await confirmDialog({
+            title: '无法开启',
+            message: START_INSUFFICIENT_FUNDS_MSG,
+            tone: 'warning',
+            confirmText: '我知道了',
+            showCancel: false,
+          })
+          return false
+        }
+      } catch {
+        // 余额拉取失败时交给后端开启接口判定
+      }
+    }
     return true
   } catch {
     return true
   }
 }
 
-function showStartOpenError(e: unknown): void {
+function showStartOpenError(e: unknown, schemeCurrency?: string): void {
   void (async () => {
     if (await redirectToGuajiAuthIfNeeded(e, (path) => router.push(path))) return
     const raw = e instanceof Error ? e.message : '操作失败'
@@ -604,6 +715,14 @@ function showStartOpenError(e: unknown): void {
     const isMinBet =
       (e instanceof ApiError && (raw.includes('单次投注金额') || raw.includes('低于'))) ||
       raw.includes('单次投注金额')
+    const isInsufficient =
+      (e instanceof ApiError && raw.includes('余额不足')) || raw.includes('余额不足')
+    const isSimConcurrent =
+      (e instanceof ApiError && raw.includes('最多可同时开启5个模拟')) ||
+      raw.includes('最多可同时开启5个模拟')
+    const isSimDaily =
+      (e instanceof ApiError && raw.includes('今天模拟投注运行次数已达上限')) ||
+      raw.includes('今天模拟投注运行次数已达上限')
     if (isStartTime) {
       void confirmDialog({
         title: '无法开启',
@@ -617,7 +736,37 @@ function showStartOpenError(e: unknown): void {
     if (isMinBet) {
       void confirmDialog({
         title: '无法开启',
-        message: raw.includes('单次投注金额') ? raw : minBetOpenMessage('CNY'),
+        message: raw.includes('单次投注金额') ? raw : minBetOpenMessage(schemeCurrency),
+        tone: 'warning',
+        confirmText: '我知道了',
+        showCancel: false,
+      })
+      return
+    }
+    if (isInsufficient) {
+      void confirmDialog({
+        title: '无法开启',
+        message: START_INSUFFICIENT_FUNDS_MSG,
+        tone: 'warning',
+        confirmText: '我知道了',
+        showCancel: false,
+      })
+      return
+    }
+    if (isSimConcurrent) {
+      void confirmDialog({
+        title: '无法开启',
+        message: SIM_CONCURRENT_LIMIT_MSG,
+        tone: 'warning',
+        confirmText: '我知道了',
+        showCancel: false,
+      })
+      return
+    }
+    if (isSimDaily) {
+      void confirmDialog({
+        title: '无法开启',
+        message: SIM_DAILY_START_LIMIT_MSG,
         tone: 'warning',
         confirmText: '我知道了',
         showCancel: false,
@@ -637,7 +786,7 @@ async function startScheme(s: CloudSchemeCard) {
     void refreshCloudStats()
     ElMessage.success(`已开启：${s.schemeName}`)
   } catch (e) {
-    showStartOpenError(e)
+    showStartOpenError(e, s.schemeCurrency)
   }
 }
 
@@ -660,7 +809,13 @@ function patchSchemeCard(updated: Awaited<ReturnType<typeof startCloudInstance>>
   const idx = runningSchemes.value.findIndex((x) => x.id === updated.id)
   const card = instanceToDisplay(updated)
   if (idx >= 0) {
-    runningSchemes.value[idx] = mergeSchemeCountdownOnPoll(runningSchemes.value[idx], card)
+    const prev = runningSchemes.value[idx]
+    const merged = mergeSchemeCountdownOnPoll(prev, card)
+    // 启停响应未带币种时，保留卡片上已选/已展示的币种
+    if (!card.schemeCurrencyFromApi && prev.schemeCurrency) {
+      merged.schemeCurrency = normalizeSchemeCurrency(prev.schemeCurrency)
+    }
+    runningSchemes.value[idx] = merged
   }
 }
 
@@ -846,18 +1001,29 @@ function statusBadgeClass(s: CloudSchemeCard): string {
 
       <section class="cc-list-sec">
         <div class="cc-list-head">
-          <h2 class="cc-list-h2">运行中方案</h2>
+          <div class="cc-list-head-left">
+            <h2 class="cc-list-h2">运行中方案</h2>
+            <span class="cc-sim-quota" title="剩余可开启次数；北京时间每天 0 点恢复为 5/5">
+              今日模拟：{{ simTodayRemaining }}/{{ simQuota.todayStartsLimit }}
+            </span>
+            <span class="cc-sim-quota" title="当前正在运行的模拟方案数">
+              模拟投注运行：{{ simQuota.running }}/{{ simQuota.runningLimit }}
+            </span>
+          </div>
           <span class="cc-list-meta">
             共 {{ schemeCount }} 个方案
             <template v-if="schemeSearchKeyword">
-              ，筛选 {{ displayedSchemeCount }} 个
+              <template v-if="displayedSchemeCount < schemeCount">，已加载 {{ displayedSchemeCount }} 个</template>
               <button type="button" class="cc-search-clear" @click="clearSchemeSearch">清除</button>
+            </template>
+            <template v-else-if="listHasMore && displayedSchemeCount < schemeCount">
+              ，已加载 {{ displayedSchemeCount }} 个
             </template>
           </span>
         </div>
 
         <p v-if="displayedSchemes.length === 0" class="cc-list-empty">
-          {{ schemeSearchKeyword ? '未找到匹配的运行中方案' : '暂无运行中的方案' }}
+          {{ schemeSearchKeyword ? '未找到匹配的方案' : '暂无方案' }}
         </p>
 
         <div v-for="s in displayedSchemes" :key="s.id" :class="schemeCardClass(s)" role="button" tabindex="0"
@@ -899,11 +1065,26 @@ function statusBadgeClass(s: CloudSchemeCard): string {
               <span class="cc-k">回头盈亏</span>
               <span class="cc-v cc-v--error">{{ s.lookbackPnl }}</span>
             </div>
-            <div class="cc-kv cc-kv--last cc-kv--mult" @click.stop>
+            <div class="cc-kv cc-kv--last" @click.stop>
               <span class="cc-k">倍数系数</span>
               <el-input :model-value="s.multiplier" readonly size="small"
                 class="cc-el-inp cc-el-inp--mult cc-el-inp--mult-trigger" :disabled="multiplierSavingId === s.id"
                 @click="openMultiplierDialog(s)" />
+            </div>
+            <div class="cc-kv cc-kv--last" @click.stop>
+              <span class="cc-k">币种</span>
+              <el-select
+                :model-value="s.schemeCurrency"
+                size="small"
+                class="cc-currency-select"
+                aria-label="方案币种"
+                :title="s.status === 'running' ? '运行中不可修改方案币种' : '切换方案币种'"
+                :disabled="s.status === 'running' || currencySavingId === s.id || !s.definitionId"
+                :loading="currencySavingId === s.id"
+                @update:model-value="(v: string) => onSchemeCurrencyChange(s, v)"
+              >
+                <el-option v-for="c in SCHEME_CURRENCY_OPTIONS" :key="c" :label="c" :value="c" />
+              </el-select>
             </div>
           </div>
 
@@ -928,12 +1109,12 @@ function statusBadgeClass(s: CloudSchemeCard): string {
           </div>
         </div>
 
-        <div v-if="listHasMore && displayedSchemes.length > 0 && !schemeSearchKeyword" ref="loadMoreSentinel"
+        <div v-if="listHasMore && displayedSchemes.length > 0" ref="loadMoreSentinel"
           class="cc-list-sentinel" aria-hidden="true" />
         <p v-if="listLoadingMore" class="cc-list-more">加载中…</p>
-        <p v-else-if="!listHasMore && runningSchemes.length > 0 && !schemeSearchKeyword"
+        <p v-else-if="!listHasMore && runningSchemes.length > 0"
           class="cc-list-more cc-list-more--done">
-          已加载全部方案
+          {{ schemeSearchKeyword ? '已加载全部匹配方案' : '已加载全部方案' }}
         </p>
       </section>
     </main>
@@ -1143,7 +1324,7 @@ function statusBadgeClass(s: CloudSchemeCard): string {
 .cc-head {
   background: linear-gradient(180deg, var(--cc-primary-strong) 0%, var(--cc-primary) 100%);
   color: #fff;
-  padding: max(1.75rem, env(safe-area-inset-top)) 1.25rem 3.75rem;
+  padding: max(1.75rem, env(safe-area-inset-top)) var(--page-gutter) 3.75rem;
   border-radius: 0 0 2rem 2rem;
   box-shadow: 0 20px 40px -24px rgba(0, 80, 203, 0.45);
 }
@@ -1257,7 +1438,7 @@ function statusBadgeClass(s: CloudSchemeCard): string {
 .cc-main {
   max-width: 40rem;
   margin: 0 auto;
-  padding: 0 1.15rem 2rem;
+  padding: 0 var(--page-gutter) 2rem;
   margin-top: -1.75rem;
   display: flex;
   flex-direction: column;
@@ -1267,7 +1448,7 @@ function statusBadgeClass(s: CloudSchemeCard): string {
 .cc-panel {
   background: var(--cc-card);
   border-radius: 1rem;
-  padding: 1rem;
+  padding: var(--card-pad);
   box-shadow: 0 24px 48px -28px rgba(15, 23, 42, 0.12), 0 4px 16px -8px rgba(15, 23, 42, 0.06);
   display: flex;
   flex-direction: column;
@@ -1439,7 +1620,17 @@ function statusBadgeClass(s: CloudSchemeCard): string {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
+  gap: 0.5rem;
   padding: 0 0.15rem;
+  flex-wrap: wrap;
+}
+
+.cc-list-head-left {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.75rem;
+  min-width: 0;
 }
 
 .cc-list-h2 {
@@ -1450,10 +1641,19 @@ function statusBadgeClass(s: CloudSchemeCard): string {
   letter-spacing: -0.01em;
 }
 
+.cc-sim-quota {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--cc-on-var);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .cc-list-meta {
   font-size: 0.6875rem;
   font-weight: 600;
   color: var(--cc-on-var);
+  margin-left: auto;
 }
 
 .cc-search-clear {
@@ -1469,7 +1669,7 @@ function statusBadgeClass(s: CloudSchemeCard): string {
 
 .cc-list-empty {
   margin: 0.5rem 0 1rem;
-  padding: 1.25rem;
+  padding: var(--card-pad);
   text-align: center;
   font-size: 0.875rem;
   color: var(--cc-on-var);
@@ -1497,7 +1697,7 @@ function statusBadgeClass(s: CloudSchemeCard): string {
   min-width: 0;
   background: var(--cc-card);
   border-radius: 1.25rem;
-  padding: 1.25rem;
+  padding: var(--card-pad);
   box-shadow: 0 12px 32px -20px rgba(15, 23, 42, 0.14);
 }
 
@@ -1675,12 +1875,18 @@ function statusBadgeClass(s: CloudSchemeCard): string {
   padding-bottom: 0;
 }
 
-.cc-kv--mult {
-  justify-content: space-between;
-}
-
 .cc-el-inp--mult {
   width: 3.25rem;
+  flex: 0 0 auto;
+}
+
+.cc-currency-select {
+  width: 5.25rem;
+  flex: 0 0 auto;
+}
+
+.cc-currency-select :deep(.el-select__wrapper) {
+  min-height: 1.75rem;
 }
 
 .cc-el-inp--mult-trigger :deep(.el-input__wrapper) {
@@ -1768,7 +1974,7 @@ function statusBadgeClass(s: CloudSchemeCard): string {
 }
 
 .cc-lookback-dialog .el-dialog__body {
-  padding: 0 1.5rem 1.25rem;
+  padding: 0 var(--page-gutter) 1.25rem;
   max-height: min(75dvh, 34rem);
   overflow-y: auto;
   scrollbar-width: none;
@@ -2010,7 +2216,7 @@ function statusBadgeClass(s: CloudSchemeCard): string {
 }
 
 .lb-logic-card {
-  padding: 1rem;
+  padding: var(--card-pad);
   border-radius: 0.75rem;
   border: 1px solid rgba(194, 198, 216, 0.55);
   background: rgba(242, 244, 246, 0.45);

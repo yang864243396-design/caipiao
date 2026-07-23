@@ -188,7 +188,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 1.5rem;
+  padding: var(--card-pad);
   background: rgba(224, 227, 229, 0.78);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
