@@ -212,7 +212,7 @@ export const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes,
   // 云端中心 / 会员中心等页共用 window 滚动容器；不配置时切 Tab 会继承上一页滚动位置
-  scrollBehavior(to, from, savedPosition) {
+  scrollBehavior(to, _from, savedPosition) {
     if (savedPosition) return savedPosition
     if (to.hash) {
       return { el: to.hash, top: 0, behavior: 'smooth' }
