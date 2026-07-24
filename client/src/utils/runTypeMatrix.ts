@@ -549,6 +549,73 @@ export function isPc28HezhiConfigLike(config: {
   return false
 }
 
+type AdvTriggerPosConfig = {
+  betMode?: string
+  playTypeId?: string
+  playTypeLabel?: string
+  playMethodLabel?: string
+  guajiGroup?: string
+  subPlayId?: string
+  catalogSubId?: string
+  playTemplate?: string
+  inputMode?: string
+  segmentLen?: number
+}
+
+function isAdvTriggerTextLikePlay(config: AdvTriggerPosConfig): boolean {
+  if (isLonghuPlayConfigLike(config) || isPc28ModeConfigLike(config)) return true
+  const bm = String(config.betMode ?? '')
+  return (
+    bm === 'dxds' ||
+    bm === 'daxiao' ||
+    bm === 'danshuang' ||
+    bm === 'teshu' ||
+    bm === 'longhubao' ||
+    bm === 'zhuangxian' ||
+    bm === 'longhu' ||
+    bm === 'longhuhe'
+  )
+}
+
+function isAdvTriggerDingweiPlay(config: AdvTriggerPosConfig): boolean {
+  const bm = String(config.betMode ?? '')
+  const tid = String(config.playTypeId ?? '')
+  const group = String(config.guajiGroup ?? '')
+  const label = String(config.playMethodLabel ?? '')
+  return (
+    bm === 'dingwei' ||
+    tid === 'dingwei' ||
+    tid === 'g006' ||
+    group === '一星' ||
+    isDingweiStarType(config.playTypeLabel ?? '', tid, label)
+  )
+}
+
+/** 高级开某投某：一星/定位胆展示「投注位」多选芯片 */
+export function supportsAdvTriggerPositionPicker(config: AdvTriggerPosConfig): boolean {
+  if (isAdvTriggerTextLikePlay(config)) return false
+  const segLen = Math.max(0, Number(config.segmentLen) || 0)
+  return segLen >= 2 && isAdvTriggerDingweiPlay(config)
+}
+
+/**
+ * 高级开某投某：前三直选复式等按位数字玩法，
+ * 表格按「万位正投/反投、千位…」分列填写（不展示投注位芯片）。
+ */
+export function supportsAdvTriggerPerPosColumns(config: AdvTriggerPosConfig): boolean {
+  if (isAdvTriggerTextLikePlay(config)) return false
+  if (isAdvTriggerDingweiPlay(config)) return false
+  const segLen = Math.max(0, Number(config.segmentLen) || 0)
+  if (segLen < 2) return false
+  const bm = String(config.betMode ?? '')
+  const sub = String(config.catalogSubId ?? config.subPlayId ?? '')
+  const label = String(config.playMethodLabel ?? '')
+  if (config.inputMode === 'multiline') return true
+  if (bm === 'fushi' || bm === 'zhixuan_fs' || bm === 'zuhe') return true
+  if (sub === 'zhixuan_fs' || sub.includes('zhixuan_fs') || label.includes('直选复式')) return true
+  return false
+}
+
 export function pc28HezhiNumberPool(): { min: number; max: number } {
   return { min: 0, max: 27 }
 }

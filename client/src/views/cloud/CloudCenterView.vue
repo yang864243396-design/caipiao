@@ -843,7 +843,6 @@ async function removeScheme(card: CloudSchemeCard) {
 }
 
 const schemeCount = computed(() => (listTotal.value > 0 ? listTotal.value : runningSchemes.value.length))
-const displayedSchemeCount = computed(() => displayedSchemes.value.length)
 
 function schemeCardClass(s: CloudSchemeCard): string[] {
   const classes = ['cc-card', 'cc-card--clickable']
@@ -1013,11 +1012,7 @@ function statusBadgeClass(s: CloudSchemeCard): string {
           <span class="cc-list-meta">
             共 {{ schemeCount }} 个方案
             <template v-if="schemeSearchKeyword">
-              <template v-if="displayedSchemeCount < schemeCount">，已加载 {{ displayedSchemeCount }} 个</template>
               <button type="button" class="cc-search-clear" @click="clearSchemeSearch">清除</button>
-            </template>
-            <template v-else-if="listHasMore && displayedSchemeCount < schemeCount">
-              ，已加载 {{ displayedSchemeCount }} 个
             </template>
           </span>
         </div>

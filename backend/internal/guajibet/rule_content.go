@@ -545,6 +545,11 @@ func CountBetNums(meta RuleMeta, wireContent string) int {
 			}
 			return applySegmentMultiplier(meta, n)
 		}
+		// 冷热按位号池（换行）若先按逗号拆会把换行当分隔，积成 1 注并误带 solo=true → 单挑参数错误
+		_, segStart, segLen := classifyRule(meta)
+		if segLen > 1 && strings.ContainsAny(wireContent, "\n\r") {
+			wireContent = formatSSCFushiContent(segStart, segLen, wireContent)
+		}
 		n := countSSCFushiProduct(wireContent)
 		if isSSCFushiBaoziWire(wireContent) {
 			return 0
@@ -961,18 +966,40 @@ func guajiGroupRequiresSoloFalse(meta RuleMeta) bool {
 
 // guajiGroupRequiresSoloTrue 第三方要求 solo=true 的区位组合玩法。
 // 实测（2026-07）：前后四直选复式/单式 bets=段积×2 时 solo=false →「单挑参数错误」，solo=true 才过。
-// 直选组合 / 组选24 等仍走 solo=false（勿一律 true）。
+// 实测（2026-07-23）：五星直选复式 32 注 content=25,26,37,16,48 solo=false →「单挑参数错误」，solo=true 才过。
+// 直选组合 / 组选24 等仍走 solo=false（勿一律 true）。白名单优先于 guajiSoloMaxBets。
 func guajiGroupRequiresSoloTrue(meta RuleMeta) bool {
-	if !isQianhou4Meta(meta) {
-		return false
-	}
 	mode := InferBetMode(meta)
-	switch mode {
-	case "fushi", "danshi", "zuxuan_ds":
+	if isQianhou4Meta(meta) {
+		switch mode {
+		case "fushi", "danshi", "zuxuan_ds":
+			return true
+		}
+	}
+	if isWuxingZhixuanFushiMeta(meta) {
 		return true
-	default:
+	}
+	return false
+}
+
+// isWuxingZhixuanFushiMeta 五星直选复式（含冷热多注，须绕过 28 注 solo 上限）。
+func isWuxingZhixuanFushiMeta(meta RuleMeta) bool {
+	tpl := strings.TrimSpace(meta.PlayTemplate)
+	if tpl != "" && !IsSSCPlayTemplate(tpl) {
 		return false
 	}
+	if meta.TypeID != "g015" && meta.Group != "五星" {
+		return false
+	}
+	// 勿把组选/特殊号等算进来
+	if InferBetMode(meta) != "fushi" {
+		return false
+	}
+	label := meta.Label + meta.FullName + meta.TeamLabel
+	if strings.Contains(label, "组选") || strings.Contains(label, "组合") || strings.Contains(label, "特殊") {
+		return false
+	}
+	return true
 }
 
 func isQianhou4Meta(meta RuleMeta) bool {
@@ -1690,6 +1717,17 @@ func dingweiMetaPositionLocked(meta RuleMeta) bool {
 func formatSSCFushiContent(start, length int, groupContent string) string {
 	if length <= 0 {
 		length = 1
+	}
+	// 已是位段 wire（如 25,26,37,16,48）：按段规范化，避免二次 format 把整串复制到每一位
+	if !strings.ContainsAny(groupContent, "\n\r") {
+		parts := splitCommaParts(groupContent)
+		if len(parts) == length {
+			out := make([]string, length)
+			for i := 0; i < length; i++ {
+				out[i] = normalizePickDigits(parts[i])
+			}
+			return strings.Join(out, ",")
+		}
 	}
 	lines := splitPositionLines(groupContent)
 	parts := make([]string, length)

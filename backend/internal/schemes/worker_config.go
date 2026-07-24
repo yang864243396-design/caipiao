@@ -47,16 +47,21 @@ type triggerBetCfg struct {
 }
 
 type hotColdWarmCfg struct {
-	TotalPeriods int      `json:"totalPeriods"`
-	Pool         []string `json:"pool"`
+	TotalPeriods int `json:"totalPeriods"`
+	// Pool 手动覆盖：按位对齐（万\n千\n百…），某位非空则该位用手选号码，
+	// 为空则该位按名次自动取号（混合模式）。跨位/整体型玩法取 Pool[0]。
+	Pool []string `json:"pool"`
 	// every 每期换 / keep 不换号 / after_hit 中后换 / after_miss 挂后换
 	Strategy string `json:"strategy"`
 	// WinRotate 兼容旧配置；Strategy 为空时 true→after_hit、false→keep
 	WinRotate bool `json:"winRotate"`
-	// PickTypes 出号类型：hot / cold（可多选；空则兼容旧 pool 或默认 hot）
+	// PickTypes 出号类型：hot / cold（可多选；空则兼容旧 pool）
 	PickTypes []string `json:"pickTypes"`
-	// FaultCount 容错个数：从冷/热排序结果取前 N 个号（1-10，默认 1）
+	// FaultCount 容错=起点偏移：在「最热→最冷」排序上跳过该端最极端的前 N 名（0=不跳过）。
+	// 旧字段名保留兼容；语义已由「取N个」改为「起点偏移」（对齐富联，见冷热出号逆向）。
 	FaultCount int `json:"faultCount"`
+	// PickCount 每位取几个名次：从起点偏移处连续取 N 个号（默认 1）。
+	PickCount int `json:"pickCount"`
 }
 
 type randomDrawCfg struct {
@@ -255,7 +260,9 @@ func resolveTriggerBet(cfg map[string]interface{}) *triggerBetCfg {
 	return out
 }
 
-// applyTriggerBetPosition 将开某投某配置的投注位写回 Play，供匹配开奖/查子玩法/判中共用。
+// applyTriggerBetPosition 规范化开某投某投注位。
+// 定位胆：写回 Play.PositionIdx/SegmentStart（单位投注）。
+// 前三直选复式等：只保留 Trigger.PositionIdxs 供按位匹配/出号，不改写玩法段。
 func applyTriggerBetPosition(out *parsedSchemeConfig) {
 	if out == nil || out.Trigger == nil || !out.Trigger.HasPosition {
 		return
@@ -288,12 +295,18 @@ func applyTriggerBetPosition(out *parsedSchemeConfig) {
 	sort.Ints(norm)
 	out.Trigger.PositionIdxs = norm
 	out.Trigger.PositionIdx = norm[0]
+	if !isDingweiTriggerPlay(out.Play) {
+		return
+	}
 	out.Play.PositionIdx = norm[0]
 	out.Play.SegmentStart = norm[0]
-	if out.Play.SegmentLen <= 0 || out.Play.BetMode == "dingwei" ||
-		out.Play.PlayTypeID == "dingwei" || out.Play.PlayTypeID == "g006" {
-		out.Play.SegmentLen = 1
-	}
+	out.Play.SegmentLen = 1
+}
+
+func isDingweiTriggerPlay(rule playRule) bool {
+	bm := strings.TrimSpace(rule.BetMode)
+	tid := strings.TrimSpace(rule.PlayTypeID)
+	return bm == "dingwei" || tid == "dingwei" || tid == "g006"
 }
 
 func triggerBetUsesPosition(rule playRule) bool {
@@ -305,20 +318,31 @@ func triggerBetUsesPosition(rule playRule) bool {
 	}
 	bm := strings.TrimSpace(rule.BetMode)
 	tid := strings.TrimSpace(rule.PlayTypeID)
-	if bm == "dingwei" || tid == "dingwei" || tid == "g006" {
+	sub := strings.TrimSpace(rule.SubPlayID)
+	if isDingweiTriggerPlay(rule) {
 		return true
 	}
+	// 前三/中三/后三直选复式等：SegmentLen>=2 的按位数字玩法
+	if rule.SegmentLen >= 2 {
+		if bm == "fushi" || bm == "zhixuan_fs" || bm == "zuhe" {
+			return true
+		}
+		if sub == "zhixuan_fs" || strings.Contains(sub, "zhixuan_fs") {
+			return true
+		}
+	}
+	_ = tid
 	return false
 }
 
 // layoutTriggerBetDingweiContent 将单位号码编排到选定投注位（多行），
-// 避免统一「一星定位胆」子玩法在 wire 时始终压到万位。
+// 避免统一「一星定位胆」子玩法在 wire 时始终压到万位。仅定位胆使用。
 func layoutTriggerBetDingweiContent(cfg parsedSchemeConfig, content string) string {
 	content = strings.TrimSpace(content)
 	if content == "" || cfg.Trigger == nil || !cfg.Trigger.HasPosition {
 		return content
 	}
-	if !triggerBetUsesPosition(cfg.Play) {
+	if !isDingweiTriggerPlay(cfg.Play) || !triggerBetUsesPosition(cfg.Play) {
 		return content
 	}
 	if strings.Contains(content, "\n") {
@@ -328,9 +352,19 @@ func layoutTriggerBetDingweiContent(cfg parsedSchemeConfig, content string) stri
 	if cfg.Play.PlayTemplate == "pk10_std" {
 		positions = 10
 	}
-	// 已是「号,,,,」五段 wire：原样保留
-	if strings.Count(content, ",") == positions-1 {
-		return content
+	// 已是「号,,,,」稀疏五段 wire（含空位）：原样保留。
+	// 注意：正投多号「1,2,3」或满号「1,2,3,4,5」逗号数也可能是 positions-1，不能仅按逗号数判断。
+	if parts := strings.Split(content, ","); len(parts) == positions {
+		hasEmpty := false
+		for _, p := range parts {
+			if strings.TrimSpace(p) == "" {
+				hasEmpty = true
+				break
+			}
+		}
+		if hasEmpty {
+			return content
+		}
 	}
 	idxs := cfg.Trigger.PositionIdxs
 	if len(idxs) == 0 {
@@ -354,7 +388,7 @@ func resolveHotColdWarm(cfg map[string]interface{}) *hotColdWarmCfg {
 	if !ok {
 		return nil
 	}
-	out := &hotColdWarmCfg{TotalPeriods: 20, Strategy: "keep", FaultCount: 1}
+	out := &hotColdWarmCfg{TotalPeriods: 20, Strategy: "keep", FaultCount: 0, PickCount: 1}
 	if v := toInt(raw["totalPeriods"], 0); v > 0 {
 		out.TotalPeriods = v
 	}
@@ -369,11 +403,22 @@ func resolveHotColdWarm(cfg map[string]interface{}) *hotColdWarmCfg {
 	} else if out.WinRotate {
 		out.Strategy = "after_hit"
 	}
-	if fc := toInt(raw["faultCount"], 0); fc > 0 {
-		if fc > 10 {
-			fc = 10
+	// 容错=起点偏移（0..9），允许显式 0；旧配置的正整数按新语义直接当偏移。
+	if _, has := raw["faultCount"]; has {
+		fc := toInt(raw["faultCount"], 0)
+		if fc < 0 {
+			fc = 0
+		}
+		if fc > 9 {
+			fc = 9
 		}
 		out.FaultCount = fc
+	}
+	if pc := toInt(raw["pickCount"], 0); pc > 0 {
+		if pc > 10 {
+			pc = 10
+		}
+		out.PickCount = pc
 	}
 	if arr, ok := raw["pickTypes"].([]interface{}); ok {
 		for _, item := range arr {

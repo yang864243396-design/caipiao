@@ -18,7 +18,11 @@ import {
   schemeGroupUsesPickPanel,
   textPickOptionsForConfig,
 } from '@/utils/pickPanelOptions'
-import { isLonghuPlayConfigLike } from '@/utils/runTypeMatrix'
+import {
+  isLonghuPlayConfigLike,
+  supportsAdvTriggerPerPosColumns,
+  supportsAdvTriggerPositionPicker,
+} from '@/utils/runTypeMatrix'
 import type {
   SchemeHotColdWarm,
   SchemeJushuRow,
@@ -91,22 +95,50 @@ const showTriggerPositionPicker = computed(() => {
   if (props.runTypeId !== 'adv_trigger_bet') return false
   if (isLonghuPlayConfigLike(props.playConfig)) return false
   if (textPickOptionsForConfig(props.playConfig).length > 0) return false
-  const tid = String(props.playConfig.playTypeId ?? '')
-  const bm = String(props.playConfig.betMode ?? '')
-  const isDingwei =
-    bm === 'dingwei' ||
-    tid === 'dingwei' ||
-    tid === 'g006' ||
-    String(props.playConfig.guajiGroup ?? '') === '一星'
-  return isDingwei && positionCount.value >= 2
+  return supportsAdvTriggerPositionPicker(props.playConfig)
 })
+
+const showTriggerPerPosColumns = computed(() => {
+  if (props.runTypeId !== 'adv_trigger_bet') return false
+  if (isLonghuPlayConfigLike(props.playConfig)) return false
+  if (textPickOptionsForConfig(props.playConfig).length > 0) return false
+  return supportsAdvTriggerPerPosColumns(props.playConfig)
+})
+
+function triggerPosName(posLabel: string): string {
+  const base = String(posLabel ?? '')
+    .trim()
+    .replace(/位$/, '')
+  return `${base || '位'}位`
+}
+
+function triggerFieldParts(raw: string, len: number): string[] {
+  const n = Math.max(1, len)
+  const text = String(raw ?? '')
+  if (!text.includes('\n') && !text.includes('\r')) {
+    const one = text.trim()
+    return Array.from({ length: n }, () => one)
+  }
+  const parts = text.split(/\r?\n/).map((s) => s.trim())
+  return Array.from({ length: n }, (_, i) => parts[i] ?? '')
+}
 
 const triggerPositionIdxs = computed(() => {
   const tb = props.triggerBet
-  if (!tb) return [0]
-  if (tb.positionIdxs?.length) return [...tb.positionIdxs].sort((a, b) => a - b)
-  if (tb.positionIdx != null && Number.isFinite(tb.positionIdx)) return [Number(tb.positionIdx)]
-  return [0]
+  const n = Math.max(1, positionCount.value)
+  const all = Array.from({ length: n }, (_, i) => i)
+  if (!tb) return all
+  if (tb.positionIdxs?.length) {
+    return [...tb.positionIdxs]
+      .map((x) => Number(x))
+      .filter((i) => Number.isInteger(i) && i >= 0 && i < n)
+      .sort((a, b) => a - b)
+  }
+  if (tb.positionIdx != null && Number.isFinite(tb.positionIdx)) {
+    const i = Number(tb.positionIdx)
+    if (i >= 0 && i < n) return [i]
+  }
+  return all
 })
 
 const triggerRows = computed<SchemeTriggerRow[]>(() => props.triggerBet?.rows ?? [])
@@ -200,9 +232,20 @@ const hcwTotalPeriods = computed(() => {
 
 const hcwFaultCount = computed(() => {
   const fc = Math.trunc(Number(props.hotColdWarm?.faultCount))
-  if (Number.isFinite(fc) && fc >= 1 && fc <= 10) return fc
-  return 1
+  if (Number.isFinite(fc)) return Math.min(9, Math.max(0, fc))
+  return 0
 })
+
+const hcwPickTypes = computed<Array<'hot' | 'cold'>>(() => {
+  const arr = props.hotColdWarm?.pickTypes ?? []
+  return arr
+    .map((t) => String(t ?? '').toLowerCase())
+    .filter((t): t is 'hot' | 'cold' => t === 'hot' || t === 'cold')
+})
+
+const hcwPickTypesLabel = computed(() =>
+  hcwPickTypes.value.map((t) => (t === 'hot' ? '热号' : '冷号')).join(' + '),
+)
 
 const hcwAttrUniverse = ref<string[]>([])
 const hcwLoading = ref(false)
@@ -422,8 +465,10 @@ function hcwDisplayCells(pos: number): HcwCell[] {
 const hcwCellsByPos = computed(() => hcwGroupLabels.value.map((_, pi) => hcwDisplayCells(pi)))
 
 const hcwEstimatedUnits = computed(() => {
+  // 与编辑页一致：和值/跨度等走 countBetUnits（组合数×段倍乘），勿按选项个数计注
   if (hcwAttribute.value) {
-    return (hcwPools.value[0] ?? []).filter((t) => t.trim() !== '').length
+    const line = (hcwPools.value[0] ?? []).filter((t) => t.trim() !== '').join(',')
+    return line ? countBetUnits(props.playConfig, line) : 0
   }
   if (hcwDigitOverall.value) {
     const line = (hcwPools.value[0] ?? []).join(',')
@@ -683,37 +728,84 @@ function formatGroupContent(content: string): string {
           >{{ label }}</span>
         </div>
       </div>
-      <div class="scr-trig-grid scr-trig-grid--head" aria-hidden="true">
+      <div
+        class="scr-trig-grid scr-trig-grid--head"
+        :class="{ 'scr-trig-grid--posrow': showTriggerPerPosColumns }"
+        aria-hidden="true"
+      >
         <span>启用</span>
         <span>开出</span>
+        <template v-if="showTriggerPerPosColumns">
+          <span>位置</span>
+        </template>
         <span>正投</span>
         <span>反投</span>
       </div>
-      <div
-        v-for="row in triggerRows"
-        :key="row.open"
-        class="scr-trig-grid"
-        :class="{ 'is-off': !row.enabled }"
-      >
-        <el-switch :model-value="row.enabled" size="small" disabled />
-        <span class="scr-trig-open">{{ row.open }}</span>
-        <el-input :model-value="row.pos" size="small" disabled />
-        <el-input :model-value="row.neg" size="small" disabled />
-      </div>
+      <template v-if="showTriggerPerPosColumns">
+        <div
+          v-for="row in triggerRows"
+          :key="row.open"
+          class="scr-trig-block"
+          :class="{ 'is-off': !row.enabled }"
+        >
+          <div
+            v-for="(label, pIdx) in positionLabels"
+            :key="`scr-trig-c-${row.open}-${pIdx}`"
+            class="scr-trig-grid scr-trig-grid--posrow"
+          >
+            <el-switch v-if="pIdx === 0" :model-value="row.enabled" size="small" disabled />
+            <span v-else class="scr-trig-cell-placeholder" aria-hidden="true" />
+            <span v-if="pIdx === 0" class="scr-trig-open">{{ row.open }}</span>
+            <span v-else class="scr-trig-cell-placeholder" aria-hidden="true" />
+            <span class="scr-trig-pos-name">{{ triggerPosName(label) }}</span>
+            <el-input
+              :model-value="triggerFieldParts(row.pos, positionCount)[pIdx] ?? ''"
+              size="small"
+              disabled
+            />
+            <el-input
+              :model-value="triggerFieldParts(row.neg, positionCount)[pIdx] ?? ''"
+              size="small"
+              disabled
+            />
+          </div>
+        </div>
+      </template>
+      <template v-else>
+        <div
+          v-for="row in triggerRows"
+          :key="row.open"
+          class="scr-trig-grid"
+          :class="{ 'is-off': !row.enabled }"
+        >
+          <el-switch :model-value="row.enabled" size="small" disabled />
+          <span class="scr-trig-open">{{ row.open }}</span>
+          <el-input :model-value="row.pos" size="small" disabled />
+          <el-input :model-value="row.neg" size="small" disabled />
+        </div>
+      </template>
       <div class="scr-field">
         <span class="scr-lbl">投向模式</span>
-        <el-radio-group :model-value="triggerMode" class="scr-radio-wrap" disabled>
+        <el-radio-group
+          :model-value="triggerMode"
+          class="scr-radio-wrap scr-radio-wrap--trigger-mode"
+          disabled
+        >
           <el-radio v-for="o in TRIGGER_MODE_OPTIONS" :key="o.value" :value="o.value">
             {{ o.label }}
           </el-radio>
         </el-radio-group>
       </div>
       <p class="scr-run-tip">
-        <template v-if="showTriggerPositionPicker">
-          可多选投注位：每位按该位上期开奖各自查映射下注；某位无映射时用启用行第 1 行正投
+        正投 / 反投可含多个号码（逗号分隔）。
+        <template v-if="showTriggerPerPosColumns">
+          每个开出号码下按位置分行展示；启用后各位正投与反投均必填。
+        </template>
+        <template v-else-if="showTriggerPositionPicker">
+          可多选投注位：每位按该位上期开奖各自查映射下注；某位无映射时用启用行第 1 行正投。
         </template>
         <template v-else>
-          上期开出号码无启用映射时，按启用行第 1 行的正投下注
+          上期开出号码无启用映射时，按启用行第 1 行的正投下注。
         </template>
       </p>
     </div>
@@ -754,7 +846,7 @@ function formatGroupContent(content: string): string {
         </div>
         <div class="scr-hcw-ctrl">
           <span class="scr-hcw-lbl">容错</span>
-          <div class="scr-stepper" role="group" aria-label="容错个数">
+          <div class="scr-stepper" role="group" aria-label="容错">
             <button type="button" class="scr-stepper-btn" disabled aria-label="减少容错">
               <span class="material-sym scr-ms-sm" aria-hidden="true">remove</span>
             </button>
@@ -769,6 +861,11 @@ function formatGroupContent(content: string): string {
             </button>
           </div>
         </div>
+      </div>
+      <div v-if="hcwPickTypes.length" class="scr-hcw-bar scr-hcw-bar--types">
+        <span class="scr-hcw-lbl">出号类型</span>
+        <span class="scr-hcw-types-val">{{ hcwPickTypesLabel }}</span>
+        <span class="scr-hcw-types-hint">按名次自动取号，某位手选可覆盖该位</span>
       </div>
       <div class="scr-hcw-bar scr-hcw-bar--strategy">
         <el-radio-group :model-value="hcwStrategy" class="scr-hcw-strategy" disabled>
@@ -1028,6 +1125,21 @@ function formatGroupContent(content: string): string {
   gap: 0.15rem 1.1rem;
 }
 
+.scr-radio-wrap--trigger-mode {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 0.75rem;
+  row-gap: 0.35rem;
+  width: 100%;
+}
+
+.scr-radio-wrap--trigger-mode :deep(.el-radio) {
+  margin-right: 0;
+  height: auto;
+  min-height: 2rem;
+  align-items: center;
+}
+
 .scr-trig-pos-chips {
   --scr-trig-pos-n: 5;
   display: grid;
@@ -1064,11 +1176,49 @@ function formatGroupContent(content: string): string {
   gap: 0.6rem;
 }
 
+.scr-trig-grid--posrow {
+  grid-template-columns: 2.1rem 1.75rem 2.4rem 1fr 1fr;
+  gap: 0.35rem 0.28rem;
+}
+
+.scr-trig-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  padding: 0.35rem 0;
+}
+
+.scr-trig-block + .scr-trig-block {
+  border-top: 1px solid rgba(25, 28, 30, 0.06);
+}
+
+.scr-trig-block.is-off {
+  opacity: 0.55;
+}
+
+.scr-trig-cell-placeholder {
+  display: block;
+  min-height: 1px;
+}
+
+.scr-trig-pos-name {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--scr-on-variant);
+  text-align: center;
+  white-space: nowrap;
+}
+
 .scr-trig-grid--head span {
   font-size: 11px;
   font-weight: 700;
   color: var(--scr-on-variant);
   letter-spacing: 0.02em;
+}
+
+.scr-trig-grid--posrow .scr-trig-open {
+  font-size: 0.8125rem;
+  padding: 0.2rem 0;
 }
 
 .scr-trig-grid.is-off .scr-trig-open {
@@ -1160,6 +1310,24 @@ function formatGroupContent(content: string): string {
 .scr-hcw-bar--strategy {
   justify-content: space-between;
   gap: 0.35rem;
+}
+
+.scr-hcw-bar--types {
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.scr-hcw-types-val {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--scr-primary-strong);
+}
+
+.scr-hcw-types-hint {
+  font-size: 0.72rem;
+  color: var(--scr-text-muted, #8a94a6);
+  margin-left: auto;
 }
 
 .scr-hcw-ctrl {

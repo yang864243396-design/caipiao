@@ -568,9 +568,11 @@ func TestHotColdWarmPoolAndRotate(t *testing.T) {
 	}
 }
 
-func TestBuildHotColdPickContentByTypeAndFault(t *testing.T) {
-	cfg := pickTestConfig(t, `{"runTypeId":"hot_cold_warm","playTypeId":"dingwei","subPlayId":"sub_ge","hotColdWarm":{"totalPeriods":20,"pickTypes":["hot"],"faultCount":1,"pool":["9"]}}`)
-	// 个位（PositionIdx=4）：7 出现最多 → 热号首位应为 7
+func TestBuildHotColdPickContentByRankAndOffset(t *testing.T) {
+	// 名次+起点偏移模型：容错=偏移，pickCount=每位取几个名次。
+	cfg := pickTestConfig(t, `{"runTypeId":"hot_cold_warm","playTypeId":"dingwei","subPlayId":"sub_ge","hotColdWarm":{"totalPeriods":20,"pickTypes":["hot"],"faultCount":0,"pickCount":1}}`)
+	// 个位（PositionIdx=4）频次：7×3 > 1×1、3×1 > 其余0
+	// 全序（频次降序，平手按号码升序）：7,1,3,0,2,4,5,6,8,9
 	draws := [][]string{
 		{"0", "0", "0", "0", "7"},
 		{"0", "0", "0", "0", "7"},
@@ -578,28 +580,69 @@ func TestBuildHotColdPickContentByTypeAndFault(t *testing.T) {
 		{"0", "0", "0", "0", "3"},
 		{"0", "0", "0", "0", "1"},
 	}
-	got := buildHotColdPickContent(cfg, draws)
-	if got != "7" {
-		t.Fatalf("hot fault=1 => %q, want 7", got)
+	// 热 offset0 count1 → 最热 7
+	if got := buildHotColdPickContent(cfg, draws); got != "7" {
+		t.Fatalf("hot offset0 count1 => %q, want 7", got)
 	}
-	cfg.HotCold.PickTypes = []string{"cold"}
+	// 热 offset1 count1 → 第2热（平手按号码升序：freq1 中 1<3）→ 1
 	cfg.HotCold.FaultCount = 1
-	got = buildHotColdPickContent(cfg, draws)
-	if strings.TrimSpace(got) == "" || got == "7" {
-		t.Fatalf("cold fault=1 should pick a cold digit, got %q", got)
+	if got := buildHotColdPickContent(cfg, draws); got != "1" {
+		t.Fatalf("hot offset1 count1 => %q, want 1", got)
 	}
-	cfg.HotCold.PickTypes = []string{"hot"}
-	cfg.HotCold.FaultCount = 2
-	got = buildHotColdPickContent(cfg, draws)
-	parts := strings.Split(got, ",")
-	if len(parts) != 2 {
-		t.Fatalf("hot fault=2 => %q, want 2 tokens", got)
+	// 热 offset0 count2 → 第1、2热 → 7,1
+	cfg.HotCold.FaultCount = 0
+	cfg.HotCold.PickCount = 2
+	if got := buildHotColdPickContent(cfg, draws); got != "7,1" {
+		t.Fatalf("hot offset0 count2 => %q, want 7,1", got)
+	}
+	// 冷 offset0 count1 → 最冷（全序末位，freq0 中号码最大 9）→ 9
+	cfg.HotCold.PickTypes = []string{"cold"}
+	cfg.HotCold.PickCount = 1
+	if got := buildHotColdPickContent(cfg, draws); got != "9" {
+		t.Fatalf("cold offset0 count1 => %q, want 9", got)
+	}
+}
+
+func TestBuildHotColdPickContentManualOverride(t *testing.T) {
+	// 混合模式：某位手选号码覆盖，其余位按名次自动取号。
+	cfg := pickTestConfig(t, `{"runTypeId":"hot_cold_warm","playTemplate":"ssc_std","playTypeId":"g006","subPlayId":"13","typeId":"g006","subId":"13","betMode":"dingwei","hotColdWarm":{"totalPeriods":20,"pickTypes":["hot"],"faultCount":0,"pickCount":1,"pool":["8","","","",""]}}`)
+	draws := [][]string{
+		{"1", "2", "3", "4", "5"},
+		{"1", "2", "3", "4", "5"},
+		{"6", "7", "8", "9", "0"},
+	}
+	got := buildHotColdPickContent(cfg, draws)
+	lines := strings.Split(got, "\n")
+	if len(lines) != 5 {
+		t.Fatalf("lines=%d content=%q want 5", len(lines), got)
+	}
+	if lines[0] != "8" {
+		t.Fatalf("万位应被手选覆盖为 8, got %q", lines[0])
+	}
+	// 千位（idx1）频次：2×2 > 7×1 → 最热 2
+	if lines[1] != "2" {
+		t.Fatalf("千位自动取号应为最热 2, got %q", lines[1])
+	}
+}
+
+func TestBuildHotColdPickContentEveryPeriodResort(t *testing.T) {
+	// 每期换：不同开奖窗口重排后取号应变化。
+	cfg := pickTestConfig(t, `{"runTypeId":"hot_cold_warm","playTypeId":"dingwei","subPlayId":"sub_ge","hotColdWarm":{"totalPeriods":20,"pickTypes":["hot"],"faultCount":0,"pickCount":1,"strategy":"every"}}`)
+	a := buildHotColdPickContent(cfg, [][]string{{"0", "0", "0", "0", "7"}, {"0", "0", "0", "0", "7"}})
+	b := buildHotColdPickContent(cfg, [][]string{{"0", "0", "0", "0", "3"}, {"0", "0", "0", "0", "3"}})
+	if a != "7" || b != "3" {
+		t.Fatalf("每期重排应随窗口变化: a=%q(want 7) b=%q(want 3)", a, b)
+	}
+	// 每期换策略：结算后清空 current_pick，下期重取
+	inst := sqlcdb.SchemeInstance{Kind: "custom", CurrentPick: "7"}
+	if _, cur, _ := advancePickState(cfg, inst, pickDecision{Content: "7"}, false); cur != "" {
+		t.Fatalf("every 策略应清空 current_pick, got %q", cur)
 	}
 }
 
 func TestBuildHotColdPickContentG006FivePosition(t *testing.T) {
-	// 统一定位胆 subId=13：五位各取 faultCount 个热号 → 五行内容
-	cfg := pickTestConfig(t, `{"runTypeId":"hot_cold_warm","playTemplate":"ssc_std","playTypeId":"g006","subPlayId":"13","typeId":"g006","subId":"13","betMode":"dingwei","hotColdWarm":{"totalPeriods":20,"pickTypes":["hot"],"faultCount":5,"pool":["0,1,3,5,8","0,1,2,6,7","0,1,2,5,6","2,3,5,6,9","0,1,4,5,7"]}}`)
+	// 统一定位胆 subId=13：五位各取 pickCount 个热号名次 → 五行内容
+	cfg := pickTestConfig(t, `{"runTypeId":"hot_cold_warm","playTemplate":"ssc_std","playTypeId":"g006","subPlayId":"13","typeId":"g006","subId":"13","betMode":"dingwei","hotColdWarm":{"totalPeriods":20,"pickTypes":["hot"],"faultCount":0,"pickCount":5}}`)
 	if playPositionCount(cfg.Play) != 5 {
 		t.Fatalf("playPositionCount=%d want 5", playPositionCount(cfg.Play))
 	}

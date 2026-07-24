@@ -95,9 +95,12 @@ func (s *Service) List(ctx context.Context, q Query) (Result, error) {
 		limit = 100
 	}
 
+	orderNoRaw := strings.TrimSpace(q.OrderNo)
 	orderNo := pgtype.Text{}
-	if q.OrderNo != "" {
-		orderNo = pgtype.Text{String: q.OrderNo, Valid: true}
+	if orderNoRaw != "" {
+		orderNo = pgtype.Text{String: orderNoRaw, Valid: true}
+		// 注单号检索：在允许的最大跨度内向前扩窗，避免默认「仅今天」漏掉刚删方案的历史单。
+		timeFrom = expandRangeStartForOrderNo(timeFrom, timeTo, maxBetQueryDays)
 	}
 
 	currency, err := mapCurrencyFilter(q.Currency)
@@ -106,6 +109,10 @@ func (s *Service) List(ctx context.Context, q Query) (Result, error) {
 	}
 
 	schemeDefID := strings.TrimSpace(q.SchemeDefinitionID)
+	// 注单号优先走「全部方案」路径：已删除方案的 instance/definition 不在，按 definition 联表会漏单。
+	if orderNoRaw != "" {
+		schemeDefID = "all"
+	}
 	lotteryCode := mapLotteryCodeFilter(q.GameCode)
 	if q.GameCode != "" && q.GameCode != "all" && lotteryCode.Valid && lotteryCode.String == "__invalid__" {
 		return Result{}, fmt.Errorf("%w: gameCode 参数无效", ErrInvalidQuery)
@@ -570,4 +577,17 @@ func validateQuerySpan(from, to string) error {
 		return fmt.Errorf("%w: 查询区间最多连续 %d 天", ErrInvalidQuery, maxBetQueryDays)
 	}
 	return nil
+}
+
+// expandRangeStartForOrderNo 将查询起点前推至「结束时刻往前 maxDays 天」，
+// 仍不超过 maxBetQueryDays（timeTo 为半开区间上界）。
+func expandRangeStartForOrderNo(from, to time.Time, maxDays int) time.Time {
+	if maxDays < 1 {
+		return from
+	}
+	wantFrom := to.Add(-time.Duration(maxDays) * 24 * time.Hour)
+	if from.After(wantFrom) {
+		return wantFrom
+	}
+	return from
 }

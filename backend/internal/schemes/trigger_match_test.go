@@ -152,6 +152,88 @@ func TestTriggerBetPositionIdxsMulti(t *testing.T) {
 	}
 }
 
+// TestTriggerBetQian3FushiPerPosition 前三直选复式：按万/千/百各自开出映射，
+// 且取该行对应位的正投（pos 换行分位）。
+func TestTriggerBetQian3FushiPerPosition(t *testing.T) {
+	t.Parallel()
+	rows := make([]string, 0, 10)
+	for i := 0; i <= 9; i++ {
+		d := string(rune('0' + i))
+		// 万/千/百正投分别为 d / (d+1)%10 / (d+2)%10
+		pos := d + `\n` + string(rune('0'+((i+1)%10))) + `\n` + string(rune('0'+((i+2)%10)))
+		neg := string(rune('0'+(9-i))) + `\n` + string(rune('0'+((8-i+10)%10))) + `\n` + string(rune('0'+((7-i+10)%10)))
+		rows = append(rows, `{"enabled":true,"open":"`+d+`","pos":"`+pos+`","neg":"`+neg+`"}`)
+	}
+	raw := `{
+		"runTypeId":"adv_trigger_bet",
+		"playTemplate":"ssc_std",
+		"playTypeId":"g001",
+		"subPlayId":"1",
+		"betMode":"fushi",
+		"triggerBet":{
+			"mode":"always_pos",
+			"rows":[` + strings.Join(rows, ",") + `]
+		}
+	}`
+	cfg := parseSchemeConfig("custom", []byte(raw), 0, 0)
+	if cfg.Play.SegmentLen != 3 || cfg.Play.SegmentStart != 0 {
+		t.Fatalf("segment=%d,%d want 0,3", cfg.Play.SegmentStart, cfg.Play.SegmentLen)
+	}
+	if !triggerBetUsesPosition(cfg.Play) {
+		t.Fatal("前三直选复式应按位出号")
+	}
+	if isDingweiTriggerPlay(cfg.Play) {
+		t.Fatal("前三复式不应当作定位胆改写段")
+	}
+	// 上期 172xx：万开1→取行1万位正投1；千开7→行7千位正投8；百开2→行2百位正投4
+	dec := pickTriggerBetPreview(cfg, sqlcdb.SchemeInstance{}, []string{"1", "7", "2", "3", "2"})
+	if dec.Skip {
+		t.Fatal("should not skip")
+	}
+	want := "1\n8\n4"
+	if dec.Content != want {
+		t.Fatalf("content=%q want %q", dec.Content, want)
+	}
+	meta := guajibet.ParseRuleMeta("ssc_std", "g001", "1", "前三直选复式", "前三码", nil, "1")
+	wire := guajibet.FormatBetContentForRule(meta, dec.Content)
+	if wire != "1,8,4" {
+		t.Fatalf("wire=%q want 1,8,4", wire)
+	}
+}
+
+// TestLayoutTriggerBetDingweiMultiNumbers 正投多号「1,3,5」应按位编排，不能误判为五段 wire。
+func TestLayoutTriggerBetDingweiMultiNumbers(t *testing.T) {
+	t.Parallel()
+	raw := `{
+		"runTypeId":"adv_trigger_bet",
+		"playTemplate":"ssc_std",
+		"playTypeId":"g006",
+		"subPlayId":"13",
+		"betMode":"dingwei",
+		"triggerBet":{
+			"mode":"always_pos",
+			"positionIdxs":[2],
+			"rows":[{"enabled":true,"open":"6","pos":"1,3,5","neg":"0,2,4"}]
+		}
+	}`
+	cfg := parseSchemeConfig("custom", []byte(raw), 0, 0)
+	laid := layoutTriggerBetDingweiContent(cfg, "1,3,5")
+	want := "\n\n1,3,5\n\n"
+	if laid != want {
+		t.Fatalf("layout=%q want %q", laid, want)
+	}
+	// 稀疏 wire 仍原样保留
+	sparse := "8,,,,"
+	if got := layoutTriggerBetDingweiContent(cfg, sparse); got != sparse {
+		t.Fatalf("sparse wire layout=%q want %q", got, sparse)
+	}
+	meta := guajibet.ParseRuleMeta("ssc_std", "g006", "13", "一星定位胆", "一星", nil, "13")
+	wire := guajibet.FormatBetContentForRule(meta, laid)
+	if wire != ",,135,," {
+		t.Fatalf("wire=%q want ,,135,,", wire)
+	}
+}
+
 // TestTriggerBetPerPositionWanBaiGe 上期 17232、选万/百/个、开出 N→正投 N：
 // 应得 1,,2,,2，而不是把万位 1 复制成 1,,1,,1。
 func TestTriggerBetPerPositionWanBaiGe(t *testing.T) {

@@ -48,6 +48,14 @@ function todayRange(): [string, string] {
   return [s, s]
 }
 
+/** 近 n 天（含今天），用于注单号检索扩窗 */
+function lastNDaysRange(n: number): [string, string] {
+  const end = new Date()
+  const start = new Date()
+  start.setDate(end.getDate() - Math.max(0, n - 1))
+  return [ymd(start), ymd(end)]
+}
+
 function rangeSpanDays(from: string, to: string): number {
   const a = new Date(from.replace(/-/g, '/'))
   const b = new Date(to.replace(/-/g, '/'))
@@ -164,13 +172,23 @@ watch([schemeId, currency, dateRange], () => {
   requestSearch()
 })
 
-watch(orderNo, () => {
+function scheduleOrderNoSearch(): void {
   if (!filtersReady.value) return
   if (orderNoTimer) clearTimeout(orderNoTimer)
   orderNoTimer = setTimeout(() => {
     orderNoTimer = null
+    const q = orderNo.value.trim()
+    if (q) {
+      // 有注单号时扩到最大可查天数，并回退「全部方案」——已删方案按 definition 联表会漏单
+      dateRange.value = lastNDaysRange(MAX_QUERY_DAYS)
+      schemeId.value = ALL_SCHEMES
+    }
     void runSearch(true)
   }, INPUT_DEBOUNCE_MS)
+}
+
+watch(orderNo, () => {
+  scheduleOrderNoSearch()
 })
 
 watch(dateRange, (v) => {
@@ -370,7 +388,14 @@ onUnmounted(() => {
             </el-select>
           </div>
           <div class="mbr-filter-grid mbr-filter-grid--2">
-            <el-input v-model="orderNo" clearable placeholder="注单编号" class="mbr-input" />
+            <el-input
+              v-model="orderNo"
+              clearable
+              placeholder="注单编号（平台/第三方）"
+              class="mbr-input"
+              @keyup.enter="scheduleOrderNoSearch"
+              @clear="scheduleOrderNoSearch"
+            />
             <DateRangePickerField v-model="dateRange" class="mbr-drp" :max-days="MAX_QUERY_DAYS" />
           </div>
         </section>

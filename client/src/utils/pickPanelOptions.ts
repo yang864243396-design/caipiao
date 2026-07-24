@@ -339,10 +339,23 @@ export function groupDigitInputHint(config: PlayConfig): string {
     }
     return `直接连写号码（可选 ${range}），如：${example}`
   }
+  // 跨段组合（前中后三 / 前后二 / 前后三 / 前后四）位置非连续，用「N 个顺序号码」；
+  // 前三/中三/后三/前二/后二/四星/五星等连续固定位仍按「首位到末位」显示位置。
+  if (usesSequentialGroupHint(config)) {
+    const cnCount = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'][segLen] ?? String(segLen)
+    return `请对应${cnCount}个顺序号码，以“，”分隔，输入对应位置的号码，每一位置皆要输入号码；如：${example}`
+  }
   const labels = config.segmentLabels ?? []
   const first = labels[0] ?? '第1位'
   const last = labels[segLen - 1] ?? `第${segLen}位`
   return `请对应${first}到${last}，以“，”分隔，输入对应位置的号码，每一位置皆要输入号码；如：${example}`
+}
+
+/** 跨段组合玩法（前中后三 / 前后二 / 前后三 / 前后四）：位置非连续，提示用「N 个顺序号码」。 */
+function usesSequentialGroupHint(config: PlayConfig): boolean {
+  const text = `${config.playMethodLabel ?? ''} ${config.subPlayId ?? ''} ${config.playTypeId ?? ''} ${config.catalogSubId ?? ''}`
+  if (/前中后三|前后二|前后三|前后四/.test(text)) return true
+  return /qianzhonghou3|qianhou3|combo24/i.test(text)
 }
 
 /** 号池多选上限；一星/定位胆每位最多 9；包胆 / 龙虎（和）对齐第三方仅单选 */

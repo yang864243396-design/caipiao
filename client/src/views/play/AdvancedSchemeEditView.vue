@@ -18,6 +18,7 @@ import type {
   SchemeTriggerBet,
   SchemeTriggerRow,
   SchemeHotColdWarm,
+  SchemeHotColdPickType,
   SchemeRotateStrategy,
   SchemeRandomDraw,
   UpdateSchemeInput,
@@ -68,6 +69,8 @@ import {
   isPc28HezhiConfigLike,
   isPc28ModeConfigLike,
   lotteryHasAdvTriggerPlay,
+  supportsAdvTriggerPerPosColumns,
+  supportsAdvTriggerPositionPicker,
   syncRunTypePlaySelection,
   validateRunTypePlaySelection,
 } from '@/utils/runTypeMatrix'
@@ -484,7 +487,11 @@ const displayedGroupIndexes = computed(() =>
 // --- adv_fixed_rotate 高级定码轮换：局数列表 ---
 const jushuList = ref<SchemeJushuRow[]>([])
 const jushuDialogVisible = ref(false)
+/** null=添加；非 null=编辑列表下标 */
+const jushuEditIdx = ref<number | null>(null)
 const jushuForm = ref<SchemeJushuRow>({ ju: 1, content: '', afterHit: 1, afterMiss: 1 })
+const jushuDialogTitle = computed(() => (jushuEditIdx.value != null ? '编辑局数' : '添加局数'))
+const jushuDialogConfirmLabel = computed(() => (jushuEditIdx.value != null ? '保存修改' : '确认添加'))
 
 function applyJushuFromConfig(raw: unknown): boolean {
   if (!Array.isArray(raw) || !raw.length) return false
@@ -517,9 +524,28 @@ function seedJushuFromGroups(): void {
 }
 
 function openJushuDialog(): void {
+  jushuEditIdx.value = null
   const maxJu = jushuList.value.reduce((m, r) => Math.max(m, r.ju), 0)
   jushuForm.value = { ju: maxJu + 1, content: '', afterHit: 1, afterMiss: 1 }
   jushuDialogVisible.value = true
+}
+
+function openJushuEditDialog(idx: number): void {
+  const row = jushuList.value[idx]
+  if (!row) return
+  jushuEditIdx.value = idx
+  jushuForm.value = {
+    ju: row.ju,
+    content: String(row.content ?? '').replace(/\r/g, ''),
+    afterHit: Math.max(1, Math.trunc(Number(row.afterHit)) || 1),
+    afterMiss: Math.max(1, Math.trunc(Number(row.afterMiss)) || 1),
+  }
+  jushuDialogVisible.value = true
+}
+
+function closeJushuDialog(): void {
+  jushuDialogVisible.value = false
+  jushuEditIdx.value = null
 }
 
 function confirmJushuDialog(): void {
@@ -528,7 +554,8 @@ function confirmJushuDialog(): void {
     ElMessage.warning('局数须为不小于 1 的整数')
     return
   }
-  if (jushuList.value.some((r) => r.ju === f.ju)) {
+  const editIdx = jushuEditIdx.value
+  if (jushuList.value.some((r, i) => r.ju === f.ju && i !== editIdx)) {
     ElMessage.warning(`第 ${f.ju} 局已存在，局数不可重复`)
     return
   }
@@ -543,16 +570,20 @@ function confirmJushuDialog(): void {
     ElMessage.warning(contentCheck.message)
     return
   }
-  jushuList.value = [
-    ...jushuList.value,
-    {
-      ju: f.ju,
-      content: contentCheck.normalized,
-      afterHit: Math.max(1, f.afterHit),
-      afterMiss: Math.max(1, f.afterMiss),
-    },
-  ].sort((a, b) => a.ju - b.ju)
-  jushuDialogVisible.value = false
+  const nextRow: SchemeJushuRow = {
+    ju: f.ju,
+    content: contentCheck.normalized,
+    afterHit: Math.max(1, f.afterHit),
+    afterMiss: Math.max(1, f.afterMiss),
+  }
+  if (editIdx != null && editIdx >= 0 && editIdx < jushuList.value.length) {
+    const next = jushuList.value.slice()
+    next[editIdx] = nextRow
+    jushuList.value = next.sort((a, b) => a.ju - b.ju)
+  } else {
+    jushuList.value = [...jushuList.value, nextRow].sort((a, b) => a.ju - b.ju)
+  }
+  closeJushuDialog()
 }
 
 function removeJushuRow(idx: number): void {
@@ -582,6 +613,8 @@ const PC28_HEZHI_VALUES = Array.from({ length: 28 }, (_, i) => String(i))
 const longhuPickValues = computed(() => longhuPickOptionsForConfig(schemePlayConfig.value))
 const triggerRows = ref<SchemeTriggerRow[]>([])
 const triggerMode = ref<SchemeTriggerBet['mode']>('always_pos')
+/** 「全部随机」每格随机出号个数（位数），由工具条步进器控制 */
+const triggerRandomCount = ref(1)
 /** 定位胆投注位（可多选）：0=万 … 4=个（统一一星定位胆时必选） */
 const triggerPositionIdxs = ref<number[]>([0])
 /** 远端已有配置时不随玩法解析过程重建行 */
@@ -600,6 +633,10 @@ watch(
     if (key !== lastTriggerPlayKey) {
       lastTriggerPlayKey = key
       triggerRowsLocked = false
+      // 换玩法后默认勾选段内全部投注位（如前三：万/千/百）
+      if (runTypeId.value === 'adv_trigger_bet') {
+        triggerPositionIdxs.value = defaultTriggerPositionIdxs()
+      }
     }
   },
 )
@@ -620,20 +657,72 @@ const triggerBetOptions = computed<string[]>(() => {
 
 const isTriggerTextPlay = computed(() => triggerBetOptions.value.length > 0)
 
-/** 统一「一星定位胆」等多位面板：需选手动投注位；子玩法已锁万/千…则不显示 */
+/** 一星/定位胆：展示投注位芯片 */
 const showTriggerPositionPicker = computed(() => {
   if (runTypeId.value !== 'adv_trigger_bet') return false
   if (isLonghuPlay.value || isTriggerTextPlay.value) return false
-  const cfg = schemePlayConfig.value
-  const tid = String(cfg.playTypeId ?? '')
-  const bm = String(cfg.betMode ?? '')
-  const isDingwei =
-    bm === 'dingwei' ||
-    tid === 'dingwei' ||
-    tid === 'g006' ||
-    String(cfg.guajiGroup ?? '') === '一星'
-  return isDingwei && positionCount.value >= 2
+  return supportsAdvTriggerPositionPicker(schemePlayConfig.value)
 })
+
+/** 前三直选复式等：按位分列正投/反投（不展示投注位） */
+const showTriggerPerPosColumns = computed(() => {
+  if (runTypeId.value !== 'adv_trigger_bet') return false
+  if (isLonghuPlay.value || isTriggerTextPlay.value) return false
+  return supportsAdvTriggerPerPosColumns(schemePlayConfig.value)
+})
+
+/** 位名展示：万 → 万位 */
+function triggerPosName(posLabel: string): string {
+  const base = String(posLabel ?? '')
+    .trim()
+    .replace(/位$/, '')
+  return `${base || '位'}位`
+}
+
+/** pos/neg 按行存「位1\n位2\n位3」；旧单值兼容展开到各位 */
+function triggerFieldParts(raw: string, len: number): string[] {
+  const n = Math.max(1, len)
+  const text = String(raw ?? '')
+  if (!text.includes('\n') && !text.includes('\r')) {
+    const one = text.trim()
+    return Array.from({ length: n }, () => one)
+  }
+  const parts = text.split(/\r?\n/).map((s) => s.trim())
+  return Array.from({ length: n }, (_, i) => parts[i] ?? '')
+}
+
+function getTriggerFieldCell(row: SchemeTriggerRow, field: 'pos' | 'neg', idx: number): string {
+  return triggerFieldParts(row[field], positionCount.value)[idx] ?? ''
+}
+
+function writeTriggerFieldCell(
+  row: SchemeTriggerRow,
+  field: 'pos' | 'neg',
+  idx: number,
+  raw: string,
+): void {
+  const parts = triggerFieldParts(row[field], positionCount.value)
+  parts[idx] = String(raw ?? '')
+  row[field] = parts.join('\n')
+}
+
+function commitTriggerFieldCell(row: SchemeTriggerRow, field: 'pos' | 'neg', idx: number): void {
+  const parts = triggerFieldParts(row[field], positionCount.value)
+  parts[idx] = sanitizeTriggerBetContent(parts[idx] ?? '')
+  row[field] = parts.join('\n')
+}
+
+function defaultTriggerPositionIdxs(): number[] {
+  const n = Math.max(1, positionCount.value)
+  return Array.from({ length: n }, (_, i) => i)
+}
+
+function ensureTriggerPositions(): void {
+  if (!showTriggerPositionPicker.value) return
+  const n = Math.max(1, positionCount.value)
+  const cur = triggerPositionIdxs.value.filter((i) => Number.isInteger(i) && i >= 0 && i < n)
+  triggerPositionIdxs.value = cur.length ? cur : defaultTriggerPositionIdxs()
+}
 
 function triggerOpenValues(): string[] {
   if (isLonghuPlay.value) return longhuPickValues.value
@@ -720,54 +809,135 @@ function applyTriggerBetFromConfig(raw: unknown): void {
     triggerMode.value = mode
   }
   if (tb.positionIdxs != null || tb.positionIdx != null) {
-    const fromArr = normalizeTriggerPositionIdxs(tb.positionIdxs, positionCount.value || 10)
-    if (Array.isArray(tb.positionIdxs) && fromArr.length) {
-      triggerPositionIdxs.value = fromArr
+    const n = Math.max(1, positionCount.value)
+    const idxs = Array.isArray(tb.positionIdxs)
+      ? normalizeTriggerPositionIdxs(tb.positionIdxs, n)
+      : normalizeTriggerPositionIdxs(tb.positionIdx, n)
+    triggerPositionIdxs.value = idxs
+  }
+}
+
+/** 随机出号个数上限 = 号池大小（至少 1） */
+const triggerRandomMax = computed(() => Math.max(1, triggerOpenValues().length))
+
+/** 取 count 个不重复随机号码，逗号拼接（count 由「随机出号」步进器决定） */
+function randomTriggerMultiValue(count: number): string {
+  const pool = [...triggerOpenValues()]
+  if (!pool.length) return '0'
+  const n = Math.min(pool.length, Math.max(1, Math.trunc(count) || 1))
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[pool[i], pool[j]] = [pool[j]!, pool[i]!]
+  }
+  return pool.slice(0, n).join(',')
+}
+
+/** 「全部随机」：纯前端一次性填表辅助，引擎下注不涉及随机；每格取「随机出号」个号 */
+function randomFillTrigger(): void {
+  const count = Math.min(triggerRandomMax.value, Math.max(1, Math.trunc(triggerRandomCount.value) || 1))
+  triggerRandomCount.value = count
+  const posN = Math.max(1, positionCount.value)
+  for (const row of triggerRows.value) {
+    if (showTriggerPerPosColumns.value) {
+      row.pos = Array.from({ length: posN }, () => randomTriggerMultiValue(count)).join('\n')
+      row.neg = Array.from({ length: posN }, () => randomTriggerMultiValue(count)).join('\n')
     } else {
-      triggerPositionIdxs.value = normalizeTriggerPositionIdxs(tb.positionIdx, positionCount.value || 10)
+      row.pos = randomTriggerMultiValue(count)
+      row.neg = randomTriggerMultiValue(count)
     }
   }
+  ElMessage.success(`已随机填充正投 / 反投号码（每格 ${count} 个号）`)
 }
 
-function randomTriggerValue(): string {
-  const pool = triggerOpenValues()
-  return pool[Math.floor(Math.random() * pool.length)] ?? '0'
+/** 规范化按位正投/反投（换行分位，每位内可逗号多号） */
+function sanitizeTriggerPerPosField(raw: string): string {
+  const n = Math.max(1, positionCount.value)
+  return triggerFieldParts(raw, n)
+    .map((cell) => sanitizeTriggerBetContent(cell))
+    .join('\n')
 }
 
-/** 「全部随机」：纯前端一次性填表辅助，引擎下注不涉及随机 */
-function randomFillTrigger(): void {
-  for (const row of triggerRows.value) {
-    row.pos = randomTriggerValue()
-    row.neg = randomTriggerValue()
-  }
-  ElMessage.success('已随机填充正投 / 反投号码')
-}
-
-function sanitizeTriggerDigit(v: string): string {
-  const digits = String(v ?? '').replace(/\D/g, '').slice(0, 2)
-  if (!digits) return ''
+/** 规范化单个投注 token（数字池 / PC28 和值） */
+function sanitizeOneTriggerToken(raw: string): string {
+  const p = String(raw ?? '').trim()
+  if (!p) return ''
   const cfg = schemePlayConfig.value
   if (isPc28HezhiConfigLike(cfg) && isPc28PlayLine()) {
-    const n = Math.min(27, Number(digits))
-    return Number.isFinite(n) ? String(n) : ''
+    const digits = p.replace(/\D/g, '')
+    if (!digits) return ''
+    const n = Number(digits)
+    if (!Number.isFinite(n) || n < 0) return ''
+    return String(Math.min(27, n))
   }
-  return normalizePoolToken(digits) || digits.slice(0, 1)
+  const digits = p.replace(/\D/g, '')
+  return normalizePoolToken(digits) || normalizePoolToken(p) || ''
+}
+
+/**
+ * 正投/反投内容：支持逗号分隔多个号码（如 1,3,5）。
+ * 中文逗号会归一为英文逗号；去重保序。
+ */
+function sanitizeTriggerBetContent(v: string): string {
+  const raw = String(v ?? '')
+    .replace(/，/g, ',')
+    .trim()
+  if (!raw) return ''
+  const parts = raw.split(',').map((s) => s.trim()).filter(Boolean)
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const p of parts) {
+    const tok = sanitizeOneTriggerToken(p)
+    if (!tok || seen.has(tok)) continue
+    seen.add(tok)
+    out.push(tok)
+  }
+  return out.join(',')
+}
+
+/** 文字玩法：字符串 ↔ 多选数组 */
+function triggerTextTokens(v: string): string[] {
+  return String(v ?? '')
+    .replace(/，/g, ',')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
+function setTriggerTextField(row: SchemeTriggerRow, field: 'pos' | 'neg', vals: string[]): void {
+  const allow = new Set(triggerBetOptions.value)
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const v of vals ?? []) {
+    const t = String(v ?? '').trim()
+    if (!t || !allow.has(t) || seen.has(t)) continue
+    seen.add(t)
+    out.push(t)
+  }
+  row[field] = out.join(',')
 }
 
 const triggerInputPlaceholder = computed(() => {
   if (isPc28HezhiConfigLike(schemePlayConfig.value) && isPc28PlayLine()) {
-    return '0-27'
+    return '如 1,2,15'
   }
   const bm = schemePlayConfig.value.betMode ?? ''
   if (bm === 'hezhi' && isPc28PlayLine()) {
-    return '0-27'
+    return '如 1,2,15'
   }
   const pool = numberPoolTokens.value
-  return pool.length ? `${pool[0]}-${pool[pool.length - 1]}` : '0-9'
+  if (!pool.length) return '如 1,3,5'
+  if (pool.length <= 10) return `如 ${pool[0]},${pool[1] ?? pool[0]},${pool[2] ?? pool[0]}`
+  return `如 ${pool[0]},${pool[1]},${pool[2]}`
 })
 
 // --- hot_cold_warm 冷热出号（v6 仅冷/热） ---
 const hcwTotalPeriods = ref(20)
+/** 容错=起点偏移：在「最热→最冷」排序上跳过该端最极端的前 N 名（0-9，0=不跳过）。 */
+const hcwFaultCount = ref(0)
+/** 名次个数：从起点偏移处连续取几个号（1-10，默认 1）。 */
+const hcwPickCount = ref(1)
+/** 出号类型：hot / cold（可多选；空=纯手动覆盖模式，仅用下方网格选号）。 */
+const hcwPickTypes = ref<SchemeHotColdPickType[]>([])
 const hcwStrategy = ref<SchemeRotateStrategy>('keep')
 const HCW_STRATEGY_OPTIONS: Array<{ label: string; value: SchemeRotateStrategy }> = [
   { label: '每期换', value: 'every' },
@@ -873,6 +1043,16 @@ function applyHotColdWarmFromConfig(raw: unknown): void {
   const tp = Math.trunc(Number(c.totalPeriods))
   if (Number.isFinite(tp) && tp >= 20 && tp <= 100) hcwTotalPeriods.value = tp
   else if (Number.isFinite(tp) && tp > 100) hcwTotalPeriods.value = 100
+  // 容错=起点偏移（0-9），允许显式 0
+  const fc = Math.trunc(Number(c.faultCount))
+  if (Number.isFinite(fc)) hcwFaultCount.value = Math.min(9, Math.max(0, fc))
+  const pc = Math.trunc(Number(c.pickCount))
+  if (Number.isFinite(pc) && pc >= 1) hcwPickCount.value = Math.min(10, pc)
+  if (Array.isArray(c.pickTypes)) {
+    hcwPickTypes.value = c.pickTypes
+      .map((t) => String(t ?? '').toLowerCase())
+      .filter((t): t is SchemeHotColdPickType => t === 'hot' || t === 'cold')
+  }
   const st = String(c.strategy ?? '')
   if (st === 'every' || st === 'keep' || st === 'after_hit' || st === 'after_miss') {
     hcwStrategy.value = st
@@ -1164,9 +1344,11 @@ const hcwCellsByPos = computed(() =>
 
 /** 预估注数：与随机出号一致，走 countBetUnits（位积/组合×段长/任选 C(n,k)） */
 const hcwEstimatedUnits = computed(() => {
-  // 属性家族：每个已选选项 = 1 注（大/小/龙/虎/和值值…）
+  // 属性/聚合家族（和值/跨度/大小单双/龙虎等）：统一走 countBetUnits
+  // 和值/跨度按组合数×段倍乘（前中后三组选和值 2,6,13,17,24 → 38×3=114），勿按「选几个算几注」
   if (hcwAttribute.value) {
-    return (hcwPools.value[0] ?? []).filter((t) => t.trim() !== '').length
+    const line = (hcwPools.value[0] ?? []).filter((t) => t.trim() !== '').join(',')
+    return line ? countBetUnits(schemePlayConfig.value, line) : 0
   }
   // 号码整体频次：单档选号池，按组选/不定位/包胆口径算注数
   if (hcwDigitOverall.value) {
@@ -1294,7 +1476,10 @@ watch(
     () => schemePlayConfig.value.playMethodLabel,
   ],
   () => {
-    if (runTypeId.value === 'adv_trigger_bet') ensureTriggerRows()
+    if (runTypeId.value === 'adv_trigger_bet') {
+      ensureTriggerRows()
+      ensureTriggerPositions()
+    }
     if (runTypeId.value === 'hot_cold_warm') {
       ensureHcwPools()
       // 玩法家族切换后旧分档失效（数字↔属性宇宙不同），重置后按当前总期数直接统计
@@ -1852,8 +2037,26 @@ function runTypeDraftFields(): Partial<UpdateSchemeInput> {
     case 'adv_fixed_rotate':
       return jushuList.value.length ? { jushuList: jushuList.value.map((r) => ({ ...r })) } : {}
     case 'adv_trigger_bet': {
+      const textPlay = isTriggerTextPlay.value
+      const perPos = showTriggerPerPosColumns.value
       const triggerBet: SchemeTriggerBet = {
-        rows: triggerRows.value.map((r) => ({ ...r })),
+        rows: triggerRows.value.map((r) => ({
+          ...r,
+          pos: textPlay
+            ? triggerTextTokens(r.pos)
+                .filter((t) => triggerBetOptions.value.includes(t))
+                .join(',')
+            : perPos
+              ? sanitizeTriggerPerPosField(r.pos)
+              : sanitizeTriggerBetContent(r.pos),
+          neg: textPlay
+            ? triggerTextTokens(r.neg)
+                .filter((t) => triggerBetOptions.value.includes(t))
+                .join(',')
+            : perPos
+              ? sanitizeTriggerPerPosField(r.neg)
+              : sanitizeTriggerBetContent(r.neg),
+        })),
         mode: triggerMode.value,
       }
       if (showTriggerPositionPicker.value) {
@@ -1872,6 +2075,12 @@ function runTypeDraftFields(): Partial<UpdateSchemeInput> {
           ? [(hcwPools.value[0] ?? []).join(',')]
           : Array.from({ length: positionCount.value }, (_, i) => (hcwPools.value[i] ?? []).join(',')),
         strategy: hcwStrategy.value,
+        // 出号类型：hot/cold（可多选；空则退化为纯手动覆盖）
+        pickTypes: [...hcwPickTypes.value],
+        // 容错=起点偏移（0-9）
+        faultCount: Math.min(9, Math.max(0, Math.trunc(Number(hcwFaultCount.value) || 0))),
+        // 名次个数（1-10）
+        pickCount: Math.min(10, Math.max(1, Math.trunc(Number(hcwPickCount.value) || 1))),
         // 兼容旧字段：中后换 ≈ 原中奖轮换开
         winRotate: hcwStrategy.value === 'after_hit',
       }
@@ -1978,7 +2187,19 @@ watch(
 
 /** 七套面板状态跟随现有防抖持久化机制 */
 watch(
-  [jushuList, triggerRows, triggerMode, hcwTotalPeriods, hcwPools, hcwStrategy, rdCounts, rdStrategy],
+  [
+    jushuList,
+    triggerRows,
+    triggerMode,
+    hcwTotalPeriods,
+    hcwPools,
+    hcwStrategy,
+    hcwFaultCount,
+    hcwPickCount,
+    hcwPickTypes,
+    rdCounts,
+    rdStrategy,
+  ],
   persistDraft,
   { deep: true },
 )
@@ -2237,12 +2458,32 @@ async function onSaveCloud() {
     // 与局数内容对齐，供仍读取 schemeGroups 的下游兜底
     schemeGroups.value = jushuList.value.map((r) => r.content)
   } else if (rt === 'adv_trigger_bet') {
-    const filled = triggerRows.value.some(
-      (r) => r.enabled && (String(r.pos).trim() !== '' || String(r.neg).trim() !== ''),
-    )
-    if (!filled) {
-      await warn('请填写开某投某映射（可用「全部随机」）')
-      return
+    if (showTriggerPerPosColumns.value) {
+      const n = Math.max(1, positionCount.value)
+      const incomplete = triggerRows.value.find((r) => {
+        if (!r.enabled) return false
+        const posParts = triggerFieldParts(r.pos, n)
+        const negParts = triggerFieldParts(r.neg, n)
+        return posParts.some((c) => !c) || negParts.some((c) => !c)
+      })
+      if (incomplete) {
+        const posNames = positionLabels.value.map((l) => triggerPosName(l)).join('、')
+        await warn(`启用行须填齐各位正投与反投（${posNames}）`)
+        return
+      }
+      const anyEnabled = triggerRows.value.some((r) => r.enabled)
+      if (!anyEnabled) {
+        await warn('请至少启用一行开某投某映射')
+        return
+      }
+    } else {
+      const filled = triggerRows.value.some(
+        (r) => r.enabled && (String(r.pos).trim() !== '' || String(r.neg).trim() !== ''),
+      )
+      if (!filled) {
+        await warn('请填写开某投某映射（可用「全部随机」）')
+        return
+      }
     }
     if (showTriggerPositionPicker.value && !triggerPositionIdxs.value.length) {
       await warn('请至少选择一个投注位')
@@ -2252,10 +2493,6 @@ async function onSaveCloud() {
     schemeGroups.value = [sample ? String(sample.pos).trim() : '0']
   } else if (rt === 'hot_cold_warm') {
     ensureHcwPools()
-    if (hcwEstimatedUnits.value <= 0) {
-      await warn('请至少选择一个冷热号码')
-      return
-    }
     // 按位玩法存成单组多行（万\n千\n百），避免被当成 3 个轮换组导致只取到一位
     schemeGroups.value = hcwSingleGroup.value
       ? [(hcwPools.value[0] ?? []).join(',')]
@@ -2907,11 +3144,6 @@ function onTimeDialogOpened() {
             <span class="scf-ms scf-ms--sm" aria-hidden="true">add</span>
             <span>添加局数</span>
           </button>
-          <button v-else-if="runTypeId === 'adv_trigger_bet'" type="button" class="scf-add-btn"
-            @click="randomFillTrigger">
-            <span class="scf-ms scf-ms--sm" aria-hidden="true">casino</span>
-            <span>全部随机</span>
-          </button>
         </div>
 
         <!-- 1/2. 定码轮换（多分组） / 固定取码（单组·每期复投） -->
@@ -2977,10 +3209,26 @@ function onTimeDialogOpened() {
               <div class="scf-jushu-side">
                 <span class="scf-jushu-jump">中后 → 第 {{ row.afterHit }} 局</span>
                 <span class="scf-jushu-jump">挂后 → 第 {{ row.afterMiss }} 局</span>
-                <button type="button" class="scf-jushu-del" :aria-label="`删除第 ${row.ju} 局`"
-                  @click="removeJushuRow(idx)">
-                  <span class="scf-ms scf-ms--sm" aria-hidden="true">delete</span>
-                </button>
+                <div class="scf-jushu-actions" role="group" :aria-label="`第 ${row.ju} 局操作`">
+                  <button
+                    type="button"
+                    class="scf-jushu-edit"
+                    title="编辑局数"
+                    :aria-label="`编辑第 ${row.ju} 局`"
+                    @click="openJushuEditDialog(idx)"
+                  >
+                    <span class="scf-ms scf-ms--sm" aria-hidden="true">edit</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="scf-jushu-del"
+                    title="删除局数"
+                    :aria-label="`删除第 ${row.ju} 局`"
+                    @click="removeJushuRow(idx)"
+                  >
+                    <span class="scf-ms scf-ms--sm" aria-hidden="true">delete</span>
+                  </button>
+                </div>
               </div>
             </li>
           </ul>
@@ -3007,44 +3255,174 @@ function onTimeDialogOpened() {
               >{{ label }}</button>
             </div>
           </div>
-          <div class="scf-trig-grid scf-trig-grid--head" aria-hidden="true">
+          <div class="scf-trig-toolbar">
+            <div class="scf-trig-rand-ctrl">
+              <span class="scf-trig-rand-lbl">随机出号</span>
+              <div class="scf-stepper" role="group" aria-label="随机出号个数">
+                <button
+                  type="button"
+                  class="scf-stepper-btn"
+                  :disabled="triggerRandomCount <= 1"
+                  aria-label="减少随机出号"
+                  @click="triggerRandomCount = Math.max(1, triggerRandomCount - 1)"
+                >
+                  <span class="scf-ms scf-ms--sm" aria-hidden="true">remove</span>
+                </button>
+                <el-input
+                  v-model.number="triggerRandomCount"
+                  type="number"
+                  inputmode="numeric"
+                  maxlength="2"
+                  class="scf-stepper-input scf-stepper-input--narrow"
+                  :min="1"
+                  :max="triggerRandomMax"
+                  @change="triggerRandomCount = Math.min(triggerRandomMax, Math.max(1, Math.trunc(Number(triggerRandomCount) || 1)))"
+                />
+                <button
+                  type="button"
+                  class="scf-stepper-btn"
+                  :disabled="triggerRandomCount >= triggerRandomMax"
+                  aria-label="增加随机出号"
+                  @click="triggerRandomCount = Math.min(triggerRandomMax, triggerRandomCount + 1)"
+                >
+                  <span class="scf-ms scf-ms--sm" aria-hidden="true">add</span>
+                </button>
+              </div>
+            </div>
+            <button type="button" class="scf-add-btn" @click="randomFillTrigger">
+              <span class="scf-ms scf-ms--sm" aria-hidden="true">casino</span>
+              <span>全部随机</span>
+            </button>
+          </div>
+          <div
+            class="scf-trig-grid scf-trig-grid--head"
+            :class="{ 'scf-trig-grid--posrow': showTriggerPerPosColumns }"
+            aria-hidden="true"
+          >
             <span>启用</span>
             <span>开出</span>
+            <template v-if="showTriggerPerPosColumns">
+              <span>位置</span>
+            </template>
             <span>正投</span>
             <span>反投</span>
           </div>
-          <div v-for="row in triggerRows" :key="row.open" class="scf-trig-grid" :class="{ 'is-off': !row.enabled }">
-            <el-switch v-model="row.enabled" size="small" :aria-label="`启用开出 ${row.open} 的映射`" />
-            <span class="scf-trig-open">{{ row.open }}</span>
-            <template v-if="isTriggerTextPlay">
-              <el-select v-model="row.pos" size="small" placeholder="正投" :disabled="!row.enabled">
-                <el-option v-for="v in triggerBetOptions" :key="v" :label="v" :value="v" />
-              </el-select>
-              <el-select v-model="row.neg" size="small" placeholder="反投" :disabled="!row.enabled">
-                <el-option v-for="v in triggerBetOptions" :key="`neg-${v}`" :label="v" :value="v" />
-              </el-select>
-            </template>
-            <template v-else>
-              <el-input v-model="row.pos" size="small" maxlength="2" :placeholder="triggerInputPlaceholder"
-                inputmode="numeric" :disabled="!row.enabled"
-                @change="row.pos = sanitizeTriggerDigit(row.pos)" />
-              <el-input v-model="row.neg" size="small" maxlength="2" :placeholder="triggerInputPlaceholder"
-                inputmode="numeric" :disabled="!row.enabled"
-                @change="row.neg = sanitizeTriggerDigit(row.neg)" />
-            </template>
-          </div>
+          <template v-if="showTriggerPerPosColumns">
+            <div
+              v-for="row in triggerRows"
+              :key="row.open"
+              class="scf-trig-block"
+              :class="{ 'is-off': !row.enabled }"
+            >
+              <div
+                v-for="(label, pIdx) in positionLabels"
+                :key="`trig-c-${row.open}-${pIdx}`"
+                class="scf-trig-grid scf-trig-grid--posrow"
+              >
+                <el-switch
+                  v-if="pIdx === 0"
+                  v-model="row.enabled"
+                  size="small"
+                  :aria-label="`启用开出 ${row.open} 的映射`"
+                />
+                <span v-else class="scf-trig-cell-placeholder" aria-hidden="true" />
+                <span v-if="pIdx === 0" class="scf-trig-open">{{ row.open }}</span>
+                <span v-else class="scf-trig-cell-placeholder" aria-hidden="true" />
+                <span class="scf-trig-pos-name">{{ triggerPosName(label) }}</span>
+                <el-input
+                  :model-value="getTriggerFieldCell(row, 'pos', pIdx)"
+                  size="small"
+                  :placeholder="triggerInputPlaceholder"
+                  inputmode="text"
+                  :disabled="!row.enabled"
+                  :aria-label="`${triggerPosName(label)}正投（开出 ${row.open}）`"
+                  @update:model-value="(v: string | number) => writeTriggerFieldCell(row, 'pos', pIdx, String(v ?? ''))"
+                  @change="commitTriggerFieldCell(row, 'pos', pIdx)"
+                />
+                <el-input
+                  :model-value="getTriggerFieldCell(row, 'neg', pIdx)"
+                  size="small"
+                  :placeholder="triggerInputPlaceholder"
+                  inputmode="text"
+                  :disabled="!row.enabled"
+                  :aria-label="`${triggerPosName(label)}反投（开出 ${row.open}）`"
+                  @update:model-value="(v: string | number) => writeTriggerFieldCell(row, 'neg', pIdx, String(v ?? ''))"
+                  @change="commitTriggerFieldCell(row, 'neg', pIdx)"
+                />
+              </div>
+            </div>
+          </template>
+          <template v-else>
+            <div
+              v-for="row in triggerRows"
+              :key="row.open"
+              class="scf-trig-grid"
+              :class="{ 'is-off': !row.enabled }"
+            >
+              <el-switch v-model="row.enabled" size="small" :aria-label="`启用开出 ${row.open} 的映射`" />
+              <span class="scf-trig-open">{{ row.open }}</span>
+              <template v-if="isTriggerTextPlay">
+                <el-select
+                  :model-value="triggerTextTokens(row.pos)"
+                  size="small"
+                  multiple
+                  collapse-tags
+                  collapse-tags-tooltip
+                  placeholder="正投（可多选）"
+                  :disabled="!row.enabled"
+                  @update:model-value="(v: string[]) => setTriggerTextField(row, 'pos', v)"
+                >
+                  <el-option v-for="v in triggerBetOptions" :key="v" :label="v" :value="v" />
+                </el-select>
+                <el-select
+                  :model-value="triggerTextTokens(row.neg)"
+                  size="small"
+                  multiple
+                  collapse-tags
+                  collapse-tags-tooltip
+                  placeholder="反投（可多选）"
+                  :disabled="!row.enabled"
+                  @update:model-value="(v: string[]) => setTriggerTextField(row, 'neg', v)"
+                >
+                  <el-option v-for="v in triggerBetOptions" :key="`neg-${v}`" :label="v" :value="v" />
+                </el-select>
+              </template>
+              <template v-else>
+                <el-input
+                  v-model="row.pos"
+                  size="small"
+                  :placeholder="triggerInputPlaceholder"
+                  inputmode="text"
+                  :disabled="!row.enabled"
+                  @change="row.pos = sanitizeTriggerBetContent(row.pos)"
+                />
+                <el-input
+                  v-model="row.neg"
+                  size="small"
+                  :placeholder="triggerInputPlaceholder"
+                  inputmode="text"
+                  :disabled="!row.enabled"
+                  @change="row.neg = sanitizeTriggerBetContent(row.neg)"
+                />
+              </template>
+            </div>
+          </template>
           <div class="scf-field scf-panel-field">
             <span class="scf-lbl">投向模式</span>
-            <el-radio-group v-model="triggerMode" class="scf-radio-wrap">
+            <el-radio-group v-model="triggerMode" class="scf-radio-wrap scf-radio-wrap--trigger-mode">
               <el-radio v-for="o in TRIGGER_MODE_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</el-radio>
             </el-radio-group>
           </div>
           <p class="scf-run-tip">
-            <template v-if="showTriggerPositionPicker">
-              可多选投注位：每位按该位上期开奖各自查映射下注；某位无映射时用启用行第 1 行正投
+            正投 / 反投可填多个号码，英文逗号分隔（如 1,3,5）。
+            <template v-if="showTriggerPerPosColumns">
+              每个开出号码下按位置分行填写；启用后各位正投与反投均必填。每位按该位上期开奖查对应「开出」后取该位号码下注。
+            </template>
+            <template v-else-if="showTriggerPositionPicker">
+              可多选投注位：每位按该位上期开奖各自查映射下注；某位无映射时用启用行第 1 行正投。
             </template>
             <template v-else>
-              上期开出号码无启用映射时，按启用行第 1 行的正投下注
+              上期开出号码无启用映射时，按启用行第 1 行的正投下注。
             </template>
           </p>
         </div>
@@ -3084,11 +3462,54 @@ function onTimeDialogOpened() {
                   <span class="scf-ms scf-ms--sm" aria-hidden="true">add</span>
                 </button>
               </div>
-              <el-button size="small" type="primary" plain :loading="hcwLoading" @click="loadHcwStats">
-                刷新统计
-              </el-button>
+              <button
+                type="button"
+                class="scf-hcw-refresh"
+                :disabled="hcwLoading"
+                aria-label="刷新统计"
+                title="刷新统计"
+                @click="loadHcwStats"
+              >
+                <span
+                  class="scf-ms scf-ms--sm"
+                  :class="{ 'scf-hcw-refresh-spin': hcwLoading }"
+                  aria-hidden="true"
+                >refresh</span>
+              </button>
             </div>
-            <span class="scf-hcw-units">总计：{{ hcwEstimatedUnits }} 注</span>
+            <div class="scf-hcw-ctrl">
+              <span class="scf-hcw-lbl" title="在「最热→最冷」排序上跳过该端最极端的前 N 名（0=不跳过）">容错</span>
+              <div class="scf-stepper" role="group" aria-label="容错">
+                <button
+                  type="button"
+                  class="scf-stepper-btn"
+                  :disabled="hcwFaultCount <= 0"
+                  aria-label="减少容错"
+                  @click="hcwFaultCount = Math.max(0, hcwFaultCount - 1)"
+                >
+                  <span class="scf-ms scf-ms--sm" aria-hidden="true">remove</span>
+                </button>
+                <el-input
+                  v-model.number="hcwFaultCount"
+                  type="number"
+                  inputmode="numeric"
+                  maxlength="1"
+                  class="scf-stepper-input scf-stepper-input--narrow"
+                  :min="0"
+                  :max="9"
+                  @change="hcwFaultCount = Math.min(9, Math.max(0, Math.trunc(Number(hcwFaultCount) || 0)))"
+                />
+                <button
+                  type="button"
+                  class="scf-stepper-btn"
+                  :disabled="hcwFaultCount >= 9"
+                  aria-label="增加容错"
+                  @click="hcwFaultCount = Math.min(9, hcwFaultCount + 1)"
+                >
+                  <span class="scf-ms scf-ms--sm" aria-hidden="true">add</span>
+                </button>
+              </div>
+            </div>
           </div>
           <div class="scf-hcw-bar scf-hcw-bar--strategy">
             <el-radio-group v-model="hcwStrategy" class="scf-hcw-strategy">
@@ -3096,6 +3517,7 @@ function onTimeDialogOpened() {
                 {{ o.label }}
               </el-radio>
             </el-radio-group>
+            <span class="scf-hcw-units">总计：{{ hcwEstimatedUnits }} 注</span>
           </div>
           <div v-for="(label, pi) in hcwGroupLabels" :key="pi" class="scf-hcw-pos">
             <div class="scf-hcw-pos-head">
@@ -3130,7 +3552,7 @@ function onTimeDialogOpened() {
               </div>
             </div>
             <p v-if="!hcwStatsReady && !hcwLoading" class="scf-run-tip">
-              {{ hcwAttribute ? '暂无选项频次，可点「刷新统计」重试' : '暂无开奖统计，可直接手动选号' }}
+              {{ hcwAttribute ? '暂无选项频次，可点刷新重试' : '暂无开奖统计，可直接手动选号' }}
             </p>
             <div
               v-if="(hcwCellsByPos[pi] ?? []).length"
@@ -3318,8 +3740,16 @@ function onTimeDialogOpened() {
       </div>
     </el-dialog>
 
-    <el-dialog v-model="jushuDialogVisible" title="添加局数" width="min(24rem, calc(100vw - 2rem))" append-to-body
-      align-center destroy-on-close class="scf-jushu-dialog">
+    <el-dialog
+      v-model="jushuDialogVisible"
+      :title="jushuDialogTitle"
+      width="min(24rem, calc(100vw - 2rem))"
+      append-to-body
+      align-center
+      destroy-on-close
+      class="scf-jushu-dialog"
+      @closed="jushuEditIdx = null"
+    >
       <div class="scf-jushu-form">
         <div class="scf-field">
           <span class="scf-lbl">局数</span>
@@ -3368,8 +3798,8 @@ function onTimeDialogOpened() {
         <p class="scf-run-tip">跳转到不存在的局数时，自动回到第 1 局</p>
       </div>
       <template #footer>
-        <el-button @click="jushuDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="confirmJushuDialog">确认添加</el-button>
+        <el-button @click="closeJushuDialog">取消</el-button>
+        <el-button type="primary" @click="confirmJushuDialog">{{ jushuDialogConfirmLabel }}</el-button>
       </template>
     </el-dialog>
 
@@ -4275,6 +4705,22 @@ function onTimeDialogOpened() {
   gap: 0.15rem 1.1rem;
 }
 
+/* 投向模式：两行两列对齐（一直正投/反投；前正后反/前反后正） */
+.scf-radio-wrap--trigger-mode {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 0.75rem;
+  row-gap: 0.35rem;
+  width: 100%;
+}
+
+.scf-radio-wrap--trigger-mode :deep(.el-radio) {
+  margin-right: 0;
+  height: auto;
+  min-height: 2rem;
+  align-items: center;
+}
+
 /* 局数列表 */
 .scf-jushu-list {
   list-style: none;
@@ -4331,15 +4777,38 @@ function onTimeDialogOpened() {
   color: var(--scf-on-variant);
 }
 
-.scf-jushu-del {
+.scf-jushu-actions {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1rem;
+}
+
+.scf-jushu-edit,
+.scf-jushu-del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
   border: none;
   background: transparent;
-  color: var(--scf-error);
   cursor: pointer;
-  padding: 0.2rem 0.3rem;
+  padding: 0;
   border-radius: 0.4rem;
   line-height: 0;
+}
+
+.scf-jushu-edit {
+  color: var(--scf-primary-strong, #0050cb);
+}
+
+.scf-jushu-edit:hover {
+  background: rgba(0, 80, 203, 0.08);
+}
+
+.scf-jushu-del {
+  color: var(--scf-error);
 }
 
 .scf-jushu-del:hover {
@@ -4376,6 +4845,29 @@ function onTimeDialogOpened() {
 }
 
 /* 开某投某 · 投注位（与 scf-field 同列，芯片均分一行） */
+.scf-trig-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.65rem;
+}
+
+.scf-trig-rand-ctrl {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.scf-trig-rand-lbl {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: #4a5568;
+  white-space: nowrap;
+}
+
 .scf-trig-pos-chips {
   --scf-trig-pos-n: 5;
   display: grid;
@@ -4432,6 +4924,45 @@ function onTimeDialogOpened() {
   gap: 0.6rem;
 }
 
+/* 前三复式等：启用|开出|位置|正投|反投，每位一行 */
+.scf-trig-grid--posrow {
+  grid-template-columns: 2.1rem 1.75rem 2.4rem 1fr 1fr;
+  gap: 0.35rem 0.28rem;
+}
+
+.scf-trig-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  padding: 0.35rem 0;
+  border-radius: 0.55rem;
+}
+
+.scf-trig-block + .scf-trig-block {
+  border-top: 1px solid rgba(25, 28, 30, 0.06);
+}
+
+.scf-trig-block.is-off {
+  opacity: 0.55;
+}
+
+.scf-trig-block.is-off .scf-trig-open {
+  opacity: 0.45;
+}
+
+.scf-trig-cell-placeholder {
+  display: block;
+  min-height: 1px;
+}
+
+.scf-trig-pos-name {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--scf-on-variant);
+  text-align: center;
+  white-space: nowrap;
+}
+
 .scf-trig-grid--head span {
   font-size: 11px;
   font-weight: 400;
@@ -4454,6 +4985,11 @@ function onTimeDialogOpened() {
   background: rgba(0, 80, 203, 0.06);
 }
 
+.scf-trig-grid--posrow .scf-trig-open {
+  font-size: 0.8125rem;
+  padding: 0.2rem 0;
+}
+
 /* 冷热出号 */
 .scf-hcw-bar {
   display: flex;
@@ -4463,12 +4999,16 @@ function onTimeDialogOpened() {
 }
 
 .scf-hcw-bar--top {
-  justify-content: flex-start;
+  justify-content: space-between;
   flex-wrap: nowrap;
+  gap: 0.65rem;
 }
 
 .scf-hcw-bar--strategy {
-  justify-content: flex-start;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: nowrap;
 }
 
 .scf-hcw-ctrl {
@@ -4479,23 +5019,66 @@ function onTimeDialogOpened() {
   flex: none;
 }
 
+.scf-hcw-refresh {
+  display: grid;
+  place-items: center;
+  width: 1.85rem;
+  height: 1.85rem;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0.45rem;
+  background: rgba(0, 80, 203, 0.08);
+  color: var(--scf-primary-strong, #0050cb);
+  cursor: pointer;
+  transition: background 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.scf-hcw-refresh:hover:not(:disabled) {
+  background: rgba(0, 80, 203, 0.14);
+}
+
+.scf-hcw-refresh:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.scf-hcw-refresh-spin {
+  display: inline-block;
+  animation: scf-hcw-spin 0.8s linear infinite;
+}
+
+@keyframes scf-hcw-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .scf-hcw-strategy {
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
-  gap: 0.15rem 0.85rem;
-  width: 100%;
+  gap: 0.1rem 0.45rem;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .scf-hcw-strategy :deep(.el-radio) {
   margin-right: 0;
+  margin-left: 0;
   height: auto;
 }
 
 .scf-hcw-strategy :deep(.el-radio__label) {
-  font-size: 0.8125rem;
+  font-size: 0.75rem;
   font-weight: 400;
-  padding-left: 0.35rem;
+  padding-left: 0.25rem;
+}
+
+.scf-hcw-strategy :deep(.el-radio__inner) {
+  width: 0.875rem;
+  height: 0.875rem;
 }
 
 /* 勿用全局 .scf-lbl（width:100%），否则在 flex 行内会挤掉输入框 */
@@ -4550,6 +5133,11 @@ function onTimeDialogOpened() {
   width: 2.15rem;
 }
 
+/* 容错为单位数，缩短仅够展示 1 位 */
+.scf-stepper-input--narrow {
+  width: 1.35rem;
+}
+
 .scf-stepper-input :deep(.el-input__wrapper) {
   height: 1.85rem;
   padding: 0;
@@ -4579,8 +5167,7 @@ function onTimeDialogOpened() {
 
 .scf-hcw-units {
   flex: none;
-  margin-left: auto;
-  font-size: 0.8125rem;
+  font-size: 0.75rem;
   font-weight: 400;
   font-variant-numeric: tabular-nums;
   color: var(--scf-primary-strong, #0050cb);

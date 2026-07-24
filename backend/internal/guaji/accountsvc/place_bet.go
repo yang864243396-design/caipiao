@@ -155,23 +155,30 @@ func (s *Service) placeRealBetWithRow(
 	if unit <= 0 {
 		unit = 2
 	}
-	if guajibet.IsFushiBaoziZeroBet(req.RuleMeta, req.Content) {
+	// 再 format 一次（幂等）：防止冷热按位换行号池未转 wire 时 Count=1 + solo=true → 单挑参数错误
+	content := req.Content
+	if strings.TrimSpace(req.RuleMeta.PlayTemplate) != "" {
+		if formatted := guajibet.FormatBetContentForRule(req.RuleMeta, req.Content); strings.TrimSpace(formatted) != "" {
+			content = formatted
+		}
+	}
+	if guajibet.IsFushiBaoziZeroBet(req.RuleMeta, content) {
 		return guajibet.Result{}, fmt.Errorf("%w: %w", guajibet.ErrPlaceRejected, guajibet.ErrZeroBets)
 	}
 	betsNums := req.BetsNums
-	if n := guajibet.ResolveBetsNums(req.RuleMeta, req.Content, req.Amount, unit, mult); n > 0 {
+	if n := guajibet.ResolveBetsNums(req.RuleMeta, content, req.Amount, unit, mult); n > 0 {
 		betsNums = n
 	}
 	if betsNums <= 0 {
 		betsNums = 1
 	}
 	betAmount := roundLottBetAmount(unit, betsNums, mult)
-	solo := guajibet.ResolveSolo(req.RuleMeta, req.Content, betsNums)
+	solo := guajibet.ResolveSolo(req.RuleMeta, content, betsNums)
 	betRes, err := s.guaji.PlaceLottBet(ctx, token, guaji.LottBetRequest{
 		AutoType: "platform",
 		BetContents: []guaji.LottBetContent{{
 			RuleID:     req.RuleID,
-			BetContent: req.Content,
+			BetContent: content,
 			AmountUnit: unit,
 			BetsNums:   betsNums,
 			Multiple:   mult,
@@ -191,7 +198,7 @@ func (s *Service) placeRealBetWithRow(
 			_ = s.markTokenError(ctx, memberID, row.id, row.accessTokenEnc.String, fault.UserMessage)
 			return guajibet.Result{}, guajibet.ErrTokenInvalid
 		}
-		slog.Warn("guaji place bet rejected", "member", memberAccount, "gameId", gameID, "ruleId", req.RuleID, "issue", req.IssueNo, "content", req.Content, "betsNums", betsNums, "solo", solo, "amount", betAmount, "err", err)
+		slog.Warn("guaji place bet rejected", "member", memberAccount, "gameId", gameID, "ruleId", req.RuleID, "issue", req.IssueNo, "content", content, "betsNums", betsNums, "solo", solo, "amount", betAmount, "err", err)
 		return guajibet.Result{}, fmt.Errorf("%w: %w", guajibet.ErrPlaceRejected, err)
 	}
 	periods := strings.TrimSpace(betRes.Periods)

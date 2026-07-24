@@ -18,6 +18,8 @@ type playRule struct {
 	SegmentPos    []int // 非连续位段（如前中后三/前后三）
 	NumberPoolMin int
 	NumberPoolMax int
+	// HezhiZuxuan 组选和值：选项宇宙排除仅豹子可组成的极值和（如三星 0/27 → 1..26）。
+	HezhiZuxuan bool
 	// OddsBase 该彩种「1 元三星直选」基准派彩（第三方 real/rate 派生）。
 	// 0 表示未知，赔率按参考基准 970 计（缩放=1）。
 	OddsBase float64

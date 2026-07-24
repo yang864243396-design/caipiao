@@ -346,8 +346,13 @@ func attributeUniverse(rule playRule) []string {
 		if segLen < 1 {
 			segLen = 1
 		}
-		out := make([]string, 0, segLen*(max-min)+1)
-		for v := segLen * min; v <= segLen*max; v++ {
+		lo, hi := segLen*min, segLen*max
+		// 组选和值排除仅豹子（各位同码）可组成的极值和：三星 0(000)/27(999) → 1..26，前二 0/18 → 1..17。
+		if rule.HezhiZuxuan && hi-lo >= 2 {
+			lo, hi = lo+1, hi-1
+		}
+		out := make([]string, 0, hi-lo+1)
+		for v := lo; v <= hi; v++ {
 			out = append(out, strconv.Itoa(v))
 		}
 		return out
@@ -677,51 +682,147 @@ func (w *Worker) recentDrawBalls(ctx context.Context, lotteryCode, currentIssue 
 	return out
 }
 
-// buildHotColdPickContent 按平台冷/热二等分 + 出号类型 + 容错取码（对齐富联换号口径，无温档）。
+// buildHotColdPickContent 按「名次 + 起点偏移」取码（对齐富联冷热出号逆向）：
+//
+//	每期用最近 N 期把号码按出现次数「最热→最冷」排序 → 出号类型定位到热端/冷端 →
+//	容错=起点偏移跳过该端最极端的前 fault 名 → 连续取 pickCount 个名次的号。
+//
+// 混合模式：hc.Pool[i] 非空的位用手选号码覆盖，其余位按名次自动取号。
 func buildHotColdPickContent(cfg parsedSchemeConfig, draws [][]string) string {
 	hc := cfg.HotCold
 	if hc == nil {
 		return ""
 	}
-	fault := hc.FaultCount
-	if fault < 1 {
-		fault = 1
+	fault := hc.FaultCount // 起点偏移（0=从最极端开始）
+	if fault < 0 {
+		fault = 0
 	}
-	if fault > 10 {
-		fault = 10
+	if fault > 9 {
+		fault = 9
+	}
+	count := hc.PickCount // 每位取几个名次
+	if count < 1 {
+		count = 1
 	}
 	types := normalizeHotColdPickTypes(hc.PickTypes)
-	if len(types) == 0 {
-		// 无出号类型：不自动取码（回退 pool）
-		return ""
-	}
-	if len(draws) == 0 {
-		return ""
-	}
+	wantHot, wantCold := hotColdWants(types)
 	pool := playNumberPool(cfg.Play)
 
 	// 属性家族（大小单双/龙虎/和值等）
 	if isHotColdAttributePlay(cfg.Play) {
+		if manual := hotColdManualAt(hc.Pool, 0); manual != "" {
+			return manual
+		}
+		if len(types) == 0 || len(draws) == 0 {
+			return ""
+		}
 		res := HotColdWarmAttributeTiers(cfg.Play, draws)
-		picked := pickTokensFromHotCold(res.Hot, res.Cold, types, fault)
-		return strings.Join(picked, ",")
+		full := append(append([]string{}, res.Hot...), res.Cold...)
+		return strings.Join(pickTokensByRank(full, wantHot, wantCold, fault, count), ",")
 	}
 	// 号码整体频次（组选/不定位/包胆）
 	if isHotColdDigitOverall(cfg.Play) {
+		if manual := hotColdManualAt(hc.Pool, 0); manual != "" {
+			return manual
+		}
+		if len(types) == 0 || len(draws) == 0 {
+			return ""
+		}
 		hot, cold := hotColdWarmTiersOverall(draws, cfg.Play, pool)
-		picked := pickTokensFromHotCold(hot, cold, types, fault)
-		return strings.Join(picked, ",")
+		full := append(append([]string{}, hot...), cold...)
+		return strings.Join(pickTokensByRank(full, wantHot, wantCold, fault, count), ",")
 	}
-	// 按位型
+	// 按位型：逐位取号，支持手动覆盖
 	n := playPositionCount(cfg.Play)
-	lines := make([]string, 0, n)
+	lines := make([]string, n)
+	filled := 0
 	for i := 0; i < n; i++ {
+		if manual := hotColdManualAt(hc.Pool, i); manual != "" {
+			lines[i] = manual
+			filled++
+			continue
+		}
+		if len(types) == 0 || len(draws) == 0 {
+			continue
+		}
 		pos := hotColdPositionIdx(cfg.Play, i)
 		hot, _, cold := hotColdWarmTiers(draws, pos, pool)
-		picked := pickTokensFromHotCold(hot, cold, types, fault)
-		lines = append(lines, strings.Join(picked, ","))
+		full := append(append([]string{}, hot...), cold...)
+		picked := pickTokensByRank(full, wantHot, wantCold, fault, count)
+		lines[i] = strings.Join(picked, ",")
+		if lines[i] != "" {
+			filled++
+		}
+	}
+	if filled == 0 {
+		return ""
 	}
 	return strings.Join(lines, "\n")
+}
+
+// hotColdWants 出号类型 → 是否取热端/冷端。
+func hotColdWants(types []string) (wantHot, wantCold bool) {
+	for _, t := range types {
+		if t == "hot" {
+			wantHot = true
+		}
+		if t == "cold" {
+			wantCold = true
+		}
+	}
+	return wantHot, wantCold
+}
+
+// hotColdManualAt 取某位的手动覆盖号码（空=该位自动取号）。
+func hotColdManualAt(pool []string, i int) string {
+	if i < 0 || i >= len(pool) {
+		return ""
+	}
+	return strings.TrimSpace(pool[i])
+}
+
+// pickTokensByRank 在「最热→最冷」全序 full 上，按出号类型 + 起点偏移 + 名次个数取号。
+//   - 热端：从 full[offset] 起连续取 count 个（offset=1,count=2 → 第2、第3热）。
+//   - 冷端：从最冷 full[n-1] 起、跳过 offset 名后连续取 count 个（冷号在前）。
+//   - 同时选热+冷：热端取号在前、冷端在后，去重保序。
+func pickTokensByRank(full []string, wantHot, wantCold bool, offset, count int) []string {
+	n := len(full)
+	if n == 0 {
+		return nil
+	}
+	if count < 1 {
+		count = 1
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, count*2)
+	add := func(idx int) {
+		if idx < 0 || idx >= n {
+			return
+		}
+		t := strings.TrimSpace(full[idx])
+		if t == "" {
+			return
+		}
+		if _, dup := seen[t]; dup {
+			return
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	if wantHot {
+		for k := 0; k < count; k++ {
+			add(offset + k)
+		}
+	}
+	if wantCold {
+		for k := 0; k < count; k++ {
+			add(n - 1 - offset - k)
+		}
+	}
+	return out
 }
 
 func normalizeHotColdPickTypes(raw []string) []string {
@@ -732,48 +833,6 @@ func normalizeHotColdPickTypes(raw []string) []string {
 		if (t == "hot" || t == "cold") && !seen[t] {
 			seen[t] = true
 			out = append(out, t)
-		}
-	}
-	return out
-}
-
-func pickTokensFromHotCold(hot, cold []string, types []string, fault int) []string {
-	wantHot, wantCold := false, false
-	for _, t := range types {
-		if t == "hot" {
-			wantHot = true
-		}
-		if t == "cold" {
-			wantCold = true
-		}
-	}
-	candidates := make([]string, 0, len(hot)+len(cold))
-	if wantHot {
-		candidates = append(candidates, hot...)
-	}
-	if wantCold {
-		// 冷档按「更冷优先」：原切片为频次降序的后半段，逆序后冷号在前
-		for i := len(cold) - 1; i >= 0; i-- {
-			candidates = append(candidates, cold[i])
-		}
-	}
-	if fault > len(candidates) {
-		fault = len(candidates)
-	}
-	seen := map[string]struct{}{}
-	out := make([]string, 0, fault)
-	for _, t := range candidates {
-		t = strings.TrimSpace(t)
-		if t == "" {
-			continue
-		}
-		if _, dup := seen[t]; dup {
-			continue
-		}
-		seen[t] = struct{}{}
-		out = append(out, t)
-		if len(out) >= fault {
-			break
 		}
 	}
 	return out
@@ -898,9 +957,13 @@ func resolveTriggerBetDecision(cfg parsedSchemeConfig, prevBalls []string, lastD
 
 	direction := nextTriggerDirection(cfg.Trigger.Mode, lastDirection)
 
-	// 定位胆（含多选投注位）：按位独立映射
-	if cfg.Trigger.HasPosition && triggerBetUsesPosition(cfg.Play) {
-		return pickTriggerBetPerPosition(cfg, enabled, prevBalls, direction)
+	// 定位胆多选位 / 前三直选复式等按位玩法：按位独立映射
+	if triggerBetUsesPosition(cfg.Play) {
+		if isDingweiTriggerPlay(cfg.Play) && !cfg.Trigger.HasPosition {
+			// 旧定位胆配置未写 positionIdxs：仍走单行映射 + 默认位编排
+		} else {
+			return pickTriggerBetPerPosition(cfg, enabled, prevBalls, direction)
+		}
 	}
 
 	// 龙虎 / PC28 等：整期一个开出条件 → 一行映射
@@ -926,6 +989,10 @@ func pickTriggerBetPerPosition(
 	prevBalls []string,
 	direction string,
 ) pickDecision {
+	// 前三直选复式等：按玩法段出多行（万\n千\n百），而非五星定位胆稀疏行
+	if !isDingweiTriggerPlay(cfg.Play) && cfg.Play.SegmentLen >= 2 {
+		return pickTriggerBetPerSegment(cfg, enabled, prevBalls, direction)
+	}
 	positions := 5
 	if cfg.Play.PlayTemplate == "pk10_std" {
 		positions = 10
@@ -972,6 +1039,54 @@ func pickTriggerBetPerPosition(
 	return pickDecision{Content: strings.Join(lines, "\n"), Direction: outDir}
 }
 
+// pickTriggerBetPerSegment 直选复式等：段内每位按绝对球位开奖查映射，输出 segmentLen 行。
+// 未勾选的段内位用启用第 1 行正/反投补齐，避免复式缺位。
+func pickTriggerBetPerSegment(
+	cfg parsedSchemeConfig,
+	enabled []triggerRow,
+	prevBalls []string,
+	direction string,
+) pickDecision {
+	segStart := cfg.Play.SegmentStart
+	segLen := cfg.Play.SegmentLen
+	if segLen <= 0 {
+		segLen = 1
+	}
+	selected := map[int]bool{}
+	for _, abs := range cfg.Trigger.PositionIdxs {
+		selected[abs] = true
+	}
+	if len(selected) == 0 {
+		for i := 0; i < segLen; i++ {
+			selected[segStart+i] = true
+		}
+	}
+	lines := make([]string, segLen)
+	filled := 0
+	outDir := direction
+	for rel := 0; rel < segLen; rel++ {
+		abs := segStart + rel
+		row := enabled[0]
+		if selected[abs] && abs < len(prevBalls) {
+			open := normalizeTriggerToken(strings.TrimSpace(prevBalls[abs]))
+			if r, ok := findEnabledTriggerRowByOpen(enabled, open); ok {
+				row = r
+			}
+		}
+		content, dir := triggerRowPickContentAt(row, direction, rel, segLen)
+		if content == "" {
+			continue
+		}
+		lines[rel] = content
+		filled++
+		outDir = dir
+	}
+	if filled == 0 {
+		return pickDecision{Skip: true}
+	}
+	return pickDecision{Content: strings.Join(lines, "\n"), Direction: outDir}
+}
+
 func findEnabledTriggerRowByOpen(enabled []triggerRow, open string) (triggerRow, bool) {
 	open = normalizeTriggerToken(open)
 	if open == "" {
@@ -987,18 +1102,36 @@ func findEnabledTriggerRowByOpen(enabled []triggerRow, open string) (triggerRow,
 
 // triggerRowPickContent 按投向取正/反投；反投为空时退回正投。
 func triggerRowPickContent(row triggerRow, direction string) (content, dir string) {
+	return triggerRowPickContentAt(row, direction, 0, 1)
+}
+
+// triggerRowPickContentAt 取某一段位的正/反投。
+// pos/neg 以换行分位（万\n千\n百）；单行旧值则各位共用。
+func triggerRowPickContentAt(row triggerRow, direction string, rel, segLen int) (content, dir string) {
 	dir = direction
-	content = row.Pos
-	if direction == "neg" {
-		content = row.Neg
+	pick := func(raw string) string {
+		raw = strings.ReplaceAll(raw, "\r\n", "\n")
+		raw = strings.ReplaceAll(raw, "\r", "\n")
+		parts := strings.Split(raw, "\n")
+		if segLen <= 1 || len(parts) <= 1 {
+			return strings.TrimSpace(raw)
+		}
+		if rel >= 0 && rel < len(parts) {
+			return strings.TrimSpace(parts[rel])
+		}
+		return ""
 	}
-	if strings.TrimSpace(content) == "" {
-		if strings.TrimSpace(row.Pos) != "" {
-			return strings.TrimSpace(row.Pos), "pos"
+	content = pick(row.Pos)
+	if direction == "neg" {
+		content = pick(row.Neg)
+	}
+	if content == "" {
+		if alt := pick(row.Pos); alt != "" {
+			return alt, "pos"
 		}
 		return "", direction
 	}
-	return strings.TrimSpace(content), dir
+	return content, dir
 }
 
 // nextTriggerDirection 投向状态机（Q4b：按上一局投向交替）。

@@ -39,6 +39,21 @@ func TestHotColdWarmTiersServiceResolve_qian3Teshu(t *testing.T) {
 	}
 }
 
+func TestZZZHezhiUniverseQzh3Zuxuan(t *testing.T) {
+	// 复现 service：前端 qzh3_zuxuan_hz 发送 pool=1..26, segmentLen=1
+	rule := resolveSSCPlayRule("qianzhonghou3", "qzh3_zuxuan_hz", "hezhi", "组选和值")
+	t.Logf("resolved rule=%+v", rule)
+	rule.NumberPoolMin, rule.NumberPoolMax = 1, 26
+	if attributeUsesInputSegmentLen(rule.BetMode) {
+		rule.SegmentLen = 1
+	}
+	uni := attributeUniverse(rule)
+	t.Logf("universe=%v", uni)
+	if len(uni) != 26 || uni[0] != "1" || uni[len(uni)-1] != "26" {
+		t.Fatalf("universe=%v want 1..26", uni)
+	}
+}
+
 // 前端特殊号 UI segmentLen=1 不得覆盖前三=3，否则冷热次数全 0。
 func TestAttributeUsesInputSegmentLen(t *testing.T) {
 	if attributeUsesInputSegmentLen("teshu") {

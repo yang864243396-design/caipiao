@@ -91,6 +91,15 @@ func TestGetCloudCenterStatsSeededE2E(t *testing.T) {
 	}
 	t.Cleanup(func() { restoreDemoAccountInstances(t, pool, snaps) })
 
+	// 该会员可能有几十条历史实例；GetCloudCenterStats 按正式/模拟两路汇总所有实例的
+	// turnover/session_pnl。先把全部实例清零到基线，使断言仅由下面两条 seed 决定，
+	// 避免历史累计营业额污染总额（cleanup 已用 snaps 原值整体还原）。
+	if _, err = pool.Exec(context.Background(), `
+UPDATE scheme_instances SET sim_bet=false, status='soft_stopped', turnover=0, session_pnl=0, updated_at=now() WHERE member_id=$1`,
+		memberID); err != nil {
+		t.Fatalf("reset baseline: %v", err)
+	}
+
 	// 正式 running + 模拟 pending，验证分路与 running 过滤
 	_, err = pool.Exec(context.Background(), `
 UPDATE scheme_instances SET sim_bet=false, status='running', turnover=120, session_pnl=15.3, updated_at=now() WHERE id=$1`,

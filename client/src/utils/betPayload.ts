@@ -966,8 +966,9 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
     if (seg > 1 && isZhixuanPositionPoolContent(content, seg)) {
       return applySegmentBetMultiplier(config, countZhixuanPositionPoolUnits(content, seg))
     }
-    // 直选单式：相同号码重复录入只计 1 注（如 12,13,14,15,12 → 4；12,12,12 → 1）
-    return dedupeDanshiTokens(content, config.segmentLen).length || 0
+    // 直选单式：相同号码重复录入只计 1 注（如 12,13,14,15,12 → 4；12,12,12 → 1）；
+    // 前中后三/前后二三四等跨段玩法需按段倍乘（前中后三×3：111,234 → 2×3=6，对齐 v6 第三方）
+    return applySegmentBetMultiplier(config, dedupeDanshiTokens(content, config.segmentLen).length) || 0
   }
 
   // 直选组合：按位乘积 × 段长（三星×3，对齐第三方「组合」）
@@ -1282,6 +1283,19 @@ export const WEISHU_MAX_BET_UNITS_MSG = '投注注数超过最大投注注数:9'
 export const ZUHE_MAX_BET_UNITS = 2700
 export const ZUHE_MAX_BET_UNITS_MSG = '投注注数超过最大投注注数:2700'
 
+/**
+ * 直选复式单组最大注数（对齐第三方）：满号位积 − 对子/豹子（各位同一号码，共 P 组）。
+ * P=每位号池大小、n=位数：max = P^n − P。
+ * 例：前二/后二 10^2−10=90；前三/后三 10^3−10=990；四星 9990；五星 99990；十一选五(P=11)前二 121−11=110。
+ */
+export function zhixuanFushiMaxBetUnits(config: PlayConfig): number {
+  const pool = poolFromConfig(config)
+  const size = pool ? pool.max - pool.min + 1 : 10
+  const n = Math.max(1, config.segmentLen || 1)
+  if (size <= 1 || n <= 1) return 0
+  return Math.pow(size, n) - size
+}
+
 /** 是否「超过最大投注注数」类提示（保存时原样弹窗、不清空内容） */
 export function isMaxBetUnitsExceededMessage(message: string): boolean {
   return String(message ?? '').startsWith('投注注数超过最大投注注数:')
@@ -1444,13 +1458,15 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
           message: `组选单式须为 ${config.segmentLen} 位且各位不全相同（不含对子/豹子），组选形态相同只计 1 注`,
         }
       }
-      return { ok: true, normalized: uniq.join(','), betUnits: uniq.length }
+      // 前中后三/前后二三四等跨段玩法按段倍乘（前中后三×3），与后端 evaluateMultiZone、第三方一致
+      return { ok: true, normalized: uniq.join(','), betUnits: applySegmentBetMultiplier(config, uniq.length) }
     }
     const uniq = dedupeDanshiTokens(danshiRaw, config.segmentLen)
     if (uniq.length && uniq.every(isBaoziDigitTicket)) {
       return { ok: false, message: ZHIXUAN_DANSHI_SOLO_BAOZI_MSG }
     }
-    return { ok: true, normalized: uniq.join(','), betUnits: uniq.length }
+    // 前中后三/前后二三四等跨段玩法按段倍乘（前中后三×3），与后端 evaluateMultiZone、第三方一致
+    return { ok: true, normalized: uniq.join(','), betUnits: applySegmentBetMultiplier(config, uniq.length) }
   }
 
   // 直选复式 / 直选组合：按位号池，每一位都必须有号。
@@ -1486,6 +1502,13 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
     if (betUnits <= 0) return { ok: false, message: '选号无效' }
     if (isZhixuanZuhePlayConfig(config) && betUnits > ZUHE_MAX_BET_UNITS) {
       return { ok: false, message: ZUHE_MAX_BET_UNITS_MSG }
+    }
+    // 直选复式：满号位积 − 对子/豹子（P^n − P）为单组上限（前二=90、前三=990…）
+    if (isZhixuanFushiPlayConfig(config) && !isZhixuanZuhePlayConfig(config)) {
+      const maxFushi = zhixuanFushiMaxBetUnits(config)
+      if (maxFushi > 0 && betUnits > maxFushi) {
+        return { ok: false, message: `投注注数超过最大投注注数:${maxFushi}` }
+      }
     }
     return { ok: true, normalized, betUnits }
   }

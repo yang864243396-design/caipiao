@@ -452,6 +452,36 @@ type CloudBetListRow struct {
 	PlacedAt          pgtype.Timestamptz
 }
 
+// cloudBetOrderMatchSQL：cloud_bet_records ↔ bet_orders 关联条件（平台单号或第三方注单号）。
+const cloudBetOrderMatchSQL = `
+(
+  (NULLIF(TRIM(c.bet_order_no), '') IS NOT NULL AND bo.order_no = c.bet_order_no)
+  OR (
+    NULLIF(TRIM(c.third_party_bet_id), '') IS NOT NULL
+    AND NULLIF(TRIM(bo.third_party_bet_id), '') IS NOT NULL
+    AND bo.third_party_bet_id = c.third_party_bet_id
+  )
+)`
+
+// cloudBetLotteryLabelSQL：方案删除后 instance 不在时，回退 bet_orders.lottery_name / scheme_name。
+const cloudBetLotteryLabelSQL = `
+COALESCE(
+  NULLIF(TRIM(si.lottery_label), ''),
+  (
+    SELECT NULLIF(TRIM(bo.lottery_name), '')
+    FROM bet_orders bo
+    WHERE bo.member_id = c.member_id
+      AND ` + cloudBetOrderMatchSQL + `
+    ORDER BY CASE WHEN bo.order_no = c.bet_order_no THEN 0 ELSE 1 END, bo.id DESC
+    LIMIT 1
+  ),
+  c.scheme_name
+)`
+
+// cloudBetRealSQL：会员投注记录只排除模拟单。
+// 不再按「当前启用挂机账号」过滤——方案删除 / 挂机解绑后 third_party_bet_id 仍须可检索。
+const cloudBetRealSQL = `c.sim_bet = false`
+
 func scanCloudBetListRow(rows interface {
 	Next() bool
 	Scan(dest ...any) error
@@ -473,6 +503,8 @@ func scanCloudBetListRow(rows interface {
 }
 
 func (q *Queries) ListCloudBetRecordsByDefinitionEx(ctx context.Context, arg ListCloudBetRecordsByDefinitionParams, currency pgtype.Text) ([]CloudBetListRow, error) {
+	// 按 definition 筛选仍依赖 instance；已删除方案走「全部方案」路径（ByLotteryEx）。
+	_ = arg.GuajiAccountID
 	rows, err := q.db.Query(ctx, `
 SELECT c.id, c.record_no, c.third_party_bet_id, c.scheme_name, si.lottery_label, c.period_no,
        c.amount::float8, c.pnl::float8, c.status, c.placed_at
@@ -482,23 +514,16 @@ WHERE c.member_id = $1 AND si.definition_id = $2
   AND c.placed_at >= $3 AND c.placed_at < $4
   AND ($5::text IS NULL OR $5::text = '' OR c.record_no ILIKE '%' || $5::text || '%'
        OR c.bet_order_no ILIKE '%' || $5::text || '%' OR c.third_party_bet_id ILIKE '%' || $5::text || '%')
-  AND c.sim_bet = false AND ($6::bigint IS NOT NULL AND c.guaji_account_id = $6::bigint)
-  AND ($7::text IS NULL OR $7::text = '' OR EXISTS (
+  AND `+cloudBetRealSQL+`
+  AND ($6::text IS NULL OR $6::text = '' OR EXISTS (
     SELECT 1 FROM bet_orders bo
     WHERE bo.member_id = c.member_id
-      AND UPPER(COALESCE(bo.currency, '')) = UPPER($7::text)
-      AND (
-        (NULLIF(TRIM(c.bet_order_no), '') IS NOT NULL AND bo.order_no = c.bet_order_no)
-        OR (
-          NULLIF(TRIM(c.third_party_bet_id), '') IS NOT NULL
-          AND NULLIF(TRIM(bo.third_party_bet_id), '') IS NOT NULL
-          AND bo.third_party_bet_id = c.third_party_bet_id
-        )
-      )
+      AND UPPER(COALESCE(bo.currency, '')) = UPPER($6::text)
+      AND `+cloudBetOrderMatchSQL+`
   ))
 ORDER BY c.placed_at DESC, c.id DESC
-LIMIT $8`,
-		arg.MemberID, arg.DefinitionID, arg.SinceAt, arg.UntilAt, arg.OrderNo, arg.GuajiAccountID, currency, arg.RowLimit)
+LIMIT $7`,
+		arg.MemberID, arg.DefinitionID, arg.SinceAt, arg.UntilAt, arg.OrderNo, currency, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -515,6 +540,7 @@ LIMIT $8`,
 }
 
 func (q *Queries) ListCloudBetRecordsByDefinitionAfterCursorEx(ctx context.Context, arg ListCloudBetRecordsByDefinitionAfterCursorParams, currency pgtype.Text) ([]CloudBetListRow, error) {
+	_ = arg.GuajiAccountID
 	rows, err := q.db.Query(ctx, `
 SELECT c.id, c.record_no, c.third_party_bet_id, c.scheme_name, si.lottery_label, c.period_no,
        c.amount::float8, c.pnl::float8, c.status, c.placed_at
@@ -524,24 +550,17 @@ WHERE c.member_id = $1 AND si.definition_id = $2
   AND c.placed_at >= $3 AND c.placed_at < $4
   AND ($5::text IS NULL OR $5::text = '' OR c.record_no ILIKE '%' || $5::text || '%'
        OR c.bet_order_no ILIKE '%' || $5::text || '%' OR c.third_party_bet_id ILIKE '%' || $5::text || '%')
-  AND c.sim_bet = false AND ($6::bigint IS NOT NULL AND c.guaji_account_id = $6::bigint)
-  AND ($7::text IS NULL OR $7::text = '' OR EXISTS (
+  AND `+cloudBetRealSQL+`
+  AND ($6::text IS NULL OR $6::text = '' OR EXISTS (
     SELECT 1 FROM bet_orders bo
     WHERE bo.member_id = c.member_id
-      AND UPPER(COALESCE(bo.currency, '')) = UPPER($7::text)
-      AND (
-        (NULLIF(TRIM(c.bet_order_no), '') IS NOT NULL AND bo.order_no = c.bet_order_no)
-        OR (
-          NULLIF(TRIM(c.third_party_bet_id), '') IS NOT NULL
-          AND NULLIF(TRIM(bo.third_party_bet_id), '') IS NOT NULL
-          AND bo.third_party_bet_id = c.third_party_bet_id
-        )
-      )
+      AND UPPER(COALESCE(bo.currency, '')) = UPPER($6::text)
+      AND `+cloudBetOrderMatchSQL+`
   ))
-  AND (c.placed_at < $8 OR (c.placed_at = $8 AND c.id < $9))
+  AND (c.placed_at < $7 OR (c.placed_at = $7 AND c.id < $8))
 ORDER BY c.placed_at DESC, c.id DESC
-LIMIT $10`,
-		arg.MemberID, arg.DefinitionID, arg.SinceAt, arg.UntilAt, arg.OrderNo, arg.GuajiAccountID, currency,
+LIMIT $9`,
+		arg.MemberID, arg.DefinitionID, arg.SinceAt, arg.UntilAt, arg.OrderNo, currency,
 		arg.CursorTime, arg.CursorID, arg.RowLimit)
 	if err != nil {
 		return nil, err
@@ -559,33 +578,37 @@ LIMIT $10`,
 }
 
 func (q *Queries) ListCloudBetRecordsByLotteryEx(ctx context.Context, arg ListCloudBetRecordsByLotteryParams, currency pgtype.Text) ([]CloudBetListRow, error) {
+	// LEFT JOIN：方案删除后 instance 被 CASCADE 清掉，cloud_bet_records 仍须可查（注单号检索）。
+	_ = arg.GuajiAccountID
 	rows, err := q.db.Query(ctx, `
-SELECT c.id, c.record_no, c.third_party_bet_id, c.scheme_name, si.lottery_label, c.period_no,
+SELECT c.id, c.record_no, c.third_party_bet_id, c.scheme_name, `+cloudBetLotteryLabelSQL+` AS lottery_label, c.period_no,
        c.amount::float8, c.pnl::float8, c.status, c.placed_at
 FROM cloud_bet_records c
-JOIN scheme_instances si ON si.id = c.scheme_id AND si.member_id = c.member_id
+LEFT JOIN scheme_instances si ON si.id = c.scheme_id AND si.member_id = c.member_id
 WHERE c.member_id = $1
-  AND ($2::text = '' OR si.lottery_code = $2)
+  AND (
+    $2::text = ''
+    OR si.lottery_code = $2
+    OR EXISTS (
+      SELECT 1 FROM bet_orders bo
+      WHERE bo.member_id = c.member_id
+        AND bo.lottery_code = $2
+        AND `+cloudBetOrderMatchSQL+`
+    )
+  )
   AND c.placed_at >= $3 AND c.placed_at < $4
   AND ($5::text IS NULL OR $5::text = '' OR c.record_no ILIKE '%' || $5::text || '%'
        OR c.bet_order_no ILIKE '%' || $5::text || '%' OR c.third_party_bet_id ILIKE '%' || $5::text || '%')
-  AND c.sim_bet = false AND ($6::bigint IS NOT NULL AND c.guaji_account_id = $6::bigint)
-  AND ($7::text IS NULL OR $7::text = '' OR EXISTS (
+  AND `+cloudBetRealSQL+`
+  AND ($6::text IS NULL OR $6::text = '' OR EXISTS (
     SELECT 1 FROM bet_orders bo
     WHERE bo.member_id = c.member_id
-      AND UPPER(COALESCE(bo.currency, '')) = UPPER($7::text)
-      AND (
-        (NULLIF(TRIM(c.bet_order_no), '') IS NOT NULL AND bo.order_no = c.bet_order_no)
-        OR (
-          NULLIF(TRIM(c.third_party_bet_id), '') IS NOT NULL
-          AND NULLIF(TRIM(bo.third_party_bet_id), '') IS NOT NULL
-          AND bo.third_party_bet_id = c.third_party_bet_id
-        )
-      )
+      AND UPPER(COALESCE(bo.currency, '')) = UPPER($6::text)
+      AND `+cloudBetOrderMatchSQL+`
   ))
 ORDER BY c.placed_at DESC, c.id DESC
-LIMIT $8`,
-		arg.MemberID, arg.LotteryCode, arg.SinceAt, arg.UntilAt, arg.OrderNo, arg.GuajiAccountID, currency, arg.RowLimit)
+LIMIT $7`,
+		arg.MemberID, arg.LotteryCode, arg.SinceAt, arg.UntilAt, arg.OrderNo, currency, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -602,34 +625,37 @@ LIMIT $8`,
 }
 
 func (q *Queries) ListCloudBetRecordsByLotteryAfterCursorEx(ctx context.Context, arg ListCloudBetRecordsByLotteryAfterCursorParams, currency pgtype.Text) ([]CloudBetListRow, error) {
+	_ = arg.GuajiAccountID
 	rows, err := q.db.Query(ctx, `
-SELECT c.id, c.record_no, c.third_party_bet_id, c.scheme_name, si.lottery_label, c.period_no,
+SELECT c.id, c.record_no, c.third_party_bet_id, c.scheme_name, `+cloudBetLotteryLabelSQL+` AS lottery_label, c.period_no,
        c.amount::float8, c.pnl::float8, c.status, c.placed_at
 FROM cloud_bet_records c
-JOIN scheme_instances si ON si.id = c.scheme_id AND si.member_id = c.member_id
+LEFT JOIN scheme_instances si ON si.id = c.scheme_id AND si.member_id = c.member_id
 WHERE c.member_id = $1
-  AND ($2::text = '' OR si.lottery_code = $2)
+  AND (
+    $2::text = ''
+    OR si.lottery_code = $2
+    OR EXISTS (
+      SELECT 1 FROM bet_orders bo
+      WHERE bo.member_id = c.member_id
+        AND bo.lottery_code = $2
+        AND `+cloudBetOrderMatchSQL+`
+    )
+  )
   AND c.placed_at >= $3 AND c.placed_at < $4
   AND ($5::text IS NULL OR $5::text = '' OR c.record_no ILIKE '%' || $5::text || '%'
        OR c.bet_order_no ILIKE '%' || $5::text || '%' OR c.third_party_bet_id ILIKE '%' || $5::text || '%')
-  AND c.sim_bet = false AND ($6::bigint IS NOT NULL AND c.guaji_account_id = $6::bigint)
-  AND ($7::text IS NULL OR $7::text = '' OR EXISTS (
+  AND `+cloudBetRealSQL+`
+  AND ($6::text IS NULL OR $6::text = '' OR EXISTS (
     SELECT 1 FROM bet_orders bo
     WHERE bo.member_id = c.member_id
-      AND UPPER(COALESCE(bo.currency, '')) = UPPER($7::text)
-      AND (
-        (NULLIF(TRIM(c.bet_order_no), '') IS NOT NULL AND bo.order_no = c.bet_order_no)
-        OR (
-          NULLIF(TRIM(c.third_party_bet_id), '') IS NOT NULL
-          AND NULLIF(TRIM(bo.third_party_bet_id), '') IS NOT NULL
-          AND bo.third_party_bet_id = c.third_party_bet_id
-        )
-      )
+      AND UPPER(COALESCE(bo.currency, '')) = UPPER($6::text)
+      AND `+cloudBetOrderMatchSQL+`
   ))
-  AND (c.placed_at < $8 OR (c.placed_at = $8 AND c.id < $9))
+  AND (c.placed_at < $7 OR (c.placed_at = $7 AND c.id < $8))
 ORDER BY c.placed_at DESC, c.id DESC
-LIMIT $10`,
-		arg.MemberID, arg.LotteryCode, arg.SinceAt, arg.UntilAt, arg.OrderNo, arg.GuajiAccountID, currency,
+LIMIT $9`,
+		arg.MemberID, arg.LotteryCode, arg.SinceAt, arg.UntilAt, arg.OrderNo, currency,
 		arg.CursorTime, arg.CursorID, arg.RowLimit)
 	if err != nil {
 		return nil, err
@@ -678,6 +704,7 @@ func (q *Queries) SummarizeCloudBetRecordsByCurrencyEx(
 	orderNo pgtype.Text,
 	guajiAccountID pgtype.Int8,
 ) ([]CloudBetCurrencySummaryRow, error) {
+	_ = guajiAccountID
 	rows, err := q.db.Query(ctx, `
 SELECT currency, COUNT(*)::bigint AS order_count,
        COALESCE(SUM(amount), 0)::float8 AS valid_amount,
@@ -688,30 +715,31 @@ FROM (
            SELECT bo.currency
            FROM bet_orders bo
            WHERE bo.member_id = c.member_id
-             AND (
-               (NULLIF(TRIM(c.bet_order_no), '') IS NOT NULL AND bo.order_no = c.bet_order_no)
-               OR (
-                 NULLIF(TRIM(c.third_party_bet_id), '') IS NOT NULL
-                 AND NULLIF(TRIM(bo.third_party_bet_id), '') IS NOT NULL
-                 AND bo.third_party_bet_id = c.third_party_bet_id
-               )
-             )
+             AND `+cloudBetOrderMatchSQL+`
            ORDER BY CASE WHEN bo.order_no = c.bet_order_no THEN 0 ELSE 1 END, bo.id DESC
            LIMIT 1
          )), ''), '')) AS currency
   FROM cloud_bet_records c
-  JOIN scheme_instances si ON si.id = c.scheme_id AND si.member_id = c.member_id
+  LEFT JOIN scheme_instances si ON si.id = c.scheme_id AND si.member_id = c.member_id
   WHERE c.member_id = $1
-    AND c.sim_bet = false
-    AND ($2::bigint IS NOT NULL AND c.guaji_account_id = $2::bigint)
-    AND c.placed_at >= $3 AND c.placed_at < $4
-    AND ($5::text = '' OR si.definition_id = $5::text)
-    AND ($6::text = '' OR si.lottery_code = $6::text)
-    AND ($7::text IS NULL OR $7::text = '' OR c.record_no ILIKE '%' || $7::text || '%'
-         OR c.bet_order_no ILIKE '%' || $7::text || '%' OR c.third_party_bet_id ILIKE '%' || $7::text || '%')
+    AND `+cloudBetRealSQL+`
+    AND c.placed_at >= $2 AND c.placed_at < $3
+    AND ($4::text = '' OR si.definition_id = $4::text)
+    AND (
+      $5::text = ''
+      OR si.lottery_code = $5::text
+      OR EXISTS (
+        SELECT 1 FROM bet_orders bo
+        WHERE bo.member_id = c.member_id
+          AND bo.lottery_code = $5::text
+          AND `+cloudBetOrderMatchSQL+`
+      )
+    )
+    AND ($6::text IS NULL OR $6::text = '' OR c.record_no ILIKE '%' || $6::text || '%'
+         OR c.bet_order_no ILIKE '%' || $6::text || '%' OR c.third_party_bet_id ILIKE '%' || $6::text || '%')
 ) t
 GROUP BY currency`,
-		memberID, guajiAccountID, sinceAt, untilAt, definitionID, lotteryCode, orderNo)
+		memberID, sinceAt, untilAt, definitionID, lotteryCode, orderNo)
 	if err != nil {
 		return nil, err
 	}

@@ -644,6 +644,43 @@ func TestGuajiGroupRequiresSoloTrue_qianhou4Fushi(t *testing.T) {
 	}
 }
 
+func TestResolveSolo_wuxingFushiHotColdPool(t *testing.T) {
+	// inst-1-1784774566098：冷热五星复式 32 注；实测 solo=false → 单挑参数错误，须 solo=true（绕过 28 注上限）
+	seg, _ := json.Marshal(map[string]string{
+		"guajiGroup": "五星", "guajiTeam": "五星直选", "guajiFullName": "五星直选复式", "guajiRuleId": "153",
+	})
+	meta := ParseRuleMeta("ssc_std", "g015", "153", "五星直选复式", "五星", seg, "153")
+	raw := "2,5\n2,6\n3,7\n1,6\n4,8"
+	wire := FormatBetContentForRule(meta, raw)
+	if wire != "25,26,37,16,48" {
+		t.Fatalf("wire=%q want 25,26,37,16,48", wire)
+	}
+	if n := CountBetNums(meta, raw); n != 32 {
+		t.Fatalf("raw bets=%d want 32", n)
+	}
+	if n := CountBetNums(meta, wire); n != 32 {
+		t.Fatalf("wire bets=%d want 32", n)
+	}
+	if !guajiGroupRequiresSoloTrue(meta) {
+		t.Fatal("五星直选复式应强制 solo=true")
+	}
+	if !ResolveSolo(meta, wire, 32) {
+		t.Fatal("五星复式 32 注须 solo=true（实测 solo=false→单挑参数错误）")
+	}
+	if !ResolveSolo(meta, "2,2,3,1,4", 1) {
+		t.Fatal("五星复式 1 注应 solo")
+	}
+	// format 幂等
+	if again := FormatBetContentForRule(meta, wire); again != wire {
+		t.Fatalf("re-format wire=%q again=%q", wire, again)
+	}
+	// 组选/组合勿误伤
+	metaZu := ParseRuleMeta("ssc_std", "g015", "157", "组选60", "五星", seg, "157")
+	if guajiGroupRequiresSoloTrue(metaZu) {
+		t.Fatal("五星组选60 不应强制 solo=true")
+	}
+}
+
 func TestResolveSolo_qian2FushiMulti(t *testing.T) {
 	meta := ParseRuleMeta("ssc_std", "g004", "38", "前二直选复式", "前二码", nil, "38")
 	wire := FormatBetContentForRule(meta, "0,1,3\n0")

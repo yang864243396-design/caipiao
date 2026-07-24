@@ -139,9 +139,13 @@ export interface SchemeTriggerRow {
   enabled: boolean
   /** 开出号码（单值：0-9 或 龙/虎/和） */
   open: string
-  /** 正投号码（单值） */
+  /**
+   * 正投号码。
+   * - 定位胆/文字玩法：单值，多号用逗号（如 1,3,5）
+   * - 前三直选复式等：换行分位（万\n千\n百），每位内可再逗号多号
+   */
   pos: string
-  /** 反投号码（单值） */
+  /** 反投号码（格式同 pos） */
   neg: string
 }
 
@@ -165,14 +169,22 @@ export type SchemeHotColdPickType = 'hot' | 'cold'
 export interface SchemeHotColdWarm {
   /** 统计总期数 */
   totalPeriods: number
-  /** 选号池（每位一行，逗号分隔；展示/兼容回退） */
+  /**
+   * 手动覆盖池（每位一行，逗号分隔）。某位非空则该位用手选号码，
+   * 为空则该位按名次自动取号（混合模式）。也用于旧配置兼容回退。
+   */
   pool: string[]
   /** every 每期换 / keep 不换号 / after_hit 中后换 / after_miss 挂后换 */
   strategy?: SchemeRotateStrategy
-  /** 出号类型：hot / cold（可多选；换号时按此从冷热排序取码） */
+  /** 出号类型：hot / cold（可多选；按此在冷热排序上取名次） */
   pickTypes?: SchemeHotColdPickType[]
-  /** 容错个数：从冷/热排序结果取前 N 个（1-10） */
+  /**
+   * 容错=起点偏移：在「最热→最冷」排序上跳过该端最极端的前 N 名（0-9，0=不跳过）。
+   * 语义已由旧「取 N 个」改为「起点偏移」（对齐富联冷热出号逆向）。
+   */
   faultCount?: number
+  /** 每位取几个名次：从起点偏移处连续取 N 个号（默认 1，1-10） */
+  pickCount?: number
   /**
    * @deprecated 兼容旧配置；优先读 strategy。true≈after_hit，false≈keep
    */
