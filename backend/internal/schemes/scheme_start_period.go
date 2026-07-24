@@ -41,7 +41,8 @@ func skipPeriodCloseAt(inst sqlcdb.SchemeInstance, skip string) (time.Time, bool
 }
 
 // schemeStartPeriodEnded 开启时跳过的最近一期是否已封盘（可切换为云端挂机并首投）。
-// 仅以跳过期封盘时刻为准，禁止因 periods 列表期号推进而提前激活。
+// 优先以跳过期封盘时刻为准；若封盘时刻不可解析，但当前开放期已严格晚于跳过期，
+// 视为跳过期已结束（避免永久卡在 await_next_bet 导致「能运行但不下注」）。
 // 若从未写入跳过期（如 periods 缓存不可用），且当前已在方案运行时段内，视为可激活。
 func schemeStartPeriodEnded(inst sqlcdb.SchemeInstance, cfgBytes []byte, now time.Time) bool {
 	now = now.UTC()
@@ -50,8 +51,11 @@ func schemeStartPeriodEnded(inst sqlcdb.SchemeInstance, cfgBytes []byte, now tim
 		return evaluateSchemeScheduleGate(cfgBytes, now) == schemeScheduleOK
 	}
 	closeAt, ok := skipPeriodCloseAt(inst, skipped)
-	if !ok || closeAt.IsZero() {
-		return false
+	if ok && !closeAt.IsZero() {
+		return !now.Before(closeAt)
 	}
-	return !now.Before(closeAt)
+	if cur, ok := lottery.StrictOpenIssueForGuajiBet(inst.LotteryCode); ok && issueAfter(cur, skipped) {
+		return evaluateSchemeScheduleGate(cfgBytes, now) == schemeScheduleOK
+	}
+	return false
 }

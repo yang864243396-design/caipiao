@@ -174,3 +174,17 @@ func TestAwaitNextBetCountdownSec_usesSnapshot(t *testing.T) {
 
 }
 
+
+func TestSchemeStartPeriodEnded_openPastSkippedWithoutCloseAt(t *testing.T) {
+	code := "scheme_start_open_past_skip"
+	closeAt := time.Now().Add(time.Minute)
+	// 缓存已是新期，无法解析旧跳过期封盘时刻
+	lottery.UpdatePeriodsScheduleFull(code, "200", "200", closeAt, closeAt)
+	inst := sqlcdb.SchemeInstance{
+		LotteryCode:     code,
+		StartSkipPeriod: pgtype.Text{String: "100", Valid: true},
+	}
+	if !schemeStartPeriodEnded(inst, nil, time.Now()) {
+		t.Fatal("current open after skipped period without closeAt should activate")
+	}
+}

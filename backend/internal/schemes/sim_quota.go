@@ -3,9 +3,11 @@ package schemes
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"caipiao/backend/internal/member"
@@ -22,7 +24,25 @@ var (
 	ErrSimSchemeConcurrentLimit = errors.New("最多可同时开启5个模拟测试方案，如需开启新方案，请先关闭一个已开启的方案")
 	// ErrSimSchemeDailyStartLimit 当日模拟投注启动次数已达上限。
 	ErrSimSchemeDailyStartLimit = errors.New("今天模拟投注运行次数已达上限")
+	// ErrSimSchemeQuotaSchema 成员表缺少模拟配额列（未跑迁移 00130）。
+	ErrSimSchemeQuotaSchema = errors.New("模拟投注配额未就绪，请在服务器执行数据库迁移后重试")
 )
+
+func isUndefinedColumnErr(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "42703"
+}
+
+func mapSimQuotaSchemaErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	if isUndefinedColumnErr(err) {
+		slog.Error("sim scheme quota schema missing (need migrate 00130)", "err", err)
+		return ErrSimSchemeQuotaSchema
+	}
+	return err
+}
 
 type SimSchemeQuota struct {
 	TodayStarts      int `json:"todayStarts"`
@@ -49,7 +69,7 @@ WHERE member_id = $1
   AND sim_bet = true
   AND status = 'running'
 `, memberID).Scan(&n)
-	return n, err
+	return n, mapSimQuotaSchemaErr(err)
 }
 
 func (s *Service) readSimTodayStarts(ctx context.Context, memberID int64, today time.Time) (int, error) {
@@ -64,7 +84,7 @@ FROM members
 WHERE id = $1
 `, memberID).Scan(&date, &count)
 	if err != nil {
-		return 0, err
+		return 0, mapSimQuotaSchemaErr(err)
 	}
 	if !date.Valid {
 		return 0, nil
@@ -100,7 +120,7 @@ WHERE id = $1
   )
 `, memberID, today.Format("2006-01-02"), maxSimSchemeDailyStarts)
 	if err != nil {
-		return err
+		return mapSimQuotaSchemaErr(err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrSimSchemeDailyStartLimit

@@ -8,7 +8,8 @@
 #   ./scripts/restart-prod.sh --client     # 仅用户端
 #   ./scripts/restart-prod.sh --admin      # 仅管理端
 #   ./scripts/restart-prod.sh --no-pull    # 不 git pull
-#   ./scripts/restart-prod.sh --migrate    # 构建前执行数据库迁移
+#   ./scripts/restart-prod.sh --migrate    # 构建前执行数据库迁移（默认开启）
+#   ./scripts/restart-prod.sh --no-migrate # 跳过数据库迁移
 #   ./scripts/restart-prod.sh --reload-nginx
 #
 # 首次使用：按实际环境改下方「配置区」。
@@ -32,7 +33,8 @@ DO_PULL=1
 DO_BACKEND=1
 DO_CLIENT=1
 DO_ADMIN=1
-DO_MIGRATE=0
+# 默认随后端更新执行迁移，避免模拟配额等新列缺失导致 start 500
+DO_MIGRATE=1
 DO_RELOAD_NGINX=0
 SCOPE_SET=0
 
@@ -54,19 +56,20 @@ while [[ $# -gt 0 ]]; do
     -h|--help) usage ;;
     --no-pull) DO_PULL=0 ;;
     --migrate) DO_MIGRATE=1 ;;
+    --no-migrate) DO_MIGRATE=0 ;;
     --reload-nginx) DO_RELOAD_NGINX=1 ;;
     --backend)
       DO_BACKEND=1; DO_CLIENT=0; DO_ADMIN=0; SCOPE_SET=1
       ;;
     --frontend)
-      DO_BACKEND=0; DO_CLIENT=1; DO_ADMIN=1; SCOPE_SET=1
+      DO_BACKEND=0; DO_CLIENT=1; DO_ADMIN=1; DO_MIGRATE=0; SCOPE_SET=1
       ;;
     --client)
-      [[ "$SCOPE_SET" -eq 0 ]] && DO_BACKEND=0 && DO_ADMIN=0
+      [[ "$SCOPE_SET" -eq 0 ]] && DO_BACKEND=0 && DO_ADMIN=0 && DO_MIGRATE=0
       DO_CLIENT=1; SCOPE_SET=1
       ;;
     --admin)
-      [[ "$SCOPE_SET" -eq 0 ]] && DO_BACKEND=0 && DO_CLIENT=0
+      [[ "$SCOPE_SET" -eq 0 ]] && DO_BACKEND=0 && DO_CLIENT=0 && DO_MIGRATE=0
       DO_ADMIN=1; SCOPE_SET=1
       ;;
     *)

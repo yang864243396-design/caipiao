@@ -125,10 +125,12 @@ func (s *Service) startInstance(ctx context.Context, account, instanceID string)
 	}
 
 	// 模拟方案：同时运行 ≤5，且北京时间自然日启动 ≤5（维护续投不计入）。
+	// 依赖 members.sim_scheme_starts_*（迁移 00130）；缺列会映射为 ErrSimSchemeQuotaSchema。
 	var simQuotaDay time.Time
 	if cur.SimBet {
 		day, qerr := s.enforceSimSchemeStartQuota(ctx, m.ID, now)
 		if qerr != nil {
+			slog.Error("scheme sim start quota failed", "instanceId", instanceID, "memberId", m.ID, "err", qerr)
 			return Instance{}, qerr
 		}
 		simQuotaDay = day

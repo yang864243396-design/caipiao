@@ -365,7 +365,8 @@ func (h *Handler) handleCloudInstanceErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, instances.ErrNotFound), errors.Is(err, schemes.ErrDefinitionNotFound):
 		apix.Fail(w, http.StatusNotFound, apix.CodeNotFound, "实例不存在")
 	case errors.Is(err, schemes.ErrStartTimeNotAfterNow), errors.Is(err, schemes.ErrEndTimeReached), errors.Is(err, schemes.ErrMinBetAmountTooLow),
-		errors.Is(err, schemes.ErrSimSchemeConcurrentLimit), errors.Is(err, schemes.ErrSimSchemeDailyStartLimit):
+		errors.Is(err, schemes.ErrSimSchemeConcurrentLimit), errors.Is(err, schemes.ErrSimSchemeDailyStartLimit),
+		errors.Is(err, schemes.ErrSimSchemeQuotaSchema):
 		apix.Fail(w, http.StatusOK, apix.CodeValidation, err.Error())
 	case errors.Is(err, schemes.ErrStartInsufficientFunds), errors.Is(err, guajibet.ErrInsufficient), errors.Is(err, member.ErrInsufficientFunds):
 		apix.Fail(w, http.StatusOK, apix.CodeForbidden, "可用余额不足，请充值后再开启")
@@ -386,6 +387,7 @@ func (h *Handler) handleCloudInstanceErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, member.ErrNotFound):
 		apix.Fail(w, http.StatusNotFound, apix.CodeNotFound, "会员不存在")
 	default:
+		slog.Error("cloud instance action failed", "err", err)
 		apix.Internal(w)
 	}
 }
