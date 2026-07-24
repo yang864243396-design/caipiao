@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -42,6 +43,35 @@ func mapSimQuotaSchemaErr(err error) error {
 		return ErrSimSchemeQuotaSchema
 	}
 	return err
+}
+
+var (
+	simQuotaSchemaMu sync.Mutex
+	simQuotaSchemaOK bool
+)
+
+// ensureSimSchemeQuotaSchema 补齐 members 模拟配额列（等同迁移 00130，IF NOT EXISTS 可重复执行）。
+// 线上若只发版未 migrate，开启模拟方案时自动自愈，避免长期无法开启。
+func (s *Service) ensureSimSchemeQuotaSchema(ctx context.Context) error {
+	if s == nil || s.pool == nil {
+		return ErrUnavailable
+	}
+	simQuotaSchemaMu.Lock()
+	defer simQuotaSchemaMu.Unlock()
+	if simQuotaSchemaOK {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx, `
+ALTER TABLE members
+    ADD COLUMN IF NOT EXISTS sim_scheme_starts_date DATE,
+    ADD COLUMN IF NOT EXISTS sim_scheme_starts_count INT NOT NULL DEFAULT 0`)
+	if err != nil {
+		slog.Error("auto-apply sim scheme quota columns failed", "err", err)
+		return err
+	}
+	simQuotaSchemaOK = true
+	slog.Info("ensured members sim scheme quota columns (00130)")
+	return nil
 }
 
 type SimSchemeQuota struct {
@@ -144,6 +174,10 @@ WHERE id = $1
 
 func (s *Service) enforceSimSchemeStartQuota(ctx context.Context, memberID int64, now time.Time) (today time.Time, err error) {
 	today = shanghaiTodayDate(now)
+	// 先幂等补齐列，再计并发/日配额，避免只发版未 migrate 时无法开启模拟。
+	if err := s.ensureSimSchemeQuotaSchema(ctx); err != nil {
+		return today, ErrSimSchemeQuotaSchema
+	}
 	running, err := s.countRunningSimSchemes(ctx, memberID)
 	if err != nil {
 		return today, err
