@@ -197,6 +197,19 @@ func TestCountBetNums_zuxuanHezhi(t *testing.T) {
 	}
 }
 
+func TestFormatBetContentForRule_hezhiStripLeadingZeros(t *testing.T) {
+	seg, _ := json.Marshal(map[string]string{"guajiGroup": "前中后三"})
+	meta := ParseRuleMeta("ssc_std", "g007", "108", "前中后三组选和值", "前中后三", seg, "108")
+	got := FormatBetContentForRule(meta, "01,02,03,04,05,06,07,08,09,10")
+	want := "1,2,3,4,5,6,7,8,9,10"
+	if got != want {
+		t.Fatalf("wire=%q want %q（第三方拒补零和值）", got, want)
+	}
+	if n := CountBetNums(meta, got); n <= 0 {
+		t.Fatalf("betsNums=%d", n)
+	}
+}
+
 func TestFormatBetContentForRule_zuxuanFs(t *testing.T) {
 	meta := ParseRuleMeta("ssc_std", "g004", "42", "组选复式", "前二", nil, "42")
 	got := FormatBetContentForRule(meta, "1\n2")

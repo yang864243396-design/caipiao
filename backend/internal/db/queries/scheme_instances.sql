@@ -476,6 +476,8 @@ SELECT
 
     status, status_reason, bet_failed_detail, turnover, pnl, run_time_sec, lookback_pnl, session_pnl, multiplier, countdown_sec, sim_bet,
 
+    start_skip_period, start_skip_close_at,
+
     running_since, created_at, updated_at
 
 FROM scheme_instances
@@ -507,6 +509,8 @@ SELECT
     id, definition_id, member_id, kind, scheme_name, lottery_code, lottery_label,
 
     status, status_reason, bet_failed_detail, turnover, pnl, run_time_sec, lookback_pnl, session_pnl, multiplier, countdown_sec, sim_bet,
+
+    start_skip_period, start_skip_close_at,
 
     running_since, created_at, updated_at
 

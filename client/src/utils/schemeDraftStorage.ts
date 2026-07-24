@@ -99,7 +99,7 @@ export function draftMetaFromQuery(query: Record<string, unknown>): SchemeDraftM
   const title = decodeURIComponent(String(Array.isArray(titleRaw) ? titleRaw[0] ?? '' : titleRaw ?? ''))
   return {
     kind: 'custom',
-    schemeName: title.trim() || '未命名方案',
+    schemeName: title.trim(),
     lotteryCode: String(Array.isArray(query.lottery) ? query.lottery[0] ?? '' : query.lottery ?? '').trim(),
     runTypeId: String(Array.isArray(query.runType) ? query.runType[0] ?? '' : query.runType ?? 'fixed_rotate').trim(),
     playTypeId: String(Array.isArray(query.playType) ? query.playType[0] ?? '' : query.playType ?? '').trim(),

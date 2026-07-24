@@ -56,10 +56,10 @@ func (w *Worker) resolvePick(
 	}
 }
 
-// AdvancePickAfterFormalSettlement 正式盘派奖后补推进出号游标。
+// AdvancePickAfterFormalSettlement 正式盘/模拟盘派奖后补推进出号游标。
 //
-// 正式盘下单时第三方尚未开奖（无中/未中结果），出号游标与投向被冻结（见 worker.go
-// guajiReal 分支），因此定码轮换/高级定码轮换等运行类型会一直停在下单时的组，
+// 下单时尚未开奖（无中/未中结果），出号游标与投向被冻结（见 worker.go deferSettle
+// 分支），因此定码轮换/高级定码轮换等运行类型会一直停在下单时的组，
 // 表现为“每期都用第一组号码下注”。派奖拿到结果后在此按 advancePickState 相同语义
 // 补推进，使各运行类型逐期切换下注内容。
 //
@@ -377,14 +377,19 @@ func randomAttributeContent(rule playRule, k int) string {
 			return ""
 		}
 		minK := 1
+		maxK := len(pool)
 		if bm == "budingwei" {
 			minK = budingweiNeedCount(rule.CatalogSubID)
+		}
+		if bm == "baodan" {
+			// 组选包胆第三方仅单胆
+			maxK = 1
 		}
 		if k < minK {
 			k = minK
 		}
-		if k > len(pool) {
-			k = len(pool)
+		if k > maxK {
+			k = maxK
 		}
 		idx := rand.Perm(len(pool))[:k]
 		sort.Ints(idx)
@@ -415,17 +420,24 @@ func randomAttributeContent(rule playRule, k int) string {
 
 // isZuxuanPoolRandom 判定为"组选号码池型"玩法（组三/组六/组选N/组选复式）——
 // 随机产号为"选 K 个号组成号码池"，非按位、也非整注单式。
+// 组选包胆属属性单选（仅 1 胆），勿因 catalog 含 zuxuan 误入号池分支。
 func isZuxuanPoolRandom(rule playRule) bool {
 	if isWholeTicketRandom(rule) {
 		return false
 	}
 	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	if bm == "baodan" {
+		return false
+	}
 	switch bm {
 	case "zu3", "zu6", "zu24", "zu12", "zu60", "zu30", "zu120":
 		return true
 	}
 	cat := strings.ToLower(rule.SubPlayID + " " + rule.CatalogSubID)
 	if cat == "" {
+		return false
+	}
+	if strings.Contains(cat, "baodan") || strings.Contains(cat, "_bd") {
 		return false
 	}
 	if strings.Contains(cat, "zuxuan_fs") {

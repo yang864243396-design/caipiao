@@ -3,6 +3,7 @@ package schemes
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
 	"caipiao/backend/internal/db/sqlcdb"
@@ -17,11 +18,16 @@ func (s *Service) maybeActivateAfterStartPeriod(ctx context.Context, row sqlcdb.
 	if row.Status != "running" || row.StatusReason != StatusReasonAwaitNextBet {
 		return row
 	}
-	def, err := s.q.GetSchemeDefinitionByID(ctx, row.DefinitionID)
-	if err != nil {
-		return row
+	// 有跳过期快照时只需 row 字段（或本地 periods 缓存）；仅无跳过期时才读 definition 做时段门闸。
+	var cfgBytes []byte
+	if strings.TrimSpace(startSkipPeriod(row)) == "" {
+		def, err := s.q.GetSchemeDefinitionByID(ctx, row.DefinitionID)
+		if err != nil {
+			return row
+		}
+		cfgBytes = def.Config
 	}
-	if !schemeStartPeriodEnded(row, def.Config, now) {
+	if !schemeStartPeriodEnded(row, cfgBytes, now) {
 		return row
 	}
 	n, err := s.q.ActivateSchemeInstanceCloud(ctx, row.ID)

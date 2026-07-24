@@ -2,7 +2,6 @@ package schemes
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"caipiao/backend/internal/db/sqlcdb"
@@ -38,17 +37,6 @@ func enrichInstanceForDisplay(_ context.Context, _ *sqlcdb.Queries, row sqlcdb.S
 	return item
 }
 
-// ensurePeriodsFreshForDisplay 展示前尽量刷新 periods；锁占用或第三方慢时立即放弃，只用本地缓存。
-func (s *Service) ensurePeriodsFreshForDisplay(ctx context.Context, lotteryCode string) {
-	lotteryCode = strings.TrimSpace(lotteryCode)
-	if lotteryCode == "" || s.periodSync == nil {
-		return
-	}
-	refreshCtx, cancel := context.WithTimeout(ctx, 800*time.Millisecond)
-	defer cancel()
-	_ = s.periodSync.EnsureFreshIfStale(refreshCtx, lotteryCode)
-}
-
 func (s *Service) enrichInstanceForDisplay(ctx context.Context, row sqlcdb.SchemeInstance, now time.Time) Instance {
 	// 开启/启停响应路径：不要同步刷新 periods（ForceRefresh 持锁，易被 worker 拖死）。
 	// 倒计时字段走本地缓存即可；列表轮询会另行刷新。
@@ -60,5 +48,12 @@ func (s *Service) enrichInstanceForDisplay(ctx context.Context, row sqlcdb.Schem
 			item.SchemeCurrency = normalizeSchemeCurrency("")
 		}
 	}
+	return item
+}
+
+// enrichInstanceListItem 列表路径：不查 definition、不同步 periods，币种由批量 meta 注入。
+func enrichInstanceListItem(row sqlcdb.SchemeInstance, now time.Time, schemeCurrency string) Instance {
+	item := enrichInstanceForDisplay(context.Background(), nil, row, now)
+	item.SchemeCurrency = normalizeSchemeCurrency(schemeCurrency)
 	return item
 }

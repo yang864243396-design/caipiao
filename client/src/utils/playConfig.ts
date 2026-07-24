@@ -834,6 +834,21 @@ export function resolvePlayConfigFromTree(
     segmentLabels = ['包胆']
     poolMaxPicks = 1
   }
+  // 组三/组六/组选N/组选复式/不定位：单行号池（0–9 逗号多选）。
+  // 前中后三等区位 resolve 会得到 segmentLen=3，若保留则录入框被当成「三位按位」只能输 3 段。
+  if (
+    betMode === 'zu3' ||
+    betMode === 'zu6' ||
+    betMode === 'zuxuan_fs' ||
+    betMode === 'budingwei' ||
+    ['zu24', 'zu12', 'zu60', 'zu30', 'zu120', 'zu20', 'zu10', 'zu5', 'zu4'].includes(betMode)
+  ) {
+    inputMode = 'pool'
+    if (numberPoolMin == null) numberPoolMin = 0
+    if (numberPoolMax == null) numberPoolMax = 9
+    segmentLen = 1
+    segmentLabels = ['选号']
+  }
   if (betMode === 'teshu') {
     inputMode = 'pool'
     segmentLen = 1

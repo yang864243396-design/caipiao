@@ -548,11 +548,13 @@ export function parsePoolTokens(raw: string, min: number, max: number): string[]
   const parts = raw.split(/[\s,，\n]+/).map((s) => s.trim()).filter(Boolean)
   const seen = new Set<string>()
   const out: string[] = []
+  // 仅 11选5(01–11)/PK10(01–10) 定宽号球补零；和值号池（1–26/0–27/3–18）须自然数，补零会被第三方拒「投注注数不正确」
+  const padFixedBall = min >= 1 && max >= 10 && max <= 11
   for (const p of parts) {
     if (!/^\d{1,2}$/.test(p)) continue
     const n = Number(p)
     if (n < min || n > max) continue
-    const tok = max >= 11 ? String(n).padStart(2, '0') : String(n)
+    const tok = padFixedBall ? String(n).padStart(2, '0') : String(n)
     if (seen.has(tok)) continue
     seen.add(tok)
     out.push(tok)
@@ -1062,6 +1064,7 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
   }
 
   // 组选号池：二星 C(n,2)；三星组三/组六/通用组选复式（对齐 guajibet countZuxuanFushiBetNums）
+  // 注意：号池 UI 会把 segmentLen 置 1，计注不能再依赖 segmentLen===3。
   const zuxuanText = `${config.betMode ?? ''} ${config.subPlayId} ${config.catalogSubId ?? ''} ${config.playMethodLabel ?? ''}`
   const isZuFsLike =
     config.subPlayId === 'zuxuan_fs' ||
@@ -1069,25 +1072,25 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
     config.betMode === 'zu6' ||
     config.betMode === 'zuxuan_fs' ||
     /组三|组六|组选复式/.test(zuxuanText)
-  if (isZuFsLike && config.segmentLen === 2) {
+  if (isZuFsLike) {
     const n = new Set(pool).size
-    if (n < 2) return 0
-    return applySegmentBetMultiplier(config, (n * (n - 1)) / 2)
-  }
-  const isZuPool = config.segmentLen === 3 && isZuFsLike
-  if (isZuPool) {
-    const n = new Set(pool).size
+    const starLen = zuxuanStarLen(config)
     const isZu6Only =
       config.betMode === 'zu6' ||
-      ((/组六|zu6/i.test(zuxuanText) && !/组选6|组选60|组选120|zu60|zu120/i.test(zuxuanText)))
+      (/组六|zu6/i.test(zuxuanText) && !/组选6|组选60|组选120|zu60|zu120/i.test(zuxuanText))
     const isZu3Only =
       !isZu6Only &&
       (config.betMode === 'zu3' || /组三|zu3/i.test(zuxuanText))
+    if (starLen === 2) {
+      if (n < 2) return 0
+      return applySegmentBetMultiplier(config, (n * (n - 1)) / 2)
+    }
     if (isZu6Only) {
       if (n < 3) return 0
       return applySegmentBetMultiplier(config, (n * (n - 1) * (n - 2)) / 6)
     }
     if (isZu3Only) {
+      // 组三：n*(n-1)；前中后三再 ×3 → 10 码 = 90×3 = 270（对齐第三方）
       if (n < 2) return 0
       return applySegmentBetMultiplier(config, n * (n - 1))
     }
@@ -1098,6 +1101,19 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
   }
 
   return applySegmentBetMultiplier(config, pool.length || 1)
+}
+
+/** 组选星数：二星组选=2，组三/组六/三星组选复式=3（不受号池 UI 的 segmentLen=1 影响） */
+function zuxuanStarLen(config: PlayConfig): number {
+  if (config.segmentLen === 2) return 2
+  const text = `${config.guajiGroup ?? ''} ${config.playTypeLabel ?? ''} ${config.playMethodLabel ?? ''} ${config.playTypeId ?? ''}`
+  if (/前二|后二|g004|g005|g008/.test(text) && !/前中后|前后三|前后四|前三|中三|后三|g001|g002|g003|g007|g012/.test(text)) {
+    return 2
+  }
+  if (config.betMode === 'zu3' || config.betMode === 'zu6') return 3
+  if (config.segmentLen === 3) return 3
+  if (/前三|中三|后三|前中后三|前后三|组三|组六/.test(text)) return 3
+  return config.segmentLen > 1 ? config.segmentLen : 3
 }
 
 function applySegmentBetMultiplier(config: PlayConfig, units: number): number {
@@ -1279,9 +1295,19 @@ export const HEZHI_MAX_BET_UNITS_MSG = '投注注数超过最大投注注数:900
 export const WEISHU_MAX_BET_UNITS = 9
 export const WEISHU_MAX_BET_UNITS_MSG = '投注注数超过最大投注注数:9'
 
-/** 直选组合单组最大注数（前三组合等，对齐第三方） */
+/** 直选组合单区最大注数（前三组合等，对齐第三方）；多区位按段倍乘（前中后三×3→8100） */
 export const ZUHE_MAX_BET_UNITS = 2700
 export const ZUHE_MAX_BET_UNITS_MSG = '投注注数超过最大投注注数:2700'
+
+/** 直选组合最大注数：单区 2700 × 区位倍乘（前中后三=8100，前后三=5400） */
+export function zuheMaxBetUnits(config: PlayConfig): number {
+  const m = segmentBetMultiplier(config.guajiGroup ?? config.playTypeLabel ?? '')
+  return ZUHE_MAX_BET_UNITS * Math.max(1, m)
+}
+
+export function zuheMaxBetUnitsMsg(config: PlayConfig): string {
+  return `投注注数超过最大投注注数:${zuheMaxBetUnits(config)}`
+}
 
 /**
  * 直选复式单组最大注数（对齐第三方）：满号位积 − 对子/豹子（各位同一号码，共 P 组）。
@@ -1500,8 +1526,11 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
     }
     const betUnits = countBetUnits(config, normalized)
     if (betUnits <= 0) return { ok: false, message: '选号无效' }
-    if (isZhixuanZuhePlayConfig(config) && betUnits > ZUHE_MAX_BET_UNITS) {
-      return { ok: false, message: ZUHE_MAX_BET_UNITS_MSG }
+    if (isZhixuanZuhePlayConfig(config)) {
+      const maxZuhe = zuheMaxBetUnits(config)
+      if (betUnits > maxZuhe) {
+        return { ok: false, message: zuheMaxBetUnitsMsg(config) }
+      }
     }
     // 直选复式：满号位积 − 对子/豹子（P^n − P）为单组上限（前二=90、前三=990…）
     if (isZhixuanFushiPlayConfig(config) && !isZhixuanZuhePlayConfig(config)) {
@@ -1645,7 +1674,7 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
     'daxiao',
     'danshuang',
     'budingwei',
-    // zuhe 已在上方按位校验 + 2700 注上限
+    // zuhe 已在上方按位校验 + 单区 2700 / 前中后三 8100 注上限
     // baodan / weishu 已在上方单独校验
     'hunhe',
     'teshu',
@@ -1754,7 +1783,7 @@ export function validateSchemeGroups(config: PlayConfig, groups: string[]): Sche
   }
   const ok = invalidIndexes.length === 0
   if (ok) return { ok, normalized, invalidIndexes, message: '' }
-  // 优先返回具体原因（如和值超 900 / 组合超 2700），便于弹窗原样展示
+  // 优先返回具体原因（如和值超 900 / 组合超 2700·8100），便于弹窗原样展示
   if (isMaxBetUnitsExceededMessage(firstDetail)) {
     return { ok, normalized, invalidIndexes, message: firstDetail }
   }

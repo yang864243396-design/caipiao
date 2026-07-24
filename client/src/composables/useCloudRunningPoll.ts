@@ -10,13 +10,14 @@ import {
 
 import { connectClientWs, isCloudRefreshEvent } from '@/composables/ws/useClientWs'
 
-/** REST 轮询间隔（倒计时/盈亏等需定期拉取） */
+/** REST 轮询间隔：无 WS 时兜底；有 WS 时拉长，减轻 /running?ids= 压力 */
 const FALLBACK_POLL_MS = 15_000
+const WS_CONNECTED_POLL_MS = 60_000
 
 /**
  * 云端运行列表同步：按已加载实例 ID 批量刷新。
  * - WS 事件 / 手动 refresh：立即拉取
- * - 始终 15s REST 轮询（倒计时、盈亏、下一期 end_time 等 WS 不推送，需 REST 兜底）
+ * - REST 轮询：无 WS 15s；有 WS 60s（倒计时本地 tick，盈亏等靠 WS + 慢轮询）
  * @returns stop 停止同步；refresh 立即拉取一次（并发时合并为单次在途请求）
  */
 export function startCloudRunningSync(
@@ -60,17 +61,17 @@ export function startCloudRunningSync(
     }
   }
 
-  function startPoll() {
+  function startPoll(intervalMs: number) {
     if (pollTimer) return
     pollTimer = window.setInterval(() => {
       void refresh()
-    }, pollMs)
+    }, intervalMs)
   }
 
   const token = getAccessToken()
-  const wsAvailable = WS_CLIENT_ENABLED && WS_CLIENT_BASE && token
+  const wsAvailable = Boolean(WS_CLIENT_ENABLED && WS_CLIENT_BASE && token)
 
-  startPoll()
+  startPoll(wsAvailable ? WS_CONNECTED_POLL_MS : pollMs)
 
   if (wsAvailable) {
     stopWs = connectClientWs(WS_CLIENT_BASE, token, (env) => {

@@ -84,6 +84,7 @@ func (w *Worker) tick(ctx context.Context) {
 			w.tickInstance(ctx, inst, pm)
 		}
 	}
+	w.tickSimSettlements(ctx)
 	w.tickMaintenanceResume(ctx)
 }
 
@@ -410,7 +411,10 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 	recordStatus := status
 	recordPnl := pnl
 	guajiReal := w.usesGuajiThirdParty(inst)
-	if guajiReal {
+	// 模拟盘与正式盘一致：当期先占位 pending，等真实开奖入库后再验奖；
+	// 禁止对未开奖的开放期即时判负（空球号几乎总 miss，表现为「一直挂」）。
+	deferSettle := guajiReal || inst.SimBet
+	if deferSettle {
 		recordStatus = "pending"
 		recordPnl = 0
 	}
@@ -496,6 +500,10 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 			Status:         "pending",
 			BetContent:     betContent,
 			GuajiAccountID: activeGuajiAccountIDForInst(ctx, qtx, inst),
+			Currency:       cfg.Currency,
+			LotteryCode:    inst.LotteryCode,
+			LotteryLabel:   inst.LotteryLabel,
+			DefinitionID:   inst.DefinitionID,
 		})
 		if cerr != nil {
 			return cerr
@@ -558,12 +566,12 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 	applyPickIndex := nextPickIndex
 	applyCurrentPick := nextCurrentPick
 	applyLastDirection := nextLastDirection
-	if guajiReal {
+	if deferSettle {
 		applyPnl = 0
 		applyLookbackPnl = 0
 		resetIndividual = false
 		resetOverall = false
-		// 正式盘：轮次/出号游标待派奖后按实际中/未中推进，下单时仅累加流水与期号游标。
+		// 正式盘/模拟盘：轮次/出号游标待真实开奖后按实际中/未中推进，下单时仅累加流水与期号游标。
 		// 必须读锁内最新值写入，禁止用下单前旧快照覆盖派奖已推进的 pick_index。
 		if locked, lerr := qtx.GetSchemeInstanceFull(ctx, inst.ID); lerr == nil {
 			applyRoundIndex = locked.RoundIndex
@@ -594,13 +602,13 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 		return err
 	}
 
-	if trackOverall && !guajiReal {
+	if trackOverall && !deferSettle {
 		if err := w.saveLookbackRuntime(ctx, qtx, inst.MemberID, inst.SimBet, overallRT, resetOverall); err != nil {
 			return err
 		}
 	}
 
-	if (resetIndividual || resetOverall) && !guajiReal {
+	if (resetIndividual || resetOverall) && !deferSettle {
 		if err := w.applyLookbackResets(ctx, qtx, inst, acceptedPeriod, resetIndividual, resetOverall); err != nil {
 			return err
 		}
@@ -613,7 +621,9 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 		return err
 	}
 	committed = true
-	if !guajiReal {
+	// 即时结算路径（历史兼容）：下单即有盈亏后检查止盈止损。
+	// 模拟盘改走开奖后结算，止盈止损在 settleSimCloudBet 中检查。
+	if !deferSettle {
 		if fresh, ferr := w.q.GetSchemeInstanceFull(ctx, inst.ID); ferr == nil {
 			w.pauseRunningForSessionLimit(ctx, fresh, def.Config)
 			w.pauseAllRunningForCloudLimit(ctx, inst.MemberID)
@@ -687,6 +697,10 @@ func (w *Worker) reserveCloudBetPeriod(
 		Status:         recordStatus,
 		BetContent:     betContent,
 		GuajiAccountID: activeGuajiAccountIDForInst(ctx, qtx, inst),
+		Currency:       cfg.Currency,
+		LotteryCode:    inst.LotteryCode,
+		LotteryLabel:   inst.LotteryLabel,
+		DefinitionID:   inst.DefinitionID,
 	})
 	if err != nil {
 		return false, err

@@ -40,18 +40,34 @@ func ProcessFormalAfterSettlement(
 	definitionConfig []byte,
 	numericFromFloat func(float64) pgtype.Numeric,
 ) error {
-	if q == nil || inst.Status != "running" || inst.SimBet {
+	return ProcessAfterSettlement(ctx, q, inst, periodNo, pnl, hit, definitionConfig, numericFromFloat)
+}
+
+// ProcessAfterSettlement 正式盘/模拟盘派奖后共用：回头盈亏 + 倍投轮次 + 出号游标。
+// 模拟盘与正式盘一致，下单时冻结游标，待真实开奖入库后再按中/未中推进。
+func ProcessAfterSettlement(
+	ctx context.Context,
+	q *sqlcdb.Queries,
+	inst sqlcdb.SchemeInstance,
+	periodNo string,
+	pnl float64,
+	hit bool,
+	definitionConfig []byte,
+	numericFromFloat func(float64) pgtype.Numeric,
+) error {
+	if q == nil || inst.Status != "running" {
 		return nil
 	}
 
+	simBet := inst.SimBet
 	engine := lookback.NewEngine(q)
 	settings := engine.LoadSettings(ctx, inst.MemberID)
 	currentLookback := numericToFloat(inst.LookbackPnl)
 	var overallRT lookback.Runtime
-	if lookback.AppliesTo(settings, false) && settings.Judgment == lookback.JudgmentOverall {
-		overallRT = engine.LoadRuntime(ctx, inst.MemberID, false)
+	if lookback.AppliesTo(settings, simBet) && settings.Judgment == lookback.JudgmentOverall {
+		overallRT = engine.LoadRuntime(ctx, inst.MemberID, simBet)
 	}
-	lbEval := lookback.Evaluate(settings, false, currentLookback, overallRT, periodNo, pnl, hit)
+	lbEval := lookback.Evaluate(settings, simBet, currentLookback, overallRT, periodNo, pnl, hit)
 	lookbackDelta := lbEval.LookbackAfter - currentLookback
 
 	applyRoundIndex := inst.RoundIndex
@@ -62,7 +78,7 @@ func ProcessFormalAfterSettlement(
 		applyRoundIndex = int32(schemerounds.NextIndex(rounds, int(inst.RoundIndex), hit))
 	}
 
-	// 出号体系：下单时（第三方待开奖）冻结的出号游标在此按实际中/未中补推进，
+	// 出号体系：下单时（待开奖）冻结的出号游标在此按实际中/未中补推进，
 	// 使定码轮换/高级定码轮换等运行类型逐期切换下注内容（与倍投轮次推进独立）。
 	applyPickIndex, applyCurrentPick, applyLastDirection := inst.PickIndex, inst.CurrentPick, inst.LastDirection
 	if FormalPickAdvancer != nil {
@@ -92,7 +108,7 @@ func ProcessFormalAfterSettlement(
 	}
 
 	if lbEval.TrackOverall {
-		if err := engine.SaveRuntime(ctx, inst.MemberID, false, lbEval.OverallRT, lbEval.ResetOverall); err != nil {
+		if err := engine.SaveRuntime(ctx, inst.MemberID, simBet, lbEval.OverallRT, lbEval.ResetOverall); err != nil {
 			return err
 		}
 	}
@@ -101,7 +117,11 @@ func ProcessFormalAfterSettlement(
 			return err
 		}
 		if lbEval.ResetIndividual && !lbEval.ResetOverall {
-			slog.Info("lookback reset individual (formal)", "instanceId", inst.ID, "memberId", inst.MemberID)
+			mode := "formal"
+			if simBet {
+				mode = "sim"
+			}
+			slog.Info("lookback reset individual ("+mode+")", "instanceId", inst.ID, "memberId", inst.MemberID)
 		}
 	}
 	return nil

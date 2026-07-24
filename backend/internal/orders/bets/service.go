@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"golang.org/x/sync/errgroup"
 
 	"caipiao/backend/internal/db"
 	"caipiao/backend/internal/db/sqlcdb"
@@ -118,43 +119,53 @@ func (s *Service) List(ctx context.Context, q Query) (Result, error) {
 		return Result{}, fmt.Errorf("%w: gameCode 参数无效", ErrInvalidQuery)
 	}
 
-	var (
-		result Result
-		errList error
-	)
-	switch {
-	case schemeDefID != "" && schemeDefID != "all":
-		result, errList = s.listBySchemeDefinition(ctx, m.ID, schemeDefID, timeFrom, timeTo, orderNo, currency, q.Cursor, limit)
-	case schemeDefID == "all":
-		code := ""
-		if lotteryCode.Valid {
-			code = lotteryCode.String
-		}
-		result, errList = s.listByLottery(ctx, m.ID, code, timeFrom, timeTo, orderNo, currency, q.Cursor, limit)
-	default:
-		params := sqlcdb.ListBetOrdersParams{
-			MemberID:    m.ID,
-			TimeFrom:    pgtype.Timestamptz{Time: timeFrom, Valid: true},
-			TimeTo:      pgtype.Timestamptz{Time: timeTo, Valid: true},
-			LotteryCode: lotteryCode,
-			OrderNo:     orderNo,
-			RowLimit:    int32(limit + 1),
-		}
-		result, errList = s.listBetOrders(ctx, params, currency, q.Cursor, limit)
-	}
-	if errList != nil {
-		return Result{}, errList
+	code := ""
+	if lotteryCode.Valid {
+		code = lotteryCode.String
 	}
 
-	// 首页带币种汇总（不受列表币种筛选项限制，始终返回 USDT/TRX/CNY 三行）
+	runList := func(c context.Context) (Result, error) {
+		switch {
+		case schemeDefID != "" && schemeDefID != "all":
+			return s.listBySchemeDefinition(c, m.ID, schemeDefID, timeFrom, timeTo, orderNo, currency, q.Cursor, limit)
+		case schemeDefID == "all":
+			return s.listByLottery(c, m.ID, code, timeFrom, timeTo, orderNo, currency, q.Cursor, limit)
+		default:
+			params := sqlcdb.ListBetOrdersParams{
+				MemberID:    m.ID,
+				TimeFrom:    pgtype.Timestamptz{Time: timeFrom, Valid: true},
+				TimeTo:      pgtype.Timestamptz{Time: timeTo, Valid: true},
+				LotteryCode: lotteryCode,
+				OrderNo:     orderNo,
+				RowLimit:    int32(limit + 1),
+			}
+			return s.listBetOrders(c, params, currency, q.Cursor, limit)
+		}
+	}
+
+	// 首页列表与币种汇总并行，避免串行等待两次全窗扫描。
 	if q.Cursor == "" {
-		summary, serr := s.summarizeByCurrency(ctx, m.ID, schemeDefID, lotteryCode, timeFrom, timeTo, orderNo)
-		if serr != nil {
-			return Result{}, serr
+		g, gctx := errgroup.WithContext(ctx)
+		var result Result
+		var summary []CurrencySummary
+		g.Go(func() error {
+			var err error
+			result, err = runList(gctx)
+			return err
+		})
+		g.Go(func() error {
+			var err error
+			summary, err = s.summarizeByCurrency(gctx, m.ID, schemeDefID, lotteryCode, timeFrom, timeTo, orderNo)
+			return err
+		})
+		if err := g.Wait(); err != nil {
+			return Result{}, err
 		}
 		result.Summary = summary
+		return result, nil
 	}
-	return result, nil
+
+	return runList(ctx)
 }
 
 func (s *Service) summarizeByCurrency(
@@ -175,10 +186,6 @@ func (s *Service) summarizeByCurrency(
 	if schemeDefID == "" {
 		rows, err = s.q.SummarizeBetOrdersByCurrencyEx(ctx, memberID, since, until, lotteryCode, orderNo)
 	} else {
-		guajiID, gerr := member.LookupActiveGuajiAccountID(ctx, s.q, memberID)
-		if gerr != nil {
-			return nil, gerr
-		}
 		defID := ""
 		if schemeDefID != "all" {
 			defID = schemeDefID
@@ -187,7 +194,7 @@ func (s *Service) summarizeByCurrency(
 		if lotteryCode.Valid {
 			lotCode = lotteryCode.String
 		}
-		rows, err = s.q.SummarizeCloudBetRecordsByCurrencyEx(ctx, memberID, defID, lotCode, since, until, orderNo, guajiID)
+		rows, err = s.q.SummarizeCloudBetRecordsByCurrencyEx(ctx, memberID, defID, lotCode, since, until, orderNo, pgtype.Int8{})
 	}
 	if err != nil {
 		return nil, err
@@ -236,19 +243,13 @@ func (s *Service) listBySchemeDefinition(
 		return Result{}, err
 	}
 
-	guajiID, err := member.LookupActiveGuajiAccountID(ctx, s.q, memberID)
-	if err != nil {
-		return Result{}, err
-	}
-
 	baseParams := sqlcdb.ListCloudBetRecordsByDefinitionParams{
-		MemberID:       memberID,
-		DefinitionID:   definitionID,
-		SinceAt:        pgtype.Timestamptz{Time: timeFrom, Valid: true},
-		UntilAt:        pgtype.Timestamptz{Time: timeTo, Valid: true},
-		OrderNo:        orderNo,
-		GuajiAccountID: guajiID,
-		RowLimit:       int32(limit + 1),
+		MemberID:     memberID,
+		DefinitionID: definitionID,
+		SinceAt:      pgtype.Timestamptz{Time: timeFrom, Valid: true},
+		UntilAt:      pgtype.Timestamptz{Time: timeTo, Valid: true},
+		OrderNo:      orderNo,
+		RowLimit:     int32(limit + 1),
 	}
 
 	var rows []sqlcdb.CloudBetListRow
@@ -319,22 +320,17 @@ func (s *Service) listByLottery(
 	cursor string,
 	limit int,
 ) (Result, error) {
-	guajiID, err := member.LookupActiveGuajiAccountID(ctx, s.q, memberID)
-	if err != nil {
-		return Result{}, err
-	}
-
 	baseParams := sqlcdb.ListCloudBetRecordsByLotteryParams{
-		MemberID:       memberID,
-		LotteryCode:    lotteryCode,
-		SinceAt:        pgtype.Timestamptz{Time: timeFrom, Valid: true},
-		UntilAt:        pgtype.Timestamptz{Time: timeTo, Valid: true},
-		OrderNo:        orderNo,
-		GuajiAccountID: guajiID,
-		RowLimit:       int32(limit + 1),
+		MemberID:    memberID,
+		LotteryCode: lotteryCode,
+		SinceAt:     pgtype.Timestamptz{Time: timeFrom, Valid: true},
+		UntilAt:     pgtype.Timestamptz{Time: timeTo, Valid: true},
+		OrderNo:     orderNo,
+		RowLimit:    int32(limit + 1),
 	}
 
 	var rows []sqlcdb.CloudBetListRow
+	var err error
 	if cursor == "" {
 		rows, err = s.q.ListCloudBetRecordsByLotteryEx(ctx, baseParams, currency)
 	} else {

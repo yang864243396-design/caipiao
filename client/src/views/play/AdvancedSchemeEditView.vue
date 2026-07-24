@@ -1104,9 +1104,9 @@ async function loadHcwAttrStats(seq: number): Promise<void> {
   const localUni = hcwLocalAttrUniverse()
   // 先铺本地宇宙，避免接口失败/延迟时选项池空白（前三特殊号须始终可见豹子/对子/顺子）
   if (localUni.length) hcwAttrUniverse.value = localUni
-  // 特殊号等：playConfig.segmentLen=1 仅表示单档选项池，不是开奖截取长度；勿传以免后端把前三=3 盖成 1→全 0
+  // 特殊号/和值/跨度/尾数：playConfig.segmentLen=1 仅表示单档选项池，不是开奖截取长度。
+  // 勿传 segmentLen，否则后端若覆盖 resolve 的 3 位，跨度恒为 0、次数全堆在「0」。
   const bm = String(cfg.betMode || (localUni.includes('豹子') ? 'teshu' : '')).toLowerCase()
-  const passSegmentLen = ['hezhi', 'kuadu', 'weishu'].includes(bm)
   const res = await fetchHotColdWarmTiers({
     lotteryCode: lotteryCode.value,
     playTypeId: cfg.playTypeId,
@@ -1117,7 +1117,6 @@ async function loadHcwAttrStats(seq: number): Promise<void> {
     playMethodLabel: cfg.playMethodLabel,
     numberPoolMin: cfg.numberPoolMin,
     numberPoolMax: cfg.numberPoolMax,
-    ...(passSegmentLen && cfg.segmentLen > 0 ? { segmentLen: cfg.segmentLen } : {}),
     periods: hcwTotalPeriods.value,
   })
   if (seq !== hcwLoadSeq) return
@@ -1394,15 +1393,18 @@ const rdWholeTicket = computed(() => {
 /** 单式整注随机的本地预览注单 */
 const rdWholePreview = ref<string[]>([])
 
-/** 组三/组六/组选N/组选复式：号码池随机（选 K 个号），非按位、非整注 */
+/** 组三/组六/组选N/组选复式：号码池随机（选 K 个号），非按位、非整注。包胆属属性单选，勿因文案含「组选」误入。 */
 const rdZuxuanPool = computed(() => {
   if (rdWholeTicket.value) return false
   const cfg = schemePlayConfig.value as { betMode?: string; subPlayId?: string; catalogSubId?: string; playMethodLabel?: string }
   const bm = String(cfg.betMode ?? '').toLowerCase()
+  const label = String(cfg.playMethodLabel ?? '')
+  if (bm === 'baodan' || /包胆/.test(label)) return false
   if (['zu3', 'zu6', 'zu24', 'zu12', 'zu60', 'zu30', 'zu120'].includes(bm)) return true
   const cat = `${String(cfg.subPlayId ?? '')} ${String(cfg.catalogSubId ?? '')}`.toLowerCase()
+  if (/baodan|_bd\b|包胆/.test(`${cat} ${label}`)) return false
   if (/zuxuan_fs|zuxuan|zu3|zu6|zu24|zu12|zu60|zu30|zu120/.test(cat)) return true
-  return /组三|组六|组选/.test(String(cfg.playMethodLabel ?? ''))
+  return /组三|组六|组选/.test(label)
 })
 
 /** 属性/聚合家族（大小单双/龙虎/特殊号/庄闲/和值/跨度/不定位/包胆）：从选项宇宙随机抽 K 个 */
@@ -1807,8 +1809,14 @@ function readDocumentScrollY(): number {
   return window.scrollY || document.documentElement.scrollTop || 0
 }
 
+/** 草稿占位名不回填到输入框，避免设置方案模式后名称被自动写成「未命名方案」 */
+function schemeNameFromDraftMeta(raw: string): string {
+  const name = String(raw ?? '').trim()
+  return name === '未命名方案' ? '' : name
+}
+
 function applyDraftSnapshot(draft: SchemeDraftSnapshot): void {
-  schemeName.value = draft.meta.schemeName
+  schemeName.value = schemeNameFromDraftMeta(draft.meta.schemeName)
   simBet.value = draft.simBet
   schemeFunds.value = draft.schemeFunds
   schemeCurrency.value = normalizeSchemeCurrency(draft.schemeCurrency)
@@ -1836,7 +1844,8 @@ function applyDraftSnapshot(draft: SchemeDraftSnapshot): void {
 function buildLiveDraftMeta(): SchemeDraftMeta {
   return {
     kind: schemeKind.value,
-    schemeName: schemeName.value.trim() || '未命名方案',
+    // 草稿保留空名称；提交上云前仍校验必填，不在此处写占位名
+    schemeName: schemeName.value.trim(),
     lotteryCode: isBuiltinPlan.value ? '' : lotteryCode.value.trim(),
     runTypeId: runTypeId.value,
     playTypeId: isBuiltinPlan.value ? '' : playTypeId.value.trim(),
@@ -1913,9 +1922,7 @@ async function loadRemoteDefinition() {
       applyDraftSnapshot(draft)
     } else {
       const meta = draftMetaFromQuery(route.query as Record<string, unknown>)
-      schemeName.value = meta.schemeName === '未命名方案' && !String(route.query.title ?? '')
-        ? ''
-        : meta.schemeName
+      schemeName.value = schemeNameFromDraftMeta(meta.schemeName)
       runTypeId.value = normalizeRunTypeId(meta.runTypeId || 'fixed_rotate')
       if (meta.lotteryCode) lotteryCode.value = meta.lotteryCode
       if (meta.playTypeId) playTypeId.value = meta.playTypeId
@@ -2603,7 +2610,7 @@ async function onSaveCloud() {
 
   const cloudPayload = {
     kind: schemeKind.value,
-    schemeName: schemeName.value.trim() || '未命名方案',
+    schemeName: name,
     lotteryCode: isBuiltinPlan.value ? '' : lottery,
     shareStatus: (isCustomKind.value ? shareStatus.value : 'private') as 'private' | 'public',
     simBet: simBet.value,
@@ -3413,18 +3420,6 @@ function onTimeDialogOpened() {
               <el-radio v-for="o in TRIGGER_MODE_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</el-radio>
             </el-radio-group>
           </div>
-          <p class="scf-run-tip">
-            正投 / 反投可填多个号码，英文逗号分隔（如 1,3,5）。
-            <template v-if="showTriggerPerPosColumns">
-              每个开出号码下按位置分行填写；启用后各位正投与反投均必填。每位按该位上期开奖查对应「开出」后取该位号码下注。
-            </template>
-            <template v-else-if="showTriggerPositionPicker">
-              可多选投注位：每位按该位上期开奖各自查映射下注；某位无映射时用启用行第 1 行正投。
-            </template>
-            <template v-else>
-              上期开出号码无启用映射时，按启用行第 1 行的正投下注。
-            </template>
-          </p>
         </div>
 
         <!-- 5. 冷热出号（v6 仅冷/热） -->

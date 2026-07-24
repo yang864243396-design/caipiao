@@ -425,6 +425,10 @@ func FormatBetContentForRule(meta RuleMeta, groupContent string) string {
 			_, segLen := segmentRange(meta)
 			return formatSSCZuxuanDanshiDigits(segLen, groupContent)
 		}
+		// SSC 和值/跨度等：须去前导零（01→1）。第三方对 "01,02,…" 一律「投注注数不正确」。
+		if mode == "hezhi" || mode == "kuadu" || mode == "weishu" || mode == "baodan" {
+			return formatNaturalIntTokens(groupContent)
+		}
 		return formatCommaPickDigits(groupContent)
 	case "zu24", "zu12", "zu4", "zu120", "zu60", "zu30", "zu20", "zu10", "zu5":
 		switch mode {
@@ -1821,6 +1825,19 @@ func formatCommaPickDigits(groupContent string) string {
 		return strings.TrimSpace(groupContent)
 	}
 	return strings.Join(tokens, ",")
+}
+
+// formatNaturalIntTokens 逗号分隔整数去前导零（SSC 和值/跨度等；勿用于 11选5 的 01–11）。
+func formatNaturalIntTokens(groupContent string) string {
+	vals := parseIntTokenList(groupContent)
+	if len(vals) == 0 {
+		return strings.TrimSpace(groupContent)
+	}
+	out := make([]string, 0, len(vals))
+	for _, v := range vals {
+		out = append(out, strconv.Itoa(v))
+	}
+	return strings.Join(out, ",")
 }
 
 // formatBudingweiContent 不定位选号：逗号分隔；一码最多 2 个号（第三方限制）。

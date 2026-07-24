@@ -78,27 +78,36 @@ func (s *Service) HotColdWarmTiers(ctx context.Context, in HotColdWarmTiersInput
 	if strings.TrimSpace(rule.CatalogSubID) == "" {
 		rule.CatalogSubID = in.SubPlayID
 	}
-	// SSC/快彩「和值」选项宇宙由后端按玩法真实位数权威推导（前中后三=3位→直选 0..27 / 组选 1..26），
-	// 不被前端把 segmentLen 置 1、或把和值范围塞进 NumberPool 的行为污染。
-	sscHezhi := (tpl == "" || tpl == "ssc_std" || tpl == "fast_ssc_std") &&
-		strings.EqualFold(strings.TrimSpace(rule.BetMode), "hezhi")
-	if !sscHezhi {
-		if in.NumberPoolMax > 0 && in.NumberPoolMax >= in.NumberPoolMin {
+	rule = applyHotColdWarmInputOverrides(rule, in)
+	return HotColdWarmAttributeTiers(rule, draws), nil
+}
+
+// applyHotColdWarmInputOverrides 合并请求体号池/位数。SSC 和值/跨度/尾数不计前端 segmentLen
+//（单档 UI 常为 1，覆盖后跨度恒 0、次数全堆在「0」）。
+func applyHotColdWarmInputOverrides(rule playRule, in HotColdWarmTiersInput) playRule {
+	tpl := strings.TrimSpace(in.PlayTemplate)
+	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	sscDigitAttr := (tpl == "" || tpl == "ssc_std" || tpl == "fast_ssc_std") &&
+		(bm == "hezhi" || bm == "kuadu" || bm == "weishu")
+	if sscDigitAttr {
+		if bm != "hezhi" && in.NumberPoolMax > 0 && in.NumberPoolMax >= in.NumberPoolMin {
 			rule.NumberPoolMin = in.NumberPoolMin
 			rule.NumberPoolMax = in.NumberPoolMax
 		}
-		// 和值/跨度等选项宇宙需要真实数字段长（如前三和值 0..27）。
-		// 特殊号/龙虎/大小单双等：前端 playConfig 常把 segmentLen 置为 1（单档选项池 UI），
-		// 若覆盖 resolve 出的前三=3，形态判定会全程 0 命中。
-		if in.SegmentLen > 0 && attributeUsesInputSegmentLen(rule.BetMode) {
-			rule.SegmentLen = in.SegmentLen
+		if bm == "hezhi" {
+			text := in.PlayMethodLabel + " " + in.CatalogSubID + " " + in.SubPlayID
+			rule.HezhiZuxuan = strings.Contains(text, "组选")
 		}
-	} else {
-		// 组选和值（前中后三组选和值等）：排除仅豹子可组成的极值和。
-		text := in.PlayMethodLabel + " " + in.CatalogSubID + " " + in.SubPlayID
-		rule.HezhiZuxuan = strings.Contains(text, "组选")
+		return rule
 	}
-	return HotColdWarmAttributeTiers(rule, draws), nil
+	if in.NumberPoolMax > 0 && in.NumberPoolMax >= in.NumberPoolMin {
+		rule.NumberPoolMin = in.NumberPoolMin
+		rule.NumberPoolMax = in.NumberPoolMax
+	}
+	if in.SegmentLen > 0 && attributeUsesInputSegmentLen(rule.BetMode) {
+		rule.SegmentLen = in.SegmentLen
+	}
+	return rule
 }
 
 // attributeUsesInputSegmentLen 是否允许用请求体 segmentLen 覆盖 resolve 结果。

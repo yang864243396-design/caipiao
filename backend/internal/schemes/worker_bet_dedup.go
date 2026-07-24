@@ -151,6 +151,10 @@ func (w *Worker) finalizeCloudBetAfterGuaji(
 		ThirdPartyBetID:  pgtype.Text{String: meta.ThirdPartyBetID, Valid: meta.ThirdPartyBetID != ""},
 		ThirdPartyPeriod: guajiPeriodsPgtext(meta.Periods),
 		BetOrderNo:       pgtype.Text{String: meta.OrderNo, Valid: meta.OrderNo != ""},
+		Currency:         cfg.Currency,
+		LotteryCode:      inst.LotteryCode,
+		LotteryLabel:     inst.LotteryLabel,
+		DefinitionID:     inst.DefinitionID,
 	}); err != nil {
 		slog.Warn("scheme worker finalize cloud bet insert failed", "id", inst.ID, "period", periodNo, "err", err)
 		return

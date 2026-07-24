@@ -108,6 +108,39 @@ func SchemeInstanceFromListIDsRow(r ListSchemeInstancesByMemberIDsRow) SchemeIns
 	})
 }
 
+// ListSchemeInstancesByMemberIDsEx 含 start_skip_*，供列表激活判定与倒计时使用。
+func (q *Queries) ListSchemeInstancesByMemberIDsEx(ctx context.Context, memberID int64, ids []string) ([]SchemeInstance, error) {
+	const sql = `
+SELECT
+    id, definition_id, member_id, kind, scheme_name, lottery_code, lottery_label,
+    status, status_reason, bet_failed_detail, turnover, pnl, run_time_sec, lookback_pnl, session_pnl, multiplier, countdown_sec, sim_bet,
+    start_skip_period, start_skip_close_at,
+    running_since, created_at, updated_at
+FROM scheme_instances
+WHERE member_id = $1
+  AND id = ANY($2::text[])`
+	rows, err := q.db.Query(ctx, sql, memberID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]SchemeInstance, 0, len(ids))
+	for rows.Next() {
+		var f instanceDisplayFields
+		if err := rows.Scan(
+			&f.ID, &f.DefinitionID, &f.MemberID, &f.Kind, &f.SchemeName, &f.LotteryCode, &f.LotteryLabel,
+			&f.Status, &f.StatusReason, &f.BetFailedDetail, &f.Turnover, &f.Pnl, &f.RunTimeSec,
+			&f.LookbackPnl, &f.SessionPnl, &f.Multiplier, &f.CountdownSec, &f.SimBet,
+			&f.StartSkipPeriod, &f.StartSkipCloseAt,
+			&f.RunningSince, &f.CreatedAt, &f.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, schemeInstanceFromDisplay(f))
+	}
+	return items, rows.Err()
+}
+
 func SchemeInstanceFromListIDsRows(rows []ListSchemeInstancesByMemberIDsRow) []SchemeInstance {
 	out := make([]SchemeInstance, len(rows))
 	for i, r := range rows {
@@ -316,6 +349,33 @@ WHERE member_id = $1`, memberID)
 	return out, rows.Err()
 }
 
+// ListSchemeDefinitionRunTypesByIDs 仅查当前页 definition，避免会员全量定义扫表。
+func (q *Queries) ListSchemeDefinitionRunTypesByIDs(ctx context.Context, memberID int64, ids []string) ([]SchemeDefinitionRunTypeRow, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := q.db.Query(ctx, `
+SELECT id,
+  COALESCE(config->>'runTypeId', '') AS run_type,
+  COALESCE(config->>'schemeCurrency', '') AS scheme_currency
+FROM scheme_definitions
+WHERE member_id = $1
+  AND id = ANY($2::text[])`, memberID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]SchemeDefinitionRunTypeRow, 0, len(ids))
+	for rows.Next() {
+		var row SchemeDefinitionRunTypeRow
+		if err := rows.Scan(&row.ID, &row.RunType, &row.SchemeCurrency); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
 type CountSchemeInstancesByMemberSearchParams struct {
 	MemberID int64
 	RunMode  string
@@ -352,11 +412,12 @@ type ListSchemeInstancesByMemberPaginatedSearchParams struct {
 func (q *Queries) ListSchemeInstancesByMemberPaginatedSearch(
 	ctx context.Context,
 	arg ListSchemeInstancesByMemberPaginatedSearchParams,
-) ([]ListSchemeInstancesByMemberPaginatedRow, error) {
+) ([]SchemeInstance, error) {
 	const sql = `
 SELECT
     id, definition_id, member_id, kind, scheme_name, lottery_code, lottery_label,
     status, status_reason, bet_failed_detail, turnover, pnl, run_time_sec, lookback_pnl, session_pnl, multiplier, countdown_sec, sim_bet,
+    start_skip_period, start_skip_close_at,
     running_since, created_at, updated_at
 FROM scheme_instances
 WHERE member_id = $1
@@ -380,35 +441,19 @@ LIMIT $6`
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListSchemeInstancesByMemberPaginatedRow{}
+	items := make([]SchemeInstance, 0, arg.Limit)
 	for rows.Next() {
-		var i ListSchemeInstancesByMemberPaginatedRow
+		var f instanceDisplayFields
 		if err := rows.Scan(
-			&i.ID,
-			&i.DefinitionID,
-			&i.MemberID,
-			&i.Kind,
-			&i.SchemeName,
-			&i.LotteryCode,
-			&i.LotteryLabel,
-			&i.Status,
-			&i.StatusReason,
-			&i.BetFailedDetail,
-			&i.Turnover,
-			&i.Pnl,
-			&i.RunTimeSec,
-			&i.LookbackPnl,
-			&i.SessionPnl,
-			&i.Multiplier,
-			&i.CountdownSec,
-			&i.SimBet,
-			&i.RunningSince,
-			&i.CreatedAt,
-			&i.UpdatedAt,
+			&f.ID, &f.DefinitionID, &f.MemberID, &f.Kind, &f.SchemeName, &f.LotteryCode, &f.LotteryLabel,
+			&f.Status, &f.StatusReason, &f.BetFailedDetail, &f.Turnover, &f.Pnl, &f.RunTimeSec,
+			&f.LookbackPnl, &f.SessionPnl, &f.Multiplier, &f.CountdownSec, &f.SimBet,
+			&f.StartSkipPeriod, &f.StartSkipCloseAt,
+			&f.RunningSince, &f.CreatedAt, &f.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
-		items = append(items, i)
+		items = append(items, schemeInstanceFromDisplay(f))
 	}
 	return items, rows.Err()
 }

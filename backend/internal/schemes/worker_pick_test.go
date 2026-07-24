@@ -290,6 +290,26 @@ func TestPickRandomDrawZuxuanPool(t *testing.T) {
 	}
 }
 
+func TestPickRandomDrawBaodanNotZuxuanPool(t *testing.T) {
+	// 前中后三组选包胆：仅单胆；catalog 含 zuxuan 亦不得走组选号池（选码 2–10）。
+	cfg := pickTestConfig(t, `{
+		"runTypeId":"random_draw","playTypeId":"g007","subPlayId":"109",
+		"catalogSubId":"qianzhonghou3_zuxuan_bd","betMode":"baodan",
+		"randomDraw":{"counts":[5],"strategy":"every"}
+	}`)
+	if isZuxuanPoolRandom(cfg.Play) {
+		t.Fatalf("包胆不应走组选号池, rule=%+v", cfg.Play)
+	}
+	if !isAttributeRandom(cfg.Play) {
+		t.Fatalf("包胆应走属性随机, rule=%+v", cfg.Play)
+	}
+	dec := pickRandomDraw(cfg, sqlcdb.SchemeInstance{Kind: "custom"})
+	toks := strings.Split(strings.TrimSpace(dec.Content), ",")
+	if len(toks) != 1 || toks[0] == "" {
+		t.Fatalf("包胆只能抽 1 个胆码, got %q", dec.Content)
+	}
+}
+
 func TestPickRandomDrawAttributeFamily(t *testing.T) {
 	// 各属性/聚合玩法：随机产出的内容应落在合法选项宇宙内，且能被对应评估解析。
 	cases := []struct {

@@ -222,10 +222,15 @@ export const router = createRouter({
 })
 
 router.beforeEach(async (to) => {
+  // 会话过期强制进登录页：清掉残留 token，禁止「已登录」守卫把用户弹回原页
+  if (to.name === 'login' && to.query.expired === '1') {
+    const { logoutClient } = await import('@/api/auth')
+    logoutClient()
+  }
   const authed = !!getAccessToken()
-  // 已登录访问登录页 → 跳回目标或大厅
+  // 已登录访问登录页 → 跳回目标或大厅（过期回流除外）
   if (to.meta.public) {
-    if (to.name === 'login' && authed) {
+    if (to.name === 'login' && authed && to.query.expired !== '1') {
       const redirect = typeof to.query.redirect === 'string' ? to.query.redirect : '/'
       return redirect
     }

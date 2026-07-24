@@ -320,6 +320,7 @@ async function loadHcwAttrStats(): Promise<void> {
     hcwFreq.value = []
     return
   }
+  // 不传 segmentLen：单档 UI 常为 1，覆盖后跨度/和值计频会错位
   const res = await fetchHotColdWarmTiers({
     lotteryCode: code,
     playTypeId: cfg.playTypeId,
@@ -330,7 +331,6 @@ async function loadHcwAttrStats(): Promise<void> {
     playMethodLabel: cfg.playMethodLabel,
     numberPoolMin: cfg.numberPoolMin,
     numberPoolMax: cfg.numberPoolMax,
-    segmentLen: cfg.segmentLen,
     periods: hcwTotalPeriods.value,
   })
   if (res.mode !== 'attribute' || !Array.isArray(res.universe) || res.universe.length === 0) {
@@ -534,6 +534,7 @@ const rdWholeTicket = computed(() => {
   return label.includes('单式') || label.includes('混合')
 })
 
+/** 组选号池随机；包胆属属性单选（仅 1 码），勿因文案含「组选」误入。 */
 const rdZuxuanPool = computed(() => {
   if (rdWholeTicket.value) return false
   const cfg = props.playConfig as {
@@ -543,10 +544,13 @@ const rdZuxuanPool = computed(() => {
     playMethodLabel?: string
   }
   const bm = String(cfg.betMode ?? '').toLowerCase()
+  const label = String(cfg.playMethodLabel ?? '')
+  if (bm === 'baodan' || /包胆/.test(label)) return false
   if (['zu3', 'zu6', 'zu24', 'zu12', 'zu60', 'zu30', 'zu120'].includes(bm)) return true
   const cat = `${String(cfg.subPlayId ?? '')} ${String(cfg.catalogSubId ?? '')}`.toLowerCase()
+  if (/baodan|_bd\b|包胆/.test(`${cat} ${label}`)) return false
   if (/zuxuan_fs|zuxuan|zu3|zu6|zu24|zu12|zu60|zu30|zu120/.test(cat)) return true
-  return /组三|组六|组选/.test(String(cfg.playMethodLabel ?? ''))
+  return /组三|组六|组选/.test(label)
 })
 
 const rdAttribute = computed(() => {
@@ -579,6 +583,11 @@ const rdSingleCountLabel = computed(() => {
 const rdSingleCountMax = computed(() => {
   if (rdWholeTicket.value) return 200
   if (rdZuxuanPool.value) return Math.max(3, numberPoolTokens.value.length)
+  if (rdAttribute.value) {
+    const bm = String(props.playConfig.betMode ?? '').toLowerCase()
+    if (bm === 'baodan') return 1
+    return Math.max(1, numberPoolTokens.value.length || 1)
+  }
   return 28
 })
 const rdSingleCountMin = computed(() => {
@@ -796,18 +805,6 @@ function formatGroupContent(content: string): string {
           </el-radio>
         </el-radio-group>
       </div>
-      <p class="scr-run-tip">
-        正投 / 反投可含多个号码（逗号分隔）。
-        <template v-if="showTriggerPerPosColumns">
-          每个开出号码下按位置分行展示；启用后各位正投与反投均必填。
-        </template>
-        <template v-else-if="showTriggerPositionPicker">
-          可多选投注位：每位按该位上期开奖各自查映射下注；某位无映射时用启用行第 1 行正投。
-        </template>
-        <template v-else>
-          上期开出号码无启用映射时，按启用行第 1 行的正投下注。
-        </template>
-      </p>
     </div>
 
     <!-- 冷热出号（与新建页同布局，只读） -->

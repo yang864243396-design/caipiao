@@ -136,6 +136,8 @@ export function poolUsesCommaSeparatedInput(config: PlayConfig): boolean {
   if (isHezhiPoolConfig(config)) return true
   // 和值尾数虽为 0–9，连写会把多选拆错，与直选和值一致用逗号分隔
   if (isWeishuPoolConfig(config)) return true
+  // 组三/组六：第三方提示为逗号多选（如 0,1,2,3…），勿连写/按位
+  if (isZu3PoolPlay(config) || isZu6PoolPlay(config)) return true
   const options = digitOptionsForConfig(config)
   if (options.length < 2) return false
   const widths = new Set(options.map((o) => o.length))
@@ -194,7 +196,8 @@ function parseDigitSegmentTokens(seg: string, config: PlayConfig): string[] {
 export function schemeGroupInputBoxToContent(box: string, config: PlayConfig): string {
   const segLen = Math.max(1, config.segmentLen || 1)
   const cap = poolMaxPicksForConfig(config)
-  if (segLen <= 1) {
+  // 号池型（组三/组六/和值等）：单行逗号多选，勿按 segmentLen 拆成按位
+  if (segLen <= 1 || config.inputMode === 'pool' || isZu3PoolPlay(config) || isZu6PoolPlay(config)) {
     let toks = parseDigitSegmentTokens(box, config)
     if (cap != null && cap > 0) toks = toks.slice(0, cap)
     return toks.join(',')
@@ -221,13 +224,15 @@ export function schemeGroupContentToInputBox(content: string, config: PlayConfig
   // 无有效号码时保持空串，避免 '' → ',,,,' 盖住 placeholder
   if (c.replace(/[\s,，]/g, '') === '') return ''
   const segLen = Math.max(1, config.segmentLen || 1)
-  if (segLen <= 1) {
+  if (segLen <= 1 || config.inputMode === 'pool' || isZu3PoolPlay(config) || isZu6PoolPlay(config)) {
     const toks = c
-      .split(/[,，\s]+/)
+      .split(/[,，\s\n]+/)
       .map((t) => t.trim())
       .filter(Boolean)
-    // 和值等变长号池：显示时保留逗号，避免 14,15 → 1415 再被拆错
-    return poolUsesCommaSeparatedInput(config) ? toks.join(',') : toks.join('')
+    // 和值/组三等号池：显示时保留逗号，避免 0,1,2 → 012 再被当三位按位
+    return poolUsesCommaSeparatedInput(config) || isZu3PoolPlay(config) || isZu6PoolPlay(config)
+      ? toks.join(',')
+      : toks.join('')
   }
   // 已是录入框形态（无换行、逗号分位）：段数 ≤ 位宽时按位补齐（「1,2,3」→「1,2,3,,」）
   if (!c.includes('\n')) {
@@ -306,10 +311,10 @@ function isBaodanPoolPlay(config: PlayConfig): boolean {
  */
 export function groupDigitInputHint(config: PlayConfig): string {
   if (isZu3PoolPlay(config)) {
-    return '输入两个及以上0-9的号码，多选用逗号分隔，如1.3.5.7'
+    return '输入两个及以上 0-9 的号码，多选用逗号分隔，如 1,3,5,7'
   }
   if (isZu6PoolPlay(config)) {
-    return '输入三个及以上0-9的号码，多选用逗号分隔，如1.3.5.7'
+    return '输入三个及以上 0-9 的号码，多选用逗号分隔，如 1,3,5,7'
   }
   // 直选/组选和值：与 groupContentPlaceholder 一致，逗号分隔；组选池为 1–26
   if (isHezhiPoolConfig(config)) {

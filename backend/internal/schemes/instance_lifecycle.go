@@ -63,14 +63,11 @@ func (s *Service) listAllInstances(ctx context.Context, memberID int64, runMode 
 }
 
 func (s *Service) listInstancesByIDs(ctx context.Context, memberID int64, ids []string) (InstanceListResult, error) {
-	rows, err := s.q.ListSchemeInstancesByMemberIDs(ctx, sqlcdb.ListSchemeInstancesByMemberIDsParams{
-		MemberID: memberID,
-		Column2:  ids,
-	})
+	rows, err := s.q.ListSchemeInstancesByMemberIDsEx(ctx, memberID, ids)
 	if err != nil {
 		return InstanceListResult{}, err
 	}
-	return s.mapInstanceRows(ctx, memberID, sqlcdb.SchemeInstanceFromListIDsRows(rows), "", 0, PageMeta{})
+	return s.mapInstanceRows(ctx, memberID, rows, "", 0, PageMeta{})
 }
 
 func (s *Service) listInstancesPaginated(ctx context.Context, memberID int64, runMode string, limit int, cursor, search string) (InstanceListResult, error) {
@@ -113,7 +110,7 @@ func (s *Service) listInstancesPaginated(ctx context.Context, memberID int64, ru
 		last := rows[len(rows)-1]
 		page.NextCursor = encodeInstanceCursor(last.UpdatedAt.Time, last.ID)
 	}
-	return s.mapInstanceRows(ctx, memberID, sqlcdb.SchemeInstanceFromListPaginatedRows(rows), runMode, total, page)
+	return s.mapInstanceRows(ctx, memberID, rows, runMode, total, page)
 }
 
 func (s *Service) mapInstanceRows(
@@ -124,21 +121,25 @@ func (s *Service) mapInstanceRows(
 	total int64,
 	page PageMeta,
 ) (InstanceListResult, error) {
-	defMeta := map[string]sqlcdb.SchemeDefinitionRunTypeRow{}
-	if rtRows, rtErr := s.q.ListSchemeDefinitionRunTypesByMember(ctx, memberID); rtErr == nil {
-		for _, r := range rtRows {
-			defMeta[r.ID] = r
-		}
-	}
-	lotterySeen := map[string]bool{}
+	defIDs := make([]string, 0, len(rows))
+	seenDef := map[string]bool{}
 	for _, row := range rows {
-		code := strings.TrimSpace(row.LotteryCode)
-		if code == "" || lotterySeen[code] {
+		id := strings.TrimSpace(row.DefinitionID)
+		if id == "" || seenDef[id] {
 			continue
 		}
-		lotterySeen[code] = true
-		s.ensurePeriodsFreshForDisplay(ctx, code)
+		seenDef[id] = true
+		defIDs = append(defIDs, id)
 	}
+	defMeta := map[string]sqlcdb.SchemeDefinitionRunTypeRow{}
+	if len(defIDs) > 0 {
+		if rtRows, rtErr := s.q.ListSchemeDefinitionRunTypesByIDs(ctx, memberID, defIDs); rtErr == nil {
+			for _, r := range rtRows {
+				defMeta[r.ID] = r
+			}
+		}
+	}
+	// 列表倒计时只用本地 periods 缓存，禁止在此同步拉第三方（易串行拖到数百 ms/彩种）。
 	items := make([]Instance, 0, len(rows))
 	now := time.Now()
 	for _, row := range rows {
@@ -149,9 +150,8 @@ func (s *Service) mapInstanceRows(
 			}
 		}
 		row = s.maybeActivateAfterStartPeriod(ctx, row, now)
-		// 与 Start/Stop 一致：币种从 definition.config 完整读取，避免轻量 meta 缺字段时被默认成 USDT
-		item := s.enrichInstanceForDisplay(ctx, row, now)
 		meta := defMeta[row.DefinitionID]
+		item := enrichInstanceListItem(row, now, meta.SchemeCurrency)
 		if row.Kind == "custom" {
 			rt := NormalizeRunTypeID(meta.RunType)
 			item.RunTypeID = rt
