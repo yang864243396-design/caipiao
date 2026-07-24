@@ -73,7 +73,8 @@ export function startCloudRunningSync(
 
   startPoll(wsAvailable ? WS_CONNECTED_POLL_MS : pollMs)
 
-  if (wsAvailable) {
+  // 单独收窄 token / base：Boolean(...) 无法让 TS 排除 null
+  if (WS_CLIENT_ENABLED && WS_CLIENT_BASE && token) {
     stopWs = connectClientWs(WS_CLIENT_BASE, token, (env) => {
       if (isCloudRefreshEvent(env)) void refresh()
     })
