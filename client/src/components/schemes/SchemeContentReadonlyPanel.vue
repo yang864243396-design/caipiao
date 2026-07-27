@@ -16,7 +16,6 @@ import {
   schemeGroupContentToInputBox,
   schemeGroupUsesDigitInput,
   schemeGroupUsesPickPanel,
-  textPickOptionsForConfig,
 } from '@/utils/pickPanelOptions'
 import {
   isLonghuPlayConfigLike,
