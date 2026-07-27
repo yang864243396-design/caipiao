@@ -95,7 +95,6 @@ func (s *Service) materializeBuiltinPlan(
 }
 
 var forbiddenUpdateKeys = map[string]struct{}{
-	"schemeName":  {},
 	"lotteryCode": {},
 	"runTypeId":   {},
 	"playTypeId":  {},
@@ -104,33 +103,35 @@ var forbiddenUpdateKeys = map[string]struct{}{
 }
 
 type UpdateDefinitionPatch struct {
-	RunMode        string
-	SimBet         bool
-	HasSimBet      bool
-	SchemeFunds      string
-	SchemeCurrency   string
+	SchemeName        string
+	HasSchemeName     bool
+	RunMode           string
+	SimBet            bool
+	HasSimBet         bool
+	SchemeFunds       string
+	SchemeCurrency    string
 	HasSchemeCurrency bool
-	MultCoeff        string
-	HasMultCoeff     bool
-	StartTime      string
-	EndTime        string
-	HasStartTime   bool
-	HasEndTime     bool
-	SchemeGroups   []string
-	StopLoss       string
-	TakeProfit     string
-	BetUnit        string
-	HasBetUnit     bool
-	BetMode        string
-	HasBetMode     bool
-	PlayTemplate   string
-	TypeID         string
-	SubID          string
-	HasCatalogPlay bool
-	BetMultiplier  json.RawMessage
-	Rounds         json.RawMessage
-	HasBetMultiplier bool
-	HasRounds        bool
+	MultCoeff         string
+	HasMultCoeff      bool
+	StartTime         string
+	EndTime           string
+	HasStartTime      bool
+	HasEndTime        bool
+	SchemeGroups      []string
+	StopLoss          string
+	TakeProfit        string
+	BetUnit           string
+	HasBetUnit        bool
+	BetMode           string
+	HasBetMode        bool
+	PlayTemplate      string
+	TypeID            string
+	SubID             string
+	HasCatalogPlay    bool
+	BetMultiplier     json.RawMessage
+	Rounds            json.RawMessage
+	HasBetMultiplier  bool
+	HasRounds         bool
 	// 运行类型方案内容（v8 §5）
 	JushuList      json.RawMessage
 	HasJushuList   bool
@@ -158,6 +159,10 @@ func ParseUpdatePatch(raw map[string]json.RawMessage) (UpdateDefinitionPatch, er
 	}
 
 	patch := UpdateDefinitionPatch{}
+	if v, ok := raw["schemeName"]; ok {
+		patch.HasSchemeName = true
+		patch.SchemeName = strings.TrimSpace(unquoteJSONString(v))
+	}
 	if v, ok := raw["runMode"]; ok {
 		_ = json.Unmarshal(v, &patch.RunMode)
 	}
@@ -312,6 +317,32 @@ func (s *Service) UpdateDefinition(
 		}
 		if instErr != nil && !errors.Is(instErr, pgx.ErrNoRows) {
 			return Definition{}, instErr
+		}
+	}
+
+	if patch.HasSchemeName {
+		name := strings.TrimSpace(patch.SchemeName)
+		if name == "" {
+			return Definition{}, fmt.Errorf("%w: schemeName 不能为空", ErrInvalidUpdatePatch)
+		}
+		if len([]rune(name)) > 128 {
+			return Definition{}, fmt.Errorf("%w: schemeName 过长", ErrInvalidUpdatePatch)
+		}
+		if name != strings.TrimSpace(def.SchemeName) {
+			occupied, nerr := s.q.GetSchemeDefinitionNameStatusByMember(ctx, sqlcdb.GetSchemeDefinitionNameStatusByMemberParams{
+				MemberID:   m.ID,
+				SchemeName: name,
+			})
+			if nerr == nil && occupied.ID != definitionID {
+				return Definition{}, ErrNameDuplicate
+			}
+			if nerr != nil && !errors.Is(nerr, pgx.ErrNoRows) {
+				return Definition{}, nerr
+			}
+			if rerr := s.q.RenameSchemeDefinitionAndInstances(ctx, m.ID, definitionID, name); rerr != nil {
+				return Definition{}, rerr
+			}
+			def.SchemeName = name
 		}
 	}
 

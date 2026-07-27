@@ -73,13 +73,43 @@ func (s *Service) HotColdWarmTiers(ctx context.Context, in HotColdWarmTiersInput
 	if strings.TrimSpace(rule.BetMode) == "" {
 		rule.BetMode = betMode
 	}
-	// 龙虎等按 CatalogSubID 解析对比位；缺失时回退 SubPlayID，避免位解析失败导致零命中。
-	rule.CatalogSubID = in.CatalogSubID
-	if strings.TrimSpace(rule.CatalogSubID) == "" {
-		rule.CatalogSubID = in.SubPlayID
-	}
+	// 龙虎等按 CatalogSubID 解析对比位。数字 guaji id 本身无区位，须合并玩法文案（万千）。
+	rule.CatalogSubID = resolveHotColdCatalogSubID(rule, in)
 	rule = applyHotColdWarmInputOverrides(rule, in)
 	return HotColdWarmAttributeTiers(rule, draws), nil
+}
+
+// resolveHotColdCatalogSubID 优先选用能解析出龙虎位对的文案；否则保留 resolve 结果或回退 subId。
+func resolveHotColdCatalogSubID(rule playRule, in HotColdWarmTiersInput) string {
+	hint := strings.TrimSpace(strings.Join([]string{
+		strings.TrimSpace(in.PlayMethodLabel),
+		strings.TrimSpace(in.CatalogSubID),
+		strings.TrimSpace(in.SubPlayID),
+	}, " "))
+	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	needPair := bm == "longhu" || bm == "longhuhe" ||
+		strings.EqualFold(strings.TrimSpace(in.PlayTypeID), "longhu") ||
+		strings.EqualFold(strings.TrimSpace(in.PlayTypeID), "g010")
+	if needPair {
+		for _, cand := range []string{hint, strings.TrimSpace(rule.CatalogSubID), strings.TrimSpace(in.CatalogSubID), strings.TrimSpace(in.SubPlayID)} {
+			if cand == "" {
+				continue
+			}
+			if p1, p2, _ := longhuPositions(cand); p1 >= 0 && p2 >= 0 {
+				return cand
+			}
+		}
+	}
+	if hint != "" {
+		return hint
+	}
+	if s := strings.TrimSpace(rule.CatalogSubID); s != "" {
+		return s
+	}
+	if s := strings.TrimSpace(in.CatalogSubID); s != "" {
+		return s
+	}
+	return strings.TrimSpace(in.SubPlayID)
 }
 
 // applyHotColdWarmInputOverrides 合并请求体号池/位数。SSC 和值/跨度/尾数不计前端 segmentLen

@@ -562,6 +562,11 @@ func isSingleTokenTextDxds(meta RuleMeta) bool {
 func isWuxingSumDxds(meta RuleMeta) bool {
 	sub := strings.ToLower(strings.TrimSpace(meta.SubID))
 	label := meta.Label
+	// rules/v2：268=五星和值单双、269=五星和值大小
+	switch strings.TrimSpace(meta.SubID) {
+	case "268", "269":
+		return true
+	}
 	if strings.Contains(sub, "wuxing_hz") || strings.Contains(sub, "hz_ds") || strings.Contains(sub, "hz_dx") {
 		return true
 	}
@@ -591,9 +596,18 @@ func formatDxdsBetContent(meta RuleMeta, groupContent string) string {
 		tok := ""
 		switch {
 		case i < len(lines) && strings.TrimSpace(lines[i]) != "":
-			tok = strings.TrimSpace(lines[i])
+			// 第三方按位 wire 每位仅 1 个选项（十,个 → 大,小）；行内多选时取首个
+			if lineToks := splitPickTokens(lines[i]); len(lineToks) > 0 {
+				tok = lineToks[0]
+			} else {
+				tok = strings.TrimSpace(lines[i])
+			}
 		case len(lines) == 1 && strings.TrimSpace(lines[0]) != "":
-			tok = strings.TrimSpace(lines[0])
+			if lineToks := splitPickTokens(lines[0]); len(lineToks) > 0 {
+				tok = lineToks[0]
+			} else {
+				tok = strings.TrimSpace(lines[0])
+			}
 		case len(tokens) == 1 && length == 1:
 			tok = tokens[0]
 		case i < len(tokens):

@@ -82,6 +82,23 @@ func resolveSSCPlayRule(typeID, subID, betMode string, playMethod ...string) pla
 		}
 		return rule
 	}
+	// SSC 龙虎：g010 + 数字 rule id（如 54）无法表达万千位对；仅在 subId 本身解不出位对时合并 playMethod。
+	if typeID == "longhu" || typeID == "g010" || betMode == "longhu" || betMode == "longhuhe" ||
+		strings.Contains(method, "龙虎") {
+		if p1, p2, _ := longhuPositions(subID); p1 < 0 || p2 < 0 {
+			if labelHint != "" {
+				rule.CatalogSubID = labelHint
+			}
+		}
+		if betMode == "" {
+			if strings.Contains(labelHint, "和") && !strings.Contains(labelHint, "龙虎斗") {
+				rule.BetMode = "longhuhe"
+			} else {
+				rule.BetMode = "longhu"
+			}
+		}
+		return rule
+	}
 
 	if typeID == "combo24" {
 		if pos := combo24SegmentPositions(subID); len(pos) > 0 {
@@ -118,8 +135,21 @@ func budingweiSegmentRange(subID string) (int, int) {
 }
 
 func dxdsSegmentRange(subID string) (int, int) {
-	s := strings.ToLower(subID)
-	raw := subID
+	s := strings.ToLower(strings.TrimSpace(subID))
+	raw := strings.TrimSpace(subID)
+	// rules/v2 数字 rule id（无中文时仍能定位后二=十/个）
+	switch {
+	case raw == "266" || strings.Contains(s, "hou2_dxds"):
+		return 3, 2
+	case raw == "267" || strings.Contains(s, "hou3_dxds"):
+		return 2, 3
+	case raw == "270" || strings.Contains(s, "qian2_dxds"):
+		return 0, 2
+	case raw == "271" || strings.Contains(s, "qian3_dxds"):
+		return 0, 3
+	case raw == "268" || raw == "269":
+		return 0, 5
+	}
 	switch {
 	case strings.Contains(raw, "五星") || strings.Contains(s, "wuxing") ||
 		strings.Contains(raw, "和值大小") || strings.Contains(raw, "和值单双"):

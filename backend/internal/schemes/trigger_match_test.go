@@ -68,7 +68,9 @@ func TestIsLonghuPlayExcludesLonghubao(t *testing.T) {
 	}
 }
 
-func TestTriggerBetPositionIdxBaiWei(t *testing.T) {
+// TestTriggerBetDingweiFivePanelIgnoresLegacyPositionIdx 一星五位面板已取消投注位：
+// 旧 positionIdx 被忽略，始终按万～个全位匹配/出号。
+func TestTriggerBetDingweiFivePanelIgnoresLegacyPositionIdx(t *testing.T) {
 	t.Parallel()
 	raw := `{
 		"runTypeId":"adv_trigger_bet",
@@ -80,43 +82,35 @@ func TestTriggerBetPositionIdxBaiWei(t *testing.T) {
 			"mode":"always_pos",
 			"positionIdx":2,
 			"rows":[
-				{"enabled":true,"open":"4","pos":"4","neg":"9"},
-				{"enabled":true,"open":"7","pos":"7","neg":"0"}
+				{"enabled":true,"open":"4","pos":"4\n4\n4\n4\n4","neg":"9\n9\n9\n9\n9"},
+				{"enabled":true,"open":"1","pos":"1\n1\n1\n1\n1","neg":"0\n0\n0\n0\n0"}
 			]
 		}
 	}`
 	cfg := parseSchemeConfig("custom", []byte(raw), 0, 0)
-	if cfg.Trigger == nil || !cfg.Trigger.HasPosition || cfg.Trigger.PositionIdx != 2 {
-		t.Fatalf("trigger position: %+v", cfg.Trigger)
+	if cfg.Trigger == nil || cfg.Trigger.HasPosition {
+		t.Fatalf("五位面板应忽略旧投注位: %+v", cfg.Trigger)
 	}
-	if cfg.Play.PositionIdx != 2 {
-		t.Fatalf("Play.PositionIdx=%d want 2", cfg.Play.PositionIdx)
+	if got := cfg.Trigger.PositionIdxs; len(got) != 5 {
+		t.Fatalf("PositionIdxs=%v want 5 位全选", got)
 	}
-	watch := cfg.Trigger.PositionIdxs
-	// 上期 73602：百位=6，不应命中 open=7（万位）
-	ballsWan := []string{"7", "3", "6", "0", "2"}
-	if triggerOpenMatches(cfg.Play, ballsWan, "7", watch) {
-		t.Fatal("百位方案不应按万位 7 匹配")
+	if !isDingweiFivePanelPlay(cfg.Play) {
+		t.Fatalf("want five-panel play, got %+v", cfg.Play)
 	}
-	if !triggerOpenMatches(cfg.Play, ballsWan, "6", watch) {
-		t.Fatal("百位方案应按百位 6 匹配")
-	}
-	// 出号应按百位编排为多行
-	laid := layoutTriggerBetDingweiContent(cfg, "4")
-	want := "\n\n4\n\n"
-	if laid != want {
-		t.Fatalf("layout=%q want %q", laid, want)
-	}
-	dec := pickTriggerBetPreview(cfg, sqlcdb.SchemeInstance{}, []string{"1", "2", "4", "5", "6"})
+	// 上期 12456：万=1 → 各位正投 1
+	// 上期各位均为 1 → 全用 open=1 的正投行
+	dec := pickTriggerBetPreview(cfg, sqlcdb.SchemeInstance{}, []string{"1", "1", "1", "1", "1"})
 	if dec.Skip {
 		t.Fatal("should not skip")
 	}
+	want := "1\n1\n1\n1\n1"
 	if dec.Content != want {
 		t.Fatalf("pick content=%q want %q", dec.Content, want)
 	}
 }
 
-func TestTriggerBetPositionIdxsMulti(t *testing.T) {
+// TestTriggerBetDingweiFivePanelWatchesAllPositions 旧 positionIdxs 多选亦展开为五位全位。
+func TestTriggerBetDingweiFivePanelWatchesAllPositions(t *testing.T) {
 	t.Parallel()
 	raw := `{
 		"runTypeId":"adv_trigger_bet",
@@ -127,28 +121,19 @@ func TestTriggerBetPositionIdxsMulti(t *testing.T) {
 		"triggerBet":{
 			"mode":"always_pos",
 			"positionIdxs":[0,2],
-			"rows":[{"enabled":true,"open":"6","pos":"8","neg":"1"}]
+			"rows":[{"enabled":true,"open":"6","pos":"8\n8\n8\n8\n8","neg":"1\n1\n1\n1\n1"}]
 		}
 	}`
 	cfg := parseSchemeConfig("custom", []byte(raw), 0, 0)
-	if cfg.Trigger == nil || len(cfg.Trigger.PositionIdxs) != 2 {
-		t.Fatalf("PositionIdxs=%v", cfg.Trigger)
+	if cfg.Trigger == nil || len(cfg.Trigger.PositionIdxs) != 5 {
+		t.Fatalf("PositionIdxs=%v want 5", cfg.Trigger)
 	}
 	watch := cfg.Trigger.PositionIdxs
 	balls := []string{"7", "3", "6", "0", "2"}
-	if !triggerOpenMatches(cfg.Play, balls, "6", watch) {
-		t.Fatal("多选含百位时应匹配开出 6")
-	}
-	if !triggerOpenMatches(cfg.Play, balls, "7", watch) {
-		t.Fatal("多选含万位时应匹配开出 7")
-	}
-	if triggerOpenMatches(cfg.Play, balls, "3", watch) {
-		t.Fatal("未选中的千位不应参与匹配")
-	}
-	laid := layoutTriggerBetDingweiContent(cfg, "8")
-	want := "8\n\n8\n\n"
-	if laid != want {
-		t.Fatalf("layout=%q want %q", laid, want)
+	for _, open := range []string{"7", "3", "6", "0", "2"} {
+		if !triggerOpenMatches(cfg.Play, balls, open, watch) {
+			t.Fatalf("五位全位应匹配开出 %s", open)
+		}
 	}
 }
 
@@ -202,7 +187,9 @@ func TestTriggerBetQian3FushiPerPosition(t *testing.T) {
 }
 
 // TestLayoutTriggerBetDingweiMultiNumbers 正投多号「1,3,5」应按位编排，不能误判为五段 wire。
-func TestLayoutTriggerBetDingweiMultiNumbers(t *testing.T) {
+// TestLayoutTriggerBetDingweiFivePanelKeepsMultiline 五位面板出号已是多行时原样保留；
+// 稀疏 wire 亦原样保留。
+func TestLayoutTriggerBetDingweiFivePanelKeepsMultiline(t *testing.T) {
 	t.Parallel()
 	raw := `{
 		"runTypeId":"adv_trigger_bet",
@@ -212,31 +199,28 @@ func TestLayoutTriggerBetDingweiMultiNumbers(t *testing.T) {
 		"betMode":"dingwei",
 		"triggerBet":{
 			"mode":"always_pos",
-			"positionIdxs":[2],
-			"rows":[{"enabled":true,"open":"6","pos":"1,3,5","neg":"0,2,4"}]
+			"rows":[{"enabled":true,"open":"6","pos":"1,3,5\n\n1,3,5\n\n1,3,5","neg":"0"}]
 		}
 	}`
 	cfg := parseSchemeConfig("custom", []byte(raw), 0, 0)
-	laid := layoutTriggerBetDingweiContent(cfg, "1,3,5")
-	want := "\n\n1,3,5\n\n"
-	if laid != want {
-		t.Fatalf("layout=%q want %q", laid, want)
+	multi := "1,3,5\n\n1,3,5\n\n1,3,5"
+	if got := layoutTriggerBetDingweiContent(cfg, multi); got != multi {
+		t.Fatalf("multiline layout=%q want unchanged", got)
 	}
-	// 稀疏 wire 仍原样保留
 	sparse := "8,,,,"
 	if got := layoutTriggerBetDingweiContent(cfg, sparse); got != sparse {
 		t.Fatalf("sparse wire layout=%q want %q", got, sparse)
 	}
 	meta := guajibet.ParseRuleMeta("ssc_std", "g006", "13", "一星定位胆", "一星", nil, "13")
-	wire := guajibet.FormatBetContentForRule(meta, laid)
-	if wire != ",,135,," {
-		t.Fatalf("wire=%q want ,,135,,", wire)
+	wire := guajibet.FormatBetContentForRule(meta, multi)
+	if wire != "135,,135,,135" {
+		t.Fatalf("wire=%q want 135,,135,,135", wire)
 	}
 }
 
-// TestTriggerBetPerPositionWanBaiGe 上期 17232、选万/百/个、开出 N→正投 N：
-// 应得 1,,2,,2，而不是把万位 1 复制成 1,,1,,1。
-func TestTriggerBetPerPositionWanBaiGe(t *testing.T) {
+// TestTriggerBetDingweiFivePanelPerPos 一星五位：上期 17232，开出 N→正投 N，
+// 万～个全位出号 1\n7\n2\n3\n2（同前三码按位预备号）。
+func TestTriggerBetDingweiFivePanelPerPos(t *testing.T) {
 	t.Parallel()
 	rows := make([]string, 0, 10)
 	for i := 0; i <= 9; i++ {
@@ -251,22 +235,91 @@ func TestTriggerBetPerPositionWanBaiGe(t *testing.T) {
 		"betMode":"dingwei",
 		"triggerBet":{
 			"mode":"always_pos",
-			"positionIdxs":[0,2,4],
 			"rows":[` + strings.Join(rows, ",") + `]
 		}
 	}`
 	cfg := parseSchemeConfig("custom", []byte(raw), 0, 0)
+	if !isDingweiFivePanelPlay(cfg.Play) {
+		t.Fatalf("want five-panel, play=%+v", cfg.Play)
+	}
 	dec := pickTriggerBetPreview(cfg, sqlcdb.SchemeInstance{}, []string{"1", "7", "2", "3", "2"})
 	if dec.Skip {
 		t.Fatal("should not skip")
 	}
-	wantLines := "1\n\n2\n\n2"
+	wantLines := "1\n7\n2\n3\n2"
 	if dec.Content != wantLines {
 		t.Fatalf("content=%q want %q", dec.Content, wantLines)
 	}
 	meta := guajibet.ParseRuleMeta("ssc_std", "g006", "13", "一星定位胆", "一星", nil, "13")
 	wire := guajibet.FormatBetContentForRule(meta, dec.Content)
-	if wire != "1,,2,,2" {
-		t.Fatalf("wire=%q want 1,,2,,2", wire)
+	if wire != "1,7,2,3,2" {
+		t.Fatalf("wire=%q want 1,7,2,3,2", wire)
+	}
+}
+
+// TestTriggerBetNoMatchSkipsPeriod Q4c：开出未命中任何启用行时本期跳过，不回退启用第 1 行。
+func TestTriggerBetNoMatchSkipsPeriod(t *testing.T) {
+	t.Parallel()
+
+	// 整期玩法（龙虎）：开出未命中 → Skip
+	longhuRaw := `{
+		"runTypeId":"adv_trigger_bet",
+		"playTemplate":"ssc_std",
+		"playTypeId":"longhu",
+		"subPlayId":"lh_1v10",
+		"betMode":"longhu",
+		"triggerBet":{
+			"mode":"always_pos",
+			"rows":[
+				{"enabled":true,"open":"龙","pos":"龙","neg":"虎"},
+				{"enabled":true,"open":"和","pos":"和","neg":"龙"}
+			]
+		}
+	}`
+	longhuCfg := parseSchemeConfig("custom", []byte(longhuRaw), 0, 0)
+	// 万=1 个=9 → 虎，映射无「虎」
+	dec := resolveTriggerBetDecision(longhuCfg, []string{"1", "2", "3", "4", "9"}, "")
+	if !dec.Skip {
+		t.Fatalf("龙虎未命中应 Skip，got content=%q", dec.Content)
+	}
+
+	// 按位（一星）：仅启用 open=0，上期各位为 1 → Skip
+	dingweiRaw := `{
+		"runTypeId":"adv_trigger_bet",
+		"playTemplate":"ssc_std",
+		"playTypeId":"g006",
+		"subPlayId":"13",
+		"betMode":"dingwei",
+		"triggerBet":{
+			"mode":"always_pos",
+			"rows":[{"enabled":true,"open":"0","pos":"0\n0\n0\n0\n0","neg":"9\n9\n9\n9\n9"}]
+		}
+	}`
+	dingweiCfg := parseSchemeConfig("custom", []byte(dingweiRaw), 0, 0)
+	dec = resolveTriggerBetDecision(dingweiCfg, []string{"1", "1", "1", "1", "1"}, "")
+	if !dec.Skip {
+		t.Fatalf("一星未命中应 Skip，got content=%q", dec.Content)
+	}
+
+	// 前三复式：段内任一位未命中 → Skip（不回退第一行）
+	fushiRaw := `{
+		"runTypeId":"adv_trigger_bet",
+		"playTemplate":"ssc_std",
+		"playTypeId":"g001",
+		"subPlayId":"1",
+		"betMode":"fushi",
+		"triggerBet":{
+			"mode":"always_pos",
+			"rows":[
+				{"enabled":true,"open":"1","pos":"1\n2\n3","neg":"0\n0\n0"},
+				{"enabled":true,"open":"2","pos":"2\n3\n4","neg":"0\n0\n0"}
+			]
+		}
+	}`
+	fushiCfg := parseSchemeConfig("custom", []byte(fushiRaw), 0, 0)
+	// 万=1 命中，千=7 未命中
+	dec = resolveTriggerBetDecision(fushiCfg, []string{"1", "7", "2", "3", "2"}, "")
+	if !dec.Skip {
+		t.Fatalf("前三段内未命中应 Skip，got content=%q", dec.Content)
 	}
 }

@@ -318,7 +318,8 @@ func TestPickRandomDrawAttributeFamily(t *testing.T) {
 		balls   []string
 		options []string // 合法选项集（nil=数字池，另行校验）
 	}{
-		{"大小单双", `{"runTypeId":"random_draw","playTypeId":"dxds","subPlayId":"qian2_dxds","betMode":"dxds","randomDraw":{"counts":[2]}}`, []string{"3", "9", "2", "7", "5"}, []string{"大", "小", "单", "双"}},
+		// PC28 整期大小单双仍为单档属性；前二/后二按位见 TestPickRandomDrawPerPosDxds
+		{"PC28大小单双", `{"runTypeId":"random_draw","playTypeId":"pc28_20","subPlayId":"dxds","betMode":"dxds","playTemplate":"pc28_std","randomDraw":{"counts":[2]}}`, []string{"3", "9", "2"}, []string{"大", "小", "单", "双"}},
 		{"龙虎", `{"runTypeId":"random_draw","playTypeId":"longhu","subPlayId":"lh_wanqian_dou","betMode":"longhu","randomDraw":{"counts":[1]}}`, []string{"3", "9", "2", "7", "5"}, []string{"龙", "虎"}},
 		{"和值", `{"runTypeId":"random_draw","playTypeId":"qian3","subPlayId":"qian3_zhixuan_hz","betMode":"hezhi","randomDraw":{"counts":[3]}}`, []string{"3", "9", "2", "7", "5"}, nil},
 		{"跨度", `{"runTypeId":"random_draw","playTypeId":"qian3","subPlayId":"qian3_kuadu","betMode":"kuadu","randomDraw":{"counts":[2]}}`, []string{"3", "9", "2", "7", "5"}, nil},
@@ -362,6 +363,60 @@ func TestPickRandomDrawAttributeFamily(t *testing.T) {
 		if !SupportsRandomDrawSubPlay("", sub) {
 			t.Errorf("随机出号应支持 %s", sub)
 		}
+	}
+}
+
+func TestPickRandomDrawPerPosDxds(t *testing.T) {
+	// 前二/后二大小单双：按位随机，内容为「十\n个」多行，每行落在大/小/单/双宇宙内
+	cases := []struct {
+		name string
+		raw  string
+		want int // 行数 = SegmentLen
+	}{
+		{
+			name: "前二",
+			raw:  `{"runTypeId":"random_draw","playTemplate":"ssc_std","playTypeId":"dxds","subPlayId":"qian2_dxds","betMode":"dxds","playMethod":"前二大小单双","randomDraw":{"counts":[1,2]}}`,
+			want: 2,
+		},
+		{
+			name: "后二",
+			raw:  `{"runTypeId":"random_draw","playTemplate":"ssc_std","playTypeId":"g016","subPlayId":"266","betMode":"dxds","playMethod":"后二大小单双","randomDraw":{"counts":[2,1]}}`,
+			want: 2,
+		},
+	}
+	universe := map[string]bool{"大": true, "小": true, "单": true, "双": true}
+	balls := []string{"3", "9", "2", "7", "5"}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := pickTestConfig(t, c.raw)
+			if isAttributeRandom(cfg.Play) {
+				t.Fatalf("应按位随机，不应走单档属性: rule=%+v", cfg.Play)
+			}
+			if !isPerPosDxdsRandom(cfg.Play) {
+				t.Fatalf("want isPerPosDxdsRandom, rule=%+v", cfg.Play)
+			}
+			dec := pickRandomDraw(cfg, sqlcdb.SchemeInstance{Kind: "custom"})
+			lines := strings.Split(dec.Content, "\n")
+			if len(lines) != c.want {
+				t.Fatalf("lines=%d want %d, content=%q", len(lines), c.want, dec.Content)
+			}
+			for li, line := range lines {
+				toks := strings.Split(line, ",")
+				if len(toks) == 0 || strings.TrimSpace(toks[0]) == "" {
+					t.Fatalf("line %d empty: %q", li, line)
+				}
+				for _, tk := range toks {
+					if !universe[tk] {
+						t.Fatalf("line %d token %q not in 大/小/单/双", li, tk)
+					}
+				}
+			}
+			ev := evaluatePlayHit(cfg.Play, balls, dec.Content, false, "", 0)
+			if ev.BetUnits <= 0 {
+				t.Fatalf("content %q not bettable (units=%d)", dec.Content, ev.BetUnits)
+			}
+			t.Logf("%s → %q (units=%d)", c.name, dec.Content, ev.BetUnits)
+		})
 	}
 }
 
@@ -470,7 +525,7 @@ func TestSimRandomDrawAllFamiliesMultiPeriod(t *testing.T) {
 	}{
 		{"直选单式", `{"runTypeId":"random_draw","playTypeId":"qian3","subPlayId":"zhixuan_ds","randomDraw":{"counts":[5],"strategy":"every"}}`},
 		{"组选复式", `{"runTypeId":"random_draw","playTypeId":"qian3","subPlayId":"zuxuan_fs","betMode":"zu6","randomDraw":{"counts":[4],"strategy":"every"}}`},
-		{"大小单双", `{"runTypeId":"random_draw","playTypeId":"dxds","subPlayId":"qian2_dxds","betMode":"dxds","randomDraw":{"counts":[2],"strategy":"every"}}`},
+		{"大小单双", `{"runTypeId":"random_draw","playTemplate":"ssc_std","playTypeId":"dxds","subPlayId":"qian2_dxds","betMode":"dxds","playMethod":"前二大小单双","randomDraw":{"counts":[1,1],"strategy":"every"}}`},
 		{"龙虎", `{"runTypeId":"random_draw","playTypeId":"longhu","subPlayId":"lh_wanqian_dou","betMode":"longhu","randomDraw":{"counts":[1],"strategy":"every"}}`},
 		{"和值", `{"runTypeId":"random_draw","playTypeId":"qian3","subPlayId":"qian3_zhixuan_hz","betMode":"hezhi","randomDraw":{"counts":[3],"strategy":"every"}}`},
 		{"跨度", `{"runTypeId":"random_draw","playTypeId":"qian3","subPlayId":"qian3_kuadu","betMode":"kuadu","randomDraw":{"counts":[2],"strategy":"every"}}`},

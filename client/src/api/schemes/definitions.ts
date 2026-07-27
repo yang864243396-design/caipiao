@@ -200,6 +200,9 @@ export interface SchemeRandomDraw {
 
 export interface UpdateSchemeInput {
 
+  /** 方案名称（同步定义与云端实例展示名） */
+  schemeName?: string
+
   /** false=正式盘，true=模拟盘 */
   simBet?: boolean
 

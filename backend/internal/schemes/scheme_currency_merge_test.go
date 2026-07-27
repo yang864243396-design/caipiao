@@ -27,6 +27,20 @@ func TestMergeUpdateKeepsSchemeCurrencyTRX(t *testing.T) {
 	}
 }
 
+func TestParseUpdatePatch_schemeNameAllowed(t *testing.T) {
+	raw := map[string]json.RawMessage{
+		"schemeName": json.RawMessage(`"新方案名"`),
+		"schemeFunds": json.RawMessage(`"100"`),
+	}
+	patch, err := ParseUpdatePatch(raw)
+	if err != nil {
+		t.Fatalf("schemeName must be allowed for rename: %v", err)
+	}
+	if !patch.HasSchemeName || patch.SchemeName != "新方案名" {
+		t.Fatalf("patch=%+v", patch)
+	}
+}
+
 func TestAddToCloudPatchSchemeCurrency(t *testing.T) {
 	existing := []byte(`{"runTypeId":"fixed_number"}`)
 	out, err := mergeDefinitionConfig(existing, AddToCloudConfigPatch{SchemeCurrency: "TRX"})

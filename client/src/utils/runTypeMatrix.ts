@@ -560,6 +560,7 @@ type AdvTriggerPosConfig = {
   playTemplate?: string
   inputMode?: string
   segmentLen?: number
+  segmentLabels?: string[]
 }
 
 function isAdvTriggerTextLikePlay(config: AdvTriggerPosConfig): boolean {
@@ -591,25 +592,54 @@ function isAdvTriggerDingweiPlay(config: AdvTriggerPosConfig): boolean {
   )
 }
 
-/** 高级开某投某：一星/定位胆展示「投注位」多选芯片 */
-export function supportsAdvTriggerPositionPicker(config: AdvTriggerPosConfig): boolean {
-  if (isAdvTriggerTextLikePlay(config)) return false
-  const segLen = Math.max(0, Number(config.segmentLen) || 0)
-  return segLen >= 2 && isAdvTriggerDingweiPlay(config)
+/**
+ * 高级开某投某：投注位芯片（已废弃）。
+ * 一星/定位胆改为与前三码相同的按位分列，不再单独勾选投注位。
+ */
+export function supportsAdvTriggerPositionPicker(_config: AdvTriggerPosConfig): boolean {
+  return false
 }
 
 /**
- * 高级开某投某：前三直选复式等按位数字玩法，
+ * 前二/后二/前三/后三大小单双：按位（十/个…）文字选项，非整期单档属性池。
+ * 排除：PC28 整期大小单双、五星和值大小/单双。
+ */
+export function isPerPosDxdsPlayConfig(config: AdvTriggerPosConfig): boolean {
+  const segLen = Math.max(0, Number(config.segmentLen) || 0)
+  if (segLen < 2) return false
+  if (isLonghuPlayConfigLike(config) || isPc28ModeConfigLike(config)) return false
+  const bm = String(config.betMode ?? '').toLowerCase()
+  const label = `${config.playMethodLabel ?? ''} ${config.playTypeLabel ?? ''}`
+  if (label.includes('和值大小') || label.includes('和值单双') || label.includes('五星和值')) {
+    return false
+  }
+  if (bm === 'dxds') return true
+  if (label.includes('大小单双') && !label.includes('和值')) return true
+  return false
+}
+
+/** 按位列位数：优先 segmentLen，其次 segmentLabels 长度（一星五位兜底） */
+function advTriggerPosCount(config: AdvTriggerPosConfig): number {
+  const segLen = Math.max(0, Number(config.segmentLen) || 0)
+  const labelN = Array.isArray(config.segmentLabels) ? config.segmentLabels.length : 0
+  return Math.max(segLen, labelN)
+}
+
+/**
+ * 高级开某投某：一星定位胆 / 前三直选复式 / 后二大小单双等按位玩法，
  * 表格按「万位正投/反投、千位…」分列填写（不展示投注位芯片）。
  */
 export function supportsAdvTriggerPerPosColumns(config: AdvTriggerPosConfig): boolean {
-  if (isAdvTriggerTextLikePlay(config)) return false
-  if (isAdvTriggerDingweiPlay(config)) return false
+  // 一星/定位胆五位（或 PK10 十名次）：与前三码同布局，每位旁填预备投注号
+  if (isAdvTriggerDingweiPlay(config) && advTriggerPosCount(config) >= 2) return true
   const segLen = Math.max(0, Number(config.segmentLen) || 0)
   if (segLen < 2) return false
   const bm = String(config.betMode ?? '')
   const sub = String(config.catalogSubId ?? config.subPlayId ?? '')
-  const label = String(config.playMethodLabel ?? '')
+  const label = `${config.playMethodLabel ?? ''} ${config.playTypeLabel ?? ''}`
+  // 前二/后二/前三/后三大小单双：按位（开出=球号，正反投=大/小/单/双）
+  if (isPerPosDxdsPlayConfig(config)) return true
+  if (isAdvTriggerTextLikePlay(config)) return false
   if (config.inputMode === 'multiline') return true
   if (bm === 'fushi' || bm === 'zhixuan_fs' || bm === 'zuhe') return true
   if (sub === 'zhixuan_fs' || sub.includes('zhixuan_fs') || label.includes('直选复式')) return true

@@ -73,6 +73,8 @@ const multiplierSaved = ref<Record<string, string>>({})
 const multiplierSavingId = ref<string | null>(null)
 const currencySavingId = ref<string | null>(null)
 const simBetSavingId = ref<string | null>(null)
+/** 启停处理中：点击后立即置灰，待该方案 status 相对点击时变化后再恢复 */
+const schemeActionBusy = ref<Record<string, { fromStatus: string }>>({})
 const multiplierDialogVisible = ref(false)
 const multiplierEditScheme = ref<CloudSchemeCard | null>(null)
 const multiplierDraft = ref('1')
@@ -133,6 +135,38 @@ function setupLoadMoreObserver() {
   })
 }
 
+function isSchemeActionBusy(id: string): boolean {
+  return Boolean(schemeActionBusy.value[id])
+}
+
+function beginSchemeAction(s: Pick<CloudSchemeCard, 'id' | 'status'>): boolean {
+  if (schemeActionBusy.value[s.id]) return false
+  schemeActionBusy.value = {
+    ...schemeActionBusy.value,
+    [s.id]: { fromStatus: s.status },
+  }
+  return true
+}
+
+function endSchemeAction(id: string): void {
+  if (!schemeActionBusy.value[id]) return
+  const next = { ...schemeActionBusy.value }
+  delete next[id]
+  schemeActionBusy.value = next
+}
+
+/** status 相对点击时已变化则解除置灰 */
+function releaseSchemeActionIfStatusChanged(card: Pick<CloudSchemeCard, 'id' | 'status'>): void {
+  const busy = schemeActionBusy.value[card.id]
+  if (!busy) return
+  if (card.status !== busy.fromStatus) endSchemeAction(card.id)
+}
+
+function releaseBusyForSchemes(cards: Pick<CloudSchemeCard, 'id' | 'status'>[]): void {
+  if (!Object.keys(schemeActionBusy.value).length) return
+  for (const c of cards) releaseSchemeActionIfStatusChanged(c)
+}
+
 function applyRunningSchemes(cards: CloudSchemeCard[], preserveOrder = false) {
   const prev = runningSchemes.value
   const merged = preserveOrder ? mergeCloudSchemesStable(prev, cards) : cards
@@ -142,6 +176,7 @@ function applyRunningSchemes(cards: CloudSchemeCard[], preserveOrder = false) {
     next[s.id] = s.multiplier
   }
   multiplierSaved.value = next
+  releaseBusyForSchemes(merged)
 }
 
 function appendRunningSchemes(cards: CloudSchemeCard[]) {
@@ -533,7 +568,10 @@ function onHeaderAdd() {
 async function enableAllSchemes() {
   if (enableAllBusy.value) return
   const targets = runningSchemes.value.filter(
-    (s) => (s.status === 'pending' || s.status === 'paused') && s.statusReason !== 'maintenance',
+    (s) =>
+      (s.status === 'pending' || s.status === 'paused') &&
+      s.statusReason !== 'maintenance' &&
+      !isSchemeActionBusy(s.id),
   )
   if (targets.length === 0) {
     ElMessage.info('当前没有待开启的方案')
@@ -552,12 +590,15 @@ async function enableAllSchemes() {
   const failed: string[] = []
   try {
     for (const s of targets) {
+      if (isSchemeActionBusy(s.id)) continue
       if (!(await validateBeforeOpen(s))) continue
+      if (!beginSchemeAction(s)) continue
       try {
         const updated = await startCloudInstance(s.id)
         patchSchemeCard(updated)
         okCount++
       } catch (e) {
+        endSchemeAction(s.id)
         if (isGuajiAuthRequiredError(e)) {
           await redirectToGuajiAuthIfNeeded(e, (path) => router.push(path))
           return
@@ -779,24 +820,33 @@ function showStartOpenError(e: unknown, schemeCurrency?: string): void {
 
 
 async function startScheme(s: CloudSchemeCard) {
-  if (!(await validateBeforeOpen(s))) return
+  if (isSchemeActionBusy(s.id)) return
+  if (!beginSchemeAction(s)) return
   try {
+    if (!(await validateBeforeOpen(s))) {
+      endSchemeAction(s.id)
+      return
+    }
     const updated = await startCloudInstance(s.id)
     patchSchemeCard(updated)
     void refreshCloudStats()
     ElMessage.success(`已开启：${s.schemeName}`)
   } catch (e) {
+    endSchemeAction(s.id)
     showStartOpenError(e, s.schemeCurrency)
   }
 }
 
 async function stopScheme(s: CloudSchemeCard) {
+  if (isSchemeActionBusy(s.id)) return
+  if (!beginSchemeAction(s)) return
   try {
     const updated = await stopCloudInstance(s.id)
     patchSchemeCard(updated)
     void refreshCloudStats()
     ElMessage.success(`已停止：${s.schemeName}`)
   } catch (e) {
+    endSchemeAction(s.id)
     ElMessage.error(e instanceof Error ? e.message : '停止失败')
   }
 }
@@ -816,6 +866,9 @@ function patchSchemeCard(updated: Awaited<ReturnType<typeof startCloudInstance>>
       merged.schemeCurrency = normalizeSchemeCurrency(prev.schemeCurrency)
     }
     runningSchemes.value[idx] = merged
+    releaseSchemeActionIfStatusChanged(merged)
+  } else {
+    releaseSchemeActionIfStatusChanged(card)
   }
 }
 
@@ -1085,11 +1138,25 @@ function statusBadgeClass(s: CloudSchemeCard): string {
 
           <div class="cc-card-foot">
             <div class="cc-foot-left">
-              <el-button v-if="canStartScheme(s)" type="primary" round class="cc-start-btn"
-                @click.stop="startScheme(s)">
+              <el-button
+                v-if="canStartScheme(s)"
+                type="primary"
+                round
+                class="cc-start-btn"
+                :loading="isSchemeActionBusy(s.id)"
+                :disabled="isSchemeActionBusy(s.id)"
+                @click.stop="startScheme(s)"
+              >
                 开启方案
               </el-button>
-              <el-button v-else-if="s.status === 'running'" round class="cc-start-btn" @click.stop="stopScheme(s)">
+              <el-button
+                v-else-if="s.status === 'running'"
+                round
+                class="cc-start-btn"
+                :loading="isSchemeActionBusy(s.id)"
+                :disabled="isSchemeActionBusy(s.id)"
+                @click.stop="stopScheme(s)"
+              >
                 停止
               </el-button>
               <el-button class="cc-del-btn" round @click.stop="removeScheme(s)" aria-label="删除">
@@ -1228,7 +1295,7 @@ function statusBadgeClass(s: CloudSchemeCard): string {
                 </div>
 
                 <div class="lb-logic-card">
-                  <div class="lb-logic-card-h">方案中局几回头</div>
+                  <div class="lb-logic-card-h">方案中几局回头</div>
                   <div class="lb-wins-inline">
                     <span class="lb-wins-txt lb-wins-op">{{ '>=' }}</span>
                     <el-input v-model="lookback.schemeWinsMin" inputmode="numeric" size="small"

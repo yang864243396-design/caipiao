@@ -986,7 +986,7 @@ func guajiGroupRequiresSoloTrue(meta RuleMeta) bool {
 	return false
 }
 
-// isWuxingZhixuanFushiMeta 五星直选复式（含冷热多注，须绕过 28 注 solo 上限）。
+// isWuxingZhixuanFushiMeta 五星直选复式（含冷热多注，须绕过 guajiSoloMaxBets 上限）。
 func isWuxingZhixuanFushiMeta(meta RuleMeta) bool {
 	tpl := strings.TrimSpace(meta.PlayTemplate)
 	if tpl != "" && !IsSSCPlayTemplate(tpl) {
@@ -1515,13 +1515,20 @@ func isAllDigits(s string) bool {
 func segmentRange(meta RuleMeta) (start, length int) {
 	group := meta.Group
 	typeLabel := meta.TypeLabel
-	text := group + " " + typeLabel + " " + meta.FullName
+	text := group + " " + typeLabel + " " + meta.FullName + " " + meta.Label + " " + meta.SubID
 
 	switch meta.PlayTemplate {
 	case "syxw_std":
 		return syxwSegmentRange(typeLabel, meta.TypeID)
 	case "pk10_std":
 		return pk10SegmentRange(meta.TypeLabel, meta.TypeID, meta.Label)
+	}
+
+	// 大小单双数字 rule id：无中文时仍定位后二=十/个等
+	if meta.TypeID == "g016" || meta.TypeID == "dxds" || group == "大小单双" {
+		if start, length, ok := dxdsSegmentByGuajiRuleID(meta.SubID); ok {
+			return start, length
+		}
 	}
 
 	// guaji Group 精确匹配优先（避免「前后三」误匹配「前三」、「前中后三」误匹配「后三」）。
@@ -1600,6 +1607,24 @@ func legacyTypeSegmentRange(typeID string) (int, int) {
 		return 0, 5
 	default:
 		return 0, 1
+	}
+}
+
+// dxdsSegmentByGuajiRuleID rules/v2 大小单双数字 id → 区位。
+func dxdsSegmentByGuajiRuleID(subID string) (start, length int, ok bool) {
+	switch strings.TrimSpace(subID) {
+	case "266", "hou2_dxds":
+		return 3, 2, true
+	case "267", "hou3_dxds":
+		return 2, 3, true
+	case "270", "qian2_dxds":
+		return 0, 2, true
+	case "271", "qian3_dxds":
+		return 0, 3, true
+	case "268", "269":
+		return 0, 5, true
+	default:
+		return 0, 0, false
 	}
 }
 
@@ -1972,7 +1997,9 @@ func sortDigitRunes(s string) string {
 	return string(runes)
 }
 
-const guajiSoloMaxBets = 28
+// guajiSoloMaxBets 第三方单挑注数上限（实测中三直选复式：18 注 solo=true 可过，20 注起报「单挑参数错误」）。
+// 五星/前后四等须绕过此上限的玩法走 guajiGroupRequiresSoloTrue。
+const guajiSoloMaxBets = 18
 
 func sampleZuxuanFushiContent(meta RuleMeta) string {
 	_, segLen := segmentRange(meta)

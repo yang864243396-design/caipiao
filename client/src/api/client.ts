@@ -30,6 +30,62 @@ export type RequestOptions = {
   query?: Record<string, string | number | boolean | undefined>
   /** 默认 true；登录等公共接口传 false */
   auth?: boolean
+  /**
+   * 写接口连点限制（默认 true）：同一 method+url+body 在 1s 内重复调用会抛 RequestThrottledError。
+   * GET 不受限。传 false 可关闭（特殊场景）。
+   */
+  throttle?: boolean
+}
+
+/** 写接口 1s 连点限制（与按钮层配合，防止漏网重复提交） */
+const MUTATE_THROTTLE_MS = 1000
+
+export class RequestThrottledError extends ApiError {
+  constructor(message = '操作过于频繁，请稍后再试') {
+    super(message, 429, 42900)
+    this.name = 'RequestThrottledError'
+  }
+}
+
+export function isRequestThrottledError(err: unknown): err is RequestThrottledError {
+  return err instanceof RequestThrottledError
+}
+
+const mutateThrottleMap = new Map<string, number>()
+
+function isMutatingMethod(method: HttpMethod): boolean {
+  return method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE'
+}
+
+function mutateThrottleKey(method: HttpMethod, url: string, body: unknown): string {
+  let bodyKey = ''
+  if (body !== undefined && body !== null) {
+    if (typeof body === 'string') bodyKey = body
+    else if (body instanceof FormData) bodyKey = '[form-data]'
+    else {
+      try {
+        bodyKey = JSON.stringify(body)
+      } catch {
+        bodyKey = String(body)
+      }
+    }
+  }
+  return `${method}\n${url}\n${bodyKey}`
+}
+
+function assertMutateThrottle(method: HttpMethod, url: string, body: unknown): void {
+  const key = mutateThrottleKey(method, url, body)
+  const now = Date.now()
+  const prev = mutateThrottleMap.get(key)
+  if (prev !== undefined && now - prev < MUTATE_THROTTLE_MS) {
+    throw new RequestThrottledError()
+  }
+  mutateThrottleMap.set(key, now)
+  if (mutateThrottleMap.size > 200) {
+    for (const [k, at] of mutateThrottleMap) {
+      if (now - at >= MUTATE_THROTTLE_MS) mutateThrottleMap.delete(k)
+    }
+  }
 }
 
 function buildUrl(path: string, query?: RequestOptions['query']): string {
@@ -61,8 +117,11 @@ export function setAccessToken(token: string | null): void {
 }
 
 export async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
-  const { method = 'GET', headers = {}, body, auth = true } = opts
+  const { method = 'GET', headers = {}, body, auth = true, throttle = true } = opts
   const url = buildUrl(path, opts.query)
+  if (throttle && isMutatingMethod(method)) {
+    assertMutateThrottle(method, url, body)
+  }
   const isJson = body !== undefined && body !== null && typeof body === 'object' && !(body instanceof FormData)
   const reqHeaders: Record<string, string> = {
     ...(isJson ? { 'Content-Type': 'application/json' } : {}),
@@ -100,6 +159,9 @@ export async function requestApi<T>(path: string, opts: RequestOptions = {}): Pr
     }
     return env.data
   } catch (err) {
+    if (isRequestThrottledError(err)) {
+      throw err
+    }
     if (isSessionExpiredError(err)) {
       return hangAfterSessionExpired<T>()
     }

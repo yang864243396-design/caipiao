@@ -126,8 +126,12 @@ func evaluateMultiZone(
 }
 
 func evaluateLonghu(rule playRule, balls []string, content string) betEvaluation {
-	p1, p2, wantTie := longhuPositions(rule.CatalogSubID)
-	if p1 < 0 || p2 < 0 || p1 >= len(balls) || p2 >= len(balls) {
+	p1, p2, _ := longhuPositions(rule.CatalogSubID)
+	// 数字 guaji id 无位信息时，与 longhuResult 一致回退万 vs 个，避免冷热/结算全未命中。
+	if p1 < 0 || p2 < 0 {
+		p1, p2 = 0, len(balls)-1
+	}
+	if len(balls) == 0 || p1 < 0 || p2 < 0 || p1 >= len(balls) || p2 >= len(balls) {
 		return betEvaluation{BetUnits: 1, Odds: oddsDingweiOdds(rule.OddsBase)}
 	}
 	a, b := atoiBall(balls[p1]), atoiBall(balls[p2])
@@ -153,9 +157,7 @@ func evaluateLonghu(rule playRule, balls []string, content string) betEvaluation
 			}
 		}
 	}
-	if wantTie && a != b {
-		hit = false
-	}
+	// 龙虎和：龙/虎/和按比较结果各自命中；勿因 subId 含「和」/_he 而清空龙虎命中。
 	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsDingweiOdds(rule.OddsBase)}
 }
 
@@ -452,6 +454,30 @@ func evaluateDxds(rule playRule, balls []string, content string) betEvaluation {
 	}
 	if len(seg) == 0 {
 		return betEvaluation{BetUnits: 1, Odds: odds}
+	}
+	// 前二/后二/前三/后三大小单双：按位多行（十\n个），注数=位积，须各位同时命中
+	if !isWuxingSumDxdsRule(rule) && rule.SegmentLen > 1 && strings.Contains(content, "\n") {
+		lines := splitGroupLinesPad(content, rule.SegmentLen)
+		units := 1
+		allHit := true
+		for i := 0; i < rule.SegmentLen && i < len(seg); i++ {
+			picks := parseTextTokens(lines[i])
+			if len(picks) == 0 {
+				return betEvaluation{BetUnits: 0, Odds: odds}
+			}
+			units *= len(picks)
+			posHit := false
+			for _, pick := range picks {
+				if dxdsPickHit(rule, pick, []string{seg[i]}) {
+					posHit = true
+					break
+				}
+			}
+			if !posHit {
+				allHit = false
+			}
+		}
+		return betEvaluation{Hit: allHit, BetUnits: units, Odds: odds}
 	}
 	picks := parseTextTokens(content)
 	units := len(picks)

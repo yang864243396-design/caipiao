@@ -20,6 +20,7 @@ import {
 } from '@/utils/pickPanelOptions'
 import {
   isLonghuPlayConfigLike,
+  isPerPosDxdsPlayConfig,
   supportsAdvTriggerPerPosColumns,
   supportsAdvTriggerPositionPicker,
 } from '@/utils/runTypeMatrix'
@@ -91,17 +92,15 @@ const positionLabels = computed(() =>
   ),
 )
 
+/** 投注位芯片已废弃；一星与前三码同为按位分列 */
 const showTriggerPositionPicker = computed(() => {
   if (props.runTypeId !== 'adv_trigger_bet') return false
-  if (isLonghuPlayConfigLike(props.playConfig)) return false
-  if (textPickOptionsForConfig(props.playConfig).length > 0) return false
   return supportsAdvTriggerPositionPicker(props.playConfig)
 })
 
 const showTriggerPerPosColumns = computed(() => {
   if (props.runTypeId !== 'adv_trigger_bet') return false
   if (isLonghuPlayConfigLike(props.playConfig)) return false
-  if (textPickOptionsForConfig(props.playConfig).length > 0) return false
   return supportsAdvTriggerPerPosColumns(props.playConfig)
 })
 
@@ -555,6 +554,8 @@ const rdZuxuanPool = computed(() => {
 
 const rdAttribute = computed(() => {
   if (rdWholeTicket.value || rdZuxuanPool.value) return false
+  // 前二/后二/前三/后三大小单双：按位展示，不走单档「选项个数」
+  if (isPerPosDxdsPlayConfig(props.playConfig)) return false
   const bm = String(props.playConfig.betMode ?? '').toLowerCase()
   return [
     'daxiao',
@@ -946,7 +947,7 @@ function formatGroupContent(content: string): string {
           <el-input-number
             :model-value="rdCounts[pi] ?? 1"
             :min="1"
-            :max="10"
+            :max="isPerPosDxdsPlayConfig(playConfig) ? 4 : 10"
             size="small"
             disabled
           />

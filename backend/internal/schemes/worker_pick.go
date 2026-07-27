@@ -278,6 +278,19 @@ func pickRandomDraw(cfg parsedSchemeConfig, inst sqlcdb.SchemeInstance) pickDeci
 		}
 		return pickDecision{Content: randomAttributeContent(cfg.Play, k)}
 	}
+	// 前二/后二/前三/后三大小单双：按位从大/小/单/双抽样，多行「十\n个」
+	if isPerPosDxdsRandom(cfg.Play) {
+		positions := playPositionCount(cfg.Play)
+		lines := make([]string, 0, positions)
+		for i := 0; i < positions; i++ {
+			count := 1
+			if cfg.Random != nil && i < len(cfg.Random.Counts) {
+				count = cfg.Random.Counts[i]
+			}
+			lines = append(lines, randomAttributeContent(cfg.Play, count))
+		}
+		return pickDecision{Content: strings.Join(lines, "\n")}
+	}
 	positions := playPositionCount(cfg.Play)
 	lines := make([]string, 0, positions)
 	for i := 0; i < positions; i++ {
@@ -308,14 +321,35 @@ func isWholeTicketRandom(rule playRule) bool {
 
 // isAttributeRandom 判定为"属性/聚合型"玩法（大小单双/龙虎/特殊号/庄闲/和值/跨度/不定位/包胆）——
 // 随机产号为"从选项宇宙抽 K 个"，非按位号池、非整注单式。
+// 前二/后二/前三/后三大小单双（SegmentLen>=2）走按位抽样，不算单档属性。
 func isAttributeRandom(rule playRule) bool {
 	switch strings.ToLower(strings.TrimSpace(rule.BetMode)) {
-	case "daxiao", "danshuang", "dxds", "zhuangxian",
+	case "dxds":
+		return !isPerPosDxdsRandom(rule)
+	case "daxiao", "danshuang", "zhuangxian",
 		"longhu", "longhuhe", "longhubao", "teshu",
 		"hezhi", "kuadu", "budingwei", "baodan":
 		return true
 	}
 	return false
+}
+
+// isPerPosDxdsRandom 前二/后二/前三/后三大小单双：按位随机（十\n个），非整期单档。
+// 五星和值大小/单双、PC28 整期大小单双仍走 isAttributeRandom。
+func isPerPosDxdsRandom(rule playRule) bool {
+	if strings.ToLower(strings.TrimSpace(rule.BetMode)) != "dxds" {
+		return false
+	}
+	if rule.SegmentLen < 2 {
+		return false
+	}
+	if isWuxingSumDxdsRule(rule) {
+		return false
+	}
+	if rule.PlayTemplate == "pc28_std" {
+		return false
+	}
+	return true
 }
 
 // attributeUniverse 属性/聚合玩法的合法选项宇宙（供随机抽样）。数字池型（不定位/包胆）返回 nil，另行处理。
@@ -953,6 +987,7 @@ func (w *Worker) pickTriggerBet(
 // resolveTriggerBetDecision 高级开某投某出号。
 // 定位胆多选位：每位按该位上期开奖各自查映射下注（例：上期 17232、选万/百/个 → 1,,2,,2），
 // 不可把某一命中行的号码复制到所有位。
+// 无启用行命中开出时本期跳过（不回退启用第 1 行）。
 func resolveTriggerBetDecision(cfg parsedSchemeConfig, prevBalls []string, lastDirection string) pickDecision {
 	if cfg.Trigger == nil || len(cfg.Trigger.Rows) == 0 {
 		return pickDecision{Skip: true}
@@ -969,26 +1004,26 @@ func resolveTriggerBetDecision(cfg parsedSchemeConfig, prevBalls []string, lastD
 
 	direction := nextTriggerDirection(cfg.Trigger.Mode, lastDirection)
 
-	// 定位胆多选位 / 前三直选复式等按位玩法：按位独立映射
+	// 一星定位胆 / 前三直选复式等：按位独立映射（UI 已取消投注位芯片，默认段内全位）
 	if triggerBetUsesPosition(cfg.Play) {
-		if isDingweiTriggerPlay(cfg.Play) && !cfg.Trigger.HasPosition {
-			// 旧定位胆配置未写 positionIdxs：仍走单行映射 + 默认位编排
-		} else {
-			return pickTriggerBetPerPosition(cfg, enabled, prevBalls, direction)
-		}
+		return pickTriggerBetPerPosition(cfg, enabled, prevBalls, direction)
 	}
 
-	// 龙虎 / PC28 等：整期一个开出条件 → 一行映射
-	row := enabled[0] // Q4c：无匹配走启用第 1 行
-	if len(prevBalls) > 0 {
-		for _, r := range enabled {
-			if triggerOpenMatches(cfg.Play, prevBalls, r.Open) {
-				row = r
-				break
-			}
+	// 龙虎 / PC28 等：整期一个开出条件 → 一行映射；未命中则本期不投
+	if len(prevBalls) == 0 {
+		return pickDecision{Skip: true}
+	}
+	var row *triggerRow
+	for i := range enabled {
+		if triggerOpenMatches(cfg.Play, prevBalls, enabled[i].Open) {
+			row = &enabled[i]
+			break
 		}
 	}
-	content, dir := triggerRowPickContent(row, direction)
+	if row == nil {
+		return pickDecision{Skip: true}
+	}
+	content, dir := triggerRowPickContent(*row, direction)
 	if content == "" {
 		return pickDecision{Skip: true}
 	}
@@ -1009,9 +1044,26 @@ func pickTriggerBetPerPosition(
 	if cfg.Play.PlayTemplate == "pk10_std" {
 		positions = 10
 	}
-	idxs := cfg.Trigger.PositionIdxs
-	if len(idxs) == 0 {
-		idxs = []int{cfg.Play.PositionIdx}
+	// 一星五位面板：忽略旧投注位勾选，始终万～个（或 PK10 全名次）按位出号
+	var idxs []int
+	if isDingweiFivePanelPlay(cfg.Play) {
+		if len(cfg.Play.SegmentPos) > 0 {
+			idxs = append([]int(nil), cfg.Play.SegmentPos...)
+		} else {
+			idxs = make([]int, positions)
+			for i := range idxs {
+				idxs[i] = i
+			}
+		}
+	} else {
+		idxs = cfg.Trigger.PositionIdxs
+		if len(idxs) == 0 {
+			if len(cfg.Play.SegmentPos) > 0 {
+				idxs = append([]int(nil), cfg.Play.SegmentPos...)
+			} else {
+				idxs = []int{cfg.Play.PositionIdx}
+			}
+		}
 	}
 	lines := make([]string, positions)
 	filled := 0
@@ -1023,16 +1075,19 @@ func pickTriggerBetPerPosition(
 		if idx >= positions {
 			idx = positions - 1
 		}
-		row := enabled[0]
-		if idx < len(prevBalls) {
-			open := normalizeTriggerToken(strings.TrimSpace(prevBalls[idx]))
-			if r, ok := findEnabledTriggerRowByOpen(enabled, open); ok {
-				row = r
-			}
+		if idx >= len(prevBalls) {
+			return pickDecision{Skip: true}
 		}
-		content, dir := triggerRowPickContent(row, direction)
+		open := normalizeTriggerToken(strings.TrimSpace(prevBalls[idx]))
+		row, ok := findEnabledTriggerRowByOpen(enabled, open)
+		if !ok {
+			// 该位开出未命中任何启用行 → 本期不投
+			return pickDecision{Skip: true}
+		}
+		// pos/neg 按「万\n千\n百\n十\n个」分位；旧单行则各位共用
+		content, dir := triggerRowPickContentAt(row, direction, idx, positions)
 		if content == "" {
-			continue
+			return pickDecision{Skip: true}
 		}
 		lines[idx] = content
 		filled++
@@ -1041,7 +1096,7 @@ func pickTriggerBetPerPosition(
 	if filled == 0 {
 		return pickDecision{Skip: true}
 	}
-	// 单位：仍压到选定投注位（兼容仅选一位）
+	// 单位：仍压到选定投注位（兼容仅选一位 / 单位子玩法）
 	if filled == 1 && len(idxs) == 1 {
 		return pickDecision{
 			Content:   layoutTriggerBetDingweiContent(cfg, lines[idxs[0]]),
@@ -1052,7 +1107,7 @@ func pickTriggerBetPerPosition(
 }
 
 // pickTriggerBetPerSegment 直选复式等：段内每位按绝对球位开奖查映射，输出 segmentLen 行。
-// 未勾选的段内位用启用第 1 行正/反投补齐，避免复式缺位。
+// 任一位开出未命中启用行则本期不投（不回退启用第 1 行）。
 func pickTriggerBetPerSegment(
 	cfg parsedSchemeConfig,
 	enabled []triggerRow,
@@ -1064,30 +1119,22 @@ func pickTriggerBetPerSegment(
 	if segLen <= 0 {
 		segLen = 1
 	}
-	selected := map[int]bool{}
-	for _, abs := range cfg.Trigger.PositionIdxs {
-		selected[abs] = true
-	}
-	if len(selected) == 0 {
-		for i := 0; i < segLen; i++ {
-			selected[segStart+i] = true
-		}
-	}
 	lines := make([]string, segLen)
 	filled := 0
 	outDir := direction
 	for rel := 0; rel < segLen; rel++ {
 		abs := segStart + rel
-		row := enabled[0]
-		if selected[abs] && abs < len(prevBalls) {
-			open := normalizeTriggerToken(strings.TrimSpace(prevBalls[abs]))
-			if r, ok := findEnabledTriggerRowByOpen(enabled, open); ok {
-				row = r
-			}
+		if abs >= len(prevBalls) {
+			return pickDecision{Skip: true}
+		}
+		open := normalizeTriggerToken(strings.TrimSpace(prevBalls[abs]))
+		row, ok := findEnabledTriggerRowByOpen(enabled, open)
+		if !ok {
+			return pickDecision{Skip: true}
 		}
 		content, dir := triggerRowPickContentAt(row, direction, rel, segLen)
 		if content == "" {
-			continue
+			return pickDecision{Skip: true}
 		}
 		lines[rel] = content
 		filled++

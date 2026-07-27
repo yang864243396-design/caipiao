@@ -16,6 +16,9 @@ func resolveCatalogPlayRule(cfg map[string]interface{}) (playRule, bool) {
 
 	if (template == "ssc_std" || template == "fast_ssc_std") && typeID != "" && subID != "" {
 		playMethod := strings.TrimSpace(stringVal(cfg, "playMethod"))
+		if playMethod == "" {
+			playMethod = strings.TrimSpace(stringVal(cfg, "playMethodLabel"))
+		}
 		return resolveSSCPlayRule(typeID, subID, betMode, playMethod), true
 	}
 	if template == "syxw_std" && typeID != "" && subID != "" {

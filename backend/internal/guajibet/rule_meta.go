@@ -148,6 +148,15 @@ func InferBetMode(meta RuleMeta) string {
 		return "teshu"
 	case strings.Contains(label, "大小") || strings.Contains(label, "单双"):
 		return "dxds"
+	// rules/v2 大小单双：仅有数字 typeId/subId、无中文 label 时仍须识别（否则 wire 变成「双单」被拒）
+	case meta.TypeID == "g016" || meta.TypeID == "dxds" || group == "大小单双":
+		if strings.Contains(text, "和值单双") {
+			return "danshuang"
+		}
+		if strings.Contains(text, "和值大小") {
+			return "daxiao"
+		}
+		return "dxds"
 	case strings.Contains(label, "不定位"):
 		return "budingwei"
 	case strings.Contains(label, "组选24"), strings.Contains(text, "zu24"):

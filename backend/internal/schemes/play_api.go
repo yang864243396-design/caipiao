@@ -109,6 +109,7 @@ func validateGroupContent(rule playRule, content string) error {
 	}
 	// 直选复式：按位号池，每一位都必须有号。含换行时保留空位，禁止把「1,2,3\n\n」当成单行号池放过。
 	if (sub == "zhixuan_fs" || rule.BetMode == "fushi" || rule.BetMode == "zhixuan_fs") && rule.SegmentLen > 1 {
+		checkContent := content
 		if strings.Contains(content, "\n") {
 			lines := splitGroupLinesPad(content, rule.SegmentLen)
 			for i := 0; i < rule.SegmentLen; i++ {
@@ -121,10 +122,14 @@ func validateGroupContent(rule playRule, content string) error {
 					return fmt.Errorf("第 %d 位选号不能为空", i+1)
 				}
 			}
-			return nil
-		}
-		if !hasDigitPickToken(content) {
+			checkContent = strings.Join(lines, "\n")
+		} else if !hasDigitPickToken(content) {
 			return fmt.Errorf("选号池不能为空")
+		}
+		if max := zhixuanFushiMaxBetUnits(rule); max > 0 {
+			if units := countZhixuanFushiBetUnits(checkContent, rule.SegmentLen); units > max {
+				return errMaxBetUnitsExceeded(max)
+			}
 		}
 		return nil
 	}

@@ -1310,16 +1310,22 @@ export function zuheMaxBetUnitsMsg(config: PlayConfig): string {
 }
 
 /**
- * 直选复式单组最大注数（对齐第三方）：满号位积 − 对子/豹子（各位同一号码，共 P 组）。
- * P=每位号池大小、n=位数：max = P^n − P。
- * 例：前二/后二 10^2−10=90；前三/后三 10^3−10=990；四星 9990；五星 99990；十一选五(P=11)前二 121−11=110。
+ * 直选复式单组最大注数（对齐第三方）：
+ * min(P^n − P, (P−1)·P^(n−1))，再乘区位倍乘。
+ * - P^n−P：满号位积去掉「各位同一号码」的对子/豹子
+ * - (P−1)·P^(n−1)：第三方前三等实限（SSC：前二 90、前三 900，而非公式外推的 990）
+ * 例：前二/后二 90；前三/中三/后三 900；前中后三×3→2700。
  */
 export function zhixuanFushiMaxBetUnits(config: PlayConfig): number {
   const pool = poolFromConfig(config)
   const size = pool ? pool.max - pool.min + 1 : 10
   const n = Math.max(1, config.segmentLen || 1)
   if (size <= 1 || n <= 1) return 0
-  return Math.pow(size, n) - size
+  const fullMinusSame = Math.pow(size, n) - size
+  const oneShort = (size - 1) * Math.pow(size, n - 1)
+  const base = Math.min(fullMinusSame, oneShort)
+  const m = segmentBetMultiplier(config.guajiGroup ?? config.playTypeLabel ?? '')
+  return base * Math.max(1, m)
 }
 
 /** 是否「超过最大投注注数」类提示（保存时原样弹窗、不清空内容） */
@@ -1532,7 +1538,7 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
         return { ok: false, message: zuheMaxBetUnitsMsg(config) }
       }
     }
-    // 直选复式：满号位积 − 对子/豹子（P^n − P）为单组上限（前二=90、前三=990…）
+    // 直选复式：单组上限（前二=90、前三=900…）
     if (isZhixuanFushiPlayConfig(config) && !isZhixuanZuhePlayConfig(config)) {
       const maxFushi = zhixuanFushiMaxBetUnits(config)
       if (maxFushi > 0 && betUnits > maxFushi) {

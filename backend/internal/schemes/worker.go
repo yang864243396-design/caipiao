@@ -369,6 +369,12 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 		w.pauseRunningInstance(ctx, inst, StatusReasonBetFailed, guajibet.ErrZeroBets.Error())
 		return errSchemeBetStopped
 	}
+	// 直选复式：超第三方单组上限则暂停（含开某投某满号 1000>900 等已入库方案）
+	if max := zhixuanFushiMaxBetUnits(cfg.Play); max > 0 && playEval.BetUnits > max {
+		detail := errMaxBetUnitsExceeded(max).Error()
+		w.pauseRunningInstance(ctx, inst, StatusReasonBetFailed, detail)
+		return errSchemeBetStopped
+	}
 	amount := calcBetAmount(playEval.BetUnits, betMult, cfg.BetUnitYuan)
 	pnl := calcPnLWithOdds(amount, playEval.Hit, playEval.Odds)
 

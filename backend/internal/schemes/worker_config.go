@@ -261,13 +261,38 @@ func resolveTriggerBet(cfg map[string]interface{}) *triggerBetCfg {
 }
 
 // applyTriggerBetPosition 规范化开某投某投注位。
-// 定位胆：写回 Play.PositionIdx/SegmentStart（单位投注）。
+// 一星五位面板：已取消投注位芯片，忽略旧 positionIdxs，始终按 SegmentPos 全位。
+// 单位定位胆（仅万/千…）：仍可按 positionIdxs 写回 Play.PositionIdx。
 // 前三直选复式等：只保留 Trigger.PositionIdxs 供按位匹配/出号，不改写玩法段。
 func applyTriggerBetPosition(out *parsedSchemeConfig) {
-	if out == nil || out.Trigger == nil || !out.Trigger.HasPosition {
+	if out == nil || out.Trigger == nil {
 		return
 	}
 	if !triggerBetUsesPosition(out.Play) {
+		return
+	}
+	// 一星/定位胆五位（或 PK10 十名次）：与前三码同为按位分列，不再裁剪投注位
+	if isDingweiFivePanelPlay(out.Play) {
+		idxs := append([]int(nil), out.Play.SegmentPos...)
+		if len(idxs) == 0 {
+			n := playPositionCount(out.Play)
+			if n < 2 {
+				n = 5
+				if out.Play.PlayTemplate == "pk10_std" {
+					n = 10
+				}
+			}
+			idxs = make([]int, n)
+			for i := range idxs {
+				idxs[i] = i
+			}
+		}
+		out.Trigger.PositionIdxs = idxs
+		out.Trigger.PositionIdx = idxs[0]
+		out.Trigger.HasPosition = false
+		return
+	}
+	if !out.Trigger.HasPosition {
 		return
 	}
 	max := 4
@@ -309,6 +334,17 @@ func isDingweiTriggerPlay(rule playRule) bool {
 	return bm == "dingwei" || tid == "dingwei" || tid == "g006"
 }
 
+// isDingweiFivePanelPlay 统一一星定位胆五位（或 PK10 十名次）面板，非锁定单位子玩法。
+func isDingweiFivePanelPlay(rule playRule) bool {
+	if !isDingweiTriggerPlay(rule) {
+		return false
+	}
+	if len(rule.SegmentPos) > 1 {
+		return true
+	}
+	return playPositionCount(rule) > 1
+}
+
 func triggerBetUsesPosition(rule playRule) bool {
 	if isLonghuPlay(rule) {
 		return false
@@ -322,16 +358,18 @@ func triggerBetUsesPosition(rule playRule) bool {
 	if isDingweiTriggerPlay(rule) {
 		return true
 	}
-	// 前三/中三/后三直选复式等：SegmentLen>=2 的按位数字玩法
+	// 前三直选复式 / 后二大小单双等：SegmentLen>=2 的按位玩法
 	if rule.SegmentLen >= 2 {
-		if bm == "fushi" || bm == "zhixuan_fs" || bm == "zuhe" {
+		if bm == "fushi" || bm == "zhixuan_fs" || bm == "zuhe" || bm == "dxds" {
 			return true
 		}
 		if sub == "zhixuan_fs" || strings.Contains(sub, "zhixuan_fs") {
 			return true
 		}
+		if tid == "g016" || tid == "dxds" {
+			return true
+		}
 	}
-	_ = tid
 	return false
 }
 

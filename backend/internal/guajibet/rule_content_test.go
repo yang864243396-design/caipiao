@@ -658,7 +658,7 @@ func TestGuajiGroupRequiresSoloTrue_qianhou4Fushi(t *testing.T) {
 }
 
 func TestResolveSolo_wuxingFushiHotColdPool(t *testing.T) {
-	// inst-1-1784774566098：冷热五星复式 32 注；实测 solo=false → 单挑参数错误，须 solo=true（绕过 28 注上限）
+	// inst-1-1784774566098：冷热五星复式 32 注；实测 solo=false → 单挑参数错误，须 solo=true（绕过 guajiSoloMaxBets）
 	seg, _ := json.Marshal(map[string]string{
 		"guajiGroup": "五星", "guajiTeam": "五星直选", "guajiFullName": "五星直选复式", "guajiRuleId": "153",
 	})
@@ -691,6 +691,36 @@ func TestResolveSolo_wuxingFushiHotColdPool(t *testing.T) {
 	metaZu := ParseRuleMeta("ssc_std", "g015", "157", "组选60", "五星", seg, "157")
 	if guajiGroupRequiresSoloTrue(metaZu) {
 		t.Fatal("五星组选60 不应强制 solo=true")
+	}
+}
+
+// TestResolveSolo_zhong3FushiOverSoloMax inst-1-1785133877645：
+// 中三直选复式 27 注 content=012,234,345；实测 solo=true →「单挑参数错误」，须 solo=false。
+func TestResolveSolo_zhong3FushiOverSoloMax(t *testing.T) {
+	seg, _ := json.Marshal(map[string]string{
+		"guajiGroup": "中三码", "guajiTeam": "中三直选", "guajiFullName": "中三直选复式", "guajiRuleId": "14",
+	})
+	meta := ParseRuleMeta("ssc_std", "g002", "14", "中三直选复式", "中三码", seg, "14")
+	raw := "0,1,2\n2,3,4\n3,4,5"
+	wire := FormatBetContentForRule(meta, raw)
+	if wire != "012,234,345" {
+		t.Fatalf("wire=%q want 012,234,345", wire)
+	}
+	if n := CountBetNums(meta, wire); n != 27 {
+		t.Fatalf("bets=%d want 27", n)
+	}
+	if ResolveSolo(meta, wire, 27) {
+		t.Fatal("中三复式 27 注须 solo=false（实测 solo=true→单挑参数错误）")
+	}
+	// 18 恰为上限：betsNums > 18 才关 solo；等于 18 仍可 solo
+	if !ResolveSolo(meta, "012,012,01", 18) {
+		t.Fatal("中三复式 18 注应仍可 solo=true")
+	}
+	if !ResolveSolo(meta, "0,1,2", 1) {
+		t.Fatal("中三复式 1 注应 solo=true")
+	}
+	if ResolveSolo(meta, "01234,01,01", 20) {
+		t.Fatal("中三复式 20 注须 solo=false")
 	}
 }
 
@@ -800,6 +830,24 @@ func TestFormatBetContentForRule_dxdsHou2(t *testing.T) {
 	}
 	if NeedsSoloForRule(meta, got) {
 		t.Fatal("后二大小单双不应 solo")
+	}
+}
+
+func TestSegmentRange_dxdsHou2ByRuleID266(t *testing.T) {
+	// 与线上一致：group=大小单双、subId=266，须解析为十/个
+	seg, _ := json.Marshal(map[string]string{
+		"guajiGroup": "大小单双", "guajiTeam": "后大小单双", "guajiFullName": "后二大小单双",
+	})
+	meta := ParseRuleMeta("ssc_std", "g016", "266", "后二大小单双", "大小单双", seg, "266")
+	start, length := segmentRange(meta)
+	if start != 3 || length != 2 {
+		t.Fatalf("seg=%d+%d want 3+2", start, length)
+	}
+	// 仅数字 id、无中文全名时也能定位
+	bare := ParseRuleMeta("ssc_std", "g016", "266", "", "大小单双", nil, "266")
+	start, length = segmentRange(bare)
+	if start != 3 || length != 2 {
+		t.Fatalf("bare seg=%d+%d want 3+2", start, length)
 	}
 }
 

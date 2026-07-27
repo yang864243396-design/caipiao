@@ -121,6 +121,29 @@ function renPickCount(subId: string): number {
   return 2
 }
 
+/** rules/v2 大小单双数字 rule id → 区位（后二=十/个） */
+function dxdsGuajiRuleSegment(subId: string): { start: number; len: number } | null {
+  switch (String(subId ?? '').trim()) {
+    case '266': // 后二大小单双
+    case 'hou2_dxds':
+      return { start: 3, len: 2 }
+    case '267': // 后三大小单双
+    case 'hou3_dxds':
+      return { start: 2, len: 3 }
+    case '270': // 前二大小单双
+    case 'qian2_dxds':
+      return { start: 0, len: 2 }
+    case '271': // 前三大小单双
+    case 'qian3_dxds':
+      return { start: 0, len: 3 }
+    case '268': // 五星和值单双
+    case '269': // 五星和值大小
+      return { start: 0, len: 5 }
+    default:
+      return null
+  }
+}
+
 function budingweiOrDxdsSegment(
   typeId: string,
   subId: string,
@@ -138,6 +161,8 @@ function budingweiOrDxdsSegment(
     if (raw.includes('五星') || text.startsWith('wuxing')) return { start: 0, len: 5 }
     return { start: 0, len: 3 }
   }
+  const byRule = dxdsGuajiRuleSegment(subId)
+  if (byRule) return byRule
   if (raw.includes('和值单双') || raw.includes('和值大小')) return { start: 0, len: 1 }
   if (raw.includes('前二') || text.startsWith('qian2')) return { start: 0, len: 2 }
   if (raw.includes('后二') || text.startsWith('hou2')) return { start: 3, len: 2 }
@@ -339,8 +364,11 @@ const GUAJI_TYPE_ID_TO_CATALOG: Record<string, string> = {
   g004: 'qian2',
   g005: 'hou2',
   g006: 'dingwei',
+  g009: 'budingwei',
+  g011: 'renxuan',
   g013: 'sixing',
   g015: 'wuxing',
+  g016: 'dxds',
 }
 
 export function mapGuajiTypeIdToCatalog(typeId: string): string {
@@ -511,7 +539,8 @@ export function resolvePlayConfigFromCatalogIds(
   let segmentLen = 1
   let segmentLabels: string[]
 
-  if (typeId === 'dingwei') {
+  // 一星/定位胆（含 rules/v2 g006）：未锁定位时五位面板；dingwei_wan 等为单位
+  if (typeId === 'dingwei' || typeId === 'g006') {
     if (subId.startsWith('dingwei_')) {
       segmentStart = dingweiPositionIndex(subId)
       segmentLen = 1
@@ -549,7 +578,7 @@ export function resolvePlayConfigFromCatalogIds(
     const pos = combo24SegmentPositions(subId)
     segmentLen = pos.length
     segmentLabels = pos.map((i) => POSITION_LABELS[i])
-  } else if (typeId === 'budingwei' || typeId === 'dxds') {
+  } else if (typeId === 'budingwei' || typeId === 'dxds' || typeId === 'g009' || typeId === 'g016') {
     const seg = budingweiOrDxdsSegment(typeId, subId)
     segmentStart = seg.start
     segmentLen = seg.len
@@ -561,14 +590,18 @@ export function resolvePlayConfigFromCatalogIds(
     segmentLabels = POSITION_LABELS.slice(segmentStart, segmentStart + segmentLen)
   }
 
-  const inputMode = inputModeFromBetMode(betMode, subPlayId, segmentLen)
+  const inferredBet =
+    betMode ||
+    (typeId === 'dxds' || typeId === 'g016' ? 'dxds' : typeId === 'budingwei' || typeId === 'g009' ? 'budingwei' : '')
+  const inputMode = inputModeFromBetMode(inferredBet || betMode, subPlayId, segmentLen)
   return {
-    playTypeId: typeId,
+    playTypeId: typeId === 'g016' ? 'dxds' : typeId === 'g009' ? 'budingwei' : typeId,
     subPlayId,
+    catalogSubId: subId,
     segmentLen,
     segmentLabels,
     inputMode,
-    betMode: betMode || undefined,
+    betMode: inferredBet || undefined,
   }
 }
 

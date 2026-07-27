@@ -42,6 +42,7 @@ import {
   groupContentPlaceholder,
   isYixingDingweiPlayConfig,
   isMaxBetUnitsExceededMessage,
+  isZhixuanFushiPlayConfig,
   WEISHU_MAX_BET_UNITS,
   YIXING_MAX_PICKS_MSG,
   YIXING_MAX_PICKS_PER_POS,
@@ -50,6 +51,7 @@ import {
   validateGroupContent,
   validateSchemeGroups,
   schemeSoloBaoziError,
+  zhixuanFushiMaxBetUnits,
 } from '@/utils/betPayload'
 import { defaultPlaySelection, formatSubPlayLabel } from '@/utils/playConfig'
 import { normalizeSchemeTimePairFromConfig, schemeTimeRangeError } from '@/utils/schemeDateTime'
@@ -68,6 +70,7 @@ import {
   isLonghuPlayConfigLike,
   isPc28HezhiConfigLike,
   isPc28ModeConfigLike,
+  isPerPosDxdsPlayConfig,
   lotteryHasAdvTriggerPlay,
   supportsAdvTriggerPerPosColumns,
   supportsAdvTriggerPositionPicker,
@@ -657,19 +660,23 @@ const triggerBetOptions = computed<string[]>(() => {
 
 const isTriggerTextPlay = computed(() => triggerBetOptions.value.length > 0)
 
-/** 一星/定位胆：展示投注位芯片 */
+/** 投注位芯片已废弃（恒 false）；一星改为按位分列 */
 const showTriggerPositionPicker = computed(() => {
   if (runTypeId.value !== 'adv_trigger_bet') return false
-  if (isLonghuPlay.value || isTriggerTextPlay.value) return false
   return supportsAdvTriggerPositionPicker(schemePlayConfig.value)
 })
 
-/** 前三直选复式等：按位分列正投/反投（不展示投注位） */
+/** 一星定位胆 / 前三直选复式 / 后二大小单双等：按位分列正投/反投 */
 const showTriggerPerPosColumns = computed(() => {
   if (runTypeId.value !== 'adv_trigger_bet') return false
-  if (isLonghuPlay.value || isTriggerTextPlay.value) return false
+  if (isLonghuPlay.value) return false
   return supportsAdvTriggerPerPosColumns(schemePlayConfig.value)
 })
+
+/** 按位列里的正/反投是否用文字多选（大小单双），开出仍为球号 0-9 */
+const triggerPerPosTextBet = computed(
+  () => showTriggerPerPosColumns.value && triggerBetOptions.value.length > 0,
+)
 
 /** 位名展示：万 → 万位 */
 function triggerPosName(posLabel: string): string {
@@ -733,17 +740,32 @@ function triggerOpenValues(): string[] {
   if (bm === 'hezhi' && isPc28PlayLine()) {
     return [...PC28_HEZHI_VALUES]
   }
+  // 按位玩法（直选复式 / 后二大小单双）：开出按该位球号 0-9
+  if (supportsAdvTriggerPerPosColumns(schemePlayConfig.value)) {
+    return [...numberPoolTokens.value]
+  }
   const textOpts = textPickOptionsForConfig(schemePlayConfig.value)
   if (textOpts.length) return textOpts
   return [...numberPoolTokens.value]
 }
 
 function ensureTriggerRows(): void {
-  if (triggerRowsLocked && triggerRows.value.length) return
   const opens = triggerOpenValues()
   const cur = triggerRows.value
   if (cur.length === opens.length && cur.every((r, i) => r.open === opens[i])) return
-  triggerRows.value = opens.map((open) => ({ enabled: true, open, pos: '', neg: '' }))
+  if (triggerRowsLocked && cur.length) {
+    // 开出维度一致（如仍是 0-9）则保留远端行；大/小→按位球号等不兼容时重建
+    const compatible =
+      cur.length === opens.length && cur.every((r) => opens.includes(String(r.open)))
+    if (compatible) return
+    triggerRowsLocked = false
+  }
+  triggerRows.value = opens.map((open) => {
+    const prev = cur.find((r) => String(r.open) === open)
+    return prev
+      ? { enabled: prev.enabled, open, pos: String(prev.pos ?? ''), neg: String(prev.neg ?? '') }
+      : { enabled: true, open, pos: '', neg: '' }
+  })
 }
 
 function normalizeTriggerPositionIdxs(raw: unknown, maxExclusive = 10): number[] {
@@ -817,12 +839,29 @@ function applyTriggerBetFromConfig(raw: unknown): void {
   }
 }
 
-/** 随机出号个数上限 = 号池大小（至少 1） */
-const triggerRandomMax = computed(() => Math.max(1, triggerOpenValues().length))
+/** 随机出号个数上限 = 正/反投号池大小（至少 1） */
+const triggerRandomMax = computed(() => {
+  // 按位大小单双：正反投池为大/小/单/双；其余用开出号池
+  const poolMax = Math.max(
+    1,
+    triggerPerPosTextBet.value ? triggerBetOptions.value.length : triggerOpenValues().length,
+  )
+  const cfg = schemePlayConfig.value
+  // 直选复式：每格随机个数须使位积 ≤ 最大注数（前三 10³=1000>900 → 上限 9）
+  if (isZhixuanFushiPlayConfig(cfg) && positionCount.value > 1) {
+    const maxUnits = zhixuanFushiMaxBetUnits(cfg)
+    if (maxUnits > 0) {
+      let k = poolMax
+      while (k > 1 && k ** positionCount.value > maxUnits) k -= 1
+      return Math.max(1, k)
+    }
+  }
+  return poolMax
+})
 
-/** 取 count 个不重复随机号码，逗号拼接（count 由「随机出号」步进器决定） */
-function randomTriggerMultiValue(count: number): string {
-  const pool = [...triggerOpenValues()]
+/** 取 count 个不重复随机项，逗号拼接（count 由「随机出号」步进器决定） */
+function randomTriggerMultiValue(count: number, poolSrc?: string[]): string {
+  const pool = [...(poolSrc?.length ? poolSrc : triggerOpenValues())]
   if (!pool.length) return '0'
   const n = Math.min(pool.length, Math.max(1, Math.trunc(count) || 1))
   for (let i = pool.length - 1; i > 0; i--) {
@@ -837,13 +876,15 @@ function randomFillTrigger(): void {
   const count = Math.min(triggerRandomMax.value, Math.max(1, Math.trunc(triggerRandomCount.value) || 1))
   triggerRandomCount.value = count
   const posN = Math.max(1, positionCount.value)
+  // 按位大小单双：正/反投从大/小/单/双抽，勿用开出球号池
+  const betPool = triggerPerPosTextBet.value ? [...triggerBetOptions.value] : undefined
   for (const row of triggerRows.value) {
     if (showTriggerPerPosColumns.value) {
-      row.pos = Array.from({ length: posN }, () => randomTriggerMultiValue(count)).join('\n')
-      row.neg = Array.from({ length: posN }, () => randomTriggerMultiValue(count)).join('\n')
+      row.pos = Array.from({ length: posN }, () => randomTriggerMultiValue(count, betPool)).join('\n')
+      row.neg = Array.from({ length: posN }, () => randomTriggerMultiValue(count, betPool)).join('\n')
     } else {
-      row.pos = randomTriggerMultiValue(count)
-      row.neg = randomTriggerMultiValue(count)
+      row.pos = randomTriggerMultiValue(count, isTriggerTextPlay.value ? [...triggerBetOptions.value] : undefined)
+      row.neg = randomTriggerMultiValue(count, isTriggerTextPlay.value ? [...triggerBetOptions.value] : undefined)
     }
   }
   ElMessage.success(`已随机填充正投 / 反投号码（每格 ${count} 个号）`)
@@ -914,6 +955,37 @@ function setTriggerTextField(row: SchemeTriggerRow, field: 'pos' | 'neg', vals: 
     out.push(t)
   }
   row[field] = out.join(',')
+}
+
+/** 按位文字正/反投（后二大小单双：每位一格大/小/单/双） */
+function setTriggerTextFieldCell(
+  row: SchemeTriggerRow,
+  field: 'pos' | 'neg',
+  idx: number,
+  vals: string[],
+): void {
+  const allow = new Set(triggerBetOptions.value)
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const v of vals ?? []) {
+    const t = String(v ?? '').trim()
+    if (!t || !allow.has(t) || seen.has(t)) continue
+    seen.add(t)
+    out.push(t)
+  }
+  writeTriggerFieldCell(row, field, idx, out.join(','))
+}
+
+function sanitizeTriggerPerPosTextField(raw: string): string {
+  const n = Math.max(1, positionCount.value)
+  const allow = new Set(triggerBetOptions.value)
+  return triggerFieldParts(raw, n)
+    .map((cell) =>
+      triggerTextTokens(cell)
+        .filter((t) => allow.has(t))
+        .join(','),
+    )
+    .join('\n')
 }
 
 const triggerInputPlaceholder = computed(() => {
@@ -1410,6 +1482,8 @@ const rdZuxuanPool = computed(() => {
 /** 属性/聚合家族（大小单双/龙虎/特殊号/庄闲/和值/跨度/不定位/包胆）：从选项宇宙随机抽 K 个 */
 const rdAttribute = computed(() => {
   if (rdWholeTicket.value || rdZuxuanPool.value) return false
+  // 前二/后二/前三/后三大小单双：按位（十/个…），不走单档「选项个数」
+  if (isPerPosDxdsPlayConfig(schemePlayConfig.value)) return false
   const bm = String(schemePlayConfig.value.betMode ?? '').toLowerCase()
   return ['daxiao', 'danshuang', 'dxds', 'zhuangxian', 'longhu', 'longhuhe', 'longhubao', 'teshu', 'hezhi', 'kuadu', 'budingwei', 'baodan'].includes(bm)
 })
@@ -1560,9 +1634,12 @@ function shuffleInPlace<T>(arr: T[]): T[] {
 }
 
 /** 一星每位最多 9 个号；其它按位玩法最多 10 */
-const rdPerPosMax = computed(() =>
-  isYixingDingweiPlayConfig(schemePlayConfig.value) ? YIXING_MAX_PICKS_PER_POS : 10,
-)
+const rdPerPosMax = computed(() => {
+  if (isYixingDingweiPlayConfig(schemePlayConfig.value)) return YIXING_MAX_PICKS_PER_POS
+  // 后二大小单双等：每位最多大/小/单/双共 4 个
+  if (isPerPosDxdsPlayConfig(schemePlayConfig.value)) return Math.max(1, rdAttributeUniverse().length)
+  return 10
+})
 
 /** 本地生成预览号码（含属性家族选项抽样） */
 function generateRdPreview(): void {
@@ -1611,12 +1688,25 @@ function generateRdPreview(): void {
     rdPreview.value = []
     return
   }
-  // 按位玩法（一星/前三/前二/五星复式等）：按位预览，每个号一枚蓝色 tag，不展开整注
+  // 按位玩法（一星/前三/前二/五星复式 / 后二大小单双等）：按位预览
   const perPosMax = rdPerPosMax.value
+  const perPosDxds = isPerPosDxdsPlayConfig(schemePlayConfig.value)
+  const textOpts = perPosDxds ? textPickOptionsForConfig(schemePlayConfig.value) : []
+  const attrUniverse = perPosDxds ? rdAttributeUniverse() : []
   const pools = Array.from({ length: positionCount.value }, (_, i) => {
-    const pool = shuffleInPlace([...numberPoolTokens.value])
+    const source = perPosDxds
+      ? [...(textOpts.length ? textOpts : attrUniverse)]
+      : [...numberPoolTokens.value]
+    const pool = shuffleInPlace(source)
     const count = Math.min(perPosMax, Math.max(1, rdCounts.value[i] ?? 1), pool.length)
-    return pool.slice(0, count).sort((a, b) => Number(a) - Number(b))
+    const picks = pool.slice(0, count)
+    if (perPosDxds && textOpts.length) {
+      const order = new Map(textOpts.map((t, oi) => [t, oi]))
+      picks.sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0))
+    } else {
+      picks.sort((a, b) => Number(a) - Number(b) || a.localeCompare(b))
+    }
+    return picks
   })
   rdPreview.value = pools
   rdWholePreview.value = []
@@ -1635,7 +1725,8 @@ interface RdPreviewTag {
 
 /**
  * 预览 tag：
- * - 按位玩法（一星/前三/前二/五星复式等）：每位每个号一枚蓝色 tag（三位各 1 号 → 3 枚）
+ * - 后二/前二大小单双：每位一枚 tag（十/个 → 2 枚），选项合并进位内文案
+ * - 其它按位玩法（一星/前三复式等）：每位每个号一枚蓝色 tag
  * - 单式整注 / 组选号池：一注或号池条目一枚
  */
 const rdPreviewTags = computed<RdPreviewTag[]>(() => {
@@ -1644,8 +1735,22 @@ const rdPreviewTags = computed<RdPreviewTag[]>(() => {
     const rows = rdPreview.value
     if (!rows.length) return []
     const out: RdPreviewTag[] = []
+    const perPosDxds = isPerPosDxdsPlayConfig(schemePlayConfig.value)
     rows.forEach((row, index) => {
       if (!row?.length) return
+      // 大小单双按位：十位「大 小」一枚、个位「单」一枚，勿拆成选项级 tag
+      if (perPosDxds) {
+        const posName = positionLabels.value[index] ?? ''
+        const body = row.join('\u2009')
+        out.push({
+          key: `p-${index}-${row.join(',')}`,
+          label: posName ? `${posName} ${body}` : body,
+          kind: 'pos' as const,
+          index,
+          // 不设 digit：关闭时清空该整位
+        })
+        return
+      }
       row.forEach((digit, di) => {
         out.push({
           key: `p-${index}-${di}-${digit}`,
@@ -2046,22 +2151,27 @@ function runTypeDraftFields(): Partial<UpdateSchemeInput> {
     case 'adv_trigger_bet': {
       const textPlay = isTriggerTextPlay.value
       const perPos = showTriggerPerPosColumns.value
+      const perPosText = triggerPerPosTextBet.value
       const triggerBet: SchemeTriggerBet = {
         rows: triggerRows.value.map((r) => ({
           ...r,
-          pos: textPlay
-            ? triggerTextTokens(r.pos)
-                .filter((t) => triggerBetOptions.value.includes(t))
-                .join(',')
-            : perPos
-              ? sanitizeTriggerPerPosField(r.pos)
+          pos: perPos
+            ? perPosText
+              ? sanitizeTriggerPerPosTextField(r.pos)
+              : sanitizeTriggerPerPosField(r.pos)
+            : textPlay
+              ? triggerTextTokens(r.pos)
+                  .filter((t) => triggerBetOptions.value.includes(t))
+                  .join(',')
               : sanitizeTriggerBetContent(r.pos),
-          neg: textPlay
-            ? triggerTextTokens(r.neg)
-                .filter((t) => triggerBetOptions.value.includes(t))
-                .join(',')
-            : perPos
-              ? sanitizeTriggerPerPosField(r.neg)
+          neg: perPos
+            ? perPosText
+              ? sanitizeTriggerPerPosTextField(r.neg)
+              : sanitizeTriggerPerPosField(r.neg)
+            : textPlay
+              ? triggerTextTokens(r.neg)
+                  .filter((t) => triggerBetOptions.value.includes(t))
+                  .join(',')
               : sanitizeTriggerBetContent(r.neg),
         })),
         mode: triggerMode.value,
@@ -2094,10 +2204,13 @@ function runTypeDraftFields(): Partial<UpdateSchemeInput> {
       return { hotColdWarm }
     }
     case 'random_draw': {
-      // 单式=注数 / 组选=选码个数 → counts=[K]；按位型 → 每位号码数量
+      // 单式=注数 / 组选=选码个数 → counts=[K]；按位型 → 每位号码/选项数量
+      const perPosMax = rdPerPosMax.value
       const counts = rdSingleCountMode.value
         ? [Math.min(rdSingleCountMax.value, Math.max(rdSingleCountMin.value, rdCounts.value[0] ?? rdSingleCountMin.value))]
-        : Array.from({ length: positionCount.value }, (_, i) => Math.min(10, Math.max(1, rdCounts.value[i] ?? 1)))
+        : Array.from({ length: positionCount.value }, (_, i) =>
+            Math.min(perPosMax, Math.max(1, rdCounts.value[i] ?? 1)),
+          )
       const randomDraw: SchemeRandomDraw = { counts, strategy: rdStrategy.value }
       return { randomDraw }
     }
@@ -2110,7 +2223,10 @@ function runTypeDraftFields(): Partial<UpdateSchemeInput> {
 }
 
 function buildRemoteDraftPatch(): UpdateSchemeInput {
+  const name = schemeName.value.trim()
   return {
+    // 空名不写回（防抖输入中途清空时）；显式保存前已校验非空
+    ...(name ? { schemeName: name } : {}),
     simBet: simBet.value,
     schemeFunds: schemeFunds.value,
     schemeCurrency: schemeCurrency.value,
@@ -2515,13 +2631,18 @@ async function onSaveCloud() {
       if (!rdPreview.value.length || rdPreview.value.every((row) => !row.length)) {
         generateRdPreview()
       }
-      // 按位：单组多行（万\n千\n…），禁止拆成多个轮换组
+      // 按位：单组多行（万\n千\n… / 十\n个），禁止拆成多个轮换组
       const perPosMax = rdPerPosMax.value
+      const perPosDxds = isPerPosDxdsPlayConfig(schemePlayConfig.value)
+      const fallbackUniverse = perPosDxds ? rdAttributeUniverse() : []
       schemeGroups.value = [
         Array.from({ length: positionCount.value }, (_, i) => {
           const prev = rdPreview.value[i] ?? []
           if (prev.length) return prev.join(',')
           const count = Math.min(perPosMax, Math.max(1, rdCounts.value[i] ?? 1))
+          if (perPosDxds) {
+            return fallbackUniverse.slice(0, count).join(',') || '大'
+          }
           return Array.from({ length: count }, (_, j) => String(j % 10)).join(',')
         }).join('\n'),
       ]
@@ -2564,14 +2685,22 @@ async function onSaveCloud() {
     schemeGroups.value = groupCheck.normalized
   }
 
-  // 高级定码轮换 / 冷热 / 随机等未走 validateSchemeGroups 的入口：统一拦和值超 900 注
+  // 高级定码轮换 / 开某投某 / 冷热 / 随机等未走 validateSchemeGroups 的入口：统一拦超注上限
   {
-    const contents =
+    const contents: string[] =
       rt === 'adv_fixed_rotate'
         ? jushuList.value.map((r) => r.content)
-        : rt === 'hot_cold_warm' || rt === 'random_draw'
-          ? [...schemeGroups.value]
-          : []
+        : rt === 'adv_trigger_bet'
+          ? triggerRows.value.flatMap((r) => {
+              if (!r.enabled) return []
+              const out: string[] = []
+              if (String(r.pos ?? '').trim()) out.push(String(r.pos))
+              if (String(r.neg ?? '').trim()) out.push(String(r.neg))
+              return out
+            })
+          : rt === 'hot_cold_warm' || rt === 'random_draw'
+            ? [...schemeGroups.value]
+            : []
     for (const raw of contents) {
       if (!String(raw ?? '').trim()) continue
       const r = validateGroupContent(schemePlayConfig.value, String(raw ?? ''))
@@ -3336,26 +3465,56 @@ function onTimeDialogOpened() {
                 <span v-if="pIdx === 0" class="scf-trig-open">{{ row.open }}</span>
                 <span v-else class="scf-trig-cell-placeholder" aria-hidden="true" />
                 <span class="scf-trig-pos-name">{{ triggerPosName(label) }}</span>
-                <el-input
-                  :model-value="getTriggerFieldCell(row, 'pos', pIdx)"
-                  size="small"
-                  :placeholder="triggerInputPlaceholder"
-                  inputmode="text"
-                  :disabled="!row.enabled"
-                  :aria-label="`${triggerPosName(label)}正投（开出 ${row.open}）`"
-                  @update:model-value="(v: string | number) => writeTriggerFieldCell(row, 'pos', pIdx, String(v ?? ''))"
-                  @change="commitTriggerFieldCell(row, 'pos', pIdx)"
-                />
-                <el-input
-                  :model-value="getTriggerFieldCell(row, 'neg', pIdx)"
-                  size="small"
-                  :placeholder="triggerInputPlaceholder"
-                  inputmode="text"
-                  :disabled="!row.enabled"
-                  :aria-label="`${triggerPosName(label)}反投（开出 ${row.open}）`"
-                  @update:model-value="(v: string | number) => writeTriggerFieldCell(row, 'neg', pIdx, String(v ?? ''))"
-                  @change="commitTriggerFieldCell(row, 'neg', pIdx)"
-                />
+                <template v-if="triggerPerPosTextBet">
+                  <el-select
+                    :model-value="triggerTextTokens(getTriggerFieldCell(row, 'pos', pIdx))"
+                    size="small"
+                    multiple
+                    collapse-tags
+                    collapse-tags-tooltip
+                    placeholder="正投（可多选）"
+                    :disabled="!row.enabled"
+                    :aria-label="`${triggerPosName(label)}正投（开出 ${row.open}）`"
+                    @update:model-value="(v: string[]) => setTriggerTextFieldCell(row, 'pos', pIdx, v)"
+                  >
+                    <el-option v-for="v in triggerBetOptions" :key="`pp-${row.open}-${pIdx}-${v}`" :label="v" :value="v" />
+                  </el-select>
+                  <el-select
+                    :model-value="triggerTextTokens(getTriggerFieldCell(row, 'neg', pIdx))"
+                    size="small"
+                    multiple
+                    collapse-tags
+                    collapse-tags-tooltip
+                    placeholder="反投（可多选）"
+                    :disabled="!row.enabled"
+                    :aria-label="`${triggerPosName(label)}反投（开出 ${row.open}）`"
+                    @update:model-value="(v: string[]) => setTriggerTextFieldCell(row, 'neg', pIdx, v)"
+                  >
+                    <el-option v-for="v in triggerBetOptions" :key="`pn-${row.open}-${pIdx}-${v}`" :label="v" :value="v" />
+                  </el-select>
+                </template>
+                <template v-else>
+                  <el-input
+                    :model-value="getTriggerFieldCell(row, 'pos', pIdx)"
+                    size="small"
+                    :placeholder="triggerInputPlaceholder"
+                    inputmode="text"
+                    :disabled="!row.enabled"
+                    :aria-label="`${triggerPosName(label)}正投（开出 ${row.open}）`"
+                    @update:model-value="(v: string | number) => writeTriggerFieldCell(row, 'pos', pIdx, String(v ?? ''))"
+                    @change="commitTriggerFieldCell(row, 'pos', pIdx)"
+                  />
+                  <el-input
+                    :model-value="getTriggerFieldCell(row, 'neg', pIdx)"
+                    size="small"
+                    :placeholder="triggerInputPlaceholder"
+                    inputmode="text"
+                    :disabled="!row.enabled"
+                    :aria-label="`${triggerPosName(label)}反投（开出 ${row.open}）`"
+                    @update:model-value="(v: string | number) => writeTriggerFieldCell(row, 'neg', pIdx, String(v ?? ''))"
+                    @change="commitTriggerFieldCell(row, 'neg', pIdx)"
+                  />
+                </template>
               </div>
             </div>
           </template>

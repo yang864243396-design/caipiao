@@ -13,8 +13,10 @@ import './styles/detail-tab-rg.css'
 import './styles/layout-mobile.css'
 import './styles/layout-web.css'
 import { initLayoutMode } from '@/composables/useLayoutMode'
+import { installGlobalClickThrottle } from '@/utils/clickThrottle'
 
 initLayoutMode()
+installGlobalClickThrottle()
 
 const app = createApp(App)
 app.use(router)
