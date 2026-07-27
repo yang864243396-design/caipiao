@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
+
+	"caipiao/backend/internal/timeutil"
 )
 
 func isUnsetSchemeConfigDateTime(raw string) bool {
@@ -21,6 +23,7 @@ func isLegacyDefaultSchemeTimePair(startRaw, endRaw string) bool {
 	return strings.TrimSpace(startRaw) == "00:00" && strings.TrimSpace(endRaw) == "23:59"
 }
 
+// parseSchemeConfigDateTime 将方案配置中的开始/结束时间按北京时间（Asia/Shanghai）解析。
 func parseSchemeConfigDateTime(raw string) (time.Time, bool) {
 	raw = strings.TrimSpace(strings.ReplaceAll(raw, "：", ":"))
 	if isUnsetSchemeConfigDateTime(raw) {
@@ -29,6 +32,7 @@ func parseSchemeConfigDateTime(raw string) (time.Time, bool) {
 	if full := strings.Split(raw, " "); len(full) >= 2 {
 		raw = full[0] + " " + full[1]
 	}
+	loc := timeutil.PlatformLocation()
 	layouts := []string{
 		"2006-01-02 15:04:05",
 		"2006-01-02 15:04",
@@ -40,10 +44,10 @@ func parseSchemeConfigDateTime(raw string) (time.Time, bool) {
 		var t time.Time
 		var err error
 		if strings.Contains(layout, "2006") {
-			t, err = time.ParseInLocation(layout, raw, time.Local)
+			t, err = time.ParseInLocation(layout, raw, loc)
 		} else {
-			now := time.Now()
-			t, err = time.ParseInLocation("2006-01-02 "+layout, now.Format("2006-01-02")+" "+raw, time.Local)
+			nowBJ := time.Now().In(loc)
+			t, err = time.ParseInLocation("2006-01-02 "+layout, nowBJ.Format("2006-01-02")+" "+raw, loc)
 		}
 		if err == nil && !t.IsZero() {
 			return t, true

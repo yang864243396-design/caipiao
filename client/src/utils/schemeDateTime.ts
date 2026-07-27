@@ -1,9 +1,36 @@
 /**
- * 方案开始/结束时间解析与校验（支持 YYYY-MM-DD HH:mm:ss 与 HH:mm）。
+ * 方案开始/结束时间解析与校验。
+ * 墙钟一律按北京时间（Asia/Shanghai / UTC+8）解释，与后端 timeutil.PlatformLocation 一致。
  */
+
+const BEIJING_TZ = 'Asia/Shanghai'
+const BEIJING_OFFSET = '+08:00'
 
 function normalizeRaw(raw: string): string {
   return raw.trim().replace(/：/g, ':')
+}
+
+function pad2(n: number): string {
+  return String(n).padStart(2, '0')
+}
+
+/** 当前北京时间的年月日 */
+function beijingYmd(nowMs = Date.now()): { y: number; mo: number; d: number } {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: BEIJING_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(nowMs))
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? NaN)
+  return { y: get('year'), mo: get('month'), d: get('day') }
+}
+
+/** 将北京墙钟日期时间转为绝对毫秒时间戳 */
+function beijingWallToMs(y: number, mo: number, d: number, h: number, mi: number, s: number): number | null {
+  const iso = `${y}-${pad2(mo)}-${pad2(d)}T${pad2(h)}:${pad2(mi)}:${pad2(s)}${BEIJING_OFFSET}`
+  const ms = Date.parse(iso)
+  return Number.isNaN(ms) ? null : ms
 }
 
 /** 无效占位日期（如 0000-00-00 00:00:00） */
@@ -14,8 +41,8 @@ export function isInvalidSchemeDateTime(raw: string): boolean {
   return parseSchemeDateTimeMs(t) == null
 }
 
-/** 解析为毫秒时间戳；仅时刻（HH:mm）时使用固定日期便于比较 */
-export function parseSchemeDateTimeMs(raw: string): number | null {
+/** 解析为毫秒时间戳（北京墙钟）；仅时刻（HH:mm）时取「今天（北京）」 */
+export function parseSchemeDateTimeMs(raw: string, nowMs = Date.now()): number | null {
   const t = normalizeRaw(raw)
   if (!t) return null
 
@@ -25,15 +52,14 @@ export function parseSchemeDateTimeMs(raw: string): number | null {
     const mo = Number(full[2])
     const d = Number(full[3])
     if (y <= 0 || mo <= 0 || d <= 0) return null
-    const dt = new Date(
+    return beijingWallToMs(
       y,
-      mo - 1,
+      mo,
       d,
       Number(full[4] ?? 0),
       Number(full[5] ?? 0),
       Number(full[6] ?? 0),
     )
-    return Number.isNaN(dt.getTime()) ? null : dt.getTime()
   }
 
   const hm = t.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/)
@@ -42,7 +68,8 @@ export function parseSchemeDateTimeMs(raw: string): number | null {
     const mi = Number(hm[2])
     const s = Number(hm[3] ?? 0)
     if (h > 23 || mi > 59 || s > 59) return null
-    return new Date(2000, 0, 1, h, mi, s).getTime()
+    const { y, mo, d } = beijingYmd(nowMs)
+    return beijingWallToMs(y, mo, d, h, mi, s)
   }
 
   return null
@@ -59,9 +86,9 @@ export function isSchemeStartBeforeEnd(start: string, end: string): boolean {
 /**
  * 保存前校验时间范围；通过返回 null，否则返回提示文案。
  */
-/** 开启方案：开始时间须严格晚于当前时刻（提前开启后由 worker 在开始时间到达后下注） */
+/** 开启方案：开始时间须严格晚于当前时刻（北京时间；提前开启后由 worker 在开始时间到达后下注） */
 export function isSchemeStartAfterNow(start: string, nowMs = Date.now()): boolean {
-  const ms = parseSchemeDateTimeMs(start)
+  const ms = parseSchemeDateTimeMs(start, nowMs)
   if (ms == null) return false
   return ms > nowMs
 }

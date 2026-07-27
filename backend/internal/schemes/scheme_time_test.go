@@ -3,6 +3,8 @@ package schemes
 import (
 	"testing"
 	"time"
+
+	"caipiao/backend/internal/timeutil"
 )
 
 func TestValidateSchemeStartTimeAfterNowEmptyAllowsOpen(t *testing.T) {
@@ -29,13 +31,32 @@ func TestSchemeConfigStartTimeLegacyDefaultPairIgnored(t *testing.T) {
 	}
 }
 
+func TestParseSchemeConfigDateTimeUsesBeijing(t *testing.T) {
+	t.Parallel()
+	loc := timeutil.PlatformLocation()
+	got, ok := parseSchemeConfigDateTime("2026-07-01 15:30:00")
+	if !ok {
+		t.Fatal("parse failed")
+	}
+	want := time.Date(2026, 7, 1, 15, 30, 0, 0, loc)
+	if !got.Equal(want) {
+		t.Fatalf("got %v want %v (Beijing wall clock)", got, want)
+	}
+	if got.Location().String() != loc.String() && got.Location() != loc {
+		// FixedZone fallback name may differ; instant equality above is enough
+		_ = got
+	}
+}
+
 func TestValidateSchemeStartTimeAfterNowFutureRequired(t *testing.T) {
-	future := time.Now().Add(2 * time.Hour).Format("2006-01-02 15:04:05")
+	loc := timeutil.PlatformLocation()
+	nowBJ := time.Now().In(loc)
+	future := nowBJ.Add(2 * time.Hour).Format("2006-01-02 15:04:05")
 	cfg := []byte(`{"startTime":"` + future + `"}`)
 	if err := validateSchemeStartTimeAfterNow(cfg, time.Now()); err != nil {
 		t.Fatalf("future start should pass: %v", err)
 	}
-	past := time.Now().Add(-2 * time.Hour).Format("2006-01-02 15:04:05")
+	past := nowBJ.Add(-2 * time.Hour).Format("2006-01-02 15:04:05")
 	cfgPast := []byte(`{"startTime":"` + past + `"}`)
 	if err := validateSchemeStartTimeAfterNow(cfgPast, time.Now()); err == nil {
 		t.Fatal("past start should fail")
@@ -43,7 +64,8 @@ func TestValidateSchemeStartTimeAfterNowFutureRequired(t *testing.T) {
 }
 
 func TestEvaluateSchemeScheduleGate(t *testing.T) {
-	now := time.Date(2026, 6, 21, 12, 0, 0, 0, time.Local)
+	loc := timeutil.PlatformLocation()
+	now := time.Date(2026, 6, 21, 12, 0, 0, 0, loc)
 	futureStart := now.Add(time.Hour).Format("2006-01-02 15:04:05")
 	pastStart := now.Add(-time.Minute).Format("2006-01-02 15:04:05")
 	futureEnd := now.Add(time.Hour).Format("2006-01-02 15:04:05")
@@ -66,15 +88,16 @@ func TestEvaluateSchemeScheduleGate(t *testing.T) {
 }
 
 func TestValidateSchemeEndTimeNotReached(t *testing.T) {
-	now := time.Now()
-	future := now.Add(2 * time.Hour).Format("2006-01-02 15:04:05")
+	loc := timeutil.PlatformLocation()
+	nowBJ := time.Now().In(loc)
+	future := nowBJ.Add(2 * time.Hour).Format("2006-01-02 15:04:05")
 	cfg := []byte(`{"endTime":"` + future + `"}`)
-	if err := validateSchemeEndTimeNotReached(cfg, now); err != nil {
+	if err := validateSchemeEndTimeNotReached(cfg, time.Now()); err != nil {
 		t.Fatalf("future end should allow start: %v", err)
 	}
-	past := now.Add(-time.Minute).Format("2006-01-02 15:04:05")
+	past := nowBJ.Add(-time.Minute).Format("2006-01-02 15:04:05")
 	cfgPast := []byte(`{"endTime":"` + past + `"}`)
-	if err := validateSchemeEndTimeNotReached(cfgPast, now); err != ErrEndTimeReached {
+	if err := validateSchemeEndTimeNotReached(cfgPast, time.Now()); err != ErrEndTimeReached {
 		t.Fatalf("past end want ErrEndTimeReached got %v", err)
 	}
 }

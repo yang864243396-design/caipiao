@@ -17,6 +17,7 @@ import (
 	"caipiao/backend/internal/db/sqlcdb"
 
 	"caipiao/backend/internal/lottery"
+	"caipiao/backend/internal/timeutil"
 
 )
 
@@ -128,7 +129,7 @@ func TestSchemeStartPeriodEnded_legacyUsesCacheClose(t *testing.T) {
 
 func TestSchemeStartPeriodEnded_noSkipInScheduleWindow(t *testing.T) {
 
-	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.Local)
+	now := time.Date(2026, 7, 1, 12, 0, 0, 0, timeutil.PlatformLocation())
 
 	cfg := []byte(`{"startTime":"2026-07-01 11:00:00","endTime":"2026-07-01 20:00:00"}`)
 
