@@ -4,10 +4,31 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"caipiao/backend/internal/apix"
 )
+
+// StripTrailingSlash 去掉非根路径末尾的「/」，避免 Go 1.22 ServeMux
+// 把 /client/schemes/ 判成与 /client/schemes 不同路由而返回「404 page not found」。
+func StripTrailingSlash(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		if len(p) > 1 && strings.HasSuffix(p, "/") {
+			r2 := r.Clone(r.Context())
+			u := *r.URL
+			u.Path = strings.TrimRight(p, "/")
+			if u.Path == "" {
+				u.Path = "/"
+			}
+			r2.URL = &u
+			next.ServeHTTP(w, r2)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 func Recover(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

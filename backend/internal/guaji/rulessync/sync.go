@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"caipiao/backend/internal/db"
 )
@@ -126,7 +127,38 @@ func BuildPlan(templateCode, rulesTypeID string, tpl RulesTemplate) (SyncPlan, e
 	if len(plan.PlayTypes) == 0 || len(plan.SubPlays) == 0 {
 		return SyncPlan{}, fmt.Errorf("rules/v2 type %s 无有效玩法", rulesTypeID)
 	}
+	if err := checkPlanEncoding(plan); err != nil {
+		return SyncPlan{}, err
+	}
 	return plan, nil
+}
+
+// checkPlanEncoding 拒绝含 U+FFFD 替换字符的名称。
+//
+// 玩法名是下注模式与号池的判定依据，一个字损坏就会静默选错号：
+// lhc_std g003/299「三全中复式」曾把「式」存成两个 U+FFFD，导致
+// inferLHCBetMode 匹配不到「复式」，取样退化成单个号码，该玩法在正式盘
+// 长期无法下单（见 migrations/00137）。ApplyPlan 是整模板 DELETE+INSERT，
+// 此处报错会让事务回滚，库里保留上一次的正确名称。
+func checkPlanEncoding(plan SyncPlan) error {
+	bad := func(s string) bool { return strings.ContainsRune(s, utf8.RuneError) }
+	if bad(plan.RulesTypeName) {
+		return fmt.Errorf("模板 %s 名称含替换字符（上游或解码损坏）: %+q",
+			plan.TemplateCode, plan.RulesTypeName)
+	}
+	for _, pt := range plan.PlayTypes {
+		if bad(pt.Label) {
+			return fmt.Errorf("模板 %s 玩法类型 %s 名称含替换字符: %+q",
+				plan.TemplateCode, pt.TypeID, pt.Label)
+		}
+	}
+	for _, sp := range plan.SubPlays {
+		if bad(sp.Label) || bad(string(sp.SegmentRule)) {
+			return fmt.Errorf("模板 %s 子玩法 %s/%s 名称含替换字符: %+q",
+				plan.TemplateCode, sp.TypeID, sp.SubID, sp.Label)
+		}
+	}
+	return nil
 }
 
 func ApplyPlan(ctx context.Context, pool *db.Pool, plan SyncPlan) error {

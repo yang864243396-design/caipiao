@@ -7,7 +7,6 @@ var expectedWSKey = map[string]string{
 	"hash_jisu":      "lottery_log033",
 	"tron_k3_jisu":   "lottery_log033",
 	"tron_pk10_jisu": "lottery_log033",
-	"bnb_pk10_jisu":  "lottery_log033",
 
 	"hash_ffc_1m": "lottery_log103",
 	"hash_ffc_3m": "lottery_log303",
@@ -16,6 +15,8 @@ var expectedWSKey = map[string]string{
 	"bnb_ffc_1m":  "bsc_lottery_log01",
 	"bnb_k3_1m":   "bsc_lottery_log01",
 	"bnb_syxw":    "bsc_lottery_log01",
+	// 名字带"极速"但实测与 bnb_ffc_1m 同期号，属币安 1 分钟线（00138/00139）
+	"bnb_pk10_jisu": "bsc_lottery_log01",
 
 	// 波场分分彩 00 区块（独立 type）；03 线 lottery_log103/303/503 见 hash / 衍生
 	"tron_ffc_1m": "lottery1_wsds",
@@ -49,6 +50,25 @@ var expectedWSKey = map[string]string{
 // knownPending 尚无可靠 WS 或未配置 key；live 审计跳过，不记 FAIL。
 var knownPending = map[string]string{}
 
+// wsKeyByRestPath：REST 历史线 → 同一条线的 WS 广播 key。
+//
+// 两份映射（historysync 的 REST 路径、lottery_catalog.guaji_ws_key）指向同一条彩种线，
+// 但分开维护，抄错一处也不报错——币安极速赛车 REST 抄了波场极速线，99k 条开奖入错彩种、
+// 101 笔注单全 cancel，没人发现。有了这张表，两份映射就能互相校验（见 expected_family_test.go）。
+// 只列出 REST 与 WS 同名的线；tron_ffc_1m/3m/5m 那几条 REST 名与 WS 名无对应关系，留空跳过。
+var wsKeyByRestPath = map[string]string{
+	"lottery_log033s":   "lottery_log033",
+	"lottery_log05s":    "lottery_log05",
+	"lottery_log103s":   "lottery_log103",
+	"lottery_log303s":   "lottery_log303",
+	"lottery_log503s":   "lottery_log503",
+	"lottery_log101s":   "lottery_log101",
+	"lottery_log125s":   "lottery_log125",
+	"bsc_lottery_logs":  "bsc_lottery_log01",
+	"bsc_lottery_log3s": "bsc_lottery_log03",
+	"bsc_lottery_log5s": "bsc_lottery_log05",
+}
+
 func wsKeyCandidates(wsKey, restPath string) []string {
 	seen := map[string]bool{}
 	add := func(k string) {
@@ -61,28 +81,7 @@ func wsKeyCandidates(wsKey, restPath string) []string {
 	if alt := strings.TrimSuffix(wsKey, "s"); alt != wsKey {
 		add(alt)
 	}
-	switch restPath {
-	case "lottery_log033s":
-		add("lottery_log033")
-	case "lottery_log05s":
-		add("lottery_log05")
-	case "lottery_log103s":
-		add("lottery_log103")
-	case "lottery_log303s":
-		add("lottery_log303")
-	case "lottery_log503s":
-		add("lottery_log503")
-	case "lottery_log101s":
-		add("lottery_log101")
-	case "lottery_log125s":
-		add("lottery_log125")
-	case "bsc_lottery_logs":
-		add("bsc_lottery_log01")
-	case "bsc_lottery_log3s":
-		add("bsc_lottery_log03")
-	case "bsc_lottery_log5s":
-		add("bsc_lottery_log05")
-	}
+	add(wsKeyByRestPath[restPath])
 	out := make([]string, 0, len(seen))
 	for k := range seen {
 		out = append(out, k)

@@ -9,12 +9,27 @@ import {
   type BetRecordDisplayRow,
   type BetRecordMode,
 } from '@/api/cloud/betRecords'
+import {
+  getBetListMemoryCache,
+  peekBetListRestore,
+  saveBetListRestore,
+  setBetListMemoryCache,
+  takeBetListRestore,
+} from '@/composables/useBetListRestore'
+
+type SchemeBetListCache = {
+  schemeName: string
+  rows: BetRecordDisplayRow[]
+  nextCursor: string | null
+  hasMore: boolean
+}
 
 const route = useRoute()
 const router = useRouter()
 
 const mode = computed<BetRecordMode>(() => (route.query.mode === 'sim' ? 'sim' : 'real'))
 const schemeId = computed(() => String(route.params.schemeId ?? ''))
+const pageKey = computed(() => `cloud-scheme:${schemeId.value}:${mode.value}`)
 
 const schemeName = ref('方案明细')
 const displayRows = ref<BetRecordDisplayRow[]>([])
@@ -31,6 +46,15 @@ function resetPagination(): void {
   hasMore.value = false
 }
 
+function persistCache(): void {
+  setBetListMemoryCache<SchemeBetListCache>(pageKey.value, {
+    schemeName: schemeName.value,
+    rows: displayRows.value.slice(),
+    nextCursor: nextCursor.value,
+    hasMore: hasMore.value,
+  })
+}
+
 async function fetchDetailPage(cursor?: string, append = false): Promise<void> {
   const data = await fetchBetRecordDetail(schemeId.value, {
     mode: mode.value,
@@ -43,6 +67,7 @@ async function fetchDetailPage(cursor?: string, append = false): Promise<void> {
   displayRows.value = append ? [...displayRows.value, ...mapped] : mapped
   hasMore.value = data.records.page?.hasMore ?? false
   nextCursor.value = data.records.page?.nextCursor ?? null
+  persistCache()
 }
 
 async function loadDetail(reset = true): Promise<void> {
@@ -79,6 +104,30 @@ async function loadMore(): Promise<void> {
   }
 }
 
+async function ensureAnchorVisible(anchorRecordNo: string): Promise<void> {
+  const target = anchorRecordNo.trim()
+  if (!target) return
+  for (let i = 0; i < 20; i++) {
+    if (displayRows.value.some((r) => r.recordNo === target)) return
+    if (!hasMore.value || !nextCursor.value) return
+    await loadMore()
+  }
+}
+
+function scrollToAnchor(anchorRecordNo: string, scrollY: number): void {
+  // 优先还原离开时的滚动位置；锚点仅在内容高度变化导致 scrollY 无效时兜底
+  if (Number.isFinite(scrollY) && scrollY > 0) {
+    window.scrollTo(0, scrollY)
+    return
+  }
+  const target = anchorRecordNo.trim()
+  if (!target) return
+  const el = document.querySelector(`[data-record-no="${CSS.escape(target)}"]`)
+  if (el instanceof HTMLElement) {
+    el.scrollIntoView({ block: 'center' })
+  }
+}
+
 function setupLoadObserver(): void {
   loadObserver?.disconnect()
   if (!loadSentinel.value) return
@@ -91,8 +140,70 @@ function setupLoadObserver(): void {
   loadObserver.observe(loadSentinel.value)
 }
 
+async function bootstrap(): Promise<void> {
+  const cached = getBetListMemoryCache<SchemeBetListCache>(pageKey.value)
+  const pending = peekBetListRestore(pageKey.value)
+  if (pending && cached?.rows.length) {
+    const restore = takeBetListRestore(pageKey.value)!
+    schemeName.value = cached.schemeName
+    displayRows.value = cached.rows
+    nextCursor.value = cached.nextCursor
+    hasMore.value = cached.hasMore
+    await nextTick()
+    setupLoadObserver()
+    await nextTick()
+    scrollToAnchor(restore.anchorRecordNo, restore.scrollY)
+    // 瞬时还原后静默刷新：避免进详情期间已结算的盈亏仍显示旧值
+    void silentRefresh(restore.scrollY)
+    return
+  }
+  const restore = takeBetListRestore(pageKey.value)
+  await loadDetail()
+  if (restore?.anchorRecordNo) {
+    await ensureAnchorVisible(restore.anchorRecordNo)
+    await nextTick()
+    scrollToAnchor(restore.anchorRecordNo, restore.scrollY)
+  }
+}
+
+/** 不打断滚动地重拉至不少于当前条数（避免进详情期间结算结果仍显示旧盈亏） */
+async function silentRefresh(keepScrollY: number): Promise<void> {
+  const want = Math.max(displayRows.value.length, BET_RECORD_DETAIL_PAGE_SIZE)
+  try {
+    const merged: BetRecordDisplayRow[] = []
+    let cursor: string | undefined
+    let more = true
+    let name = schemeName.value
+    while (more && merged.length < want) {
+      const data = await fetchBetRecordDetail(schemeId.value, {
+        mode: mode.value,
+        days: 3,
+        cursor,
+        limit: BET_RECORD_DETAIL_PAGE_SIZE,
+      })
+      name = data.schemeName
+      merged.push(...data.records.items.map(toDisplayRow))
+      more = data.records.page?.hasMore ?? false
+      cursor = data.records.page?.nextCursor ?? undefined
+      if (!cursor) more = false
+    }
+    schemeName.value = name
+    displayRows.value = merged
+    hasMore.value = more
+    nextCursor.value = cursor ?? null
+    persistCache()
+    await nextTick()
+    setupLoadObserver()
+    if (Number.isFinite(keepScrollY) && keepScrollY > 0) {
+      window.scrollTo(0, keepScrollY)
+    }
+  } catch {
+    /* 静默失败保留缓存展示 */
+  }
+}
+
 onMounted(() => {
-  void loadDetail()
+  void bootstrap()
 })
 
 onUnmounted(() => {
@@ -107,6 +218,20 @@ watch([schemeId, mode], () => {
 function goBack() {
   if (window.history.length > 1) router.back()
   else void router.push({ name: 'bet-records', query: { mode: mode.value } })
+}
+
+function openDetail(row: BetRecordDisplayRow): void {
+  const recordNo = (row.recordNo || '').trim()
+  if (!recordNo) {
+    ElMessage.warning('该记录暂无法查看详情')
+    return
+  }
+  persistCache()
+  saveBetListRestore(pageKey.value, {
+    scrollY: window.scrollY,
+    anchorRecordNo: recordNo,
+  })
+  void router.push({ name: 'bet-detail', params: { recordNo } })
 }
 </script>
 
@@ -125,16 +250,17 @@ function goBack() {
         <div v-loading="loading" class="br-table-card">
           <el-table
             :data="displayRows"
-            class="br-el-table br-detail-table"
+            class="br-el-table br-detail-table br-table--clickable"
             size="small"
             stripe
             fit
             empty-text="暂无数据"
             :style="{ width: '100%' }"
+            @row-click="openDetail"
           >
             <el-table-column prop="period" label="期号" width="32%" align="center" class-name="br-cell-order">
               <template #default="{ row }">
-                <span class="br-td-order">{{ row.period }}</span>
+                <span class="br-td-order" :data-record-no="row.recordNo">{{ row.period }}</span>
               </template>
             </el-table-column>
 
@@ -288,5 +414,13 @@ function goBack() {
   padding-inline: 0.25rem;
   transform: scale(0.9);
   transform-origin: center;
+}
+
+.br-table--clickable :deep(.el-table__body tr) {
+  cursor: pointer;
+}
+
+.br-table--clickable :deep(.el-table__body tr:hover > td.el-table__cell) {
+  background: rgba(0, 80, 203, 0.04) !important;
 }
 </style>

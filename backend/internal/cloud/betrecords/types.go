@@ -12,8 +12,9 @@ const (
 type Status string
 
 const (
-	StatusHit  Status = "hit"
-	StatusMiss Status = "miss"
+	StatusPending Status = "pending"
+	StatusHit     Status = "hit"
+	StatusMiss    Status = "miss"
 )
 
 type Row struct {
@@ -25,12 +26,12 @@ type Row struct {
 	Period           string
 	ThirdPartyPeriod string
 	PlayType         string
-	Multiplier      string
-	Round           string
-	Amount          float64
-	PnL             float64
-	Status          Status
-	BetContent      string
+	Multiplier       string
+	Round            string
+	Amount           float64
+	PnL              float64
+	Status           Status
+	BetContent       string
 }
 
 type Group struct {
@@ -65,6 +66,7 @@ type GroupsPage struct {
 
 type Item struct {
 	ID         string  `json:"id"`
+	RecordNo   string  `json:"recordNo"`
 	Period     string  `json:"period"`
 	Periods    string  `json:"periods,omitempty"`
 	PlayType   string  `json:"playType"`
@@ -95,4 +97,28 @@ type DetailResult struct {
 type Page struct {
 	Items []Item   `json:"items"`
 	Page  PageMeta `json:"page"`
+}
+
+// ItemDetail 单笔投注详情（GET /client/cloud/bet-records/item/{recordNo}）。
+type ItemDetail struct {
+	RecordNo     string   `json:"recordNo"`
+	ThirdPartyID string   `json:"thirdPartyId"`
+	Period       string   `json:"period"`
+	LotteryLabel string   `json:"lotteryLabel"`
+	PlayType     string   `json:"playType"`
+	Status       string   `json:"status"`
+	StatusLabel  string   `json:"statusLabel"`
+	DrawNumbers  string   `json:"drawNumbers"`
+	BetUnits     *int     `json:"betUnits"`
+	Multiplier   string   `json:"multiplier"`
+	Round        string   `json:"round"`
+	Amount       float64  `json:"amount"`
+	Currency     string   `json:"currency"`
+	PayoutAmount *float64 `json:"payoutAmount"`
+	PlacedAt     string   `json:"placedAt"`
+	BetContent   string   `json:"betContent"`
+	// BetContentLines 已按玩法位段标好位名的展示行（如「千位 1 3 5」）。
+	// 玩法无按位语义或位段解析不出时为空，前端回退到 BetContent 原样展示。
+	BetContentLines []string `json:"betContentLines,omitempty"`
+	SimBet          bool     `json:"simBet"`
 }

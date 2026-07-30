@@ -576,6 +576,9 @@ func (h *Handler) handleSchemeErr(w http.ResponseWriter, err error) {
 		apix.Fail(w, http.StatusConflict, 40902, "运行中不可修改方案币种")
 	case errors.Is(err, schemes.ErrInvalidUpdatePatch):
 		apix.Validation(w, "更新参数无效")
+	// 越界原因要原样透出：只说"内容无效"用户无从下手改
+	case errors.Is(err, schemes.ErrInvalidSchemeContent):
+		apix.Validation(w, strings.TrimPrefix(err.Error(), schemes.ErrInvalidSchemeContent.Error()+": "))
 
 	case errors.Is(err, member.ErrNotFound):
 		apix.Fail(w, http.StatusNotFound, apix.CodeNotFound, "会员不存在")

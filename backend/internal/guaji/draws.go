@@ -3,13 +3,10 @@ package guaji
 import (
 	"context"
 	"encoding/json"
-	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/gorilla/websocket"
 )
 
 // DrawEvent 是一条彩种线开奖（T3，实测协议）。
@@ -280,7 +277,9 @@ func parseDrawTime(s string) time.Time {
 func wsPathOrDefault(p string) string {
 	p = strings.TrimSpace(p)
 	if p == "" {
-		return "/ws"
+		// 尾斜杠是必须的：2026-07-28 起 /ws 返回 301 → /ws/，
+		// WebSocket 拨号不跟随重定向，开奖 WS 全线连不上、所有彩种停止入库。
+		return "/ws/"
 	}
 	if !strings.HasPrefix(p, "/") {
 		return "/" + p
@@ -304,20 +303,7 @@ func (c *Client) SubscribeDraws(ctx context.Context, handler func([]DrawEvent)) 
 	q.Set("token", "Anonymous")
 	u.RawQuery = q.Encode()
 
-	dialer := websocket.Dialer{
-		HandshakeTimeout: 10 * time.Second,
-		NetDialContext:   dialContextPreferHealthy,
-		Proxy:            httpProxyFunc(),
-	}
-	hdr := http.Header{}
-	if c.cfg.Origin != "" {
-		hdr.Set("Origin", c.cfg.Origin)
-	}
-	hdr.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
-	conn, resp, err := dialer.DialContext(ctx, u.String(), hdr)
-	if resp != nil && resp.Body != nil {
-		defer resp.Body.Close()
-	}
+	conn, err := c.dialWS(ctx, u.String())
 	if err != nil {
 		return err
 	}

@@ -71,9 +71,11 @@ func TestPickOpenLottPeriod_hashUtcWallClock(t *testing.T) {
 	}
 }
 
+// 验的是时区：第三方 tron game_id=27 返回北京时间墙钟，14:41 应解析为 UTC 06:41。
+// now 取在开盘之后，让这一期落到「已开盘」分支、封盘时刻取 end_time；
+// 未开盘期改用 start_time 当封盘时刻的规则由 missingCurrentPeriodUsesNextStart 覆盖。
 func TestPickOpenLottPeriod_tronBeijingWallClock(t *testing.T) {
-	// 第三方 tron game_id=27 返回北京时间墙钟 14:40，对应 UTC 06:40
-	now := time.Date(2026, 6, 21, 6, 39, 50, 0, time.UTC)
+	now := time.Date(2026, 6, 21, 6, 40, 30, 0, time.UTC) // 北京 14:40:30
 	periods := []LottPeriod{
 		{Period: "111202606210880", StartTime: "2026-06-21 14:40:00", EndTime: "2026-06-21 14:41:00"},
 	}

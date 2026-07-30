@@ -218,9 +218,10 @@ func TestGetCloudCenterStatsIntegration(t *testing.T) {
 	}
 
 	type channelExpect struct {
-		totalTurnover     float64
-		totalSessionPnl   float64
-		runningSessionPnl float64
+		totalTurnover        float64
+		totalSessionPnl      float64
+		runningSessionPnl    float64
+		nonRunningSessionPnl float64
 	}
 	expect := map[bool]channelExpect{false: {}, true: {}}
 
@@ -229,7 +230,8 @@ SELECT
     sim_bet,
     COALESCE(SUM(turnover), 0)::float8 AS total_turnover,
     COALESCE(SUM(session_pnl), 0)::float8 AS total_session_pnl,
-    COALESCE(SUM(session_pnl) FILTER (WHERE status = 'running'), 0)::float8 AS running_session_pnl
+    COALESCE(SUM(session_pnl) FILTER (WHERE status = 'running'), 0)::float8 AS running_session_pnl,
+    COALESCE(SUM(session_pnl) FILTER (WHERE status <> 'running'), 0)::float8 AS non_running_session_pnl
 FROM scheme_instances
 WHERE member_id = $1
 GROUP BY sim_bet`, memberID)
@@ -241,7 +243,7 @@ GROUP BY sim_bet`, memberID)
 	for rows.Next() {
 		var simBet bool
 		var ch channelExpect
-		if err := rows.Scan(&simBet, &ch.totalTurnover, &ch.totalSessionPnl, &ch.runningSessionPnl); err != nil {
+		if err := rows.Scan(&simBet, &ch.totalTurnover, &ch.totalSessionPnl, &ch.runningSessionPnl, &ch.nonRunningSessionPnl); err != nil {
 			t.Fatalf("scan: %v", err)
 		}
 		expect[simBet] = ch
@@ -266,14 +268,23 @@ GROUP BY sim_bet`, memberID)
 	assertChannel("formal", got.Formal, expect[false])
 	assertChannel("sim", got.Sim, expect[true])
 
-	if math.Abs(got.Formal.RunningSessionPnl) > math.Abs(got.Formal.TotalSessionPnl)+0.05 {
-		t.Errorf("formal |runningSessionPnl| %.1f exceeds |totalSessionPnl| %.1f",
-			got.Formal.RunningSessionPnl, got.Formal.TotalSessionPnl)
+	// running 与非 running 必须构成对全部实例的一个划分：两者相加等于合计。
+	// 这条能抓住「running 聚合取错集合」这类错误，而盈亏有正负，
+	// 不能用 |running| <= |total| 代替——在运行中的方案盈、已停的方案亏得更多时，
+	// 子集的绝对值完全可以大于全集，那样写只在符号恰好一致时碰巧通过。
+	assertPartition := func(name string, got schemes.CloudCenterChannelStats, exp channelExpect) {
+		t.Helper()
+		// got 的两个分量各自已四舍五入到 0.1，作差后误差可达 0.1，
+		// 叠加 want 侧的 0.05，取 0.2 容差；真出错时偏差是量级上的，不会被掩盖。
+		gotNonRunning := got.TotalSessionPnl - got.RunningSessionPnl
+		want := roundStat(exp.nonRunningSessionPnl)
+		if math.Abs(gotNonRunning-want) > 0.2 {
+			t.Errorf("%s 非 running 盈亏对不上：total-running=%.1f，直连 SQL 为 %.1f",
+				name, gotNonRunning, want)
+		}
 	}
-	if math.Abs(got.Sim.RunningSessionPnl) > math.Abs(got.Sim.TotalSessionPnl)+0.05 {
-		t.Errorf("sim |runningSessionPnl| %.1f exceeds |totalSessionPnl| %.1f",
-			got.Sim.RunningSessionPnl, got.Sim.TotalSessionPnl)
-	}
+	assertPartition("formal", got.Formal, expect[false])
+	assertPartition("sim", got.Sim, expect[true])
 
 	t.Logf("account=%s formal=%+v sim=%+v", account, got.Formal, got.Sim)
 }

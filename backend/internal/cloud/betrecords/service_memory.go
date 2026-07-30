@@ -26,8 +26,12 @@ func (s rowSeed) row() Row {
 	if id := s.thirdParty; id != "" {
 		tp = pgtype.Text{String: id, Valid: true}
 	}
+	recordNo := "CB-MEM-" + s.thirdParty
+	if s.thirdParty == "" {
+		recordNo = "CB-MEM-" + s.scheme + "-" + s.period
+	}
 	return Row{
-		ID:              s.thirdParty,
+		ID:              recordNo,
 		ThirdPartyBetID: tp,
 		SchemeID:        s.scheme,
 		SchemeName:      s.name,

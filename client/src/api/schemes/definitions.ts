@@ -170,20 +170,22 @@ export interface SchemeHotColdWarm {
   /** 统计总期数 */
   totalPeriods: number
   /**
-   * 手动覆盖池（每位一行，逗号分隔）。某位非空则该位用手选号码，
-   * 为空则该位按名次自动取号（混合模式）。也用于旧配置兼容回退。
+   * 权威配置：每位一行名次（0=最热）。运行时按近 N 期重排后取「当前排在这些名次上的号码」。
+   * 热/冷/全/清只是快捷勾选名次；点格子切换的也是名次。
+   */
+  ranks?: number[][]
+  /**
+   * 编辑预览缓存（当前排名映射后的号码）；运行时不锁定。
+   * 无 ranks 的旧配置：非空行表示该位启用。
    */
   pool: string[]
   /** every 每期换 / keep 不换号 / after_hit 中后换 / after_miss 挂后换 */
   strategy?: SchemeRotateStrategy
-  /** 出号类型：hot / cold（可多选；按此在冷热排序上取名次） */
+  /** 快捷元数据（热/冷）；有 ranks 时运行时以 ranks 为准 */
   pickTypes?: SchemeHotColdPickType[]
-  /**
-   * 容错=起点偏移：在「最热→最冷」排序上跳过该端最极端的前 N 名（0-9，0=不跳过）。
-   * 语义已由旧「取 N 个」改为「起点偏移」（对齐富联冷热出号逆向）。
-   */
+  /** @deprecated 已废弃，忽略 */
   faultCount?: number
-  /** 每位取几个名次：从起点偏移处连续取 N 个号（默认 1，1-10） */
+  /** @deprecated 已废弃，忽略 */
   pickCount?: number
   /**
    * @deprecated 兼容旧配置；优先读 strategy。true≈after_hit，false≈keep
@@ -259,13 +261,22 @@ export interface UpdateSchemeInput {
 
 
 
+function requireDefinitionId(definitionId: string): string {
+  const id = String(definitionId ?? '').trim()
+  // 空 id 会拼成 /client/schemes/ → Go mux 404 page not found
+  if (!id) throw new Error('缺少方案 ID')
+  return id
+}
+
 export async function getSchemeDefinition(definitionId: string): Promise<SchemeDefinitionDto> {
+
+  const id = requireDefinitionId(definitionId)
 
   await ensureClientSession()
 
   return requestApi<SchemeDefinitionDto>(
 
-    `/client/schemes/${encodeURIComponent(definitionId)}`,
+    `/client/schemes/${encodeURIComponent(id)}`,
 
   )
 
@@ -279,15 +290,19 @@ export async function updateSchemeDefinition(
 
   input: UpdateSchemeInput,
 
+  opts?: { throttle?: boolean },
+
 ): Promise<SchemeDefinitionDto> {
+
+  const id = requireDefinitionId(definitionId)
 
   await ensureClientSession()
 
   return requestApi<SchemeDefinitionDto>(
 
-    `/client/schemes/${encodeURIComponent(definitionId)}`,
+    `/client/schemes/${encodeURIComponent(id)}`,
 
-    { method: 'PATCH', body: input },
+    { method: 'PATCH', body: input, throttle: opts?.throttle },
 
   )
 
@@ -297,11 +312,13 @@ export async function updateSchemeDefinition(
 
 export async function deleteSchemeDefinition(definitionId: string): Promise<void> {
 
+  const id = requireDefinitionId(definitionId)
+
   await ensureClientSession()
 
   await requestApi<Record<string, never>>(
 
-    `/client/schemes/${encodeURIComponent(definitionId)}`,
+    `/client/schemes/${encodeURIComponent(id)}`,
 
     { method: 'DELETE' },
 

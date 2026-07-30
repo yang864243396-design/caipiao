@@ -1,5 +1,5 @@
 ﻿<script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import DateRangePickerField from '@/components/ui/DateRangePickerField.vue'
@@ -10,6 +10,13 @@ import {
   toBetDisplayRow,
   type BetCurrencySummary,
 } from '@/api/orders/bets'
+import {
+  getBetListMemoryCache,
+  peekBetListRestore,
+  saveBetListRestore,
+  setBetListMemoryCache,
+  takeBetListRestore,
+} from '@/composables/useBetListRestore'
 import { fetchMemberLotteryFilterOptions, fetchPublicLotteries } from '@/api/games/lotteries'
 import { fetchRunningSchemes } from '@/api/cloud/center'
 import { PRIMARY_CURRENCIES, type PrimaryCurrency } from '@/api/guaji/accounts'
@@ -68,9 +75,19 @@ interface BetRow {
   time: string
   game: string
   orderId: string
+  recordNo: string
   amount: string
   returnAmount: string
   status: string
+}
+
+const PAGE_KEY = 'member-bet-records'
+
+type MemberBetListCache = {
+  rows: BetRow[]
+  nextCursor: string | null
+  hasMore: boolean
+  summary: BetCurrencySummary[]
 }
 
 const router = useRouter()
@@ -220,6 +237,27 @@ function applySummary(items?: BetCurrencySummary[]): void {
   })
 }
 
+function cacheKey(): string {
+  const range = dateRange.value
+  return [
+    gameId.value,
+    schemeId.value,
+    currency.value,
+    orderNo.value.trim(),
+    range?.[0] ?? '',
+    range?.[1] ?? '',
+  ].join('|')
+}
+
+function persistCache(): void {
+  setBetListMemoryCache<MemberBetListCache>(cacheKey(), {
+    rows: rows.value.slice(),
+    nextCursor: nextCursor.value,
+    hasMore: hasMore.value,
+    summary: summaryRows.value.slice(),
+  })
+}
+
 async function fetchBetPage(cursor?: string, append = false): Promise<void> {
   if (!dateRange.value || !dateRange.value[0] || !dateRange.value[1]) return
   const result = await fetchBetOrders({
@@ -239,6 +277,7 @@ async function fetchBetPage(cursor?: string, append = false): Promise<void> {
   if (!append) {
     applySummary(result.summary)
   }
+  persistCache()
 }
 
 async function runSearch(auto = false): Promise<void> {
@@ -343,8 +382,86 @@ async function loadCloudSchemeOptions() {
 async function loadFilters() {
   await Promise.all([loadGameOptions(), loadCloudSchemeOptions()])
   applyDefaultFilters()
-  await runSearch(true)
+  const pending = peekBetListRestore(PAGE_KEY)
+  if (pending?.filters) {
+    const f = pending.filters
+    if (typeof f.gameId === 'string') gameId.value = f.gameId
+    if (typeof f.schemeId === 'string') schemeId.value = f.schemeId
+    if (typeof f.currency === 'string') currency.value = f.currency as BetCurrencyFilter
+    if (typeof f.orderNo === 'string') orderNo.value = f.orderNo
+    if (Array.isArray(f.dateRange) && f.dateRange.length === 2) {
+      dateRange.value = [String(f.dateRange[0]), String(f.dateRange[1])]
+    }
+    syncSchemeToGame()
+  }
   filtersReady.value = true
+  const key = cacheKey()
+  const cached = pending ? getBetListMemoryCache<MemberBetListCache>(key) : undefined
+  if (pending && cached?.rows.length) {
+    const restore = takeBetListRestore(PAGE_KEY)!
+    rows.value = cached.rows
+    nextCursor.value = cached.nextCursor
+    hasMore.value = cached.hasMore
+    applySummary(cached.summary)
+    ready.value = true
+    await nextTick()
+    setupLoadObserver()
+    await nextTick()
+    scrollToAnchor(restore.anchorRecordNo, restore.scrollY)
+    return
+  }
+  const restore = takeBetListRestore(PAGE_KEY)
+  await runSearch(true)
+  if (restore?.anchorRecordNo) {
+    await ensureAnchorVisible(restore.anchorRecordNo)
+    await nextTick()
+    scrollToAnchor(restore.anchorRecordNo, restore.scrollY)
+  }
+}
+
+async function ensureAnchorVisible(anchorRecordNo: string): Promise<void> {
+  const target = anchorRecordNo.trim()
+  if (!target) return
+  for (let i = 0; i < 20; i++) {
+    if (rows.value.some((r) => r.recordNo === target)) return
+    if (!hasMore.value || !nextCursor.value) return
+    await loadMore()
+  }
+}
+
+function scrollToAnchor(anchorRecordNo: string, scrollY: number): void {
+  // 优先还原离开时的滚动位置；锚点仅在内容高度变化导致 scrollY 无效时兜底
+  if (Number.isFinite(scrollY) && scrollY > 0) {
+    window.scrollTo(0, scrollY)
+    return
+  }
+  const target = anchorRecordNo.trim()
+  if (!target) return
+  const el = document.querySelector(`[data-record-no="${CSS.escape(target)}"]`)
+  if (el instanceof HTMLElement) {
+    el.scrollIntoView({ block: 'center' })
+  }
+}
+
+function openDetail(row: BetRow): void {
+  const recordNo = (row.recordNo || '').trim()
+  if (!recordNo) {
+    ElMessage.warning('该记录暂无法查看详情')
+    return
+  }
+  persistCache()
+  saveBetListRestore(PAGE_KEY, {
+    scrollY: window.scrollY,
+    anchorRecordNo: recordNo,
+    filters: {
+      gameId: gameId.value,
+      schemeId: schemeId.value,
+      currency: currency.value,
+      orderNo: orderNo.value,
+      dateRange: dateRange.value ? [...dateRange.value] : null,
+    },
+  })
+  void router.push({ name: 'bet-detail', params: { recordNo } })
 }
 
 onMounted(() => {
@@ -425,8 +542,19 @@ onUnmounted(() => {
           <p class="mbr-empty-title">暂无投注记录</p>
         </div>
         <template v-else>
-          <el-table :data="rows" stripe size="small" class="mbr-table member-list-table" style="width: 100%">
-            <el-table-column prop="time" label="时间" :min-width="44" />
+          <el-table
+            :data="rows"
+            stripe
+            size="small"
+            class="mbr-table member-list-table mbr-table--clickable"
+            style="width: 100%"
+            @row-click="openDetail"
+          >
+            <el-table-column prop="time" label="时间" :min-width="44">
+              <template #default="{ row }">
+                <span :data-record-no="row.recordNo">{{ row.time }}</span>
+              </template>
+            </el-table-column>
             <el-table-column prop="game" label="彩种" :min-width="40" />
             <el-table-column prop="orderId" label="单号" :min-width="44" />
             <el-table-column prop="amount" label="投注金额" :min-width="36" />
@@ -700,6 +828,14 @@ onUnmounted(() => {
   line-height: 1.5;
   color: var(--mbr-on-mute);
   text-align: center;
+}
+
+.mbr-table--clickable :deep(.el-table__body tr) {
+  cursor: pointer;
+}
+
+.mbr-table--clickable :deep(.el-table__body tr:hover > td.el-table__cell) {
+  background: rgba(0, 80, 203, 0.04) !important;
 }
 </style>
 

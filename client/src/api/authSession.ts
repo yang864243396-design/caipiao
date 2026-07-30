@@ -19,7 +19,8 @@ export function isSessionExpiredError(err: unknown): boolean {
   )
 }
 
-let handling = false
+/** 并发 401 共用同一处理 Promise，避免第二次直接 return 导致无人跳转 */
+let handling: Promise<void> | null = null
 
 function buildLoginHref(redirect: string): string {
   const base = import.meta.env.BASE_URL || '/'
@@ -28,57 +29,55 @@ function buildLoginHref(redirect: string): string {
   return `${prefix}/login?${qs.toString()}`
 }
 
+function goLoginPage(redirect: string): void {
+  const href = buildLoginHref(redirect)
+  // 会话失效必须整页进入登录：软路由 replace 可能被挂起的导航/组件卸载拖死，
+  // 表现为点「重新登录」后仍停在原页，再点其它入口才被守卫送去登录。
+  window.location.assign(href)
+}
+
 /**
  * token 失效：清除会话、弹窗提示并跳转登录页（并发 401 仅处理一次）。
  */
-export async function handleSessionExpired(): Promise<void> {
-  if (handling) return
-  handling = true
+export function handleSessionExpired(): Promise<void> {
+  if (handling) return handling
 
-  try {
-    const { router } = await import('@/router')
-    const current = router.currentRoute.value
-    if (current.name === 'login') {
+  handling = (async () => {
+    try {
+      const { router } = await import('@/router')
+      const current = router.currentRoute.value
+      if (current.name === 'login' || current.path === '/login') {
+        logoutClient()
+        return
+      }
+
+      const redirect = current.fullPath && current.fullPath !== '/login' ? current.fullPath : '/'
       logoutClient()
-      return
+
+      try {
+        await ElMessageBox.alert('登录状态已失效，请重新登录', '登录过期', {
+          confirmButtonText: '重新登录',
+          type: 'warning',
+          closeOnClickModal: false,
+          closeOnPressEscape: false,
+          showClose: false,
+          appendTo: document.body,
+          // 避免被全局连点节流 stopImmediatePropagation 误伤确认按钮
+          customClass: 'session-expired-msgbox',
+        })
+      } catch {
+        // 关闭/异常也继续去登录页
+      }
+
+      // 弹窗期间若有逻辑写回 token，跳转前再清一次
+      logoutClient()
+      goLoginPage(redirect)
+    } finally {
+      handling = null
     }
+  })()
 
-    const redirect = current.fullPath && current.fullPath !== '/login' ? current.fullPath : '/'
-    logoutClient()
-
-    try {
-      await ElMessageBox.alert('登录状态已失效，请重新登录', '登录过期', {
-        confirmButtonText: '重新登录',
-        type: 'warning',
-        closeOnClickModal: false,
-        closeOnPressEscape: false,
-        showClose: false,
-        appendTo: document.body,
-      })
-    } catch {
-      // 关闭/异常也继续去登录页
-    }
-
-    // 弹窗期间若有逻辑写回 token，跳转前再清一次，避免守卫把已登录用户从登录页弹回原页
-    logoutClient()
-
-    try {
-      await router.replace({
-        path: '/login',
-        query: { redirect, expired: '1' },
-      })
-    } catch {
-      // 导航失败走硬跳转
-    }
-
-    // 软路由未切走时强制整页进入登录页（焦点陷阱/导航中止等边缘情况）
-    const now = router.currentRoute.value
-    if (now.name !== 'login' && now.path !== '/login') {
-      window.location.assign(buildLoginHref(redirect))
-    }
-  } finally {
-    handling = false
-  }
+  return handling
 }
 
 /** 401 后阻止业务层继续抛错 / 重复 toast */

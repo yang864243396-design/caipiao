@@ -13,7 +13,9 @@ import {
   isDraftSchemeId,
   loadSchemeDraft,
   saveDraftBetMultiplier,
+  saveSchemeEditBmPending,
 } from '@/utils/schemeDraftStorage'
+import { readDraftAdvancedTemplates } from '@/utils/draftAdvancedTemplates'
 import {
   loadPlayDetailShareDock,
   savePlayDetailShareDock,
@@ -295,6 +297,18 @@ function buildBetMultiplierPayload(): BetMultiplierPayload {
     },
     advanced: {
       selectedId: selectedAdvancedId.value,
+      // Worker 只消费 config.rounds；仅存 selectedId 会落到服务端默认表（挂后停第 1 局）。
+      ...(selectedAdvancedId.value
+        ? (() => {
+            const rounds = roundsForTemplate(selectedAdvancedId.value)
+            return rounds?.length ? { rounds } : {}
+          })()
+        : {}),
+      // 勿冲掉草稿里的 customTemplates，否则上云时无法 sync 会员「新方案」
+      ...((): { customTemplates?: ReturnType<typeof readDraftAdvancedTemplates> } => {
+        const custom = readDraftAdvancedTemplates()
+        return custom.length ? { customTemplates: custom } : {}
+      })(),
     },
   }
 }
@@ -421,18 +435,15 @@ async function onConfirm() {
       String(route.query.detailReturn ?? '') === 'scheme-detail')
   ) {
     const kind = persistKindLabel()
-    try {
-      sessionStorage.setItem(
-        `scheme-edit-bm-pending:${schemeId}`,
-        JSON.stringify({ kind, payload: buildBetMultiplierPayload() }),
-      )
-    } catch {
-      /* ignore */
+    const payload = buildBetMultiplierPayload()
+    saveSchemeEditBmPending(schemeId, kind, payload)
+    // 草稿方案同时写 localStorage，避免只靠 pending / router.back 丢配置
+    if (isDraftSchemeId(schemeId)) {
+      saveDraftBetMultiplier(route.query as Record<string, unknown>, kind, payload)
     }
     ElMessage.success('已选择倍投方式，点击「完成」后生效')
-    // 配置页已用 sessionStorage 暂存；back 避免再 push 一层编辑页导致详情/编辑历史环
-    if (window.history.length > 1) router.back()
-    else navigateBackToSchemeWithKind()
+    // replace 带回 bmsKind，确保编辑页消费 pending 并刷新右侧文案（勿纯 back 丢 query）
+    navigateBackToSchemeWithKind()
     return
   }
 
@@ -622,7 +633,7 @@ interface AdvancedScheme {
   lotteryLabel?: string
 }
 
-const { advancedSchemes: templateSchemes } = useSchemeTemplateLibrary()
+const { advancedSchemes: templateSchemes, roundsForTemplate } = useSchemeTemplateLibrary()
 const advancedSchemes = computed(() => templateSchemes.value)
 const selectedAdvancedId = ref<string | null>(null)
 

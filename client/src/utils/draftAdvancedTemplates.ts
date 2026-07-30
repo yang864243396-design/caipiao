@@ -107,16 +107,22 @@ export function draftAdvancedTemplateToRow(t: DraftAdvancedTemplate): SchemeTemp
   }
 }
 
-/** 草稿上云后，将会员高级倍投模板写入服务端并 remap selectedId */
-export async function syncDraftAdvancedTemplatesToServer(
+/**
+ * 将会员草稿高级倍投模板写入服务端并 remap selectedId。
+ * 若 payload 里已嵌 rounds 但 customTemplates 被冲掉，仍尝试用 selectedId 从本地草稿找回。
+ */
+export async function syncAdvancedTemplatesInPayload(
   definitionId: string,
-  draft: SchemeDraftSnapshot,
-): Promise<BetMultiplierPayload | undefined> {
-  const custom = readDraftAdvancedTemplatesFromSnapshot(draft)
-  const base = draft.betMultiplier
-  if (!base) return undefined
-
+  base: BetMultiplierPayload,
+): Promise<BetMultiplierPayload> {
   const adv = (base.advanced ?? {}) as Record<string, unknown>
+  const fromPayload = normalizeCustomTemplates(adv.customTemplates)
+  const selectedRaw = typeof adv.selectedId === 'string' ? adv.selectedId.trim() : ''
+  const custom = [...fromPayload]
+  if (selectedRaw && isDraftAdvancedTemplateId(selectedRaw) && !custom.some((t) => t.id === selectedRaw)) {
+    const orphan = getDraftAdvancedTemplate(selectedRaw)
+    if (orphan) custom.push(orphan)
+  }
   if (custom.length === 0) {
     if (!adv.customTemplates) return base
     const { customTemplates: _removed, ...restAdv } = adv
@@ -134,18 +140,48 @@ export async function syncDraftAdvancedTemplatesToServer(
     idMap.set(t.id, created.id)
   }
 
-  const selectedRaw = adv.selectedId
-  let selectedId = selectedRaw
+  let selectedId: unknown = adv.selectedId
   if (typeof selectedRaw === 'string' && idMap.has(selectedRaw)) {
     selectedId = idMap.get(selectedRaw)
   }
 
   const { customTemplates: _removed, ...restAdv } = adv
+  const rounds =
+    Array.isArray(restAdv.rounds) && restAdv.rounds.length > 0
+      ? restAdv.rounds
+      : custom.find((t) => t.id === selectedRaw)?.rounds
   return {
     ...base,
     advanced: {
       ...restAdv,
       selectedId,
+      ...(rounds?.length ? { rounds } : {}),
     },
   }
+}
+
+/** 草稿上云后，将会员高级倍投模板写入服务端并 remap selectedId */
+export async function syncDraftAdvancedTemplatesToServer(
+  definitionId: string,
+  draft: SchemeDraftSnapshot,
+): Promise<BetMultiplierPayload | undefined> {
+  const base = draft.betMultiplier
+  if (!base) return undefined
+  return syncAdvancedTemplatesInPayload(definitionId, base)
+}
+
+function normalizeCustomTemplates(raw: unknown): DraftAdvancedTemplate[] {
+  if (!Array.isArray(raw)) return []
+  const out: DraftAdvancedTemplate[] = []
+  for (const item of raw) {
+    if (item == null || typeof item !== 'object') continue
+    const row = item as Record<string, unknown>
+    const id = String(row.id ?? '').trim()
+    const name = String(row.name ?? '').trim()
+    if (!id || !name || !isDraftAdvancedTemplateId(id)) continue
+    const rounds = normalizeDraftAdvancedRounds(row.rounds)
+    if (!rounds.length) continue
+    out.push({ id, name, rounds })
+  }
+  return out
 }

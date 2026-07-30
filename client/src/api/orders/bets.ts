@@ -6,6 +6,8 @@ export interface BetOrderItem {
   time: string
   game: string
   orderId: string
+  /** 平台 cloud_bet_records.record_no，详情路由主键 */
+  recordNo?: string
   amount: number
   returnAmount: number
   status: string
@@ -65,6 +67,7 @@ export function toBetDisplayRow(item: BetOrderItem): {
   time: string
   game: string
   orderId: string
+  recordNo: string
   amount: string
   returnAmount: string
   status: string
@@ -73,6 +76,7 @@ export function toBetDisplayRow(item: BetOrderItem): {
     time: item.time,
     game: item.game,
     orderId: item.orderId,
+    recordNo: (item.recordNo || '').trim(),
     amount: formatMoney(item.amount),
     returnAmount: formatMoney(item.returnAmount),
     status: item.status,

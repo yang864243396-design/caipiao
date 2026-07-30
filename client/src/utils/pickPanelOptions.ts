@@ -41,6 +41,12 @@ function isWeishuPoolConfig(config: PlayConfig): boolean {
   return /和值尾数/.test(label) || (label.includes('尾数') && !/单双|大小|对碰|不中|生肖/.test(label))
 }
 
+/** 跨度号池（前/中/后三直选跨度等）：0–9，须逗号分隔（勿连写成 039） */
+function isKuaduPoolConfig(config: PlayConfig): boolean {
+  if (config.betMode === 'kuadu') return true
+  return /跨度/.test(config.playMethodLabel ?? '')
+}
+
 /** 投注/方案面板：按玩法号池生成可选号码 */
 export function digitOptionsForConfig(config: PlayConfig): string[] {
   const min = config.numberPoolMin ?? 0
@@ -136,6 +142,8 @@ export function poolUsesCommaSeparatedInput(config: PlayConfig): boolean {
   if (isHezhiPoolConfig(config)) return true
   // 和值尾数虽为 0–9，连写会把多选拆错，与直选和值一致用逗号分隔
   if (isWeishuPoolConfig(config)) return true
+  // 跨度 0–9：输入框内每个数字用逗号分隔（如 0,3,9），勿连写成 039
+  if (isKuaduPoolConfig(config)) return true
   // 组三/组六：第三方提示为逗号多选（如 0,1,2,3…），勿连写/按位
   if (isZu3PoolPlay(config) || isZu6PoolPlay(config)) return true
   const options = digitOptionsForConfig(config)
@@ -156,13 +164,27 @@ function parseCommaSeparatedPoolTokens(raw: string, options: string[]): string[]
     .filter(Boolean)
   const seen = new Set<string>()
   const out: string[] = []
+  const singleWidth = options.length > 0 && options.every((o) => o.length === 1)
+  const push = (match: string) => {
+    if (seen.has(match)) return
+    seen.add(match)
+    out.push(match)
+  }
   for (const p of parts) {
     if (!/^\d+$/.test(p)) continue
     const n = Number(p)
     const match = options.find((o) => Number(o) === n)
-    if (!match || seen.has(match)) continue
-    seen.add(match)
-    out.push(match)
+    if (match) {
+      push(match)
+      continue
+    }
+    // 跨度/尾数等单位数号池：粘连录入 "039" → 0,3,9（失焦后输入框也按逗号展示）
+    if (singleWidth && p.length > 1) {
+      for (const ch of p) {
+        const one = options.find((o) => o === ch || Number(o) === Number(ch))
+        if (one) push(one)
+      }
+    }
   }
   return out
 }
@@ -225,14 +247,16 @@ export function schemeGroupContentToInputBox(content: string, config: PlayConfig
   if (c.replace(/[\s,，]/g, '') === '') return ''
   const segLen = Math.max(1, config.segmentLen || 1)
   if (segLen <= 1 || config.inputMode === 'pool' || isZu3PoolPlay(config) || isZu6PoolPlay(config)) {
+    // 和值/跨度/组三等：显示时保留逗号；粘连串先按号池解析再拼回（039 → 0,3,9）
+    if (poolUsesCommaSeparatedInput(config) || isZu3PoolPlay(config) || isZu6PoolPlay(config)) {
+      const toks = parseDigitSegmentTokens(c.replace(/\n/g, ','), config)
+      return toks.join(',')
+    }
     const toks = c
       .split(/[,，\s\n]+/)
       .map((t) => t.trim())
       .filter(Boolean)
-    // 和值/组三等号池：显示时保留逗号，避免 0,1,2 → 012 再被当三位按位
-    return poolUsesCommaSeparatedInput(config) || isZu3PoolPlay(config) || isZu6PoolPlay(config)
-      ? toks.join(',')
-      : toks.join('')
+    return toks.join('')
   }
   // 已是录入框形态（无换行、逗号分位）：段数 ≤ 位宽时按位补齐（「1,2,3」→「1,2,3,,」）
   if (!c.includes('\n')) {
@@ -327,6 +351,12 @@ export function groupDigitInputHint(config: PlayConfig): string {
     const min = config.numberPoolMin ?? 0
     const max = config.numberPoolMax ?? 9
     return `和值尾数：输入 ${min}–${max}，多选用逗号分隔（如 1,3,5）`
+  }
+  // 跨度：0–9，输入框内每个数字用逗号分隔
+  if (isKuaduPoolConfig(config)) {
+    const min = config.numberPoolMin ?? 0
+    const max = config.numberPoolMax ?? 9
+    return `跨度：输入 ${min}–${max}，每个数字用逗号分隔（如 0,3,9）`
   }
   // 组选包胆：仅单选一个胆码
   if (isBaodanPoolPlay(config)) {

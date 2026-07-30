@@ -294,15 +294,11 @@ async function load(): Promise<void> {
             if ((s === 'hot' || s === 'cold') && !pickTypes.includes(s)) pickTypes.push(s)
           }
         }
-        const fc = Math.trunc(Number(h.faultCount))
-        const faultCount =
-          Number.isFinite(fc) && fc >= 1 ? Math.min(10, fc) : undefined
         hotColdWarm.value = {
           totalPeriods: Math.max(1, Math.trunc(Number(h.totalPeriods) || 20)),
           pool: Array.isArray(h.pool) ? h.pool.map((p) => asString(p)) : [],
           strategy,
           pickTypes: pickTypes.length ? pickTypes : undefined,
-          faultCount,
           winRotate: strategy === 'after_hit',
         }
       } else {

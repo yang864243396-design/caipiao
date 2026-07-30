@@ -48,6 +48,35 @@ func TestClassifyUpstreamError_friendlyPassthrough(t *testing.T) {
 	}
 }
 
+func TestIsRetryableTransportError(t *testing.T) {
+	cases := []struct {
+		err  error
+		want bool
+	}{
+		{errors.New("guaji http POST /api/web_bets/lott: context deadline exceeded"), true},
+		{errors.New("guaji http POST /x: connection refused"), true},
+		{errors.New(`guaji http POST /x: status 502 body={}`), true},
+		{errors.New(`guaji http POST /x: status 429 body={"detail":"Too Many Requests"}`), true},
+		{&APIError{Code: 40055, Message: "封盘时间,下注失败"}, false},
+		{&APIError{Code: CodeTokenInvalid, Message: "无效的令牌"}, false},
+		{&APIError{Code: 40000, Message: "余额不足"}, false},
+	}
+	for _, c := range cases {
+		if got := IsRetryableTransportError(c.err); got != c.want {
+			t.Fatalf("%v => %v want %v", c.err, got, c.want)
+		}
+	}
+}
+
+func TestIsSafeImmediateRetryError(t *testing.T) {
+	if !IsSafeImmediateRetryError(errors.New("dial tcp: connection refused")) {
+		t.Fatal("refused should be safe retry")
+	}
+	if IsSafeImmediateRetryError(errors.New("context deadline exceeded")) {
+		t.Fatal("timeout must not immediate-retry place bet")
+	}
+}
+
 func TestIsPeriodClosedError(t *testing.T) {
 	cases := []struct {
 		err  error

@@ -245,13 +245,15 @@ Mock 层：`client/src/mock/schemeDefinitionsMock.ts` · `admin/src/mock/schemeS
 
 ## 15. 后台 Scheme Worker（`internal/schemes/worker*.go`）
 
-> 环境变量：`SCHEME_WORKER_ENABLED`、`SCHEME_WORKER_TICK_SEC`（见 `backend/.env.example`）
+> 环境变量：`SCHEME_WORKER_ENABLED`、`SCHEME_WORKER_TICK_SEC`、`SCHEME_WORKER_CONCURRENCY`、`SCHEME_WORKER_PLACE_CONCURRENCY`（见 `backend/.env.example`）
 
 ### 15.1 周期
 
-1. 扫描 `status=running` 实例，倒计时归零后取下一期 `lottery_draws`（seed 用完后确定性合成）
-2. 读方案 `config` → 解析 `playTypeId` / `subPlayId` / `schemeGroups[roundIndex]`
-3. 按玩法引擎判定 hit/miss，写 `cloud_bet_records`，更新实例倍投轮次
+1. 扫描 `status=running` 实例（`ORDER BY updated_at`；开盘彩种优先），有界并发（默认 32）推进；同 tick 按彩种预热 periods、封盘 ForceRefresh 至多一次
+2. 真下单另限 `PLACE_CONCURRENCY`（默认 16）；连接/502/429 等传输故障**不停投**，回滚占位下 tick 再试；仅 dial 类错误同 tick 短重试
+3. 倒计时对齐后取下一期 `lottery_draws`（seed 用完后确定性合成）
+4. 读方案 `config` → 解析 `playTypeId` / `subPlayId` / `schemeGroups[roundIndex]`
+5. 按玩法引擎判定 hit/miss，写 `cloud_bet_records`，更新实例倍投轮次
 
 ### 15.2 玩法段（5 位：万千百十个）
 

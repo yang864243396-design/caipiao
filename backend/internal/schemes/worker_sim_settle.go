@@ -30,6 +30,49 @@ func (w *Worker) tickSimSettlements(ctx context.Context) {
 	}
 }
 
+// simSettlement 模拟盘一注的结算结论。
+type simSettlement struct {
+	Status string
+	Hit    bool
+	Pnl    float64
+	Payout float64
+}
+
+// decideSimSettlement 由方案定义与开奖球号推出结算结论，不碰 DB。
+//
+// 这是全系统唯一明确写下 status = hit|miss 的地方，从事务里拆出来是为了能被表驱动测试
+// 直接覆盖——否则要跑通它得先造出成员、方案定义、实例、注单一整张图。
+// ok=false 表示开奖号缺失，不应结算。
+func decideSimSettlement(
+	kind string, config []byte, lotteryCode, betContent string,
+	roundIndex int, balls []string, amount float64,
+) (simSettlement, bool) {
+	if len(balls) == 0 {
+		return simSettlement{}, false
+	}
+	groupIndex := 0
+	if roundIndex > 0 {
+		groupIndex = roundIndex
+	}
+	cfg := parseSchemeConfig(kind, config, roundIndex, groupIndex)
+	cfg.Play = attachOddsBase(cfg.Play, lotteryCode)
+
+	if strings.TrimSpace(betContent) == "" {
+		betContent = cfg.GroupContent
+	}
+	// cloud_bet_records.bet_content 已是当期实际投注内容（含反投展开），按原玩法验奖即可。
+	playEval := evaluatePlayHit(cfg.Play, balls, betContent, false, "", cfg.Play.PositionIdx)
+
+	amount = member.RoundMoney(amount)
+	pnl := calcPnLWithOdds(amount, playEval.Hit, playEval.Odds)
+	out := simSettlement{Status: "miss", Hit: playEval.Hit, Pnl: pnl}
+	if playEval.Hit {
+		out.Status = "hit"
+		out.Payout = member.RoundMoney(amount + pnl)
+	}
+	return out, true
+}
+
 func (w *Worker) settleSimCloudBet(ctx context.Context, row sqlcdb.PendingSimCloudBetRow) error {
 	balls := sqlcdb.ParseDrawBalls(row.Balls)
 	if len(balls) == 0 {
@@ -45,25 +88,14 @@ func (w *Worker) settleSimCloudBet(ctx context.Context, row sqlcdb.PendingSimClo
 		return err
 	}
 
-	groupIndex := 0
-	if inst.RoundIndex > 0 {
-		groupIndex = int(inst.RoundIndex)
+	settle, ok := decideSimSettlement(
+		inst.Kind, def.Config, row.LotteryCode, row.BetContent,
+		int(inst.RoundIndex), balls, row.Amount,
+	)
+	if !ok {
+		return nil
 	}
-	cfg := parseSchemeConfig(inst.Kind, def.Config, int(inst.RoundIndex), groupIndex)
-	cfg.Play = attachOddsBase(cfg.Play, row.LotteryCode)
-
-	betContent := row.BetContent
-	if strings.TrimSpace(betContent) == "" {
-		betContent = cfg.GroupContent
-	}
-	// cloud_bet_records.bet_content 已是当期实际投注内容（含反投展开），按原玩法验奖即可。
-	playEval := evaluatePlayHit(cfg.Play, balls, betContent, false, "", cfg.Play.PositionIdx)
-	amount := member.RoundMoney(row.Amount)
-	pnl := calcPnLWithOdds(amount, playEval.Hit, playEval.Odds)
-	status := "miss"
-	if playEval.Hit {
-		status = "hit"
-	}
+	pnl := settle.Pnl
 
 	tx, err := w.pool.Begin(ctx)
 	if err != nil {
@@ -72,7 +104,9 @@ func (w *Worker) settleSimCloudBet(ctx context.Context, row sqlcdb.PendingSimClo
 	defer tx.Rollback(ctx)
 	qtx := w.q.WithTx(tx)
 
-	n, err := qtx.UpdateCloudBetRecordFromSettlementByID(ctx, row.ID, status, numericFromFloat(pnl))
+	n, err := qtx.UpdateCloudBetRecordFromSettlementByID(
+		ctx, row.ID, settle.Status, numericFromFloat(pnl), numericFromFloat(settle.Payout),
+	)
 	if err != nil {
 		return err
 	}
@@ -86,7 +120,7 @@ func (w *Worker) settleSimCloudBet(ctx context.Context, row sqlcdb.PendingSimClo
 	fresh, ferr := qtx.GetSchemeInstanceFull(ctx, row.SchemeID)
 	if ferr == nil {
 		if err := schemestate.ProcessAfterSettlement(
-			ctx, qtx, fresh, row.PeriodNo, pnl, playEval.Hit, def.Config, numericFromFloat,
+			ctx, qtx, fresh, row.PeriodNo, pnl, settle.Hit, def.Config, numericFromFloat,
 		); err != nil {
 			return err
 		}
@@ -105,6 +139,7 @@ func (w *Worker) settleSimCloudBet(ctx context.Context, row sqlcdb.PendingSimClo
 	}
 
 	slog.Info("scheme worker sim bet settled",
-		"instanceId", row.SchemeID, "period", row.PeriodNo, "status", status, "pnl", pnl, "amount", amount)
+		"instanceId", row.SchemeID, "period", row.PeriodNo,
+		"status", settle.Status, "pnl", pnl, "amount", row.Amount)
 	return nil
 }

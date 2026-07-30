@@ -39,6 +39,10 @@ const SKIP_CLOSEST_SELECTOR = [
   '.el-picker-panel',
   '.el-collapse-item__header',
   '.el-tabs__item',
+  // 会话过期等系统弹窗：确认按钮必须首击生效，不能被连点节流吞掉
+  '.el-message-box',
+  '.el-overlay.is-message-box',
+  '.session-expired-msgbox',
   'input',
   'textarea',
   'select',

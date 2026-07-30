@@ -147,16 +147,16 @@ func (q *Queries) TryClaimCloudBetPeriod(ctx context.Context, arg ReserveCloudBe
 INSERT INTO cloud_bet_records (
     record_no, member_id, sim_bet, scheme_id, scheme_name,
     period_no, play_type, multiplier, round_label, amount, pnl, status, bet_content,
-    guaji_account_id, currency, lottery_code, lottery_label, definition_id, placed_at
+    guaji_account_id, currency, lottery_code, lottery_label, definition_id, bet_units, placed_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, now()
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, now()
 )
 ON CONFLICT (scheme_id, period_no) DO NOTHING
 RETURNING id`,
 		arg.RecordNo, arg.MemberID, arg.SimBet, arg.SchemeID, arg.SchemeName,
 		arg.PeriodNo, arg.PlayType, arg.Multiplier, arg.RoundLabel, arg.Amount, arg.Pnl,
 		arg.Status, arg.BetContent, arg.GuajiAccountID,
-		arg.Currency, arg.LotteryCode, arg.LotteryLabel, arg.DefinitionID,
+		arg.Currency, arg.LotteryCode, arg.LotteryLabel, arg.DefinitionID, nullInt4(arg.BetUnits),
 	).Scan(&id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -237,6 +237,7 @@ type ReserveCloudBetPeriodParams struct {
 	LotteryCode    string
 	LotteryLabel   string
 	DefinitionID   string
+	BetUnits       int
 }
 
 // ReserveCloudBetPeriod 独立提交占位记录；冲突或已存在返回 false。
@@ -246,16 +247,16 @@ func (q *Queries) ReserveCloudBetPeriod(ctx context.Context, arg ReserveCloudBet
 INSERT INTO cloud_bet_records (
     record_no, member_id, sim_bet, scheme_id, scheme_name,
     period_no, play_type, multiplier, round_label, amount, pnl, status, bet_content,
-    guaji_account_id, currency, lottery_code, lottery_label, definition_id, placed_at
+    guaji_account_id, currency, lottery_code, lottery_label, definition_id, bet_units, placed_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, now()
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, now()
 )
 ON CONFLICT (scheme_id, period_no) DO NOTHING
 RETURNING id`,
 		arg.RecordNo, arg.MemberID, arg.SimBet, arg.SchemeID, arg.SchemeName,
 		arg.PeriodNo, arg.PlayType, arg.Multiplier, arg.RoundLabel, arg.Amount, arg.Pnl,
 		arg.Status, arg.BetContent, arg.GuajiAccountID,
-		arg.Currency, arg.LotteryCode, arg.LotteryLabel, arg.DefinitionID,
+		arg.Currency, arg.LotteryCode, arg.LotteryLabel, arg.DefinitionID, nullInt4(arg.BetUnits),
 	).Scan(&id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -266,8 +267,17 @@ RETURNING id`,
 	return id > 0, nil
 }
 
-// UpdateCloudBetRecordGuajiMeta 第三方接单后回写注单号、接单期号与对齐后的金额。
-func (q *Queries) UpdateCloudBetRecordGuajiMeta(ctx context.Context, schemeID, periodNo string, thirdPartyBetID, betOrderNo, thirdPartyPeriod pgtype.Text, pnl pgtype.Numeric, status string, amount pgtype.Numeric) error {
+// UpdateCloudBetRecordGuajiMeta 第三方接单后回写注单号、接单期号与对齐后的金额/注数/玩法。
+func (q *Queries) UpdateCloudBetRecordGuajiMeta(
+	ctx context.Context,
+	schemeID, periodNo string,
+	thirdPartyBetID, betOrderNo, thirdPartyPeriod pgtype.Text,
+	pnl pgtype.Numeric,
+	status string,
+	amount pgtype.Numeric,
+	betUnits int,
+	playType string,
+) error {
 	_, err := q.db.Exec(ctx, `
 UPDATE cloud_bet_records
 SET third_party_bet_id = $3,
@@ -275,25 +285,39 @@ SET third_party_bet_id = $3,
     third_party_period = $5,
     pnl = $6,
     status = $7,
-    amount = $8
-WHERE scheme_id = $1 AND period_no = $2`, schemeID, periodNo, thirdPartyBetID, betOrderNo, thirdPartyPeriod, pnl, status, amount)
+    amount = $8,
+    bet_units = COALESCE($9::int, bet_units),
+    play_type = CASE WHEN NULLIF(TRIM($10), '') IS NOT NULL THEN TRIM($10) ELSE play_type END
+WHERE scheme_id = $1 AND period_no = $2`,
+		schemeID, periodNo, thirdPartyBetID, betOrderNo, thirdPartyPeriod, pnl, status, amount,
+		nullInt4(betUnits), strings.TrimSpace(playType))
 	return err
 }
 
 // MoveCloudBetRecordPeriod 将占位记录从预期期号改到第三方实际接单期号。
+// 目标期已有记录时删掉预期期占位（避免留下幽灵期号），由后续 GuajiMeta 回写目标期。
 func (q *Queries) MoveCloudBetRecordPeriod(ctx context.Context, schemeID, fromPeriod, toPeriod string) error {
 	fromPeriod = strings.TrimSpace(fromPeriod)
 	toPeriod = strings.TrimSpace(toPeriod)
 	if schemeID == "" || fromPeriod == "" || toPeriod == "" || fromPeriod == toPeriod {
 		return nil
 	}
-	_, err := q.db.Exec(ctx, `
+	tag, err := q.db.Exec(ctx, `
 UPDATE cloud_bet_records
 SET period_no = $3
 WHERE scheme_id = $1 AND period_no = $2
   AND NOT EXISTS (
     SELECT 1 FROM cloud_bet_records WHERE scheme_id = $1 AND period_no = $3
   )`, schemeID, fromPeriod, toPeriod)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() > 0 {
+		return nil
+	}
+	_, err = q.db.Exec(ctx, `
+DELETE FROM cloud_bet_records
+WHERE scheme_id = $1 AND period_no = $2`, schemeID, fromPeriod)
 	return err
 }
 
@@ -325,6 +349,7 @@ type InsertCloudBetRecordExParams struct {
 	LotteryCode      string
 	LotteryLabel     string
 	DefinitionID     string
+	BetUnits         int
 }
 
 func (q *Queries) InsertCloudBetRecordEx(ctx context.Context, arg InsertCloudBetRecordExParams) error {
@@ -333,9 +358,9 @@ INSERT INTO cloud_bet_records (
     record_no, member_id, sim_bet, scheme_id, scheme_name,
     period_no, play_type, multiplier, round_label, amount, pnl, status, bet_content,
     guaji_account_id, third_party_bet_id, third_party_period, bet_order_no,
-    currency, lottery_code, lottery_label, definition_id, placed_at
+    currency, lottery_code, lottery_label, definition_id, bet_units, placed_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, now()
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, now()
 )
 ON CONFLICT (scheme_id, period_no) DO UPDATE SET
     third_party_bet_id = COALESCE(EXCLUDED.third_party_bet_id, cloud_bet_records.third_party_bet_id),
@@ -345,13 +370,22 @@ ON CONFLICT (scheme_id, period_no) DO UPDATE SET
     lottery_code = CASE WHEN EXCLUDED.lottery_code <> '' THEN EXCLUDED.lottery_code ELSE cloud_bet_records.lottery_code END,
     lottery_label = CASE WHEN EXCLUDED.lottery_label <> '' THEN EXCLUDED.lottery_label ELSE cloud_bet_records.lottery_label END,
     definition_id = CASE WHEN EXCLUDED.definition_id <> '' THEN EXCLUDED.definition_id ELSE cloud_bet_records.definition_id END,
-    amount = EXCLUDED.amount`,
+    amount = EXCLUDED.amount,
+    bet_units = COALESCE(EXCLUDED.bet_units, cloud_bet_records.bet_units),
+    play_type = CASE WHEN NULLIF(TRIM(EXCLUDED.play_type), '') IS NOT NULL THEN EXCLUDED.play_type ELSE cloud_bet_records.play_type END`,
 		arg.RecordNo, arg.MemberID, arg.SimBet, arg.SchemeID, arg.SchemeName,
 		arg.PeriodNo, arg.PlayType, arg.Multiplier, arg.RoundLabel, arg.Amount, arg.Pnl, arg.Status,
 		arg.BetContent, arg.GuajiAccountID, arg.ThirdPartyBetID, arg.ThirdPartyPeriod, arg.BetOrderNo,
-		arg.Currency, arg.LotteryCode, arg.LotteryLabel, arg.DefinitionID,
+		arg.Currency, arg.LotteryCode, arg.LotteryLabel, arg.DefinitionID, nullInt4(arg.BetUnits),
 	)
 	return err
+}
+
+func nullInt4(n int) pgtype.Int4 {
+	if n <= 0 {
+		return pgtype.Int4{}
+	}
+	return pgtype.Int4{Int32: int32(n), Valid: true}
 }
 
 // GetSchemeInstanceFull 读取 worker/回头所需的完整实例字段。
@@ -479,14 +513,21 @@ LIMIT $1`, rowLimit)
 }
 
 // UpdateCloudBetRecordFromSettlementByID 按记录 id 结算 pending 模拟注（无第三方 order_no）。
-func (q *Queries) UpdateCloudBetRecordFromSettlementByID(ctx context.Context, id int64, status string, pnl pgtype.Numeric) (int64, error) {
+func (q *Queries) UpdateCloudBetRecordFromSettlementByID(
+	ctx context.Context,
+	id int64,
+	status string,
+	pnl pgtype.Numeric,
+	payout pgtype.Numeric,
+) (int64, error) {
 	tag, err := q.db.Exec(ctx, `
 UPDATE cloud_bet_records
 SET status = $2,
-    pnl = $3
+    pnl = $3,
+    payout_amount = $4
 WHERE id = $1
   AND status = 'pending'
-  AND sim_bet = true`, id, status, pnl)
+  AND sim_bet = true`, id, status, pnl, payout)
 	if err != nil {
 		return 0, err
 	}
@@ -879,4 +920,136 @@ LIMIT $11`,
 		items = append(items, i)
 	}
 	return items, rows.Err()
+}
+
+// CloudBetRecordDetailRow 单笔投注详情（按 record_no）。
+type CloudBetRecordDetailRow struct {
+	RecordNo         string
+	ThirdPartyBetID  pgtype.Text
+	SchemeID         string
+	SchemeName       string
+	SimBet           bool
+	PeriodNo         string
+	ThirdPartyPeriod pgtype.Text
+	PlayType         string
+	Multiplier       string
+	RoundLabel       string
+	Amount           float64
+	Pnl              float64
+	Status           string
+	BetContent       string
+	Currency         string
+	LotteryCode      string
+	LotteryLabel     string
+	BetUnits         pgtype.Int4
+	PayoutAmount     pgtype.Numeric
+	PlacedAt         pgtype.Timestamptz
+	// SchemeKind / SchemeConfig 取自方案定义，用于还原玩法位段、给「我的投注」标位名。
+	SchemeKind   string
+	SchemeConfig string
+}
+
+// GetCloudBetRecordByMemberRecordNo 按会员 + record_no 读取单笔投注。
+func (q *Queries) GetCloudBetRecordByMemberRecordNo(ctx context.Context, memberID int64, recordNo string) (CloudBetRecordDetailRow, error) {
+	recordNo = strings.TrimSpace(recordNo)
+	var r CloudBetRecordDetailRow
+	if memberID <= 0 || recordNo == "" {
+		return r, pgx.ErrNoRows
+	}
+	err := q.db.QueryRow(ctx, `
+SELECT c.record_no,
+       c.third_party_bet_id,
+       c.scheme_id,
+       c.scheme_name,
+       c.sim_bet,
+       c.period_no,
+       c.third_party_period,
+       c.play_type,
+       c.multiplier,
+       c.round_label,
+       c.amount::float8,
+       c.pnl::float8,
+       c.status,
+       COALESCE(c.bet_content, ''),
+       COALESCE(c.currency, ''),
+       COALESCE(NULLIF(TRIM(c.lottery_code), ''), ''),
+       COALESCE(NULLIF(TRIM(c.lottery_label), ''), ''),
+       c.bet_units,
+       c.payout_amount,
+       c.placed_at,
+       COALESCE(si.kind, ''),
+       COALESCE(sd.config::text, '')
+FROM cloud_bet_records c
+LEFT JOIN scheme_instances si ON si.id = c.scheme_id
+LEFT JOIN scheme_definitions sd ON sd.id = si.definition_id
+WHERE c.member_id = $1 AND c.record_no = $2`, memberID, recordNo).Scan(
+		&r.RecordNo,
+		&r.ThirdPartyBetID,
+		&r.SchemeID,
+		&r.SchemeName,
+		&r.SimBet,
+		&r.PeriodNo,
+		&r.ThirdPartyPeriod,
+		&r.PlayType,
+		&r.Multiplier,
+		&r.RoundLabel,
+		&r.Amount,
+		&r.Pnl,
+		&r.Status,
+		&r.BetContent,
+		&r.Currency,
+		&r.LotteryCode,
+		&r.LotteryLabel,
+		&r.BetUnits,
+		&r.PayoutAmount,
+		&r.PlacedAt,
+		&r.SchemeKind,
+		&r.SchemeConfig,
+	)
+	return r, err
+}
+
+// LookupDrawBallsJoined 按彩种 + 候选期号查开奖球号，空格拼接。
+func (q *Queries) LookupDrawBallsJoined(ctx context.Context, lotteryCode string, issueCandidates ...string) (string, error) {
+	lotteryCode = strings.TrimSpace(lotteryCode)
+	if lotteryCode == "" {
+		return "", nil
+	}
+	seen := map[string]struct{}{}
+	issues := make([]string, 0, len(issueCandidates))
+	for _, raw := range issueCandidates {
+		issue := strings.TrimSpace(raw)
+		if issue == "" {
+			continue
+		}
+		if _, ok := seen[issue]; ok {
+			continue
+		}
+		seen[issue] = struct{}{}
+		issues = append(issues, issue)
+	}
+	if len(issues) == 0 {
+		return "", nil
+	}
+	var balls []byte
+	err := q.db.QueryRow(ctx, `
+SELECT balls
+FROM lottery_draws
+WHERE lottery_code = $1 AND issue_no = ANY($2::text[])
+ORDER BY CASE issue_no
+  WHEN $3 THEN 0
+  ELSE 1
+END
+LIMIT 1`, lotteryCode, issues, issues[0]).Scan(&balls)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	parsed := ParseDrawBalls(balls)
+	if len(parsed) == 0 {
+		return "", nil
+	}
+	return strings.Join(parsed, " "), nil
 }

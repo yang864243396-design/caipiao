@@ -24,6 +24,9 @@ func (w *Worker) syncRunningCountdown(ctx context.Context, inst sqlcdb.SchemeIns
 	if !ok {
 		return
 	}
+	if inst.CountdownSec == int32(sec) {
+		return
+	}
 	if err := w.q.SetSchemeInstanceCountdownSec(ctx, inst.ID, int32(sec)); err != nil {
 		slog.Debug("scheme worker sync countdown failed", "id", inst.ID, "err", err)
 	}

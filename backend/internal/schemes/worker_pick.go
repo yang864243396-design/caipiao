@@ -122,7 +122,7 @@ func advancePickState(
 			lastDirection = dec.Direction
 		}
 	case RunTypeHotColdWarm:
-		// 换号：清空 current_pick，下期按统计期数+出号类型+容错重新取码（非池内 +1）
+		// 换号：清空 current_pick，下期按统计期数+出号类型重新取码（非池内 +1）
 		strategy := hotColdStrategy(cfg.HotCold)
 		switch strategy {
 		case "every":
@@ -236,6 +236,11 @@ func pickJushuList(cfg parsedSchemeConfig, inst sqlcdb.SchemeInstance) pickDecis
 	return pickDecision{Content: row.Content}
 }
 
+// betRoundLabel 投注记录「轮次」：始终为倍投轮次（1-based），与出号局数/组号无关。
+func betRoundLabel(_ parsedSchemeConfig, roundIdx int, _ int) string {
+	return strconv.Itoa(roundIdx + 1)
+}
+
 // ---------- 固定取码 ----------
 
 // pickFixedNumber 固定取码：每期复投 schemeGroups[0] 指定号码。
@@ -249,77 +254,169 @@ func pickFixedNumber(cfg parsedSchemeConfig) pickDecision {
 // ---------- 随机出号 ----------
 
 func pickRandomDraw(cfg parsedSchemeConfig, inst sqlcdb.SchemeInstance) pickDecision {
-	if strings.TrimSpace(inst.CurrentPick) != "" {
-		return pickDecision{Content: inst.CurrentPick}
+	if cur := strings.TrimSpace(inst.CurrentPick); cur != "" {
+		// 缓存号若已超该玩法注数上限，丢弃并重抽（真下单前兜底）。
+		if !contentExceedsBetUnitsMax(cfg.Play, cur) {
+			return pickDecision{Content: cur}
+		}
 	}
-	// 单式/组选单式：整注随机——随机抽 N 个完整组合（对齐竞品 GetCombinaList + 抽样模型）。
+	return pickDecision{Content: randomDrawContentUnderMax(cfg)}
+}
+
+// randomDrawContentUnderMax 生成随机内容；有玩法上限时重抽，并逐步收缩选号规模直至可下单。
+func randomDrawContentUnderMax(cfg parsedSchemeConfig) string {
+	max := maxBetUnitsForPlay(cfg.Play)
+	const (
+		maxScale    = 12
+		maxAttempts = 16
+	)
+	var last string
+	for scale := 0; scale <= maxScale; scale++ {
+		for attempt := 0; attempt < maxAttempts; attempt++ {
+			last = generateRandomDrawContent(cfg, scale)
+			if max <= 0 {
+				return last
+			}
+			n := countPlayWireBetUnits(cfg.Play, last)
+			if n > 0 && n <= max {
+				return last
+			}
+		}
+	}
+	// 属性和值/跨度：贪心取组合数较小的选项，避免无解卡死
+	bm := strings.ToLower(strings.TrimSpace(cfg.Play.BetMode))
+	if bm == "kuadu" || bm == "hezhi" {
+		k := randomDrawCountAt(cfg, 0, 0)
+		if fallback := greedyAttributeContentUnderMax(cfg.Play, k, max); fallback != "" {
+			return fallback
+		}
+		// 再降到 1 个选项，保证可下单
+		if fallback := greedyAttributeContentUnderMax(cfg.Play, 1, max); fallback != "" {
+			return fallback
+		}
+	}
+	// 绝不返回超限内容（避免 worker 回落到 schemeGroups 满选）
+	if max > 0 && countPlayWireBetUnits(cfg.Play, last) > max {
+		return ""
+	}
+	return last
+}
+
+// generateRandomDrawContent scale>0 时按档收缩选号个数（每位/每档至少 1）。
+func generateRandomDrawContent(cfg parsedSchemeConfig, scale int) string {
+	if scale < 0 {
+		scale = 0
+	}
+	// 单式/组选单式：整注随机
 	if isWholeTicketRandom(cfg.Play) {
-		n := 1
-		if cfg.Random != nil && len(cfg.Random.Counts) > 0 && cfg.Random.Counts[0] > 0 {
-			n = cfg.Random.Counts[0]
-		}
-		return pickDecision{Content: randomWholeTickets(cfg.Play, n)}
+		n := randomDrawCountAt(cfg, 0, 1)
+		n = shrinkCount(n, scale, 1)
+		return randomWholeTickets(cfg.Play, n)
 	}
-	// 组合家族（组三/组六/组选N/组选复式）：号码池随机——随机选 K 个号组成号码池，
-	// 由玩法评估按组选口径展开注数（与手动组选复式内容格式一致）。
+	// 组选号池
 	if isZuxuanPoolRandom(cfg.Play) {
-		k := 0
-		if cfg.Random != nil && len(cfg.Random.Counts) > 0 {
-			k = cfg.Random.Counts[0]
-		}
-		return pickDecision{Content: randomZuxuanPool(cfg.Play, k)}
+		k := randomDrawCountAt(cfg, 0, 0)
+		k = shrinkCount(k, scale, 1)
+		return randomZuxuanPool(cfg.Play, k)
 	}
-	// 属性/聚合家族（大小单双/龙虎/特殊号/庄闲/和值/跨度/不定位/包胆）：
-	// 从该玩法的选项宇宙随机抽 K 个（对齐竞品 GetCombinaList 宇宙 + 抽样）。
+	// 属性/聚合
 	if isAttributeRandom(cfg.Play) {
-		k := 0
-		if cfg.Random != nil && len(cfg.Random.Counts) > 0 {
-			k = cfg.Random.Counts[0]
-		}
-		return pickDecision{Content: randomAttributeContent(cfg.Play, k)}
+		k := randomDrawCountAt(cfg, 0, 0)
+		k = shrinkCount(k, scale, 1)
+		return randomAttributeContent(cfg.Play, k)
 	}
-	// 前二/后二/前三/后三大小单双：按位从大/小/单/双抽样，多行「十\n个」
+	// 按位大小单双
 	if isPerPosDxdsRandom(cfg.Play) {
 		positions := playPositionCount(cfg.Play)
 		lines := make([]string, 0, positions)
 		for i := 0; i < positions; i++ {
-			count := 1
-			if cfg.Random != nil && i < len(cfg.Random.Counts) {
-				count = cfg.Random.Counts[i]
-			}
+			count := shrinkCount(randomDrawCountAt(cfg, i, 1), scale, 1)
 			lines = append(lines, randomAttributeContent(cfg.Play, count))
 		}
-		return pickDecision{Content: strings.Join(lines, "\n")}
+		return strings.Join(lines, "\n")
 	}
+	// 按位号池（直选复式/单式展开等）
 	positions := playPositionCount(cfg.Play)
 	lines := make([]string, 0, positions)
 	for i := 0; i < positions; i++ {
-		count := 1
-		if cfg.Random != nil && i < len(cfg.Random.Counts) {
-			count = cfg.Random.Counts[i]
-		}
+		count := shrinkCount(randomDrawCountAt(cfg, i, 1), scale, 1)
 		lines = append(lines, randomDigits(cfg.Play, count))
 	}
-	return pickDecision{Content: strings.Join(lines, "\n")}
+	return normalizeZhixuanDanshiContent(cfg.Play, strings.Join(lines, "\n"))
 }
 
-// isWholeTicketRandom 判定为"整注型"玩法（直选单式/组选单式）——随机产号需抽完整组合，
-// 而非按位产号池。
+func randomDrawCountAt(cfg parsedSchemeConfig, idx, defaultN int) int {
+	if cfg.Random != nil && idx < len(cfg.Random.Counts) && cfg.Random.Counts[idx] > 0 {
+		return cfg.Random.Counts[idx]
+	}
+	return defaultN
+}
+
+func shrinkCount(n, scale, min int) int {
+	if min < 1 {
+		min = 1
+	}
+	if n < min {
+		n = min
+	}
+	n -= scale
+	if n < min {
+		return min
+	}
+	return n
+}
+
+// attributeCountFeasibleUnderMax 选 k 个属性选项时，最小可能组合注数是否 ≤ max。
+func attributeCountFeasibleUnderMax(rule playRule, k, max int) bool {
+	if k <= 0 || max <= 0 {
+		return true
+	}
+	universe := attributeUniverse(rule)
+	if len(universe) == 0 || k > len(universe) {
+		return false
+	}
+	units := make([]int, 0, len(universe))
+	for _, tok := range universe {
+		n := countPlayWireBetUnits(rule, tok)
+		if n > 0 {
+			units = append(units, n)
+		}
+	}
+	if len(units) < k {
+		return false
+	}
+	sort.Ints(units)
+	sum := 0
+	for i := 0; i < k; i++ {
+		sum += units[i]
+	}
+	return sum <= max
+}
+
+// isWholeTicketRandom 判定为"整注型"玩法——随机产号需抽完整组合，而非按位号池。
+// 组选单式 / 混合组选走整注；前/中/后三等直选单式（段长≥2）走按位随机再展开。
 func isWholeTicketRandom(rule playRule) bool {
 	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
 	sub := strings.ToLower(strings.TrimSpace(rule.SubPlayID))
+	if bm == "zuxuan_ds" || sub == "zuxuan_ds" || strings.Contains(sub, "zuxuan_ds") || bm == "hunhe" {
+		return true
+	}
+	// 前三/中三/后三/前二/后二直选单式：按位（万千百 / 千百十 / …）
+	if isZhixuanDanshiTriggerPlay(rule) {
+		return false
+	}
 	switch bm {
-	case "danshi", "zhixuan_ds", "zuxuan_ds", "hunhe":
+	case "danshi", "zhixuan_ds":
 		return true
 	}
 	switch sub {
-	case "zhixuan_ds", "zuxuan_ds":
+	case "zhixuan_ds":
 		return true
 	}
 	return false
 }
 
-// isAttributeRandom 判定为"属性/聚合型"玩法（大小单双/龙虎/特殊号/庄闲/和值/跨度/不定位/包胆）——
+// isAttributeRandom 判定为"属性/聚合型"玩法（大小单双/龙虎/特殊号/庄闲/和值/跨度/尾数/不定位/包胆）——
 // 随机产号为"从选项宇宙抽 K 个"，非按位号池、非整注单式。
 // 前二/后二/前三/后三大小单双（SegmentLen>=2）走按位抽样，不算单档属性。
 func isAttributeRandom(rule playRule) bool {
@@ -328,10 +425,82 @@ func isAttributeRandom(rule playRule) bool {
 		return !isPerPosDxdsRandom(rule)
 	case "daxiao", "danshuang", "zhuangxian",
 		"longhu", "longhuhe", "longhubao", "teshu",
-		"hezhi", "kuadu", "budingwei", "baodan":
+		"hezhi", "kuadu", "weishu", "budingwei", "baodan":
 		return true
 	}
 	return false
+}
+
+// randomDrawCountMax 与编辑页 rdSingleCountMax / rdPerPosMax 对齐：按玩法宇宙定上限。
+// 整注 200、组选号池=号池长度、属性=选项宇宙、包胆 1、尾数≤9、按位默认 10（一星 9、按位大小单双 4）。
+func randomDrawCountMax(rule playRule) int {
+	if isWholeTicketRandom(rule) {
+		return 200
+	}
+	if isZuxuanPoolRandom(rule) {
+		n := len(playNumberPool(rule))
+		if n < 3 {
+			return 3
+		}
+		return n
+	}
+	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	if isAttributeRandom(rule) {
+		switch bm {
+		case "baodan":
+			return 1
+		case "weishu":
+			// 与前端 WEISHU_MAX_BET_UNITS 一致
+			n := len(attributeUniverse(rule))
+			if n <= 0 {
+				n = 10
+			}
+			if n > weishuMaxBetUnitsCap {
+				return weishuMaxBetUnitsCap
+			}
+			return n
+		case "kuadu", "hezhi":
+			// 选项个数上限还受组合注数约束（三星跨度满选 10→1000>900，最多 9）
+			u := attributeUniverse(rule)
+			n := len(u)
+			if n < 1 {
+				n = len(playNumberPool(rule))
+			}
+			if n < 1 {
+				return 1
+			}
+			if max := maxBetUnitsForPlay(rule); max > 0 {
+				for n > 1 && !attributeCountFeasibleUnderMax(rule, n, max) {
+					n--
+				}
+			}
+			return n
+		case "budingwei":
+			n := len(playNumberPool(rule))
+			if n < 1 {
+				return 1
+			}
+			return n
+		default:
+			u := attributeUniverse(rule)
+			if len(u) > 0 {
+				return len(u)
+			}
+			n := len(playNumberPool(rule))
+			if n < 1 {
+				return 1
+			}
+			return n
+		}
+	}
+	if isPerPosDxdsRandom(rule) {
+		return 4
+	}
+	// 一星定位胆：每位最多 9（与前端 YIXING_MAX_PICKS_PER_POS 对齐）
+	if isDingweiTriggerPlay(rule) {
+		return 9
+	}
+	return 10
 }
 
 // isPerPosDxdsRandom 前二/后二/前三/后三大小单双：按位随机（十\n个），非整期单档。
@@ -397,8 +566,63 @@ func attributeUniverse(rule playRule) []string {
 			out = append(out, strconv.Itoa(v))
 		}
 		return out
+	case "weishu":
+		// 和值尾数下的是和值的个位，与号池和区位长度无关，恒为 0-9。
+		out := make([]string, 0, 10)
+		for v := 0; v <= 9; v++ {
+			out = append(out, strconv.Itoa(v))
+		}
+		return out
 	}
 	return nil
+}
+
+// greedyAttributeContentUnderMax 和值/跨度兜底：按单选项 wire 注数升序贪心选取。
+func greedyAttributeContentUnderMax(rule playRule, k, maxUnits int) string {
+	if maxUnits <= 0 {
+		return ""
+	}
+	universe := attributeUniverse(rule)
+	if len(universe) == 0 {
+		return ""
+	}
+	if k < 1 {
+		k = 1
+	}
+	type item struct {
+		tok   string
+		units int
+	}
+	items := make([]item, 0, len(universe))
+	for _, tok := range universe {
+		n := countPlayWireBetUnits(rule, tok)
+		if n <= 0 {
+			continue
+		}
+		items = append(items, item{tok: tok, units: n})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].units != items[j].units {
+			return items[i].units < items[j].units
+		}
+		return items[i].tok < items[j].tok
+	})
+	picked := make([]string, 0, k)
+	for _, it := range items {
+		if len(picked) >= k {
+			break
+		}
+		trial := strings.Join(append(append([]string{}, picked...), it.tok), ",")
+		if countPlayWireBetUnits(rule, trial) > maxUnits {
+			continue
+		}
+		picked = append(picked, it.tok)
+	}
+	if len(picked) == 0 && len(items) > 0 && items[0].units <= maxUnits {
+		return items[0].tok
+	}
+	sort.Strings(picked)
+	return strings.Join(picked, ",")
 }
 
 // randomAttributeContent 从属性/聚合玩法的选项宇宙随机抽 k 个（去重、逗号分隔）。
@@ -651,13 +875,7 @@ func (w *Worker) pickHotColdWarm(
 	}
 	draws := w.recentDrawBalls(ctx, inst.LotteryCode, draw.IssueNo, periods)
 	content := buildHotColdPickContent(cfg, draws)
-	if strings.TrimSpace(content) == "" {
-		if cfg.HotCold != nil && len(cfg.HotCold.Pool) > 0 {
-			content = strings.Join(cfg.HotCold.Pool, "\n")
-		} else {
-			content = cfg.GroupContent
-		}
-	}
+	// 不再把手选号池/schemeGroups 整页回退成固定复式
 	return pickDecision{Content: normalizeZhixuanDanshiContent(cfg.Play, content)}
 }
 
@@ -667,13 +885,6 @@ func pickHotColdWarmFromDraws(cfg parsedSchemeConfig, inst sqlcdb.SchemeInstance
 		return pickDecision{Content: normalizeZhixuanDanshiContent(cfg.Play, cur)}
 	}
 	content := buildHotColdPickContent(cfg, draws)
-	if strings.TrimSpace(content) == "" {
-		if cfg.HotCold != nil && len(cfg.HotCold.Pool) > 0 {
-			content = strings.Join(cfg.HotCold.Pool, "\n")
-		} else {
-			content = cfg.GroupContent
-		}
-	}
 	return pickDecision{Content: normalizeZhixuanDanshiContent(cfg.Play, content)}
 }
 
@@ -713,7 +924,8 @@ func (w *Worker) recentDrawBalls(ctx context.Context, lotteryCode, currentIssue 
 	}
 	out := make([][]string, 0, periods)
 	for _, r := range rows {
-		if currentIssue != "" && (r.IssueNo == currentIssue || r.IssueNo >= currentIssue) {
+		// 数值期号比较，避免纯字符串比较在乱序族下误过滤
+		if currentIssue != "" && compareIssueNo(r.IssueNo, currentIssue) >= 0 {
 			continue
 		}
 		balls := sqlcdb.ParseDrawBalls(r.Balls)
@@ -728,74 +940,51 @@ func (w *Worker) recentDrawBalls(ctx context.Context, lotteryCode, currentIssue 
 	return out
 }
 
-// buildHotColdPickContent 按「名次 + 起点偏移」取码（对齐富联冷热出号逆向）：
+// buildHotColdPickContent 按名次取号：
 //
-//	每期用最近 N 期把号码按出现次数「最热→最冷」排序 → 出号类型定位到热端/冷端 →
-//	容错=起点偏移跳过该端最极端的前 fault 名 → 连续取 pickCount 个名次的号。
-//
-// 混合模式：hc.Pool[i] 非空的位用手选号码覆盖，其余位按名次自动取号。
+//	近 N 期频次「最热→最冷」排序后，按 hc.Ranks（0=最热）取当前号码。
+//	无 Ranks 时由 pickTypes 展开为热/冷半区名次（空则默认热区）。Pool 不锁定号码。
 func buildHotColdPickContent(cfg parsedSchemeConfig, draws [][]string) string {
 	hc := cfg.HotCold
 	if hc == nil {
 		return ""
 	}
-	fault := hc.FaultCount // 起点偏移（0=从最极端开始）
-	if fault < 0 {
-		fault = 0
-	}
-	if fault > 9 {
-		fault = 9
-	}
-	count := hc.PickCount // 每位取几个名次
-	if count < 1 {
-		count = 1
-	}
-	types := normalizeHotColdPickTypes(hc.PickTypes)
-	wantHot, wantCold := hotColdWants(types)
 	pool := playNumberPool(cfg.Play)
 
 	// 属性家族（大小单双/龙虎/和值等）
 	if isHotColdAttributePlay(cfg.Play) {
-		if manual := hotColdManualAt(hc.Pool, 0); manual != "" {
-			return manual
-		}
-		if len(types) == 0 || len(draws) == 0 {
+		if !hotColdLineEnabled(hc, 0) {
 			return ""
 		}
 		res := HotColdWarmAttributeTiers(cfg.Play, draws)
 		full := append(append([]string{}, res.Hot...), res.Cold...)
-		return strings.Join(pickTokensByRank(full, wantHot, wantCold, fault, count), ",")
+		picked := pickHotColdByRanks(full, resolveHotColdRanks(hc, 0, len(full)))
+		return strings.Join(sortHotColdBetTokens(picked), ",")
 	}
 	// 号码整体频次（组选/不定位/包胆）
 	if isHotColdDigitOverall(cfg.Play) {
-		if manual := hotColdManualAt(hc.Pool, 0); manual != "" {
-			return manual
-		}
-		if len(types) == 0 || len(draws) == 0 {
+		if !hotColdLineEnabled(hc, 0) {
 			return ""
 		}
 		hot, cold := hotColdWarmTiersOverall(draws, cfg.Play, pool)
 		full := append(append([]string{}, hot...), cold...)
-		return strings.Join(pickTokensByRank(full, wantHot, wantCold, fault, count), ",")
+		picked := pickHotColdByRanks(full, resolveHotColdRanks(hc, 0, len(full)))
+		return strings.Join(sortHotColdBetTokens(picked), ",")
 	}
-	// 按位型：逐位取号，支持手动覆盖
+	// 按位型：启用位按名次取号；未启用位留空行
 	n := playPositionCount(cfg.Play)
+	enabled := hotColdPositionEnabled(hc, n)
 	lines := make([]string, n)
 	filled := 0
 	for i := 0; i < n; i++ {
-		if manual := hotColdManualAt(hc.Pool, i); manual != "" {
-			lines[i] = manual
-			filled++
-			continue
-		}
-		if len(types) == 0 || len(draws) == 0 {
+		if !enabled[i] {
 			continue
 		}
 		pos := hotColdPositionIdx(cfg.Play, i)
 		hot, _, cold := hotColdWarmTiers(draws, pos, pool)
 		full := append(append([]string{}, hot...), cold...)
-		picked := pickTokensByRank(full, wantHot, wantCold, fault, count)
-		lines[i] = strings.Join(picked, ",")
+		picked := pickHotColdByRanks(full, resolveHotColdRanks(hc, i, len(full)))
+		lines[i] = strings.Join(sortHotColdBetTokens(picked), ",")
 		if lines[i] != "" {
 			filled++
 		}
@@ -804,6 +993,141 @@ func buildHotColdPickContent(cfg parsedSchemeConfig, draws [][]string) string {
 		return ""
 	}
 	return strings.Join(lines, "\n")
+}
+
+// resolveHotColdRanks 优先用配置名次；否则由 pickTypes 展开为半区名次。
+func resolveHotColdRanks(hc *hotColdWarmCfg, lineIdx, orderLen int) []int {
+	if hc == nil || orderLen <= 0 {
+		return nil
+	}
+	if lineIdx >= 0 && lineIdx < len(hc.Ranks) && len(hc.Ranks[lineIdx]) > 0 {
+		return normalizeHotColdRanks(hc.Ranks[lineIdx], orderLen)
+	}
+	types := normalizeHotColdPickTypes(hc.PickTypes)
+	if len(types) == 0 {
+		types = []string{"hot"}
+	}
+	wantHot, wantCold := hotColdWants(types)
+	half := (orderLen + 1) / 2
+	if half > orderLen {
+		half = orderLen
+	}
+	var ranks []int
+	if wantHot {
+		for i := 0; i < half; i++ {
+			ranks = append(ranks, i)
+		}
+	}
+	if wantCold {
+		for i := half; i < orderLen; i++ {
+			ranks = append(ranks, i)
+		}
+	}
+	return ranks
+}
+
+func normalizeHotColdRanks(ranks []int, orderLen int) []int {
+	if orderLen <= 0 {
+		return nil
+	}
+	seen := make(map[int]struct{}, len(ranks))
+	out := make([]int, 0, len(ranks))
+	for _, r := range ranks {
+		if r < 0 || r >= orderLen {
+			continue
+		}
+		if _, ok := seen[r]; ok {
+			continue
+		}
+		seen[r] = struct{}{}
+		out = append(out, r)
+	}
+	return out
+}
+
+// pickHotColdByRanks 从「最热→最冷」全序按名次取号。
+func pickHotColdByRanks(ordered []string, ranks []int) []string {
+	if len(ordered) == 0 || len(ranks) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(ranks))
+	for _, r := range ranks {
+		if r < 0 || r >= len(ordered) {
+			continue
+		}
+		out = append(out, ordered[r])
+	}
+	return out
+}
+
+// pickHotColdZone 兼容旧调用：从全序取热/冷半区。
+func pickHotColdZone(full []string, wantHot, wantCold bool) []string {
+	n := len(full)
+	if n == 0 {
+		return nil
+	}
+	half := (n + 1) / 2
+	if half > n {
+		half = n
+	}
+	var ranks []int
+	if wantHot {
+		for i := 0; i < half; i++ {
+			ranks = append(ranks, i)
+		}
+	}
+	if wantCold {
+		for i := half; i < n; i++ {
+			ranks = append(ranks, i)
+		}
+	}
+	return pickHotColdByRanks(full, ranks)
+}
+
+func hotColdHasAnyPool(pool []string) bool {
+	for i := range pool {
+		if hotColdManualAt(pool, i) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func hotColdLineEnabled(hc *hotColdWarmCfg, lineIdx int) bool {
+	if hc == nil {
+		return false
+	}
+	anyRanks := hotColdCfgHasRanks(hc.Ranks)
+	anyPool := hotColdHasAnyPool(hc.Pool)
+	if !anyRanks && !anyPool {
+		return true
+	}
+	if anyRanks {
+		return lineIdx >= 0 && lineIdx < len(hc.Ranks) && len(hc.Ranks[lineIdx]) > 0
+	}
+	return hotColdManualAt(hc.Pool, lineIdx) != ""
+}
+
+// hotColdPositionEnabled：有 ranks/pool 时仅启用对应非空位；否则全部启用。
+func hotColdPositionEnabled(hc *hotColdWarmCfg, n int) []bool {
+	out := make([]bool, n)
+	for i := 0; i < n; i++ {
+		out[i] = hotColdLineEnabled(hc, i)
+	}
+	return out
+}
+
+func sortHotColdBetTokens(tokens []string) []string {
+	out := append([]string{}, tokens...)
+	sort.SliceStable(out, func(i, j int) bool {
+		ni, ei := strconv.Atoi(out[i])
+		nj, ej := strconv.Atoi(out[j])
+		if ei == nil && ej == nil {
+			return ni < nj
+		}
+		return out[i] < out[j]
+	})
+	return out
 }
 
 // hotColdWants 出号类型 → 是否取热端/冷端。
@@ -819,56 +1143,12 @@ func hotColdWants(types []string) (wantHot, wantCold bool) {
 	return wantHot, wantCold
 }
 
-// hotColdManualAt 取某位的手动覆盖号码（空=该位自动取号）。
+// hotColdManualAt 取某位配置串；非空表示该号码位置启用（具体号码仅编辑预览）。
 func hotColdManualAt(pool []string, i int) string {
 	if i < 0 || i >= len(pool) {
 		return ""
 	}
 	return strings.TrimSpace(pool[i])
-}
-
-// pickTokensByRank 在「最热→最冷」全序 full 上，按出号类型 + 起点偏移 + 名次个数取号。
-//   - 热端：从 full[offset] 起连续取 count 个（offset=1,count=2 → 第2、第3热）。
-//   - 冷端：从最冷 full[n-1] 起、跳过 offset 名后连续取 count 个（冷号在前）。
-//   - 同时选热+冷：热端取号在前、冷端在后，去重保序。
-func pickTokensByRank(full []string, wantHot, wantCold bool, offset, count int) []string {
-	n := len(full)
-	if n == 0 {
-		return nil
-	}
-	if count < 1 {
-		count = 1
-	}
-	if offset < 0 {
-		offset = 0
-	}
-	seen := map[string]struct{}{}
-	out := make([]string, 0, count*2)
-	add := func(idx int) {
-		if idx < 0 || idx >= n {
-			return
-		}
-		t := strings.TrimSpace(full[idx])
-		if t == "" {
-			return
-		}
-		if _, dup := seen[t]; dup {
-			return
-		}
-		seen[t] = struct{}{}
-		out = append(out, t)
-	}
-	if wantHot {
-		for k := 0; k < count; k++ {
-			add(offset + k)
-		}
-	}
-	if wantCold {
-		for k := 0; k < count; k++ {
-			add(n - 1 - offset - k)
-		}
-	}
-	return out
 }
 
 func normalizeHotColdPickTypes(raw []string) []string {
@@ -895,11 +1175,17 @@ func isHotColdDigitOverall(rule playRule) bool {
 		strings.Contains(sub, "budingwei") || strings.Contains(sub, "baodan")
 }
 
+// isHotColdAttributePlay 该玩法下的是属性值（大小/单双/和值/尾数……）而不是球号。
+//
+// 名单要和 universeKindForRule 保持一致：那边认定为 attribute 的，这边就必须走属性计频。
+// 漏掉一个的后果是静默的——冷热出号会掉进按位分支去统计原始球号频次，
+// 于是给「后三和值尾数」选出 "180,280,380" 这种多位内容，第三方直接拒单，
+// 注单永远卡在 pending。weishu 就这么漏了很久。
 func isHotColdAttributePlay(rule playRule) bool {
 	switch strings.ToLower(strings.TrimSpace(rule.BetMode)) {
 	case "daxiao", "danshuang", "dxds", "zhuangxian",
 		"longhu", "longhuhe", "longhubao", "teshu",
-		"hezhi", "kuadu":
+		"hezhi", "kuadu", "weishu":
 		return true
 	}
 	return false
@@ -1220,40 +1506,39 @@ func nextTriggerDirection(mode, last string) string {
 }
 
 // previousDrawBalls 取上一期开奖球（不含当期）。
-// 必须按期号精确取「issue_no < 当期」的最近一期；不可用 drawn_at 最近 N 条扫描，
-// 否则上期尚未进库/不在窗口内时会误用更早开奖（开某投某会跟错位）。
+// 优先取期号 = 当期-1 的精确上期；若刚好缺相邻一期则返回 nil（勿回退到更早开奖，
+// 否则开某投某会按上上期映射下注，如 0356 和值 15 未入库时误用 0355 的 8）。
 func (w *Worker) previousDrawBalls(ctx context.Context, lotteryCode string, draw sqlcdb.LotteryDraw) []string {
-	if w.q != nil && strings.TrimSpace(draw.IssueNo) != "" {
-		prev, err := w.q.GetPreviousLotteryDrawByIssue(ctx, sqlcdb.GetPreviousLotteryDrawByIssueParams{
+	if w == nil || w.q == nil {
+		return nil
+	}
+	lotteryCode = strings.TrimSpace(lotteryCode)
+	issue := strings.TrimSpace(draw.IssueNo)
+	if lotteryCode == "" || issue == "" {
+		return nil
+	}
+	expected := prevIssueNo(issue)
+	if expected != "" && expected != issue {
+		row, err := w.q.GetLotteryDrawByIssue(ctx, sqlcdb.GetLotteryDrawByIssueParams{
 			LotteryCode: lotteryCode,
-			IssueNo:     draw.IssueNo,
+			IssueNo:     expected,
 		})
 		if err == nil {
-			return sqlcdb.ParseDrawBalls(prev.Balls)
+			return sqlcdb.ParseDrawBalls(row.Balls)
 		}
 	}
-	rows, err := w.q.ListLotteryDraws(ctx, sqlcdb.ListLotteryDrawsParams{
+	prev, err := w.q.GetPreviousLotteryDrawByIssue(ctx, sqlcdb.GetPreviousLotteryDrawByIssueParams{
 		LotteryCode: lotteryCode,
-		RowLimit:    64,
+		IssueNo:     issue,
 	})
-	if err != nil || len(rows) == 0 {
+	if err != nil {
 		return nil
 	}
-	var bestIssue string
-	var bestBalls []byte
-	for _, r := range rows {
-		if r.IssueNo == draw.IssueNo || r.IssueNo >= draw.IssueNo {
-			continue
-		}
-		if bestIssue == "" || r.IssueNo > bestIssue {
-			bestIssue = r.IssueNo
-			bestBalls = r.Balls
-		}
-	}
-	if bestIssue == "" {
+	// 相邻上期仍缺库：返回空，由出号 Skip；worker 侧会尽量推迟到开奖入库
+	if hotColdAdjacentPrevMissing(expected, prev.IssueNo) {
 		return nil
 	}
-	return sqlcdb.ParseDrawBalls(bestBalls)
+	return sqlcdb.ParseDrawBalls(prev.Balls)
 }
 
 func isLonghuPlay(rule playRule) bool {

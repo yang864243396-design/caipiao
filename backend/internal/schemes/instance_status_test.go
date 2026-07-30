@@ -23,7 +23,7 @@ func TestInstanceStatusLabel(t *testing.T) {
 		{"pending", StatusReasonTotalTakeProfit, "", "已达总止盈"},
 		{"pending", "", "", "等待开启"},
 		{"running", "", "", "运行中"},
-		{"running", StatusReasonAwaitNextBet, "", "将在下期开始投注"},
+		{"running", StatusReasonAwaitNextBet, "", "即将进行投注"},
 		{"running", StatusReasonCloudActive, "", "正在云端挂机中"},
 		{"paused", StatusReasonManual, "", "已暂停"},
 		{"paused", StatusReasonInsufficientFunds, "", "钱包余额不足"},

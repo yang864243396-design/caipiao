@@ -313,6 +313,31 @@ func (h *Handler) BetRecordDetail(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) BetRecordItem(w http.ResponseWriter, r *http.Request) {
+	recordNo := strings.TrimSpace(r.PathValue("recordNo"))
+	if recordNo == "" {
+		apix.Validation(w, "recordNo 不能为空")
+		return
+	}
+	h.withMember(w, r, func(members *member.Service, account string) {
+		m, err := members.GetByAccount(r.Context(), account)
+		if err != nil {
+			h.handleMemberErr(w, err)
+			return
+		}
+		result, err := h.betRecords.ItemByRecordNo(r.Context(), m.ID, recordNo)
+		if err != nil {
+			if errors.Is(err, betrecords.ErrItemNotFound) || errors.Is(err, betrecords.ErrItemOutOfWindow) {
+				apix.Fail(w, http.StatusNotFound, apix.CodeNotFound, "记录不存在或已超出可查询范围")
+				return
+			}
+			apix.Fail(w, http.StatusInternalServerError, apix.CodeInternal, "加载失败")
+			return
+		}
+		apix.OK(w, result)
+	})
+}
+
 func queryInt(r *http.Request, key string, fallback int) int {
 	raw := r.URL.Query().Get(key)
 	if raw == "" {

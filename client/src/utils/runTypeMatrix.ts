@@ -626,7 +626,41 @@ function advTriggerPosCount(config: AdvTriggerPosConfig): number {
 }
 
 /**
- * 高级开某投某：一星定位胆 / 前三直选复式 / 后二大小单双等按位玩法，
+ * 前三/中三/后三等直选单式：segmentLen>=2，开某投某 / 随机出号应按位分列；
+ * 排除任选单式与组选单式。位标签缺失时仍按段长分列（展示用「第 N 位」兜底）。
+ */
+export function isZhixuanDanshiPerPosPlay(config: AdvTriggerPosConfig): boolean {
+  const segLen = Math.max(0, Number(config.segmentLen) || 0)
+  if (segLen < 2) return false
+  const bm = String(config.betMode ?? '').toLowerCase()
+  const sub = String(config.catalogSubId ?? config.subPlayId ?? '').toLowerCase()
+  const tid = String(config.playTypeId ?? '').toLowerCase()
+  const label = `${config.playMethodLabel ?? ''} ${config.playTypeLabel ?? ''}`
+  if (
+    tid.includes('renxuan') ||
+    tid === 'g011' ||
+    label.includes('任选') ||
+    label.includes('组选') ||
+    bm === 'zuxuan_ds' ||
+    sub === 'zuxuan_ds' ||
+    sub.includes('zuxuan_ds') ||
+    bm === 'hunhe' ||
+    label.includes('混合')
+  ) {
+    return false
+  }
+  return (
+    bm === 'danshi' ||
+    bm === 'zhixuan_ds' ||
+    sub === 'zhixuan_ds' ||
+    sub.includes('zhixuan_ds') ||
+    label.includes('直选单式') ||
+    config.inputMode === 'danshi'
+  )
+}
+
+/**
+ * 高级开某投某：一星定位胆 / 前三直选复式 / 中三直选单式 / 后二大小单双等按位玩法，
  * 表格按「万位正投/反投、千位…」分列填写（不展示投注位芯片）。
  */
 export function supportsAdvTriggerPerPosColumns(config: AdvTriggerPosConfig): boolean {
@@ -643,6 +677,8 @@ export function supportsAdvTriggerPerPosColumns(config: AdvTriggerPosConfig): bo
   if (config.inputMode === 'multiline') return true
   if (bm === 'fushi' || bm === 'zhixuan_fs' || bm === 'zuhe') return true
   if (sub === 'zhixuan_fs' || sub.includes('zhixuan_fs') || label.includes('直选复式')) return true
+  // 中三/前三直选单式：千百十（或万千百）三位分列
+  if (isZhixuanDanshiPerPosPlay(config)) return true
   return false
 }
 

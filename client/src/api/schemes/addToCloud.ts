@@ -64,11 +64,14 @@ export async function addSchemeToCloud(
 
 ): Promise<AddToCloudResult> {
 
+  const id = String(definitionId ?? '').trim()
+  if (!id) throw new Error('缺少方案 ID')
+
   await ensureClientSession()
 
   return requestApi<AddToCloudResult>(
 
-    `/client/schemes/${encodeURIComponent(definitionId)}/add-to-cloud`,
+    `/client/schemes/${encodeURIComponent(id)}/add-to-cloud`,
 
     { method: 'POST', body: input },
 

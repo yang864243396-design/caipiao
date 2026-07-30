@@ -25,5 +25,6 @@ func formatPK10DxdsComboWire(groupContent string) string {
 	if len(tokens) > 0 && strings.TrimSpace(tokens[0]) != "" {
 		tok = strings.TrimSpace(tokens[0])
 	}
-	return "和" + tok
+	// 下注链路会格式化两次，已带前缀时不可再加（否则 "和大" → "和和大"）。
+	return "和" + strings.TrimPrefix(tok, "和")
 }

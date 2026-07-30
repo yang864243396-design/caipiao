@@ -486,6 +486,32 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
+  /client/cloud/bet-records/item/{recordNo}:
+    get:
+      summary: 云端 · 单笔投注详情
+      description: |
+        对应 Client `BetDetailView`。主键为 `cloud_bet_records.record_no`。
+        仅最近 3 个自然日（UTC+8）内记录可查；超出或不存在返回 404。
+      tags: [client-cloud]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: recordNo
+          in: path
+          required: true
+          schema:
+            type: string
+          example: CB17100000000010001
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseBetRecordItemDetail'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
   /client/cloud/bet-records/{schemeId}:
     get:
       summary: 云端 · 单方案投注明细
@@ -2356,10 +2382,14 @@ components:
 
     BetRecordItem:
       type: object
-      required: [id, period, playType, multiplier, round, amount, pnl, status]
+      required: [id, recordNo, period, playType, multiplier, round, amount, pnl, status]
       properties:
         id:
           type: string
+          description: 展示用第三方注单号；模拟为空
+        recordNo:
+          type: string
+          description: 平台明细编号，详情路由主键
         period:
           type: string
           example: '20240310031'
@@ -2369,7 +2399,7 @@ components:
           example: '115202606160196'
         playType:
           type: string
-          example: 万位定位
+          example: 定位胆 · 万位
         multiplier:
           type: string
           example: '1.5'
@@ -2386,7 +2416,88 @@ components:
           example: 5.0
         status:
           type: string
-          enum: [hit, miss]
+          enum: [hit, miss, pending]
+        betContent:
+          type: string
+
+    BetRecordItemDetail:
+      type: object
+      required:
+        - recordNo
+        - thirdPartyId
+        - period
+        - lotteryLabel
+        - playType
+        - status
+        - statusLabel
+        - drawNumbers
+        - multiplier
+        - round
+        - amount
+        - currency
+        - placedAt
+        - betContent
+        - simBet
+      properties:
+        recordNo:
+          type: string
+        thirdPartyId:
+          type: string
+          description: 第三方注单号；模拟为空串，前端显示 —
+        period:
+          type: string
+        lotteryLabel:
+          type: string
+        playType:
+          type: string
+        status:
+          type: string
+          enum: [pending, hit, miss]
+        statusLabel:
+          type: string
+          description: 未开奖 / 未中奖 / 中奖
+        drawNumbers:
+          type: string
+          description: 空格分隔开奖号；未开奖或缺失为空串
+        betUnits:
+          type: integer
+          nullable: true
+        multiplier:
+          type: string
+        round:
+          type: string
+        amount:
+          type: number
+          format: double
+        currency:
+          type: string
+          enum: [USDT, TRX, CNY]
+        payoutAmount:
+          type: number
+          format: double
+          nullable: true
+          description: null=未开奖或中奖无第三方原值
+        placedAt:
+          type: string
+          example: '2026-07-27 20:15:03'
+        betContent:
+          type: string
+        betContentLines:
+          type: array
+          description: 按玩法位段标好位名的展示行；玩法无按位语义时不下发
+          items:
+            type: string
+          example: ['千位 1 3 5', '百位 2', '十位 0 9']
+        simBet:
+          type: boolean
+
+    ApiResponseBetRecordItemDetail:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/BetRecordItemDetail'
 
     PageMeta:
       type: object

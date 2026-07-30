@@ -42,6 +42,20 @@ func TestWebBetToSettlementLose(t *testing.T) {
 	}
 }
 
+func TestWebBetToSettlementLoseMissingNet(t *testing.T) {
+	// 真未中但 net_amount 缺失为 0、派奖也为 0 → 净额应按 −本金
+	s := webBetToSettlement(&WebBetRecord{
+		ID:           4,
+		BetAmount:    24,
+		NetAmount:    0,
+		PayoutAmount: 0,
+		Settled:      true,
+	})
+	if s.Status != "lose" || s.Pnl != -24 {
+		t.Fatalf("missing-net miss settlement=%+v", s)
+	}
+}
+
 func TestWebBetToSettlementTieRefundIsLose(t *testing.T) {
 	// 龙虎和局退本：net=0、payout=本金 → 应记挂，不能因 payout>0 判赢
 	s := webBetToSettlement(&WebBetRecord{

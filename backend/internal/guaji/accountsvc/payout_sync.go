@@ -3,6 +3,7 @@ package accountsvc
 import (
 	"context"
 	"log/slog"
+	"math"
 	"strings"
 	"time"
 
@@ -187,6 +188,10 @@ func (w *PayoutSyncWorker) syncOne(ctx context.Context, row sqlcdb.ListPendingGu
 	case payout > 1e-6 && pnl < -1e-6:
 		status = "win"
 	}
+	// 防御：真未中却净额≈0（第三方漏 net）时按 −本金落库；和局退本 payout≈本金 不动。
+	if status == "lose" && row.Amount > 1e-6 && math.Abs(pnl) < 0.01 && payout < 0.01 {
+		pnl = -row.Amount
+	}
 	// 直选组合嵌套小奖：第三方整单净额常为「小奖−全票本金」（pnl≪0 / ≈0 仍标 win）→ 用本地 PrizeNet。
 	// 绝不在 guaji 已有扎实正净额时用更大本地值覆盖（本地赔率常偏高：不定位/跨度/和值大小等）。
 	if status == "win" {
@@ -223,7 +228,7 @@ func (w *PayoutSyncWorker) syncOne(ctx context.Context, row sqlcdb.ListPendingGu
 		balanceSnapshot = info.BalanceByCurrency(currency)
 		w.svc.persistGuajiBalances(ctx, row.GuajiAccountID.Int64, multiCurrencyFromInfo(info))
 	}
-	return w.commitSettlement(ctx, row, status, pnl, payout, currency, balanceSnapshot)
+	return w.commitSettlement(ctx, row, status, pnl, payout, currency, balanceSnapshot, true)
 }
 
 func (w *PayoutSyncWorker) evalLocalDraw(ctx context.Context, row sqlcdb.ListPendingGuajiBetOrdersRow) (LocalDrawSettlement, bool, error) {
@@ -243,7 +248,8 @@ func (w *PayoutSyncWorker) trySettleFromLocalDraw(ctx context.Context, row sqlcd
 	}
 	slog.Info("payout sync local draw fallback",
 		"orderNo", row.OrderNo, "status", eval.Status, "pnl", eval.Pnl)
-	if err := w.commitSettlement(ctx, row, eval.Status, eval.Pnl, eval.Payout, row.Currency, 0); err != nil {
+	// 本地兜底结算：不写 payout_amount（严格以第三方原值为准）
+	if err := w.commitSettlement(ctx, row, eval.Status, eval.Pnl, eval.Payout, row.Currency, 0, false); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -256,6 +262,7 @@ func (w *PayoutSyncWorker) commitSettlement(
 	pnl, payout float64,
 	currency string,
 	balanceSnapshot float64,
+	writePayout bool,
 ) error {
 	tx, err := w.svc.pool.Begin(ctx)
 	if err != nil {
@@ -279,10 +286,19 @@ func (w *PayoutSyncWorker) commitSettlement(
 	if status == "win" {
 		cloudStatus = "hit"
 	}
+	payoutAmount := pgtype.Numeric{}
+	if writePayout {
+		if status == "win" {
+			payoutAmount = member.NumericFromFloat(payout)
+		} else {
+			payoutAmount = member.NumericFromFloat(0)
+		}
+	}
 	if _, err := qtx.UpdateCloudBetRecordFromSettlement(ctx, sqlcdb.UpdateCloudBetRecordFromSettlementParams{
-		BetOrderNo: pgtype.Text{String: row.OrderNo, Valid: row.OrderNo != ""},
-		Status:     cloudStatus,
-		Pnl:        member.NumericFromFloat(pnl),
+		BetOrderNo:   pgtype.Text{String: row.OrderNo, Valid: row.OrderNo != ""},
+		Status:       cloudStatus,
+		Pnl:          member.NumericFromFloat(pnl),
+		PayoutAmount: payoutAmount,
 	}); err != nil {
 		return err
 	}

@@ -199,46 +199,49 @@ func TestTriggerDirectionStateMachine(t *testing.T) {
 	}
 }
 
-func TestPickRandomDrawWholeTicketDanshi(t *testing.T) {
-	// SSC 前三直选单式：整注随机应产出 N 个完整 3 位组合（逗号分隔），可被 evaluateZhixuanDanshi 解析。
-	cfg := pickTestConfig(t, `{"runTypeId":"random_draw","playTypeId":"qian3","subPlayId":"zhixuan_ds","randomDraw":{"counts":[5],"strategy":"every"}}`)
-	if !isWholeTicketRandom(cfg.Play) {
-		t.Fatalf("qian3 直选单式 should be whole-ticket random, rule=%+v", cfg.Play)
+func TestPickRandomDrawPerPosZhixuanDanshi(t *testing.T) {
+	// 中三/前三直选单式：按位随机（与复式同），再展开为单式整注。
+	cfg := pickTestConfig(t, `{
+		"runTypeId":"random_draw",
+		"playTemplate":"ssc_std",
+		"playTypeId":"g002",
+		"subPlayId":"2",
+		"betMode":"danshi",
+		"randomDraw":{"counts":[2,2,2],"strategy":"every"}
+	}`)
+	if isWholeTicketRandom(cfg.Play) {
+		t.Fatalf("中三直选单式 should be per-position random, rule=%+v", cfg.Play)
+	}
+	if cfg.Play.SegmentLen != 3 {
+		t.Fatalf("SegmentLen=%d want 3", cfg.Play.SegmentLen)
 	}
 	dec := pickRandomDraw(cfg, sqlcdb.SchemeInstance{Kind: "custom"})
 	tokens := strings.Split(dec.Content, ",")
-	if len(tokens) != 5 {
-		t.Fatalf("want 5 注, got %d: %q", len(tokens), dec.Content)
+	if len(tokens) != 8 {
+		t.Fatalf("want 2×2×2=8 注 after expand, got %d: %q", len(tokens), dec.Content)
 	}
-	seen := map[string]bool{}
 	for _, tk := range tokens {
 		if len(tk) != 3 {
 			t.Fatalf("每注应为 3 位组合, got %q in %q", tk, dec.Content)
 		}
-		for _, r := range tk {
-			if r < '0' || r > '9' {
-				t.Fatalf("非法号码 token %q", tk)
-			}
-		}
-		if seen[tk] {
-			t.Fatalf("整注随机应去重, dup %q in %q", tk, dec.Content)
-		}
-		seen[tk] = true
 	}
 
-	// 产出的单式内容应能命中：构造一注与开奖一致
-	balls := []string{"3", "9", "2", "7", "5"} // 前三=392
-	ev := evaluatePlayHit(cfg.Play, balls, "392,111,222", cfg.Contrary, cfg.ContraryPlan, cfg.Play.PositionIdx)
-	if !ev.Hit || ev.BetUnits != 3 {
-		t.Fatalf("单式命中评估异常: hit=%v units=%d", ev.Hit, ev.BetUnits)
+	// 旧配置 counts=[5]：仅首位 5 码、其余位默认 1 → 仍 5 注（兼容）
+	cfgOld := pickTestConfig(t, `{
+		"runTypeId":"random_draw",
+		"playTemplate":"ssc_std",
+		"playTypeId":"g001",
+		"subPlayId":"zhixuan_ds",
+		"betMode":"danshi",
+		"randomDraw":{"counts":[5],"strategy":"every"}
+	}`)
+	decOld := pickRandomDraw(cfgOld, sqlcdb.SchemeInstance{Kind: "custom"})
+	if n := len(strings.Split(decOld.Content, ",")); n != 5 {
+		t.Fatalf("legacy counts=[5] want 5 注, got %d: %q", n, decOld.Content)
 	}
 
-	// 矩阵放宽：随机出号支持单式，冷热温不支持
 	if !SupportsRandomDrawSubPlay("前三码", "前三直选单式") {
 		t.Fatal("随机出号应支持前三直选单式")
-	}
-	if SupportsPositionSourceSubPlay("前三码", "前三直选单式") {
-		t.Fatal("冷热温(按位)不应支持直选单式")
 	}
 	if !SupportsRandomDrawSubPlay("2.0模式", "和值") {
 		t.Fatal("随机出号现应支持和值（属性家族已放开）")
@@ -307,6 +310,60 @@ func TestPickRandomDrawBaodanNotZuxuanPool(t *testing.T) {
 	toks := strings.Split(strings.TrimSpace(dec.Content), ",")
 	if len(toks) != 1 || toks[0] == "" {
 		t.Fatalf("包胆只能抽 1 个胆码, got %q", dec.Content)
+	}
+}
+
+func TestResolveRandomDraw_countMaxByPlay(t *testing.T) {
+	t.Parallel()
+	// 和值：宇宙 0..27，但组合注数上限 900 → 最多 26 个选项；counts=14 原样保留
+	hezhi := pickTestConfig(t, `{
+		"runTypeId":"random_draw",
+		"playTemplate":"ssc_std",
+		"playTypeId":"g002",
+		"subPlayId":"16",
+		"betMode":"hezhi",
+		"randomDraw":{"counts":[14],"strategy":"every"}
+	}`)
+	if max := randomDrawCountMax(hezhi.Play); max != 26 {
+		t.Fatalf("hezhi max=%d, want 26 (组合注数≤900)", max)
+	}
+	if hezhi.Random == nil || hezhi.Random.Counts[0] != 14 {
+		t.Fatalf("hezhi counts=%v, want [14]", hezhi.Random)
+	}
+	dec := pickRandomDraw(hezhi, sqlcdb.SchemeInstance{Kind: "custom"})
+	if toks := splitContentTokens(dec.Content); len(toks) != 14 {
+		t.Fatalf("hezhi picked %d, want 14; content=%q", len(toks), dec.Content)
+	}
+
+	// 特殊号：宇宙 3，counts=14 → 钳到 3
+	teshu := pickTestConfig(t, `{
+		"runTypeId":"random_draw","playTemplate":"ssc_std",
+		"playTypeId":"teshu","subPlayId":"qian3_teshu","betMode":"teshu",
+		"randomDraw":{"counts":[14],"strategy":"every"}
+	}`)
+	if max := randomDrawCountMax(teshu.Play); max != 3 {
+		t.Fatalf("teshu max=%d, want 3", max)
+	}
+	if teshu.Random == nil || teshu.Random.Counts[0] != 3 {
+		t.Fatalf("teshu counts=%v, want [3]", teshu.Random)
+	}
+
+	// 按位直选：上限 10，counts=14 → 钳到 10
+	zhixuan := pickTestConfig(t, `{
+		"runTypeId":"random_draw","playTemplate":"ssc_std",
+		"playTypeId":"qian3","subPlayId":"zhixuan_fs","betMode":"fushi",
+		"randomDraw":{"counts":[14,14,14],"strategy":"every"}
+	}`)
+	if max := randomDrawCountMax(zhixuan.Play); max != 10 {
+		t.Fatalf("zhixuan max=%d, want 10", max)
+	}
+	if zhixuan.Random == nil || len(zhixuan.Random.Counts) != 3 {
+		t.Fatalf("zhixuan counts=%v", zhixuan.Random)
+	}
+	for i, n := range zhixuan.Random.Counts {
+		if n != 10 {
+			t.Fatalf("zhixuan counts[%d]=%d, want 10", i, n)
+		}
 	}
 }
 
@@ -576,6 +633,89 @@ func TestSimRandomDrawAllFamiliesMultiPeriod(t *testing.T) {
 	})
 }
 
+func TestPickRandomDraw_respectsPerPlayMaxBetUnits(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		raw  string
+		over string // 超限 CurrentPick，应被丢弃重抽
+	}{
+		{
+			name: "中三直选跨度",
+			raw: `{
+				"runTypeId":"random_draw","playTemplate":"ssc_std",
+				"playTypeId":"zhong3","subPlayId":"zhong3_kuadu","betMode":"kuadu",
+				"playMethodLabel":"中三直选跨度",
+				"randomDraw":{"counts":[10],"strategy":"every"}
+			}`,
+			over: "0,1,2,3,4,5,6,7,8,9",
+		},
+		{
+			name: "前三直选复式",
+			raw: `{
+				"runTypeId":"random_draw","playTemplate":"ssc_std",
+				"playTypeId":"qian3","subPlayId":"qian3_zhixuan_fs","betMode":"fushi",
+				"playMethodLabel":"前三直选复式",
+				"randomDraw":{"counts":[10,10,10],"strategy":"every"}
+			}`,
+			over: "0,1,2,3,4,5,6,7,8,9\n0,1,2,3,4,5,6,7,8,9\n0,1,2,3,4,5,6,7,8,9",
+		},
+		{
+			name: "前三直选和值",
+			raw: `{
+				"runTypeId":"random_draw","playTemplate":"ssc_std",
+				"playTypeId":"qian3","subPlayId":"qian3_zhixuan_hz","betMode":"hezhi",
+				"playMethodLabel":"前三直选和值",
+				"randomDraw":{"counts":[28],"strategy":"every"}
+			}`,
+			over: "0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := pickTestConfig(t, c.raw)
+			max := maxBetUnitsForPlay(cfg.Play)
+			if max <= 0 {
+				t.Fatalf("maxBetUnitsForPlay=0, rule=%+v", cfg.Play)
+			}
+			for i := 0; i < 30; i++ {
+				dec := pickRandomDraw(cfg, sqlcdb.SchemeInstance{Kind: "custom"})
+				n := countPlayWireBetUnits(cfg.Play, dec.Content)
+				if n <= 0 || n > max {
+					t.Fatalf("iter %d content=%q units=%d want 1..%d", i, dec.Content, n, max)
+				}
+			}
+			dec := pickRandomDraw(cfg, sqlcdb.SchemeInstance{Kind: "custom", CurrentPick: c.over})
+			n := countPlayWireBetUnits(cfg.Play, dec.Content)
+			if n <= 0 || n > max {
+				t.Fatalf("over-limit CurrentPick not rerolled: content=%q units=%d max=%d", dec.Content, n, max)
+			}
+			if strings.TrimSpace(dec.Content) == strings.TrimSpace(c.over) {
+				t.Fatal("should not keep over-limit CurrentPick")
+			}
+		})
+	}
+}
+
+func TestMaxBetUnitsForPlay_perMode(t *testing.T) {
+	t.Parallel()
+	q3 := pickTestConfig(t, `{"playTemplate":"ssc_std","playTypeId":"qian3","subPlayId":"1","betMode":"fushi"}`)
+	if got := maxBetUnitsForPlay(q3.Play); got != 900 {
+		t.Fatalf("qian3 fushi max=%d want 900", got)
+	}
+	kd := pickTestConfig(t, `{"playTemplate":"ssc_std","playTypeId":"zhong3","subPlayId":"17","betMode":"kuadu"}`)
+	if got := maxBetUnitsForPlay(kd.Play); got != 900 {
+		t.Fatalf("zhong3 kuadu max=%d want 900", got)
+	}
+	ws := pickTestConfig(t, `{"playTemplate":"ssc_std","playTypeId":"qian3","subPlayId":"18","betMode":"weishu"}`)
+	if got := maxBetUnitsForPlay(ws.Play); got != 9 {
+		t.Fatalf("weishu max=%d want 9", got)
+	}
+	if got := countPlayWireBetUnits(kd.Play, "0,1,2,3,4,5,6,7,8,9"); got != 1000 {
+		t.Fatalf("full kuadu units=%d want 1000", got)
+	}
+}
+
 func TestPickRandomDrawKeepsCurrentPick(t *testing.T) {
 	cfg := pickTestConfig(t, `{"runTypeId":"random_draw","playTypeId":"dingwei","subPlayId":"sub_ge","randomDraw":{"counts":[3],"strategy":"keep"}}`)
 	inst := sqlcdb.SchemeInstance{Kind: "custom", CurrentPick: "1,2,3"}
@@ -625,29 +765,27 @@ func TestPickRandomDrawKeepsCurrentPick(t *testing.T) {
 }
 
 func TestHotColdWarmPoolAndRotate(t *testing.T) {
-	cfg := pickTestConfig(t, `{"runTypeId":"hot_cold_warm","playTypeId":"dingwei","subPlayId":"sub_ge","hotColdWarm":{"totalPeriods":50,"pool":["1,5,9"],"pickTypes":["hot"],"faultCount":1,"strategy":"after_hit"}}`)
+	cfg := pickTestConfig(t, `{"runTypeId":"hot_cold_warm","playTypeId":"dingwei","subPlayId":"sub_ge","hotColdWarm":{"totalPeriods":50,"pool":["1,5,9"],"pickTypes":["hot"],"strategy":"after_hit"}}`)
 	inst := sqlcdb.SchemeInstance{Kind: "custom"}
-	// 无开奖序列时回退配置池
+	// 无开奖：全序 0..9，热区整区 0,1,2,3,4；pool 非空仅表示该位启用
 	dec := pickHotColdWarmFromDraws(cfg, inst, nil)
-	if dec.Content != "1,5,9" {
-		t.Fatalf("pool content = %q", dec.Content)
+	if dec.Content != "0,1,2,3,4" {
+		t.Fatalf("hot zone = %q, want 0,1,2,3,4", dec.Content)
 	}
-	// 中后换：命中清空 → 下期按冷热重取；未中锁定本期内容
 	_, cur, _ := advancePickState(cfg, inst, dec, true)
 	if cur != "" {
 		t.Fatalf("after_hit on hit should clear pick, got %q", cur)
 	}
 	_, cur, _ = advancePickState(cfg, inst, dec, false)
-	if cur != "1,5,9" {
+	if cur != "0,1,2,3,4" {
 		t.Fatalf("after_hit on miss should keep content, got %q", cur)
 	}
 }
 
-func TestBuildHotColdPickContentByRankAndOffset(t *testing.T) {
-	// 名次+起点偏移模型：容错=偏移，pickCount=每位取几个名次。
-	cfg := pickTestConfig(t, `{"runTypeId":"hot_cold_warm","playTypeId":"dingwei","subPlayId":"sub_ge","hotColdWarm":{"totalPeriods":20,"pickTypes":["hot"],"faultCount":0,"pickCount":1}}`)
-	// 个位（PositionIdx=4）频次：7×3 > 1×1、3×1 > 其余0
-	// 全序（频次降序，平手按号码升序）：7,1,3,0,2,4,5,6,8,9
+func TestBuildHotColdPickContentHotColdZones(t *testing.T) {
+	cfg := pickTestConfig(t, `{"runTypeId":"hot_cold_warm","playTypeId":"dingwei","subPlayId":"sub_ge","hotColdWarm":{"totalPeriods":20,"pickTypes":["hot"]}}`)
+	// 个位频次：7×3 > 1×1、3×1 > 其余0
+	// 全序：7,1,3,0,2,4,5,6,8,9；热区前5：7,1,3,0,2 → 排序 0,1,2,3,7
 	draws := [][]string{
 		{"0", "0", "0", "0", "7"},
 		{"0", "0", "0", "0", "7"},
@@ -655,32 +793,18 @@ func TestBuildHotColdPickContentByRankAndOffset(t *testing.T) {
 		{"0", "0", "0", "0", "3"},
 		{"0", "0", "0", "0", "1"},
 	}
-	// 热 offset0 count1 → 最热 7
-	if got := buildHotColdPickContent(cfg, draws); got != "7" {
-		t.Fatalf("hot offset0 count1 => %q, want 7", got)
+	if got := buildHotColdPickContent(cfg, draws); got != "0,1,2,3,7" {
+		t.Fatalf("hot zone => %q, want 0,1,2,3,7", got)
 	}
-	// 热 offset1 count1 → 第2热（平手按号码升序：freq1 中 1<3）→ 1
-	cfg.HotCold.FaultCount = 1
-	if got := buildHotColdPickContent(cfg, draws); got != "1" {
-		t.Fatalf("hot offset1 count1 => %q, want 1", got)
-	}
-	// 热 offset0 count2 → 第1、2热 → 7,1
-	cfg.HotCold.FaultCount = 0
-	cfg.HotCold.PickCount = 2
-	if got := buildHotColdPickContent(cfg, draws); got != "7,1" {
-		t.Fatalf("hot offset0 count2 => %q, want 7,1", got)
-	}
-	// 冷 offset0 count1 → 最冷（全序末位，freq0 中号码最大 9）→ 9
 	cfg.HotCold.PickTypes = []string{"cold"}
-	cfg.HotCold.PickCount = 1
-	if got := buildHotColdPickContent(cfg, draws); got != "9" {
-		t.Fatalf("cold offset0 count1 => %q, want 9", got)
+	if got := buildHotColdPickContent(cfg, draws); got != "4,5,6,8,9" {
+		t.Fatalf("cold zone => %q, want 4,5,6,8,9", got)
 	}
 }
 
-func TestBuildHotColdPickContentManualOverride(t *testing.T) {
-	// 混合模式：某位手选号码覆盖，其余位按名次自动取号。
-	cfg := pickTestConfig(t, `{"runTypeId":"hot_cold_warm","playTemplate":"ssc_std","playTypeId":"g006","subPlayId":"13","typeId":"g006","subId":"13","betMode":"dingwei","hotColdWarm":{"totalPeriods":20,"pickTypes":["hot"],"faultCount":0,"pickCount":1,"pool":["8","","","",""]}}`)
+func TestBuildHotColdPickContentPositionEnable(t *testing.T) {
+	// pool 非空位=启用；万位启用取整热区，其余位留空。
+	cfg := pickTestConfig(t, `{"runTypeId":"hot_cold_warm","playTemplate":"ssc_std","playTypeId":"g006","subPlayId":"13","typeId":"g006","subId":"13","betMode":"dingwei","hotColdWarm":{"totalPeriods":20,"pickTypes":["hot"],"pool":["8","","","",""]}}`)
 	draws := [][]string{
 		{"1", "2", "3", "4", "5"},
 		{"1", "2", "3", "4", "5"},
@@ -691,33 +815,74 @@ func TestBuildHotColdPickContentManualOverride(t *testing.T) {
 	if len(lines) != 5 {
 		t.Fatalf("lines=%d content=%q want 5", len(lines), got)
 	}
-	if lines[0] != "8" {
-		t.Fatalf("万位应被手选覆盖为 8, got %q", lines[0])
+	if lines[0] == "" || lines[0] == "8" {
+		t.Fatalf("万位应取动态热区整区, got %q", lines[0])
 	}
-	// 千位（idx1）频次：2×2 > 7×1 → 最热 2
-	if lines[1] != "2" {
-		t.Fatalf("千位自动取号应为最热 2, got %q", lines[1])
+	for i := 1; i < 5; i++ {
+		if lines[i] != "" {
+			t.Fatalf("未启用位%d 应为空, got %q", i, lines[i])
+		}
+	}
+}
+
+func TestBuildHotColdPickContentHotZoneNotFixedFushi(t *testing.T) {
+	// 点「热」写入的 pool 是编辑预览；运行时取动态热区整区（约5码），不得锁死预览复式。
+	cfg := pickTestConfig(t, `{"runTypeId":"hot_cold_warm","playTemplate":"ssc_std","playTypeId":"g002","subPlayId":"14","typeId":"g002","subId":"14","betMode":"fushi","hotColdWarm":{"totalPeriods":20,"pickTypes":["hot"],"strategy":"every","pool":["2,4,5,6,7","0,1,2,5,6","0,1,3,5,9"]}}`)
+	drawsA := [][]string{
+		{"9", "2", "7", "0", "0"},
+		{"9", "2", "7", "0", "0"},
+		{"9", "4", "0", "0", "0"},
+	}
+	drawsB := [][]string{
+		{"9", "6", "9", "0", "0"},
+		{"9", "6", "9", "0", "0"},
+		{"9", "0", "3", "0", "0"},
+	}
+	a := buildHotColdPickContent(cfg, drawsA)
+	b := buildHotColdPickContent(cfg, drawsB)
+	fixed := "2,4,5,6,7\n0,1,2,5,6\n0,1,3,5,9"
+	if a == fixed || b == fixed {
+		t.Fatalf("不得锁死预览复式: a=%q b=%q", a, b)
+	}
+	for _, content := range []string{a, b} {
+		lines := strings.Split(content, "\n")
+		if len(lines) != 3 {
+			t.Fatalf("content=%q want 3 lines", content)
+		}
+		for _, line := range lines {
+			n := 0
+			if line != "" {
+				n = len(strings.Split(line, ","))
+			}
+			if n != 5 {
+				t.Fatalf("每位热区应为5码, line=%q content=%q", line, content)
+			}
+		}
+	}
+	if a == b {
+		t.Fatalf("不同开奖窗口热区应变化: a=%q b=%q", a, b)
 	}
 }
 
 func TestBuildHotColdPickContentEveryPeriodResort(t *testing.T) {
-	// 每期换：不同开奖窗口重排后取号应变化。
-	cfg := pickTestConfig(t, `{"runTypeId":"hot_cold_warm","playTypeId":"dingwei","subPlayId":"sub_ge","hotColdWarm":{"totalPeriods":20,"pickTypes":["hot"],"faultCount":0,"pickCount":1,"strategy":"every"}}`)
+	cfg := pickTestConfig(t, `{"runTypeId":"hot_cold_warm","playTypeId":"dingwei","subPlayId":"sub_ge","hotColdWarm":{"totalPeriods":20,"pickTypes":["hot"],"strategy":"every"}}`)
 	a := buildHotColdPickContent(cfg, [][]string{{"0", "0", "0", "0", "7"}, {"0", "0", "0", "0", "7"}})
 	b := buildHotColdPickContent(cfg, [][]string{{"0", "0", "0", "0", "3"}, {"0", "0", "0", "0", "3"}})
-	if a != "7" || b != "3" {
-		t.Fatalf("每期重排应随窗口变化: a=%q(want 7) b=%q(want 3)", a, b)
+	if a == b {
+		t.Fatalf("每期重排热区应随窗口变化: a=%q b=%q", a, b)
 	}
-	// 每期换策略：结算后清空 current_pick，下期重取
-	inst := sqlcdb.SchemeInstance{Kind: "custom", CurrentPick: "7"}
-	if _, cur, _ := advancePickState(cfg, inst, pickDecision{Content: "7"}, false); cur != "" {
+	if !strings.Contains(a, "7") || !strings.Contains(b, "3") {
+		t.Fatalf("热区应包含当期最热号: a=%q b=%q", a, b)
+	}
+	inst := sqlcdb.SchemeInstance{Kind: "custom", CurrentPick: a}
+	if _, cur, _ := advancePickState(cfg, inst, pickDecision{Content: a}, false); cur != "" {
 		t.Fatalf("every 策略应清空 current_pick, got %q", cur)
 	}
 }
 
 func TestBuildHotColdPickContentG006FivePosition(t *testing.T) {
-	// 统一定位胆 subId=13：五位各取 pickCount 个热号名次 → 五行内容
-	cfg := pickTestConfig(t, `{"runTypeId":"hot_cold_warm","playTemplate":"ssc_std","playTypeId":"g006","subPlayId":"13","typeId":"g006","subId":"13","betMode":"dingwei","hotColdWarm":{"totalPeriods":20,"pickTypes":["hot"],"faultCount":0,"pickCount":5}}`)
+	// 统一定位胆 subId=13：五位各取热区整区 → 五行内容
+	cfg := pickTestConfig(t, `{"runTypeId":"hot_cold_warm","playTemplate":"ssc_std","playTypeId":"g006","subPlayId":"13","typeId":"g006","subId":"13","betMode":"dingwei","hotColdWarm":{"totalPeriods":20,"pickTypes":["hot"]}}`)
 	if playPositionCount(cfg.Play) != 5 {
 		t.Fatalf("playPositionCount=%d want 5", playPositionCount(cfg.Play))
 	}
@@ -884,6 +1049,29 @@ func TestCompileBetMultiplierRounds(t *testing.T) {
 		t.Fatalf("should preserve existing advanced rounds, got %+v", rounds)
 	}
 
+	// 显式带上模板 rounds → 以 payload 为准
+	payloadWithRounds := map[string]interface{}{}
+	_ = json.Unmarshal([]byte(`{"kind":"3","advanced":{"selectedId":"tpl_demo_plan_4","rounds":[{"mult":7,"afterHit":1,"afterMiss":2},{"mult":14,"afterHit":1,"afterMiss":1}]}}`), &payloadWithRounds)
+	rounds = compileBetMultiplierRounds(payloadWithRounds, existing)
+	if len(rounds) != 2 || rounds[0].Mult != 7 || rounds[1].Mult != 14 {
+		t.Fatalf("payload advanced.rounds = %+v", rounds)
+	}
+
+	// 更换选中模板 → 覆盖为高级默认
+	existingOtherTpl := map[string]interface{}{
+		"betMultiplier": map[string]interface{}{
+			"kind":     "3",
+			"advanced": map[string]interface{}{"selectedId": "tpl_old"},
+		},
+		"rounds": []interface{}{
+			map[string]interface{}{"mult": 5.0, "afterHit": 1.0, "afterMiss": 2.0},
+		},
+	}
+	rounds = compileBetMultiplierRounds(payload, existingOtherTpl)
+	if !reflect.DeepEqual(rounds, wantAdv) {
+		t.Fatalf("switch advanced template = %+v, want %+v", rounds, wantAdv)
+	}
+
 	// 从简单倍投切换 → 覆盖为高级默认
 	existingSimple := map[string]interface{}{
 		"betMultiplier": map[string]interface{}{"kind": "2"},
@@ -968,6 +1156,11 @@ func TestAdvancePickAfterFormalSettlement(t *testing.T) {
 	}
 	if idx, _, _ := AdvancePickAfterFormalSettlement("custom", advCfg, inst, "12", true); idx != 1 {
 		t.Fatalf("adv_fixed_rotate after hit = %d, want 1", idx)
+	}
+
+	cfg := parseSchemeConfig("custom", advCfg, 2, 2)
+	if got := betRoundLabel(cfg, 2, 1); got != "3" {
+		t.Fatalf("round label = %q, want 倍投轮次 3", got)
 	}
 
 	// 开某投某：派奖后推进投向状态机（下单时冻结，此处按同一起点重算）。
@@ -1126,7 +1319,7 @@ func TestSimFormalPayoutAllRunTypes(t *testing.T) {
 
 	// 6) 冷热·中后换：命中清空重取，未中锁定内容
 	t.Run("hot_cold_warm_rotate", func(t *testing.T) {
-		raw := `{"runTypeId":"hot_cold_warm","playTypeId":"dingwei","subPlayId":"sub_ge","hotColdWarm":{"totalPeriods":50,"pool":["1,5,9"],"pickTypes":["hot"],"faultCount":1,"strategy":"after_hit"}}`
+		raw := `{"runTypeId":"hot_cold_warm","playTypeId":"dingwei","subPlayId":"sub_ge","hotColdWarm":{"totalPeriods":50,"pool":["1,5,9"],"pickTypes":["hot"],"strategy":"after_hit"}}`
 		inst := base
 		content := "1,5,9"
 		// 命中 → 清空

@@ -468,6 +468,8 @@ func (s *Service) PlaceBet(ctx context.Context, account, lotteryCode string, in 
 				ruleID = code
 			}
 		}
+		// TypeLabel 可为空：ParseRuleMeta 会从 segment_rule.guajiGroup 填 Group，
+		// 六合彩子玩法名推断（去掉组名前缀）依赖的是 Group，不是 TypeLabel。
 		ruleMeta := guajibet.ParseRuleMeta(
 			template,
 			in.BetPayload.TypeID,

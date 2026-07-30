@@ -127,7 +127,9 @@ func sampleWS(ctx context.Context, gcfg guaji.Config, dur time.Duration) (map[st
 			wsKeys[ev.GameKey] = ev.Periods
 		}
 		body := raw
-		var env struct{ Message json.RawMessage `json:"message"` }
+		var env struct {
+			Message json.RawMessage `json:"message"`
+		}
 		if json.Unmarshal(raw, &env) == nil && len(env.Message) > 0 {
 			body = env.Message
 		}

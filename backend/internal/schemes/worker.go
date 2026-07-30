@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"caipiao/backend/internal/cloud/lookback"
 	"caipiao/backend/internal/db"
 	"caipiao/backend/internal/db/sqlcdb"
+	"caipiao/backend/internal/guaji"
 	"caipiao/backend/internal/guajibet"
 	"caipiao/backend/internal/guaji/periodsync"
 	"caipiao/backend/internal/lottery"
@@ -32,6 +34,8 @@ type Worker struct {
 	guajiBets      guajiBetPlacer
 	periodSync     *periodsync.Syncer
 	tickSec        int32
+	concurrency    int32
+	placeSem       chan struct{} // 真下单全站有界并发；nil 表示不额外限流
 	countdownReset int32
 	betSeq         atomic.Uint64
 }
@@ -40,14 +44,17 @@ func NewWorker(pool *db.Pool, tickSec int, hub *ws.Hub, periodSync *periodsync.S
 	if pool == nil || tickSec <= 0 {
 		return nil
 	}
-	return &Worker{
+	w := &Worker{
 		pool:           pool,
 		q:              sqlcdb.New(pool),
 		hub:            hub,
 		periodSync:     periodSync,
 		tickSec:        int32(tickSec),
+		concurrency:    int32(defaultSchemeWorkerConcurrency),
 		countdownReset: defaultCountdownReset,
 	}
+	w.SetPlaceConcurrency(defaultSchemeWorkerPlaceConcurrency)
+	return w
 }
 
 func (w *Worker) Run(ctx context.Context) {
@@ -56,7 +63,11 @@ func (w *Worker) Run(ctx context.Context) {
 	}
 	ticker := time.NewTicker(time.Duration(w.tickSec) * time.Second)
 	defer ticker.Stop()
-	slog.Info("scheme worker started", "tickSec", w.tickSec)
+	placeN := 0
+	if w.placeSem != nil {
+		placeN = cap(w.placeSem)
+	}
+	slog.Info("scheme worker started", "tickSec", w.tickSec, "concurrency", w.concurrency, "placeConcurrency", placeN)
 	for {
 		select {
 		case <-ctx.Done():
@@ -72,23 +83,53 @@ func (w *Worker) tick(ctx context.Context) {
 	instances, err := w.q.ListRunningSchemeInstances(ctx)
 	if err != nil {
 		slog.Warn("scheme worker list failed", "err", err)
-	} else {
-		planMultByMember := make(map[int64]float64, 8)
-		for _, row := range instances {
-			inst := sqlcdb.SchemeInstanceFromRunningRow(row)
-			pm, ok := planMultByMember[inst.MemberID]
-			if !ok {
-				pm = w.memberPlanMultiplier(ctx, inst.MemberID)
-				planMultByMember[inst.MemberID] = pm
+	} else if len(instances) > 0 {
+		w.prefetchPeriodSync(ctx, uniqueLotteryCodes(instances))
+		instances = prioritizeOpenBetWindow(instances)
+		planMultByMember := w.preloadPlanMultipliers(ctx, uniqueMemberIDs(instances))
+		gate := newBetWindowGate(w)
+		conc := int(w.concurrency)
+		if conc <= 0 {
+			conc = defaultSchemeWorkerConcurrency
+		}
+		planOf := func(memberID int64) float64 {
+			if pm, ok := planMultByMember[memberID]; ok {
+				return pm
 			}
-			w.tickInstance(ctx, inst, pm)
+			return 1
+		}
+		if conc == 1 || len(instances) == 1 {
+			for _, row := range instances {
+				inst := sqlcdb.SchemeInstanceFromRunningRow(row)
+				w.tickInstance(ctx, inst, planOf(inst.MemberID), gate)
+			}
+		} else {
+			sem := make(chan struct{}, conc)
+			var wg sync.WaitGroup
+			for _, row := range instances {
+				inst := sqlcdb.SchemeInstanceFromRunningRow(row)
+				pm := planOf(inst.MemberID)
+				wg.Add(1)
+				sem <- struct{}{}
+				go func(inst sqlcdb.SchemeInstance, planMult float64) {
+					defer wg.Done()
+					defer func() { <-sem }()
+					defer func() {
+						if r := recover(); r != nil {
+							slog.Error("scheme worker tickInstance panic", "id", inst.ID, "panic", r)
+						}
+					}()
+					w.tickInstance(ctx, inst, planMult, gate)
+				}(inst, pm)
+			}
+			wg.Wait()
 		}
 	}
 	w.tickSimSettlements(ctx)
 	w.tickMaintenanceResume(ctx)
 }
 
-func (w *Worker) tickInstance(ctx context.Context, inst sqlcdb.SchemeInstance, planMult float64) {
+func (w *Worker) tickInstance(ctx context.Context, inst sqlcdb.SchemeInstance, planMult float64, gate *betWindowGate) {
 	status, err := w.q.GetSchemeInstanceStatus(ctx, inst.ID)
 	if err != nil || status != "running" {
 		return
@@ -112,12 +153,6 @@ func (w *Worker) tickInstance(ctx context.Context, inst sqlcdb.SchemeInstance, p
 		return
 	}
 	now := time.Now()
-
-	if w.periodSync != nil {
-		if err := w.periodSync.EnsureFreshIfStale(ctx, inst.LotteryCode); err != nil {
-			slog.Warn("scheme worker periods cache fallback failed", "id", inst.ID, "lottery", inst.LotteryCode, "err", err)
-		}
-	}
 
 	if fresh, ferr := w.q.GetSchemeInstanceFull(ctx, inst.ID); ferr == nil {
 		inst = fresh
@@ -155,7 +190,7 @@ func (w *Worker) tickInstance(ctx context.Context, inst sqlcdb.SchemeInstance, p
 		}
 	}
 
-	if !w.ensureBetWindowOpen(ctx, inst, now) {
+	if !w.ensureBetWindowOpen(ctx, inst, now, gate) {
 		slog.Debug("scheme worker bet skipped: bet window closed", "id", inst.ID, "lottery", inst.LotteryCode, "simBet", inst.SimBet)
 		return
 	}
@@ -237,7 +272,11 @@ func (w *Worker) tryActivateAfterStartPeriod(ctx context.Context, inst sqlcdb.Sc
 	return true, nil
 }
 
-func (w *Worker) ensureBetWindowOpen(ctx context.Context, inst sqlcdb.SchemeInstance, now time.Time) bool {
+func (w *Worker) ensureBetWindowOpen(ctx context.Context, inst sqlcdb.SchemeInstance, now time.Time, gate *betWindowGate) bool {
+	_ = now
+	if gate != nil {
+		return gate.ensureOpen(ctx, inst.LotteryCode)
+	}
 	if _, ok := lottery.StrictOpenIssueForGuajiBet(inst.LotteryCode); ok {
 		return true
 	}
@@ -327,6 +366,32 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 	baseCoef := combinedBaseCoef(inst.Multiplier, planMult)
 	betMult := effectiveBetMultiple(baseCoef, round)
 
+	// 冷热 / 开某投某：都依赖「相邻上期」开奖。上期未入库时勿用更早开奖硬投。
+	if cfg.RunTypeID == RunTypeHotColdWarm || cfg.RunTypeID == RunTypeAdvTriggerBet {
+		needsPrev := true
+		if cfg.RunTypeID == RunTypeHotColdWarm {
+			curPick := strings.TrimSpace(inst.CurrentPick)
+			needsPrev = curPick == "" || hotColdPickNeedsRebuild(cfg, curPick)
+		}
+		if needsPrev && !w.hotColdPreviousDrawReady(ctx, inst.LotteryCode, draw.IssueNo) {
+			rem, ok := lottery.PeriodsCountdownSec(inst.LotteryCode, time.Now())
+			if !ok || rem >= hotColdPrevDrawWaitMinSec {
+				slog.Debug("scheme worker bet deferred: waiting previous draw",
+					"id", inst.ID, "period", draw.IssueNo, "runType", cfg.RunTypeID, "countdown", rem)
+				return nil
+			}
+			// 临近封盘：冷热可降级统计；开某投某继续走 resolvePick，
+			// previousDrawBalls 在缺相邻上期时返回空 → Skip，避免错投上上期映射。
+			if cfg.RunTypeID == RunTypeHotColdWarm {
+				slog.Info("scheme worker hot/cold proceed without previous draw",
+					"id", inst.ID, "period", draw.IssueNo, "countdown", rem)
+			} else {
+				slog.Info("scheme worker trigger: previous draw still missing near close",
+					"id", inst.ID, "period", draw.IssueNo, "countdown", rem)
+			}
+		}
+	}
+
 	// 出号体系：按运行类型决定本期下注内容（与倍投体系独立，v8 §0）
 	dec := w.resolvePick(ctx, cfg, inst, draw)
 	if dec.Skip {
@@ -362,6 +427,13 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 	// 单取 GroupContent 只有一位；拼回按位号池后再走单式展开。
 	betContent = joinPositionPoolGroupsIfNeeded(cfg, betContent)
 	betContent = normalizeZhixuanDanshiContent(cfg.Play, betContent)
+	// 随机出号：禁止回落到 schemeGroups 满选（如跨度 0–9=1000>900）；超限则当场重抽。
+	if cfg.RunTypeID == RunTypeRandomDraw {
+		if strings.TrimSpace(betContent) == "" || contentExceedsBetUnitsMax(cfg.Play, betContent) {
+			betContent = randomDrawContentUnderMax(cfg)
+			dec.Content = betContent
+		}
+	}
 
 	balls := sqlcdb.ParseDrawBalls(draw.Balls)
 	playEval := evaluatePlayHit(cfg.Play, balls, betContent, cfg.Contrary, cfg.ContraryPlan, cfg.Play.PositionIdx)
@@ -369,11 +441,18 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 		w.pauseRunningInstance(ctx, inst, StatusReasonBetFailed, guajibet.ErrZeroBets.Error())
 		return errSchemeBetStopped
 	}
-	// 直选复式：超第三方单组上限则暂停（含开某投某满号 1000>900 等已入库方案）
-	if max := zhixuanFushiMaxBetUnits(cfg.Play); max > 0 && playEval.BetUnits > max {
-		detail := errMaxBetUnitsExceeded(max).Error()
-		w.pauseRunningInstance(ctx, inst, StatusReasonBetFailed, detail)
-		return errSchemeBetStopped
+	// 超该玩法第三方单组上限则暂停（随机出号会先重抽；此处拦复式满号等已入库内容）
+	if max := maxBetUnitsForPlay(cfg.Play); max > 0 {
+		units := playEval.BetUnits
+		// 和值/跨度等 evaluate 注数是「选项个数」，真下单以 wire 组合注数为准
+		if wire := countPlayWireBetUnits(cfg.Play, betContent); wire > 0 {
+			units = wire
+		}
+		if units > max {
+			detail := errMaxBetUnitsExceeded(max).Error()
+			w.pauseRunningInstance(ctx, inst, StatusReasonBetFailed, detail)
+			return errSchemeBetStopped
+		}
 	}
 	amount := calcBetAmount(playEval.BetUnits, betMult, cfg.BetUnitYuan)
 	pnl := calcPnLWithOdds(amount, playEval.Hit, playEval.Odds)
@@ -406,13 +485,20 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 		if cerr != nil {
 			return fmt.Errorf("lottery catalog: %w", cerr)
 		}
-		if _, _, err := resolveOutboundPlayCode(ctx, w.q, cfg, textVal(cat.PlayTemplate)); err != nil {
+		if _, subPlay, err := resolveOutboundPlayCode(ctx, w.q, cfg, textVal(cat.PlayTemplate)); err != nil {
 			w.pauseRunningInstance(ctx, inst, StatusReasonBetFailed, guajiBetFailedDetail(err))
 			return errSchemeBetStopped
+		} else if label := strings.TrimSpace(subPlay.Label); label != "" {
+			cfg.SubPlayLabel = label
 		}
 	}
 
 	recordNo := fmt.Sprintf("CB%d%04d", time.Now().UTC().UnixNano(), w.betSeq.Add(1)%10000)
+	playTypeLabel := cloudPlayTypeLabel(cfg.PlayTypeLabel, cfg.SubPlayLabel)
+	if playTypeLabel == "" {
+		playTypeLabel = cfg.PlayTypeLabel
+	}
+	betUnits := playEval.BetUnits
 
 	recordStatus := status
 	recordPnl := pnl
@@ -426,7 +512,7 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 	}
 
 	if !guajiReal {
-		reserved, err := w.reserveCloudBetPeriod(ctx, inst, draw, cfg, recordNo, recordStatus, amount, recordPnl, betContent, betMult, roundIdx, len(cfg.Rounds))
+		reserved, err := w.reserveCloudBetPeriod(ctx, inst, draw, cfg, recordNo, recordStatus, amount, recordPnl, betContent, betMult, roundIdx, betUnits, playTypeLabel)
 		if err != nil {
 			return err
 		}
@@ -443,7 +529,7 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 			if committed || !guajiAccepted {
 				return
 			}
-			w.finalizeCloudBetAfterGuaji(ctx, inst, cfg, recordNo, amount, betMult, roundIdx, betContent, betMeta)
+			w.finalizeCloudBetAfterGuaji(ctx, inst, cfg, recordNo, amount, betMult, roundIdx, betContent, betMeta, playEval.BetUnits)
 			return
 		}
 		if derr := w.q.DeleteCloudBetRecordForInstancePeriod(ctx, inst.ID, draw.IssueNo); derr != nil {
@@ -498,9 +584,9 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 			SchemeID:       inst.ID,
 			SchemeName:     inst.SchemeName,
 			PeriodNo:       guajiTargetPeriodNo,
-			PlayType:       cfg.PlayTypeLabel,
+			PlayType:       playTypeLabel,
 			Multiplier:     strconv.Itoa(betMultipleAsInt(betMult)),
-			RoundLabel:     strconv.Itoa(roundIdx + 1),
+			RoundLabel:     betRoundLabel(cfg, roundIdx, int(inst.PickIndex)),
 			Amount:         numericFromFloat(amount),
 			Pnl:            numericFromFloat(0),
 			Status:         "pending",
@@ -510,6 +596,7 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 			LotteryCode:    inst.LotteryCode,
 			LotteryLabel:   inst.LotteryLabel,
 			DefinitionID:   inst.DefinitionID,
+			BetUnits:       betUnits,
 		})
 		if cerr != nil {
 			return cerr
@@ -521,25 +608,49 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 		}
 		betMeta, err = w.placeGuajiSchemeBet(ctx, qtx, inst, cfg, draw, betContent, amount, playEval.BetUnits, betMult)
 		if err != nil {
-			stopErr := w.stopAfterThirdPartyBetFailed(ctx, qtx, inst, amount, err)
+			if errors.Is(err, guajibet.ErrPeriodClosed) {
+				return guajibet.ErrPeriodClosed
+			}
+			// 传输层抖动：回滚本期占位，保持 running，下个 tick 再试（避免误停成「连接失败」）。
+			if guaji.IsRetryableTransportError(err) {
+				slog.Warn("scheme worker bet deferred: transient upstream",
+					"instanceId", inst.ID, "memberId", inst.MemberID, "period", draw.IssueNo, "err", err)
+				return nil
+			}
+			// placeGuajiSchemeBet 可能已在 qtx 上留下失败语句 → 事务 aborted。
+			// 必须先回滚再停投，否则 Pause 会报 25P02，把真实原因盖掉。
+			placeErr := err
+			_ = tx.Rollback(ctx)
+			stopErr := w.stopAfterThirdPartyBetFailed(ctx, w.q, inst, amount, placeErr)
 			if errors.Is(stopErr, guajibet.ErrPeriodClosed) {
 				return guajibet.ErrPeriodClosed
 			}
 			if errors.Is(stopErr, errSchemeBetStopped) {
-				if cerr := tx.Commit(ctx); cerr != nil {
-					return cerr
-				}
-				committed = true
-				reason := betFailureReason(err)
+				committed = true // 占位将由 defer 清理；停投已在新连接提交
+				reason := betFailureReason(placeErr)
 				w.notifySchemeInstance(ctx, inst.MemberID, inst.ID, runModeFromSimBet(inst.SimBet), "pending", reason)
 				slog.Warn("scheme worker stopped: third party bet failed",
-					"instanceId", inst.ID, "memberId", inst.MemberID, "period", draw.IssueNo, "reason", reason, "err", err)
+					"instanceId", inst.ID, "memberId", inst.MemberID, "period", draw.IssueNo, "reason", reason, "err", placeErr)
 				return errSchemeBetStopped
 			}
-			return stopErr
+			// 停投本身失败：仍返回原始下注错误，避免只剩 25P02
+			if stopErr != nil {
+				slog.Warn("scheme worker stop after bet failed also errored",
+					"instanceId", inst.ID, "placeErr", placeErr, "stopErr", stopErr)
+				w.pauseRunningInstance(ctx, inst, StatusReasonBetFailed, guajiBetFailedDetail(placeErr))
+				committed = true
+				return errSchemeBetStopped
+			}
+			return placeErr
 		}
 		if betMeta.Amount > 0 {
 			amount = betMeta.Amount
+		}
+		if betMeta.BetsNums > 0 {
+			betUnits = betMeta.BetsNums
+		}
+		if label := strings.TrimSpace(betMeta.PlayType); label != "" {
+			playTypeLabel = label
 		}
 		guajiAccepted = true
 	}
@@ -561,6 +672,8 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 			guajiPeriodsPgtext(betMeta.Periods),
 			numericFromFloat(0), "pending",
 			numericFromFloat(amount),
+			betUnits,
+			playTypeLabel,
 		); err != nil {
 			return err
 		}
@@ -651,7 +764,8 @@ func (w *Worker) reserveCloudBetPeriod(
 	amount, recordPnl float64,
 	betContent string,
 	mult float64,
-	roundIdx, roundCount int,
+	roundIdx, betUnits int,
+	playTypeLabel string,
 ) (bool, error) {
 	tx, err := w.pool.Begin(ctx)
 	if err != nil {
@@ -688,6 +802,12 @@ func (w *Worker) reserveCloudBetPeriod(
 	}
 	periodNo := dedup.CurrentOpen
 
+	if playTypeLabel == "" {
+		playTypeLabel = cloudPlayTypeLabel(cfg.PlayTypeLabel, cfg.SubPlayLabel)
+	}
+	if playTypeLabel == "" {
+		playTypeLabel = cfg.PlayTypeLabel
+	}
 	ok, err := qtx.ReserveCloudBetPeriod(ctx, sqlcdb.ReserveCloudBetPeriodParams{
 		RecordNo:       recordNo,
 		MemberID:       inst.MemberID,
@@ -695,9 +815,9 @@ func (w *Worker) reserveCloudBetPeriod(
 		SchemeID:       inst.ID,
 		SchemeName:     inst.SchemeName,
 		PeriodNo:       periodNo,
-		PlayType:       cfg.PlayTypeLabel,
+		PlayType:       playTypeLabel,
 		Multiplier:     strconv.Itoa(betMultipleAsInt(mult)),
-		RoundLabel:     strconv.Itoa(roundIdx + 1),
+		RoundLabel:     betRoundLabel(cfg, roundIdx, int(inst.PickIndex)),
 		Amount:         numericFromFloat(amount),
 		Pnl:            numericFromFloat(recordPnl),
 		Status:         recordStatus,
@@ -707,6 +827,7 @@ func (w *Worker) reserveCloudBetPeriod(
 		LotteryCode:    inst.LotteryCode,
 		LotteryLabel:   inst.LotteryLabel,
 		DefinitionID:   inst.DefinitionID,
+		BetUnits:       betUnits,
 	})
 	if err != nil {
 		return false, err

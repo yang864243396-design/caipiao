@@ -25,9 +25,11 @@ type Config struct {
 	DBRequired        bool
 	DBMaxConns        int
 	DBMinConns        int
-	SchemeWorkerEnabled bool
-	SchemeWorkerTickSec int
-	WSEnabled           bool
+	SchemeWorkerEnabled          bool
+	SchemeWorkerTickSec          int
+	SchemeWorkerConcurrency      int
+	SchemeWorkerPlaceConcurrency int
+	WSEnabled                    bool
 	WSAuthViaQuery      bool
 	Guaji               guaji.Config
 	CMSUploadDir        string
@@ -50,9 +52,11 @@ func Load() Config {
 		DBRequired:          dbRequired,
 		DBMaxConns:          envInt("DB_MAX_CONNS", 25),
 		DBMinConns:          envInt("DB_MIN_CONNS", 2),
-		SchemeWorkerEnabled: envBool("SCHEME_WORKER_ENABLED", true),
-		SchemeWorkerTickSec: envInt("SCHEME_WORKER_TICK_SEC", 1),
-		WSEnabled:           envBool("WS_ENABLED", true),
+		SchemeWorkerEnabled:          envBool("SCHEME_WORKER_ENABLED", true),
+		SchemeWorkerTickSec:          envInt("SCHEME_WORKER_TICK_SEC", 1),
+		SchemeWorkerConcurrency:      envInt("SCHEME_WORKER_CONCURRENCY", 32),
+		SchemeWorkerPlaceConcurrency: envInt("SCHEME_WORKER_PLACE_CONCURRENCY", 16),
+		WSEnabled:                    envBool("WS_ENABLED", true),
 		WSAuthViaQuery:      envBool("WS_AUTH_VIA_QUERY", true),
 		Guaji:               guaji.LoadConfigFromEnv(),
 		CMSUploadDir:        env("CMS_UPLOAD_DIR", "./data/uploads/cms"),

@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"caipiao/backend/internal/db/sqlcdb"
+	"caipiao/backend/internal/guaji"
 	"caipiao/backend/internal/guajibet"
 	"caipiao/backend/internal/member"
 )
@@ -23,6 +25,8 @@ type schemeGuajiBetMeta struct {
 	ThirdPartyBetID string
 	Periods         string
 	Amount          float64 // 与第三方 bets_nums×单位×倍数对齐后的实扣金额
+	BetsNums        int     // wire 口径注数；供 cloud_bet_records.bet_units
+	PlayType        string  // 大类 · 子玩法展示文案
 }
 
 func (w *Worker) SetGuajiBetPlacer(p guajiBetPlacer) {
@@ -115,6 +119,10 @@ func (w *Worker) placeGuajiSchemeBet(
 	if betsNums <= 0 {
 		return schemeGuajiBetMeta{}, fmt.Errorf("%w: %w", guajibet.ErrPlaceRejected, guajibet.ErrZeroBets)
 	}
+	// 按玩法独立上限拦一层（随机出号侧会重抽；此处防其它运行模式/缓存漏网）。
+	if max := maxBetUnitsForPlay(cfg.Play); max > 0 && betsNums > max {
+		return schemeGuajiBetMeta{}, fmt.Errorf("%w: %w", guajibet.ErrPlaceRejected, errMaxBetUnitsExceeded(max))
+	}
 	// 本端 evaluate 注数偶发偏少（如单式未按逗号切分）；以 wire 注数为准同步金额，避免账本少扣、对账差一倍。
 	amount = calcBetAmount(betsNums, float64(multInt), amountUnit)
 
@@ -123,7 +131,12 @@ func (w *Worker) placeGuajiSchemeBet(
 		return schemeGuajiBetMeta{}, fmt.Errorf("%w: period %s not current guaji open issue", guajibet.ErrPeriodClosed, periodNo)
 	}
 
-	betRes, err := w.guajiBets.PlaceRealBet(ctx, account, guajibet.Request{
+	if slotErr := w.acquirePlaceSlot(ctx); slotErr != nil {
+		return schemeGuajiBetMeta{}, slotErr
+	}
+	defer w.releasePlaceSlot()
+
+	placeReq := guajibet.Request{
 		LotteryCode: inst.LotteryCode,
 		GameID:      gameID,
 		RuleID:      ruleID,
@@ -136,22 +149,42 @@ func (w *Worker) placeGuajiSchemeBet(
 		AmountUnit:  amountUnit,
 		Currency:    cfg.Currency,
 		RuleMeta:    ruleMeta,
-	})
-	if err != nil {
-		if errors.Is(err, guajibet.ErrInsufficient) {
+	}
+	var betRes guajibet.Result
+	var placeErr error
+	for attempt := 1; attempt <= guajiPlaceSafeRetryAttempts; attempt++ {
+		betRes, placeErr = w.guajiBets.PlaceRealBet(ctx, account, placeReq)
+		if placeErr == nil {
+			break
+		}
+		if errors.Is(placeErr, guajibet.ErrInsufficient) {
 			return schemeGuajiBetMeta{}, member.ErrInsufficientFunds
 		}
-		if errors.Is(err, guajibet.ErrPeriodClosed) {
+		if errors.Is(placeErr, guajibet.ErrPeriodClosed) {
 			return schemeGuajiBetMeta{}, guajibet.ErrPeriodClosed
 		}
-		return schemeGuajiBetMeta{}, err
+		if attempt < guajiPlaceSafeRetryAttempts && guaji.IsSafeImmediateRetryError(placeErr) {
+			slog.Warn("scheme worker place bet safe-retry",
+				"instanceId", inst.ID, "attempt", attempt, "err", placeErr)
+			select {
+			case <-ctx.Done():
+				return schemeGuajiBetMeta{}, ctx.Err()
+			case <-time.After(guajiPlaceSafeRetryBackoff):
+			}
+			continue
+		}
+		return schemeGuajiBetMeta{}, placeErr
+	}
+	if placeErr != nil {
+		return schemeGuajiBetMeta{}, placeErr
 	}
 	returned := strings.TrimSpace(betRes.Periods)
 	if returned == "" {
 		return schemeGuajiBetMeta{}, fmt.Errorf("%w: upstream did not return periods", guajibet.ErrPlaceRejected)
 	}
 
-	orderNo := fmt.Sprintf("BO%d%d", inst.MemberID, time.Now().UnixMilli())
+	// 并发下单同一毫秒会撞 uq_bet_orders_order_no；带实例尾缀 + 纳秒降低冲突。
+	orderNo := fmt.Sprintf("BO%d%d%s", inst.MemberID, time.Now().UnixNano(), shortIDSuffix(inst.ID))
 	outLottery := pgtype.Text{String: gameID, Valid: gameID != ""}
 	outPlay := pgtype.Text{String: ruleID, Valid: ruleID != ""}
 	_, err = qtx.InsertBetOrder(ctx, sqlcdb.InsertBetOrderParams{
@@ -183,6 +216,8 @@ func (w *Worker) placeGuajiSchemeBet(
 		ThirdPartyBetID: strings.TrimSpace(betRes.ThirdPartyBetID),
 		Periods:         returned,
 		Amount:          amount,
+		BetsNums:        betsNums,
+		PlayType:        cloudPlayTypeLabel(cfg.PlayTypeLabel, subPlay.Label),
 	}, nil
 }
 
@@ -269,6 +304,30 @@ func lotteryCategoryForCode(code string) string {
 	default:
 		return "ssc"
 	}
+}
+
+// shortIDSuffix 取实例 id 尾部数字，缩短注单号碰撞面。
+func shortIDSuffix(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "0"
+	}
+	for i := len(id) - 1; i >= 0; i-- {
+		if id[i] < '0' || id[i] > '9' {
+			tail := id[i+1:]
+			if tail == "" {
+				return "0"
+			}
+			if len(tail) > 6 {
+				return tail[len(tail)-6:]
+			}
+			return tail
+		}
+	}
+	if len(id) > 6 {
+		return id[len(id)-6:]
+	}
+	return id
 }
 
 func pauseInstanceForInsufficientFunds(ctx context.Context, qtx *sqlcdb.Queries, instanceID string) error {

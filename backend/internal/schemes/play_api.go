@@ -126,8 +126,8 @@ func validateGroupContent(rule playRule, content string) error {
 		} else if !hasDigitPickToken(content) {
 			return fmt.Errorf("选号池不能为空")
 		}
-		if max := zhixuanFushiMaxBetUnits(rule); max > 0 {
-			if units := countZhixuanFushiBetUnits(checkContent, rule.SegmentLen); units > max {
+		if max := maxBetUnitsForPlay(rule); max > 0 {
+			if units := countPlayWireBetUnits(rule, checkContent); units > max {
 				return errMaxBetUnitsExceeded(max)
 			}
 		}

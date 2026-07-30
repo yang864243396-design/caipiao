@@ -30,7 +30,7 @@ func instanceStatusLabel(status, reason, betFailedDetail string) string {
 	case "running":
 		switch reason {
 		case StatusReasonAwaitNextBet:
-			return "将在下期开始投注"
+			return "即将进行投注"
 		case StatusReasonCloudActive:
 			return "正在云端挂机中"
 		}

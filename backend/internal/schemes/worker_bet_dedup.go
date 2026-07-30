@@ -127,10 +127,22 @@ func (w *Worker) finalizeCloudBetAfterGuaji(
 	roundIdx int,
 	betContent string,
 	meta schemeGuajiBetMeta,
+	fallbackBetUnits int,
 ) {
 	periodNo := strings.TrimSpace(meta.Periods)
 	if periodNo == "" {
 		return
+	}
+	playType := strings.TrimSpace(meta.PlayType)
+	if playType == "" {
+		playType = cloudPlayTypeLabel(cfg.PlayTypeLabel, cfg.SubPlayLabel)
+	}
+	if playType == "" {
+		playType = cfg.PlayTypeLabel
+	}
+	betUnits := meta.BetsNums
+	if betUnits <= 0 {
+		betUnits = fallbackBetUnits
 	}
 	guajiID := activeGuajiAccountIDForInst(ctx, w.q, inst)
 	if err := w.q.InsertCloudBetRecordEx(ctx, sqlcdb.InsertCloudBetRecordExParams{
@@ -140,9 +152,9 @@ func (w *Worker) finalizeCloudBetAfterGuaji(
 		SchemeID:         inst.ID,
 		SchemeName:       inst.SchemeName,
 		PeriodNo:         periodNo,
-		PlayType:         cfg.PlayTypeLabel,
+		PlayType:         playType,
 		Multiplier:       strconv.Itoa(betMultipleAsInt(mult)),
-		RoundLabel:       strconv.Itoa(roundIdx + 1),
+		RoundLabel:       betRoundLabel(cfg, roundIdx, int(inst.PickIndex)),
 		Amount:           numericFromFloat(amount),
 		Pnl:              numericFromFloat(0),
 		Status:           "pending",
@@ -155,6 +167,7 @@ func (w *Worker) finalizeCloudBetAfterGuaji(
 		LotteryCode:      inst.LotteryCode,
 		LotteryLabel:     inst.LotteryLabel,
 		DefinitionID:     inst.DefinitionID,
+		BetUnits:         betUnits,
 	}); err != nil {
 		slog.Warn("scheme worker finalize cloud bet insert failed", "id", inst.ID, "period", periodNo, "err", err)
 		return

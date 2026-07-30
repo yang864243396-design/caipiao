@@ -2,56 +2,58 @@ package schemes
 
 import "testing"
 
-func TestPickPreviousIssueNo(t *testing.T) {
+// 回归：上期开奖未入库时不可用上上期映射。
+// 实盘：0356 中三和值=15，但 0357 误用 0355（和值=8）投出了 "8"。
+func TestTriggerBetSkipsWhenPrevBallsEmpty(t *testing.T) {
 	t.Parallel()
-	// 模拟「当期=308、列表缺 307」时，应取最大的 <308，而不是任意第一条。
-	candidates := []string{"1014104300306", "1014104300305", "1014104300308", "1014104300310"}
-	current := "1014104300308"
-	best := ""
-	for _, iss := range candidates {
-		if iss == current || iss >= current {
-			continue
-		}
-		if best == "" || iss > best {
-			best = iss
-		}
-	}
-	if best != "1014104300306" {
-		t.Fatalf("best=%q want 1014104300306", best)
-	}
-	// 有 307 时应取 307
-	candidates = append(candidates, "1014104300307")
-	best = ""
-	for _, iss := range candidates {
-		if iss == current || iss >= current {
-			continue
-		}
-		if best == "" || iss > best {
-			best = iss
-		}
-	}
-	if best != "1014104300307" {
-		t.Fatalf("best=%q want 1014104300307", best)
+	raw := []byte(`{
+		"runTypeId":"adv_trigger_bet","playTemplate":"ssc_std",
+		"playTypeId":"g002","subPlayId":"16","betMode":"hezhi",
+		"triggerBet":{"mode":"alt_pos_first","rows":[
+			{"enabled":true,"open":"8","pos":"8","neg":"8,9"},
+			{"enabled":true,"open":"15","pos":"15","neg":"15,16"}
+		]}
+	}`)
+	cfg := parseSchemeConfig("custom", raw, 0, 0)
+	dec := resolveTriggerBetDecision(cfg, nil, "neg")
+	if !dec.Skip {
+		t.Fatalf("empty prev balls must skip, got content=%q", dec.Content)
 	}
 }
 
-func TestResolveSSCPlayRuleG006DingweiPosition(t *testing.T) {
+func TestTriggerBetZhong3HezhiUsesSegmentSum(t *testing.T) {
 	t.Parallel()
-	rule := resolveSSCPlayRule("g006", "13", "dingwei", "一星定位胆")
-	if rule.PositionIdx != 0 {
-		t.Fatalf("PositionIdx=%d want 0 (万位默认)", rule.PositionIdx)
+	raw := []byte(`{
+		"runTypeId":"adv_trigger_bet","playTemplate":"ssc_std",
+		"playTypeId":"g002","typeId":"g002","subPlayId":"16","subId":"16","betMode":"hezhi",
+		"triggerBet":{"mode":"alt_pos_first","rows":[
+			{"enabled":true,"open":"8","pos":"8","neg":"8,9"},
+			{"enabled":true,"open":"15","pos":"15","neg":"15,16"}
+		]}
+	}`)
+	cfg := parseSchemeConfig("custom", raw, 0, 0)
+	// 0356: 5,4,3,8,2 → 中三 4+3+8=15；上期投向 neg → 本期 pos → "15"
+	balls0356 := []string{"5", "4", "3", "8", "2"}
+	dec := resolveTriggerBetDecision(cfg, balls0356, "neg")
+	if dec.Skip || dec.Content != "15" || dec.Direction != "pos" {
+		t.Fatalf("want content=15 dir=pos, got skip=%v content=%q dir=%q play=%+v",
+			dec.Skip, dec.Content, dec.Direction, cfg.Play)
 	}
-	if rule.BetMode != "dingwei" {
-		t.Fatalf("BetMode=%q want dingwei", rule.BetMode)
+	// 若误把上上期 0355 (9,5,3,0,4 中三=8) 当上期，会得到 "8" —— 这是本次线上错投形态
+	balls0355 := []string{"9", "5", "3", "0", "4"}
+	wrong := resolveTriggerBetDecision(cfg, balls0355, "neg")
+	if wrong.Content != "8" {
+		t.Fatalf("stale prev sanity: want 8, got %q", wrong.Content)
 	}
-	if playPositionCount(rule) != 5 {
-		t.Fatalf("g006/13 five-position panel: playPositionCount=%d want 5 (SegmentPos=%v)", playPositionCount(rule), rule.SegmentPos)
+}
+
+func TestHotColdAdjacentPrevMissing_triggerScenario(t *testing.T) {
+	t.Parallel()
+	// 当期 0357，期望上期 0356；库里最新仍是 0355 → 必须判定为缺相邻上期
+	if !hotColdAdjacentPrevMissing("1014147800356", "1014147800355") {
+		t.Fatal("0356 missing while latest=0355 must block")
 	}
-	rule = resolveSSCPlayRule("g006", "sub_ge", "dingwei", "个位")
-	if rule.PositionIdx != 4 {
-		t.Fatalf("PositionIdx=%d want 4", rule.PositionIdx)
-	}
-	if playPositionCount(rule) != 1 {
-		t.Fatalf("locked 个位: playPositionCount=%d want 1", playPositionCount(rule))
+	if hotColdAdjacentPrevMissing("1014147800356", "1014147800356") {
+		t.Fatal("exact prev ready must not block")
 	}
 }

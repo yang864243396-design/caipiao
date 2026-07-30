@@ -13,6 +13,7 @@ import {
   playConfigSummary,
 } from '@/utils/betPayload'
 import {
+  digitOptionsForConfig,
   schemeGroupContentToInputBox,
   schemeGroupUsesDigitInput,
   schemeGroupUsesPickPanel,
@@ -20,6 +21,7 @@ import {
 import {
   isLonghuPlayConfigLike,
   isPerPosDxdsPlayConfig,
+  isZhixuanDanshiPerPosPlay,
   supportsAdvTriggerPerPosColumns,
   supportsAdvTriggerPositionPicker,
 } from '@/utils/runTypeMatrix'
@@ -75,12 +77,6 @@ interface HcwTier {
   warm: string[]
   cold: string[]
 }
-interface HcwCell {
-  token: string
-  count: number | null
-  tier: 'hot' | 'cold' | 'none'
-}
-
 const playModeSummary = computed(() => playConfigSummary(props.playConfig) || '—')
 
 const positionCount = computed(() => Math.max(1, props.playConfig.segmentLen || 1))
@@ -155,16 +151,8 @@ const jushuDisplayList = computed(() => {
 })
 
 const numberPoolTokens = computed<string[]>(() => {
-  const min = props.playConfig.numberPoolMin
-  const max = props.playConfig.numberPoolMax
-  if (min != null && max != null && max >= min && (max > 9 || min > 0)) {
-    const pad = max >= 11
-    return Array.from({ length: max - min + 1 }, (_, i) => {
-      const n = min + i
-      return pad ? String(n).padStart(2, '0') : String(n)
-    })
-  }
-  return [...ALL_DIGITS]
+  const opts = digitOptionsForConfig(props.playConfig)
+  return opts.length ? opts : [...ALL_DIGITS]
 })
 
 function normalizePoolToken(raw: string): string {
@@ -199,7 +187,8 @@ const hcwSingleGroup = computed(() => hcwDigitOverall.value || hcwAttribute.valu
 const hcwPosCount = computed(() => {
   if (hcwSingleGroup.value) return 1
   const fromPool = (props.hotColdWarm?.pool ?? []).length
-  return Math.max(1, positionCount.value, fromPool)
+  const fromRanks = (props.hotColdWarm?.ranks ?? []).length
+  return Math.max(1, positionCount.value, fromPool, fromRanks)
 })
 
 const hcwPools = computed(() => {
@@ -228,12 +217,6 @@ const hcwTotalPeriods = computed(() => {
   return 20
 })
 
-const hcwFaultCount = computed(() => {
-  const fc = Math.trunc(Number(props.hotColdWarm?.faultCount))
-  if (Number.isFinite(fc)) return Math.min(9, Math.max(0, fc))
-  return 0
-})
-
 const hcwPickTypes = computed<Array<'hot' | 'cold'>>(() => {
   const arr = props.hotColdWarm?.pickTypes ?? []
   return arr
@@ -241,15 +224,66 @@ const hcwPickTypes = computed<Array<'hot' | 'cold'>>(() => {
     .filter((t): t is 'hot' | 'cold' => t === 'hot' || t === 'cold')
 })
 
-const hcwPickTypesLabel = computed(() =>
-  hcwPickTypes.value.map((t) => (t === 'hot' ? '热号' : '冷号')).join(' + '),
-)
+const hcwRanks = computed(() => {
+  const raw = props.hotColdWarm?.ranks
+  if (!Array.isArray(raw)) return [] as number[][]
+  return raw.map((row) => {
+    if (!Array.isArray(row)) return []
+    const seen = new Set<number>()
+    const out: number[] = []
+    for (const item of row) {
+      const n = Math.trunc(Number(item))
+      if (!Number.isFinite(n) || n < 0 || seen.has(n)) continue
+      seen.add(n)
+      out.push(n)
+    }
+    return out
+  })
+})
 
 const hcwAttrUniverse = ref<string[]>([])
 const hcwLoading = ref(false)
 const hcwStatsReady = ref(false)
 const hcwTiers = ref<HcwTier[]>([])
 const hcwFreq = ref<Array<Record<string, number>>>([])
+
+function hcwOrderedTokens(pos: number): string[] {
+  if (hcwStatsReady.value) {
+    const t = hcwTiers.value[pos]
+    const seen: string[] = []
+    for (const d of [...(t?.hot ?? []), ...(t?.cold ?? [])]) {
+      if (!seen.some((x) => tokenEq(x, d))) seen.push(d)
+    }
+    if (seen.length) return seen
+  }
+  return [...hcwFallbackOptions.value]
+}
+
+/** 有 ranks 时按当前排名映射预览；否则回退 pickTypes 整区 / 已存 pool */
+const hcwEstimatePools = computed(() => {
+  const saved = hcwPools.value
+  const n = hcwPosCount.value
+  const hasRanks = hcwRanks.value.some((r) => (r?.length ?? 0) > 0)
+  if (hasRanks && hcwStatsReady.value) {
+    return Array.from({ length: n }, (_, pi) => {
+      const ranks = hcwRanks.value[pi] ?? []
+      if (!ranks.length) return []
+      const ordered = hcwOrderedTokens(pi)
+      return sortHcwTokens(ranks.filter((r) => r >= 0 && r < ordered.length).map((r) => ordered[r]!))
+    })
+  }
+  const kinds = hcwPickTypes.value
+  if (!hcwStatsReady.value || !kinds.length) return saved
+  const wantHot = kinds.includes('hot')
+  const wantCold = kinds.includes('cold')
+  if (!wantHot && !wantCold) return saved
+  const anyEnabled = saved.some((p) => p.length > 0)
+  const kind: 'hot' | 'cold' | 'all' = wantHot && wantCold ? 'all' : wantHot ? 'hot' : 'cold'
+  return saved.map((line, pi) => {
+    if (anyEnabled && line.length === 0) return []
+    return sortHcwTokens(hcwQuickTargets(pi, kind))
+  })
+})
 
 const hcwFallbackOptions = computed(() =>
   hcwAttribute.value ? hcwAttrUniverse.value : numberPoolTokens.value,
@@ -418,7 +452,7 @@ function hcwQuickTargets(pos: number, kind: 'cold' | 'hot' | 'all'): string[] {
 }
 
 function hcwQuickActive(pos: number, kind: 'cold' | 'hot' | 'all'): boolean {
-  const pool = hcwPools.value[pos] ?? []
+  const pool = hcwEstimatePools.value[pos] ?? []
   const targets = hcwQuickTargets(pos, kind)
   if (!targets.length) return false
   if (pool.length !== targets.length) return false
@@ -441,7 +475,8 @@ function hcwTokenTier(pos: number, token: string): 'hot' | 'cold' | 'none' {
   return 'none'
 }
 
-function hcwDisplayCells(pos: number): HcwCell[] {
+/** 每位展示：0–9（或选项宇宙）升序；下方带频次；热/冷着色；高亮为预估下注号 */
+function hcwDisplayCells(pos: number): Array<{ token: string; count: number | null; tier: 'hot' | 'cold' | 'none' }> {
   let tokens: string[]
   if (hcwStatsReady.value) {
     const t = hcwTiers.value[pos]
@@ -460,21 +495,23 @@ function hcwDisplayCells(pos: number): HcwCell[] {
   }))
 }
 
-const hcwCellsByPos = computed(() => hcwGroupLabels.value.map((_, pi) => hcwDisplayCells(pi)))
+const hcwCellsByPos = computed(() =>
+  hcwGroupLabels.value.map((_, pi) => hcwDisplayCells(pi)),
+)
 
 const hcwEstimatedUnits = computed(() => {
   // 与编辑页一致：和值/跨度等走 countBetUnits（组合数×段倍乘），勿按选项个数计注
   if (hcwAttribute.value) {
-    const line = (hcwPools.value[0] ?? []).filter((t) => t.trim() !== '').join(',')
+    const line = (hcwEstimatePools.value[0] ?? []).filter((t) => t.trim() !== '').join(',')
     return line ? countBetUnits(props.playConfig, line) : 0
   }
   if (hcwDigitOverall.value) {
-    const line = (hcwPools.value[0] ?? []).join(',')
+    const line = (hcwEstimatePools.value[0] ?? []).join(',')
     return line.trim() ? countBetUnits(props.playConfig, line) : 0
   }
   const n = hcwPosCount.value
   if (n <= 0) return 0
-  const lines = Array.from({ length: n }, (_, i) => (hcwPools.value[i] ?? []).join(','))
+  const lines = Array.from({ length: n }, (_, i) => (hcwEstimatePools.value[i] ?? []).join(','))
   if (lines.every((x) => !x.trim())) return 0
   return countBetUnits(props.playConfig, lines.join('\n'))
 })
@@ -521,8 +558,9 @@ const rdStrategy = computed(() => {
   return 'every'
 })
 
-/** 单式/组选单式：整注随机 */
+/** 组选单式/混合：整注随机；前/中/后三直选单式按位展示 */
 const rdWholeTicket = computed(() => {
+  if (isZhixuanDanshiPerPosPlay(props.playConfig)) return false
   const cfg = props.playConfig as { betMode?: string; subPlayId?: string; playMethodLabel?: string }
   const bm = String(cfg.betMode ?? '').toLowerCase()
   const sub = String(cfg.subPlayId ?? '').toLowerCase()
@@ -586,9 +624,10 @@ const rdSingleCountMax = computed(() => {
   if (rdAttribute.value) {
     const bm = String(props.playConfig.betMode ?? '').toLowerCase()
     if (bm === 'baodan') return 1
+    // 与编辑页一致：和值/跨度等用号池长度（如中三和值 0–27 → 28）
     return Math.max(1, numberPoolTokens.value.length || 1)
   }
-  return 28
+  return 10
 })
 const rdSingleCountMin = computed(() => {
   if (rdWholeTicket.value) return 1
@@ -841,28 +880,6 @@ function formatGroupContent(content: string): string {
             >refresh</span>
           </button>
         </div>
-        <div class="scr-hcw-ctrl">
-          <span class="scr-hcw-lbl">容错</span>
-          <div class="scr-stepper" role="group" aria-label="容错">
-            <button type="button" class="scr-stepper-btn" disabled aria-label="减少容错">
-              <span class="material-sym scr-ms-sm" aria-hidden="true">remove</span>
-            </button>
-            <el-input
-              :model-value="hcwFaultCount"
-              type="number"
-              class="scr-stepper-input"
-              disabled
-            />
-            <button type="button" class="scr-stepper-btn" disabled aria-label="增加容错">
-              <span class="material-sym scr-ms-sm" aria-hidden="true">add</span>
-            </button>
-          </div>
-        </div>
-      </div>
-      <div v-if="hcwPickTypes.length" class="scr-hcw-bar scr-hcw-bar--types">
-        <span class="scr-hcw-lbl">出号类型</span>
-        <span class="scr-hcw-types-val">{{ hcwPickTypesLabel }}</span>
-        <span class="scr-hcw-types-hint">按名次自动取号，某位手选可覆盖该位</span>
       </div>
       <div class="scr-hcw-bar scr-hcw-bar--strategy">
         <el-radio-group :model-value="hcwStrategy" class="scr-hcw-strategy" disabled>
@@ -898,7 +915,7 @@ function formatGroupContent(content: string): string {
           </div>
         </div>
         <p v-if="!hcwStatsReady && !hcwLoading" class="scr-run-tip">
-          {{ hcwAttribute ? '暂无选项频次，可点刷新重试' : '暂无开奖统计，已选号码见高亮' }}
+          {{ hcwAttribute ? '暂无选项频次，可点刷新重试' : '暂无开奖统计，可点刷新后查看' }}
         </p>
         <div
           v-if="(hcwCellsByPos[pi] ?? []).length"
@@ -915,7 +932,7 @@ function formatGroupContent(content: string): string {
             :class="{
               'is-hot': cell.tier === 'hot',
               'is-cold': cell.tier === 'cold',
-              'is-on': poolHasToken(hcwPools[pi], cell.token),
+              'is-on': poolHasToken(hcwEstimatePools[pi], cell.token),
             }"
             disabled
           >
@@ -1689,4 +1706,5 @@ function formatGroupContent(content: string): string {
   color: var(--scr-primary);
   word-break: break-all;
 }
+
 </style>

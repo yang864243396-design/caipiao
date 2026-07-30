@@ -38,6 +38,15 @@ func triggerOpenMatches(rule playRule, balls []string, open string, watchPositio
 			return normalizeTriggerToken(pc28LonghubaoResult(balls)) == open
 		}
 	}
+	// SSC/哈希等：和值/跨度/尾数的「开出」是区位派生值，不是某一球号
+	switch strings.ToLower(strings.TrimSpace(rule.BetMode)) {
+	case "hezhi":
+		return strconv.Itoa(triggerSegmentSum(rule, balls)) == open
+	case "kuadu":
+		return strconv.Itoa(triggerSegmentKuadu(rule, balls)) == open
+	case "weishu":
+		return strconv.Itoa(triggerSegmentSum(rule, balls)%10) == open
+	}
 	positions := []int{rule.PositionIdx}
 	if len(watchPositions) > 0 && len(watchPositions[0]) > 0 {
 		positions = watchPositions[0]
@@ -49,6 +58,27 @@ func triggerOpenMatches(rule playRule, balls []string, open string, watchPositio
 		}
 	}
 	return false
+}
+
+func triggerSegmentSum(rule playRule, balls []string) int {
+	seg := drawSegmentForRule(rule, balls)
+	sum := 0
+	for _, d := range seg {
+		sum += atoiBall(d)
+	}
+	return sum
+}
+
+func triggerSegmentKuadu(rule playRule, balls []string) int {
+	seg := drawSegmentForRule(rule, balls)
+	if len(seg) == 0 {
+		return 0
+	}
+	vals := make([]int, len(seg))
+	for i, d := range seg {
+		vals[i] = atoiBall(d)
+	}
+	return maxInt(vals) - minInt(vals)
 }
 
 func pc28DxdsOpenMatches(balls []string, pick string) bool {

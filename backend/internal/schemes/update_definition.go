@@ -21,6 +21,8 @@ var (
 	ErrPatchCurrencyWhileRunning  = errors.New("patch schemeCurrency while instance running")
 	ErrInvalidUpdatePatch      = errors.New("invalid update patch")
 	ErrFavoriteRequired   = errors.New("favorite required for builtin plan")
+	// ErrInvalidSchemeContent 投注内容越出该玩法的合法投注空间。
+	ErrInvalidSchemeContent = errors.New("invalid scheme bet content")
 )
 
 // builtinPlanLottery 物化时同步到定义行的彩种信息。
@@ -361,6 +363,9 @@ func (s *Service) UpdateDefinition(
 	if err != nil {
 		return Definition{}, err
 	}
+	if err := validateDefinitionContentOnSave(def.Kind, cfgBytes, patch); err != nil {
+		return Definition{}, err
+	}
 
 	oldSimBet := configSimBet(def.Config)
 	newSimBet := configSimBet(cfgBytes)
@@ -411,6 +416,34 @@ func (s *Service) UpdateDefinition(
 	}
 
 	return mapDefinitionFromConfigUpdateRow(row, hasInstance), nil
+}
+
+// patchTouchesBetContent 该 patch 是否可能改变投注内容。
+// 只在真正动了内容时才校验：否则改个方案名就会被历史遗留的非法配置挡住，
+// 用户既看不懂也修不了。
+func patchTouchesBetContent(patch UpdateDefinitionPatch) bool {
+	return len(patch.SchemeGroups) > 0 || patch.HasFixedPick || patch.HasBetMode ||
+		patch.HasCatalogPlay || patch.HasHotColdWarm || patch.HasRandomDraw ||
+		patch.HasTriggerBet || patch.HasJushuList || patch.HasBuiltinPlan
+}
+
+// validateDefinitionContentOnSave 保存前拦下越出合法投注空间的配置。
+//
+// 号池越界、注数超上限、豹子复式这三类到了第三方一律被拒或静默丢弃，
+// 拖到下注时才发现只会留下一堆查不出原因的失败注单。
+func validateDefinitionContentOnSave(kind string, cfgBytes []byte, patch UpdateDefinitionPatch) error {
+	if !patchTouchesBetContent(patch) {
+		return nil
+	}
+	vs := ValidateSchemeConfig(kind, cfgBytes)
+	if len(vs) == 0 {
+		return nil
+	}
+	details := make([]string, 0, len(vs))
+	for _, v := range vs {
+		details = append(details, v.Detail)
+	}
+	return fmt.Errorf("%w: %s", ErrInvalidSchemeContent, strings.Join(details, "；"))
 }
 
 func mergeUpdateDefinitionConfig(existing []byte, patch UpdateDefinitionPatch, planOverlay map[string]interface{}) ([]byte, error) {
@@ -590,11 +623,12 @@ func compileBetMultiplierRounds(payload map[string]interface{}, existingCfg map[
 }
 
 // defaultAdvancedBetMultiplierRounds 与客户端 AdvancedSchemeRoundsView 默认表单一致（1-based 跳转）。
+// 默认挂翻倍：未中进下一局、命中回第 1 局；末局未中环回第 1 局。
 func defaultAdvancedBetMultiplierRounds() []schemeRound {
 	return []schemeRound{
-		{Mult: 0, AfterHit: 2, AfterMiss: 1},
-		{Mult: 1, AfterHit: 2, AfterMiss: 3},
-		{Mult: 3, AfterHit: 2, AfterMiss: 1},
+		{Mult: 1, AfterHit: 1, AfterMiss: 2},
+		{Mult: 2, AfterHit: 1, AfterMiss: 3},
+		{Mult: 4, AfterHit: 1, AfterMiss: 1},
 	}
 }
 
@@ -614,11 +648,17 @@ func compileAdvancedBetMultiplierRounds(payload map[string]interface{}, existing
 	}
 	if existingCfg != nil {
 		prevKind := ""
+		prevSelected := ""
 		if bm, ok := existingCfg["betMultiplier"].(map[string]interface{}); ok {
 			prevKind, _ = bm["kind"].(string)
+			if prevAdv, ok := bm["advanced"].(map[string]interface{}); ok {
+				prevSelected, _ = prevAdv["selectedId"].(string)
+			}
 		}
-		// 已在高级倍投下保存过轮次（含轮次页编辑）→ 保留，避免覆盖自定义方案
-		if prevKind == "3" && len(parseSchemeRoundsFromRaw(existingCfg["rounds"])) > 0 {
+		hasRounds := len(parseSchemeRoundsFromRaw(existingCfg["rounds"])) > 0
+		sameSelection := strings.TrimSpace(prevSelected) == strings.TrimSpace(selectedID)
+		// 已有高级轮次：同模板或尚未记录 selectedId 时保留（轮次页编辑不被覆盖）；换模板则重注入默认。
+		if prevKind == "3" && hasRounds && (sameSelection || strings.TrimSpace(prevSelected) == "") {
 			return nil
 		}
 	}

@@ -46,6 +46,23 @@ func (c *Client) Config() Config { return c.cfg }
 
 func (c *Client) Enabled() bool { return c.cfg.Enabled }
 
+// TuneHTTPConcurrency 提高单主机连接上限（默认 MaxConnsPerHost=32）。
+// 压测工具或高并发 Worker 需要超过 32 路真并发时调用。
+func (c *Client) TuneHTTPConcurrency(maxConnsPerHost int) {
+	if c == nil || c.http == nil || maxConnsPerHost <= 0 {
+		return
+	}
+	tr, ok := c.http.Transport.(*http.Transport)
+	if !ok || tr == nil {
+		return
+	}
+	tr.MaxConnsPerHost = maxConnsPerHost
+	tr.MaxIdleConnsPerHost = maxConnsPerHost
+	if tr.MaxIdleConns < maxConnsPerHost*2 {
+		tr.MaxIdleConns = maxConnsPerHost * 2
+	}
+}
+
 func (c *Client) doJSON(ctx context.Context, method, baseURL, path, bearer string, body any, out *envelope) error {
 	env, _, err := c.doJSONRaw(ctx, method, baseURL, path, bearer, body)
 	if err != nil {
@@ -109,6 +126,10 @@ func (c *Client) doJSONRaw(ctx context.Context, method, baseURL, path, bearer st
 			return out, raw, fmt.Errorf("guaji http %s %s: status %d body=%s", method, path, resp.StatusCode, truncate(string(raw), 512))
 		}
 		return out, raw, fmt.Errorf("guaji decode envelope: %w", err)
+	}
+	// 429 常为 {"detail":"Too Many Requests"}，无业务 code；须在此拦下，避免被当成空 data。
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return out, raw, fmt.Errorf("guaji http %s %s: status 429 body=%s", method, path, truncate(string(raw), 512))
 	}
 	// Third-party may use HTTP 4xx with JSON {code,message} business errors.
 	if resp.StatusCode >= 500 {

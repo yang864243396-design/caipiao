@@ -7,18 +7,39 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"caipiao/backend/internal/db"
 	"caipiao/backend/internal/db/sqlcdb"
 	"caipiao/backend/internal/member"
+	"caipiao/backend/internal/schemes"
 	"caipiao/backend/internal/timeutil"
 )
 
+const (
+	itemDetailDays           = 3
+	drawSyncMinGap           = 5 * time.Second
+	drawSyncTimeout          = 2 * time.Second
+	drawSyncPlacedWithin     = 2 * time.Hour
+)
+
+var (
+	ErrItemNotFound = errors.New("bet record not found")
+	ErrItemOutOfWindow = errors.New("bet record out of query window")
+)
+
+type HistorySyncer interface {
+	SyncLottery(ctx context.Context, lotteryCode string) error
+}
+
 type Service struct {
-	q *sqlcdb.Queries
+	q           *sqlcdb.Queries
+	historySync HistorySyncer
+	drawSyncMu  sync.Map // lotteryCode -> time.Time
 }
 
 func NewService(pool *db.Pool) *Service {
@@ -26,6 +47,13 @@ func NewService(pool *db.Pool) *Service {
 		return &Service{}
 	}
 	return &Service{q: sqlcdb.New(pool)}
+}
+
+func (s *Service) SetHistorySync(syncer HistorySyncer) {
+	if s == nil {
+		return
+	}
+	s.historySync = syncer
 }
 
 type GroupsFilter struct {
@@ -162,6 +190,7 @@ func (s *Service) Detail(
 		displayPeriod := resolveBetRecordPeriods(r)
 		items[i] = Item{
 			ID:         thirdPartyBetOrderNo(r.ThirdPartyBetID),
+			RecordNo:   strings.TrimSpace(r.ID),
 			Period:     displayPeriod,
 			Periods:    displayPeriod,
 			PlayType:   r.PlayType,
@@ -456,4 +485,152 @@ func resolveBetRecordPeriods(r Row) string {
 		return p
 	}
 	return strings.TrimSpace(r.Period)
+}
+
+// ItemByRecordNo 单笔投注详情；校验会员归属与最近 3 天窗口。
+func (s *Service) ItemByRecordNo(ctx context.Context, memberID int64, recordNo string) (ItemDetail, error) {
+	recordNo = strings.TrimSpace(recordNo)
+	if s == nil || s.q == nil || memberID <= 0 || recordNo == "" {
+		return ItemDetail{}, ErrItemNotFound
+	}
+	row, err := s.q.GetCloudBetRecordByMemberRecordNo(ctx, memberID, recordNo)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ItemDetail{}, ErrItemNotFound
+		}
+		return ItemDetail{}, err
+	}
+	if !row.PlacedAt.Valid {
+		return ItemDetail{}, ErrItemNotFound
+	}
+	since, until := timeutil.NaturalDaysRange(itemDetailDays)
+	placed := row.PlacedAt.Time
+	if placed.Before(since) || !placed.Before(until) {
+		return ItemDetail{}, ErrItemOutOfWindow
+	}
+
+	period := strings.TrimSpace(pgtextString(row.ThirdPartyPeriod))
+	if period == "" {
+		period = strings.TrimSpace(row.PeriodNo)
+	}
+	status := strings.TrimSpace(row.Status)
+	statusLabel := detailStatusLabel(status)
+
+	drawNumbers := ""
+	if status == string(StatusHit) || status == string(StatusMiss) {
+		drawNumbers, _ = s.lookupDrawNumbers(ctx, row)
+		if drawNumbers == "" && !row.SimBet {
+			drawNumbers = s.maybeSyncAndLookupDraw(ctx, row)
+		}
+	}
+
+	var betUnits *int
+	if row.BetUnits.Valid && row.BetUnits.Int32 > 0 {
+		n := int(row.BetUnits.Int32)
+		betUnits = &n
+	}
+
+	var payoutAmount *float64
+	switch Status(status) {
+	case StatusPending:
+		payoutAmount = nil
+	case StatusMiss:
+		z := 0.0
+		payoutAmount = &z
+	case StatusHit:
+		if row.PayoutAmount.Valid {
+			if f, ok := numericToFloat64(row.PayoutAmount); ok {
+				v := round2(f)
+				payoutAmount = &v
+			}
+		}
+		// 中奖无第三方原值（历史单 / 本地兜底）→ 前端显示 —
+	}
+
+	currency := strings.ToUpper(strings.TrimSpace(row.Currency))
+	if currency == "" {
+		currency = "USDT"
+	}
+
+	return ItemDetail{
+		RecordNo:     row.RecordNo,
+		ThirdPartyID: thirdPartyBetOrderNo(row.ThirdPartyBetID),
+		Period:       period,
+		LotteryLabel: strings.TrimSpace(row.LotteryLabel),
+		PlayType:     strings.TrimSpace(row.PlayType),
+		Status:       status,
+		StatusLabel:  statusLabel,
+		DrawNumbers:  drawNumbers,
+		BetUnits:     betUnits,
+		Multiplier:   formatMultiplierDisplay(row.Multiplier),
+		Round:        formatRoundDisplay(row.RoundLabel),
+		Amount:       round2(row.Amount),
+		Currency:     currency,
+		PayoutAmount: payoutAmount,
+		PlacedAt:     timeutil.FormatDisplayCST(placed),
+		BetContent:   row.BetContent,
+		BetContentLines: schemes.FormatBetContentLines(
+			row.SchemeKind, []byte(row.SchemeConfig), row.BetContent,
+		),
+		SimBet: row.SimBet,
+	}, nil
+}
+
+func detailStatusLabel(status string) string {
+	switch Status(status) {
+	case StatusHit:
+		return "中奖"
+	case StatusMiss:
+		return "未中奖"
+	case StatusPending:
+		return "未开奖"
+	default:
+		return status
+	}
+}
+
+func (s *Service) lookupDrawNumbers(ctx context.Context, row sqlcdb.CloudBetRecordDetailRow) (string, error) {
+	if s == nil || s.q == nil {
+		return "", nil
+	}
+	tp := ""
+	if row.ThirdPartyPeriod.Valid {
+		tp = row.ThirdPartyPeriod.String
+	}
+	return s.q.LookupDrawBallsJoined(ctx, row.LotteryCode, row.PeriodNo, tp)
+}
+
+func (s *Service) maybeSyncAndLookupDraw(ctx context.Context, row sqlcdb.CloudBetRecordDetailRow) string {
+	if s == nil || s.historySync == nil || !row.PlacedAt.Valid {
+		return ""
+	}
+	if time.Since(row.PlacedAt.Time) > drawSyncPlacedWithin {
+		return ""
+	}
+	code := strings.TrimSpace(row.LotteryCode)
+	if code == "" {
+		return ""
+	}
+	if last, ok := s.drawSyncMu.Load(code); ok {
+		if t, ok := last.(time.Time); ok && time.Since(t) < drawSyncMinGap {
+			return ""
+		}
+	}
+	s.drawSyncMu.Store(code, time.Now())
+	syncCtx, cancel := context.WithTimeout(ctx, drawSyncTimeout)
+	defer cancel()
+	_ = s.historySync.SyncLottery(syncCtx, code)
+	got, _ := s.lookupDrawNumbers(ctx, row)
+	return got
+}
+
+func numericToFloat64(n pgtype.Numeric) (float64, bool) {
+	if !n.Valid {
+		return 0, false
+	}
+	f, err := n.Float64Value()
+	if err != nil || !f.Valid {
+		return 0, false
+	}
+	return f.Float64, true
 }

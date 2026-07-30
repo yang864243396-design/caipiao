@@ -13,7 +13,8 @@ import type { MoneySummary } from '@/api/types'
 const router = useRouter()
 const route = useRoute()
 
-const activeTab = ref<BetRecordMode>('real')
+/** Tab 与路由 query.mode 单一数据源，避免快速切换时本地态与 URL 打架 */
+const activeTab = computed<BetRecordMode>(() => (route.query.mode === 'sim' ? 'sim' : 'real'))
 const loading = ref(false)
 const loadingMore = ref(false)
 const loadError = ref('')
@@ -27,6 +28,19 @@ const nextCursor = ref<string | null>(null)
 const loadSentinel = ref<HTMLElement | null>(null)
 
 let loadObserver: IntersectionObserver | null = null
+/** 递增世代号：快速切换 Tab 时丢弃过期响应，避免列表与选中态错位 */
+let loadGeneration = 0
+
+/** 按 Tab 缓存列表，切换时瞬时还原，避免「先清空再等接口」的空白延迟 */
+type TabSnapshot = {
+  summary: MoneySummary
+  schemeGroups: BetRecordSchemeGroup[]
+  dateFrom: string
+  dateTo: string
+  hasMore: boolean
+  nextCursor: string | null
+}
+const tabCache: Partial<Record<BetRecordMode, TabSnapshot>> = {}
 
 const hasData = computed(() => schemeGroups.value.length > 0)
 
@@ -38,22 +52,50 @@ function formatMoney(n: number, signed = false): string {
   return `¥${abs}`
 }
 
-function syncTabFromRoute(): void {
-  activeTab.value = route.query.mode === 'sim' ? 'sim' : 'real'
-}
-
 function resetPagination(): void {
   nextCursor.value = null
   hasMore.value = false
 }
 
-async function fetchGroupsPage(cursor?: string, append = false): Promise<void> {
+function captureSnapshot(): TabSnapshot {
+  return {
+    summary: { ...summary.value },
+    schemeGroups: schemeGroups.value.slice(),
+    dateFrom: dateFrom.value,
+    dateTo: dateTo.value,
+    hasMore: hasMore.value,
+    nextCursor: nextCursor.value,
+  }
+}
+
+function applySnapshot(snap: TabSnapshot): void {
+  summary.value = { ...snap.summary }
+  schemeGroups.value = snap.schemeGroups.slice()
+  dateFrom.value = snap.dateFrom
+  dateTo.value = snap.dateTo
+  hasMore.value = snap.hasMore
+  nextCursor.value = snap.nextCursor
+}
+
+function rememberTab(mode: BetRecordMode): void {
+  tabCache[mode] = captureSnapshot()
+}
+
+async function fetchGroupsPage(
+  mode: BetRecordMode,
+  cursor: string | undefined,
+  append: boolean,
+  generation: number,
+): Promise<boolean> {
   const data = await fetchBetRecordGroups({
-    mode: activeTab.value,
+    mode,
     days: 3,
     cursor,
     limit: BET_RECORD_GROUP_PAGE_SIZE,
   })
+  if (generation !== loadGeneration || mode !== activeTab.value) {
+    return false
+  }
   summary.value = data.summary
   dateFrom.value = data.dateFrom ?? ''
   dateTo.value = data.dateTo ?? ''
@@ -61,41 +103,85 @@ async function fetchGroupsPage(cursor?: string, append = false): Promise<void> {
   schemeGroups.value = append ? [...schemeGroups.value, ...items] : items
   hasMore.value = data.groups?.page?.hasMore ?? false
   nextCursor.value = data.groups?.page?.nextCursor ?? null
+  rememberTab(mode)
+  return true
 }
 
-async function loadRecords(reset = true): Promise<void> {
+/**
+ * @param force 为 true 时忽略 Tab 缓存重新请求（刷新按钮）；切换 Tab 默认走缓存瞬时展示。
+ */
+async function loadRecords(
+  reset = true,
+  mode: BetRecordMode = activeTab.value,
+  force = false,
+): Promise<void> {
+  if (reset && !force) {
+    const cached = tabCache[mode]
+    if (cached) {
+      loadGeneration += 1
+      applySnapshot(cached)
+      loadError.value = ''
+      loading.value = false
+      await nextTick()
+      setupLoadObserver()
+      return
+    }
+  }
+
+  const generation = ++loadGeneration
+  const keepVisible = Boolean(tabCache[mode])
   if (reset) {
     loading.value = true
     resetPagination()
+    // 无缓存才清空；有缓存时保留画面，等新数据到位再替换，避免空白闪一下
+    if (!keepVisible) {
+      schemeGroups.value = []
+      summary.value = { totalBet: 0, dayPnl: 0, winRate: 0 }
+      dateFrom.value = ''
+      dateTo.value = ''
+    }
   }
   loadError.value = ''
   try {
-    await fetchGroupsPage(undefined, false)
+    const applied = await fetchGroupsPage(mode, undefined, false, generation)
+    if (!applied) return
   } catch (e) {
+    if (generation !== loadGeneration || mode !== activeTab.value) return
     loadError.value = e instanceof Error ? e.message : '加载失败'
-    summary.value = { totalBet: 0, dayPnl: 0, winRate: 0 }
-    schemeGroups.value = []
-    dateFrom.value = ''
-    dateTo.value = ''
+    if (!keepVisible) {
+      summary.value = { totalBet: 0, dayPnl: 0, winRate: 0 }
+      schemeGroups.value = []
+      dateFrom.value = ''
+      dateTo.value = ''
+    }
     if (reset) ElMessage.error(loadError.value)
   } finally {
-    if (reset) loading.value = false
-    await nextTick()
-    setupLoadObserver()
+    if (generation === loadGeneration) {
+      if (reset) loading.value = false
+      await nextTick()
+      setupLoadObserver()
+    }
   }
 }
 
 async function loadMore(): Promise<void> {
   if (!hasMore.value || !nextCursor.value || loading.value || loadingMore.value) return
+  const mode = activeTab.value
+  const generation = loadGeneration
+  const cursor = nextCursor.value
   loadingMore.value = true
   try {
-    await fetchGroupsPage(nextCursor.value, true)
+    await fetchGroupsPage(mode, cursor, true, generation)
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '加载失败')
+    if (generation === loadGeneration && mode === activeTab.value) {
+      ElMessage.error(e instanceof Error ? e.message : '加载失败')
+    }
   } finally {
-    loadingMore.value = false
-    await nextTick()
-    setupLoadObserver()
+    if (generation === loadGeneration) {
+      loadingMore.value = false
+      await nextTick()
+      setupLoadObserver()
+    }
   }
 }
 
@@ -112,8 +198,7 @@ function setupLoadObserver(): void {
 }
 
 onMounted(() => {
-  syncTabFromRoute()
-  void loadRecords()
+  void loadRecords(true, activeTab.value)
 })
 
 onUnmounted(() => {
@@ -121,15 +206,16 @@ onUnmounted(() => {
   loadObserver = null
 })
 
-watch(() => route.query.mode, () => {
-  syncTabFromRoute()
-  void loadRecords()
-})
+watch(
+  () => route.query.mode,
+  () => {
+    void loadRecords(true, activeTab.value)
+  },
+)
 
 function setTab(tab: BetRecordMode): void {
-  activeTab.value = tab
+  if (activeTab.value === tab) return
   void router.replace({ name: 'bet-records', query: tab === 'sim' ? { mode: 'sim' } : {} })
-  void loadRecords()
 }
 
 function goBack() {
@@ -146,7 +232,7 @@ function openScheme(schemeId: string) {
 }
 
 function onRefresh() {
-  void loadRecords().then(() => {
+  void loadRecords(true, activeTab.value, true).then(() => {
     if (!loadError.value) ElMessage.success('已刷新')
   })
 }
@@ -380,6 +466,7 @@ function onRefresh() {
         <p v-if="loadingMore" class="br-load-hint">加载中…</p>
         <p v-else-if="schemeGroups.length && !hasMore" class="br-load-hint">已加载全部</p>
 
+        <p v-else-if="loading && !schemeGroups.length" class="br-scheme-empty">加载中…</p>
         <p v-else-if="!loading && !schemeGroups.length" class="br-scheme-empty">暂无数据</p>
 
       </section>

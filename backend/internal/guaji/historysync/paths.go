@@ -28,16 +28,15 @@ func IsWSOnlyHistory(lotteryCode string) bool {
 // historyAPIByCode：平台彩种 code → GET /api/{path}
 var historyAPIByCode = map[string]string{
 	// §5.1 lottery_log033s：哈希极速、波场极速快三、波场极速赛车
-	"hash_jisu":        "lottery_log033s",
-	"tron_k3_jisu":     "lottery_log033s",
-	"tron_pk10_jisu":   "lottery_log033s",
-	"bnb_pk10_jisu":    "lottery_log033s",
+	"hash_jisu":      "lottery_log033s",
+	"tron_k3_jisu":   "lottery_log033s",
+	"tron_pk10_jisu": "lottery_log033s",
 
 	// §5.2 lottery_log103s：波场1分（00115 对换后 hash 系）、波场1分快三、波场11选5、波场1分六合彩
-	"hash_ffc_1m":  "lottery_log103s",
-	"tron_k3_1m":   "lottery_log103s",
-	"tron_syxw":    "lottery_log103s",
-	"tron_lhc_1m":  "lottery_log103s",
+	"hash_ffc_1m": "lottery_log103s",
+	"tron_k3_1m":  "lottery_log103s",
+	"tron_syxw":   "lottery_log103s",
+	"tron_lhc_1m": "lottery_log103s",
 
 	// §5.3 lottery_log303s
 	"hash_ffc_3m":  "lottery_log303s",
@@ -75,27 +74,30 @@ var historyAPIByCode = map[string]string{
 	"eth_jisu": "eth_block_logs",
 
 	// §5.10 eth_lottery_logs：以太1分系（分分/11选5/快三/赛车等共用）
-	"eth_ffc_1m":     "eth_lottery_logs",
-	"eth_ffc_new":    "eth_lottery_logs",
-	"eth_syxw":       "eth_lottery_logs",
-	"eth_k3":         "eth_lottery_logs",
-	"eth_pk10_jisu":  "eth_lottery_logs",
+	"eth_ffc_1m":    "eth_lottery_logs",
+	"eth_ffc_new":   "eth_lottery_logs",
+	"eth_syxw":      "eth_lottery_logs",
+	"eth_k3":        "eth_lottery_logs",
+	"eth_pk10_jisu": "eth_lottery_logs",
 
 	// §5.11 eth_lottery_log3s
-	"eth_ffc_3m":   "eth_lottery_log3s",
-	"eth_syxw_3m":  "eth_lottery_log3s",
-	"eth_k3_3m":    "eth_lottery_log3s",
+	"eth_ffc_3m":  "eth_lottery_log3s",
+	"eth_syxw_3m": "eth_lottery_log3s",
+	"eth_k3_3m":   "eth_lottery_log3s",
 
 	// §5.12 eth_lottery_log5s
-	"eth_ffc_5m":   "eth_lottery_log5s",
-	"eth_syxw_5m":  "eth_lottery_log5s",
-	"eth_k3_5m":    "eth_lottery_log5s",
-	"eth_pk10_5m":  "eth_lottery_log5s",
+	"eth_ffc_5m":  "eth_lottery_log5s",
+	"eth_syxw_5m": "eth_lottery_log5s",
+	"eth_k3_5m":   "eth_lottery_log5s",
+	"eth_pk10_5m": "eth_lottery_log5s",
 
 	// §5.13–5.15 bsc（币安）
+	// bnb_pk10_jisu 名字带"极速"，实测 game_id=53 与 bnb_ffc_1m(39) 返回同一期号，
+	// 就是币安 1 分钟线，不是波场极速线（见 00138/00139）。
 	"bnb_ffc_1m":    "bsc_lottery_logs",
 	"bnb_syxw":      "bsc_lottery_logs",
 	"bnb_k3_1m":     "bsc_lottery_logs",
+	"bnb_pk10_jisu": "bsc_lottery_logs",
 	"bnb_ffc_3m":    "bsc_lottery_log3s",
 	"bnb_syxw_3m":   "bsc_lottery_log3s",
 	"bnb_k3_3m":     "bsc_lottery_log3s",

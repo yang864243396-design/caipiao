@@ -105,6 +105,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '方案投注明细' },
   },
   {
+    path: '/bet-detail/:recordNo',
+    name: 'bet-detail',
+    component: () => import('@/views/cloud/BetDetailView.vue'),
+    meta: { title: '投注详情' },
+  },
+  {
     path: '/member/auth/bind',
     name: 'member-auth-bind',
     component: () => import('@/views/member/auth/GuajiBindView.vue'),

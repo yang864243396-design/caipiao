@@ -38,6 +38,7 @@ type Item struct {
 	Time         string  `json:"time"`
 	Game         string  `json:"game"`
 	OrderID      string  `json:"orderId"`
+	RecordNo     string  `json:"recordNo,omitempty"`
 	Amount       float64 `json:"amount"`
 	ReturnAmount float64 `json:"returnAmount"`
 	Status       string  `json:"status"`
@@ -295,6 +296,7 @@ func (s *Service) listBySchemeDefinition(
 			timeutil.FormatDisplayCST(row.PlacedAt.Time),
 			formatGameColumn(row.LotteryLabel, row.SchemeName),
 			displayBetOrderID(row.RecordNo, row.ThirdPartyBetID),
+			row.RecordNo,
 			row.Amount,
 			row.Pnl,
 			row.Status,
@@ -373,6 +375,7 @@ func (s *Service) listByLottery(
 			timeutil.FormatDisplayCST(row.PlacedAt.Time),
 			formatGameColumn(row.LotteryLabel, row.SchemeName),
 			displayBetOrderID(row.RecordNo, row.ThirdPartyBetID),
+			row.RecordNo,
 			row.Amount,
 			row.Pnl,
 			row.Status,
@@ -527,11 +530,12 @@ func roundMoney(v float64) float64 {
 	return math.Round(v*100) / 100
 }
 
-func itemFromCloudRow(time, game, orderID string, amount, pnl float64, statusCode string) Item {
+func itemFromCloudRow(time, game, orderID, recordNo string, amount, pnl float64, statusCode string) Item {
 	return Item{
 		Time:         time,
 		Game:         game,
 		OrderID:      orderID,
+		RecordNo:     strings.TrimSpace(recordNo),
 		Amount:       roundMoney(amount),
 		ReturnAmount: cloudReturnAmount(amount, pnl, statusCode),
 		Status:       cloudStatusLabel(statusCode),

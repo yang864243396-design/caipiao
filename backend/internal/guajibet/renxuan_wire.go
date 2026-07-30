@@ -212,8 +212,20 @@ func formatRenxuanBetContent(meta RuleMeta, mode, groupContent string) string {
 	case "hunhe":
 		// 混合组选是单式形态（112 / 012,345），勿走号池补码（会把 112 补成 112,2）
 		return formatRenxuanPosPipeWire(groupContent, k, formatRenxuanDanshiPicksOnly(groupContent, k))
-	case "zu24", "zu12", "zu4":
+	case "zu24":
 		return formatRenxuanPosPipeWire(groupContent, k, formatRenxuanZuxuanPicksOnly(groupContent, k, mode))
+	case "zu12", "zu4":
+		// 组选12/4 的内容是双区号池（12,34 = 二重号池,单号池；1,2 = 三重号,单号），
+		// 不是选号列表。走号池补码会把「12,34」补成「12,34,3,4」，
+		// 第三方回「投注数字不合规」（2026-07-28 真实下单 tron_ffc_1m 144 实测）。
+		picks := groupContent
+		if _, p := parseRenxuanPositionPick(groupContent, k); strings.TrimSpace(p) != "" {
+			picks = p
+		}
+		if mode == "zu12" {
+			return formatRenxuanPosPipeWire(groupContent, k, formatZu12Wire(picks))
+		}
+		return formatRenxuanPosPipeWire(groupContent, k, formatZu4Wire(picks))
 	default:
 		return formatRenxuanPosPipeWire(groupContent, k, formatCommaPickDigits(groupContent))
 	}
@@ -528,7 +540,9 @@ func renxuanNeedsSoloTrue(meta RuleMeta, mode string, betsNums int) bool {
 	case "zuxuan_ds":
 		return betsNums == 1 && k >= 3
 	case "danshi":
-		return betsNums == 1 && k >= 4
+		// 与同组直选复式一致：单注即须 solo=true。原先多了 k>=4，
+		// 任二/任三漏成 solo=false（2026-07-28 实测 rule 75/81 拒单）。
+		return betsNums == 1
 	case "fushi":
 		// 任二/任三/任四直选复式：单注须 solo=true（实测 rule74/80，solo=false → 单挑参数错误）
 		return betsNums == 1

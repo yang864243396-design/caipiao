@@ -34,6 +34,10 @@ func SampleGroupContent(meta RuleMeta) string {
 		}
 		return "1,2"
 	}
+	// 和值大小单双投的是 大/小/单/双，标签含「和值」会被 InferBetMode 推成 hezhi 而取到数字
+	if isPK10DxdsComboMeta(meta) {
+		return "大"
+	}
 	mode := InferBetMode(meta)
 	switch mode {
 	case "dingwei":
@@ -360,14 +364,16 @@ func FormatBetContentForRule(meta RuleMeta, groupContent string) string {
 			return strings.TrimSpace(groupContent)
 		}
 	}
+	// 冠亚/前三/后三「和值大小单双」（rule 221–223）：标签含「和值」会被 InferBetMode
+	// 推成 hezhi，须在 mode 分派前拦下，否则产出和值数字而非 和大/和小/和单/和双。
+	if isPK10DxdsComboMeta(meta) {
+		return formatPK10DxdsComboWire(groupContent)
+	}
 	if mode == "dxds" || mode == "daxiao" || mode == "danshuang" {
 		if IsSSCPlayTemplate(meta.PlayTemplate) {
 			return formatDxdsBetContent(meta, groupContent)
 		}
 		if meta.PlayTemplate == "pk10_std" {
-			if isPK10DxdsComboMeta(meta) {
-				return formatPK10DxdsComboWire(groupContent)
-			}
 			return formatTextTokens(groupContent)
 		}
 	}
@@ -718,25 +724,22 @@ func NeedsSoloForRule(meta RuleMeta, wireContent string) bool {
 	if mode == "weishu" || mode == "teshu" || mode == "baodan" {
 		return false
 	}
-	// 前后三/前中后三混合组选：实测 solo=true →「单挑参数错误」
-	if mode == "hunhe" {
-		text := meta.Group + " " + meta.TypeLabel + " " + meta.Label + " " + meta.FullName
-		if strings.Contains(text, "前后三") || strings.Contains(text, "前中后三") {
-			return false
-		}
+	// 跨度：实测任意注数 solo=true →「单挑参数错误」（2026-07-28 tron_ffc_1m
+	// rule_id=4/29 content=0 bets=10：solo=true 拒单、solo=false 接单）。
+	// 跨度是属性值，一个值天然对应多个组合，没有「单挑某一注」的语义。
+	// 同批实测中和值（rule_id=3）solo=true 可下单，故不能连和值一起关。
+	if mode == "kuadu" {
+		return false
 	}
 	if meta.PlayTemplate == "pc28_std" && mode == "hezhi" {
 		return false
 	}
 	if mode == "zuhe" {
 		// 直选组合：多区位玩法实测须 solo=false（与直选单式/组三不同）
+		// 前中后三 / 前后三 相反，须 solo=true（2026-07-28 实测 rule 105/93）。
 		g := strings.TrimSpace(meta.Group)
 		switch g {
-		case "四星", "五星", "前后四", "前中后三", "前后三":
-			return false
-		}
-		if strings.Contains(meta.Group+meta.TypeLabel+meta.Label, "前中后三") ||
-			strings.Contains(meta.Group+meta.TypeLabel+meta.Label, "前后三") {
+		case "四星", "五星", "前后四":
 			return false
 		}
 	}
@@ -752,8 +755,8 @@ func NeedsSoloForRule(meta RuleMeta, wireContent string) bool {
 	if mode == "zu6" && (meta.Group == "四星" || meta.Group == "前后四" || meta.TypeID == "g013" || meta.TypeID == "g014") {
 		return false
 	}
-	// SSC 前二/后二组选复式：勿走末尾默认 solo=true
-	if sscErxingZuxuanFsForcesSoloFalse(meta) {
+	// SSC 前二/后二组选：勿走末尾默认 solo=true
+	if sscErxingZuxuanForcesSoloFalse(meta) {
 		return false
 	}
 	if meta.PlayTemplate == "lhc_std" {
@@ -878,8 +881,8 @@ func ResolveSolo(meta RuleMeta, wireContent string, betsNums int) bool {
 	if betsNums > guajiSoloMaxBets {
 		return false
 	}
-	// SSC 前二/后二组选复式：实测任意注数 solo=true →「单挑参数错误」（与直选复式单注不同）。
-	if sscErxingZuxuanFsForcesSoloFalse(meta) {
+	// SSC 前二/后二组选：实测任意注数 solo=true →「单挑参数错误」（与直选复式单注不同）。
+	if sscErxingZuxuanForcesSoloFalse(meta) {
 		return false
 	}
 	// 前二/后二：实测多注仍带 solo=true → guaji 40000「单挑参数错误」；仅单注可 solo。
@@ -892,14 +895,17 @@ func ResolveSolo(meta RuleMeta, wireContent string, betsNums int) bool {
 	return NeedsSoloBet(wireContent)
 }
 
-// sscErxingZuxuanFsForcesSoloFalse 时时彩前二/后二组选复式须 solo=false。
-func sscErxingZuxuanFsForcesSoloFalse(meta RuleMeta) bool {
+// sscErxingZuxuanForcesSoloFalse 时时彩前二/后二组选（复式与单式）须 solo=false。
+// 单式原先只被「二星多注」规则挡住，单注时漏成 solo=true
+// （2026-07-28 实测 rule 43/51 单注 solo=true 拒单、solo=false 接单）。
+func sscErxingZuxuanForcesSoloFalse(meta RuleMeta) bool {
 	tpl := strings.TrimSpace(meta.PlayTemplate)
 	if tpl != "" && tpl != "ssc_std" && tpl != "fast_ssc_std" {
 		return false
 	}
-	mode := InferBetMode(meta)
-	if mode != "zuxuan_fs" {
+	switch InferBetMode(meta) {
+	case "zuxuan_fs", "zuxuan_ds":
+	default:
 		return false
 	}
 	return erxingDuoZhuForcesSoloFalse(meta)

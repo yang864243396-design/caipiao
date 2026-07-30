@@ -425,6 +425,16 @@ func formatPaddedDanshiDigits(template string, segLen int, groupContent string) 
 		return formatSSCDanshiDigits(segLen, groupContent)
 	}
 	raw := normalizePickDigits(groupContent)
+	// 已按 width 补零的整注（如十一选五 "010203"）按宽度切分。
+	// 否则会被下面的逐字符分支当成 '0','1','0' 再各自补零，
+	// 把号码改成别的号（"010203" → "000100"）。下注链路会格式化两次，必须幂等。
+	if width > 1 && len(raw) == segLen*width {
+		var b strings.Builder
+		for i := 0; i < segLen; i++ {
+			b.WriteString(padNumericToken(raw[i*width:(i+1)*width], width))
+		}
+		return b.String()
+	}
 	if len(raw) >= segLen {
 		var b strings.Builder
 		for i := 0; i < segLen; i++ {

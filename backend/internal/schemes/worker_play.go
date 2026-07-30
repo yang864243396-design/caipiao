@@ -409,6 +409,11 @@ func normalizeZhixuanDanshiContent(rule playRule, content string) string {
 	if bm == "zuxuan_ds" || sub == "zuxuan_ds" {
 		return content
 	}
+	// 属性玩法（和值/尾数/大小单双…）内容是选项 token，绝不能按位展开。
+	// 否则「3,6,9」会被 reshape 成 3\n6\n9 再展成「369」，校验与落库全错。
+	if isHotColdAttributePlay(rule) {
+		return content
+	}
 	// 复式/组选复式按位内容勿展成单式票
 	if bm == "fushi" || bm == "zhixuan_fs" || sub == "zhixuan_fs" ||
 		bm == "zuxuan_fs" || sub == "zuxuan_fs" || bm == "zuhe" {
@@ -418,6 +423,12 @@ func normalizeZhixuanDanshiContent(rule playRule, content string) string {
 	seg := rule.SegmentLen
 	if seg <= 0 {
 		seg = playPositionCount(rule)
+	}
+	if seg > 1 {
+		// 换行丢失时：15 个单码（5+5+5）等可均分成 seg 段的按位号池，先还原再展开
+		if reshaped, ok := reshapeFlatDigitsToPositionPool(content, seg); ok {
+			content = reshaped
+		}
 	}
 	// betMode 偶发丢失时：内容已是按位号池且段长≥2，仍按单式展开（对齐 guajibet Format）
 	if !isDanshi {
@@ -429,6 +440,33 @@ func normalizeZhixuanDanshiContent(rule playRule, content string) string {
 		return expanded
 	}
 	return content
+}
+
+// reshapeFlatDigitsToPositionPool 将「无换行、全是单码、且个数能被段长整除」的串还原为按位号池。
+// 例：seg=3, "0,1,2,3,4,5,6,7,8,9,0,1,2,3,4" → "0,1,2,3,4\n5,6,7,8,9\n0,1,2,3,4"。
+func reshapeFlatDigitsToPositionPool(content string, segLen int) (string, bool) {
+	if segLen <= 1 || strings.Contains(content, "\n") || strings.Contains(content, "\r") {
+		return "", false
+	}
+	tokens := splitContentTokens(content)
+	if len(tokens) < segLen || len(tokens)%segLen != 0 {
+		return "", false
+	}
+	for _, t := range tokens {
+		if len(t) != 1 || t[0] < '0' || t[0] > '9' {
+			return "", false
+		}
+	}
+	perPos := len(tokens) / segLen
+	lines := make([]string, segLen)
+	for i := 0; i < segLen; i++ {
+		lines[i] = strings.Join(tokens[i*perPos:(i+1)*perPos], ",")
+	}
+	joined := strings.Join(lines, "\n")
+	if !looksLikeZhixuanPositionPool(joined, segLen) {
+		return "", false
+	}
+	return joined, true
 }
 
 func uniqueStringTokens(items []string) []string {

@@ -1,4 +1,4 @@
-.PHONY: run build test tidy migrate-up migrate-down migrate-status sqlc guaji-smoke guaji-capture guaji-audit-ws-keys
+.PHONY: run build test tidy migrate-up migrate-down migrate-status sqlc guaji-smoke guaji-capture guaji-audit-ws-keys scheme-e2e
 
 run:
 	go run ./cmd/server
@@ -48,6 +48,18 @@ guaji-audit-ws-keys:
 
 guaji-audit-ws-keys-report:
 	go run ./cmd/audit-ws-keys
+
+# 只读对账：号池闭包 / 注数 / 期号归属 / 判定 / 资金守恒 / 冷热可达性
+# 方案全链路 E2E：建方案 → 启动 → 出号下注 → 结算 → 查询，覆盖全部 7 种运行类型。
+# 走真实库、全程模拟盘、跑完自清理。建议先停掉本地后端，避免它的 worker 并发推同一批实例。
+scheme-e2e:
+	go test ./internal/schemes/ -run "E2E$$|LifecycleE2E" -v -count=1
+
+scheme-audit:
+	go run ./cmd/scheme-audit
+
+scheme-audit-ci:
+	go run ./cmd/scheme-audit -days 2 -ci
 
 guaji-catalog-sync:
 	go run ./cmd/guaji-catalog-sync

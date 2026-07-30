@@ -48,19 +48,20 @@ type triggerBetCfg struct {
 
 type hotColdWarmCfg struct {
 	TotalPeriods int `json:"totalPeriods"`
-	// Pool 手动覆盖：按位对齐（万\n千\n百…），某位非空则该位用手选号码，
-	// 为空则该位按名次自动取号（混合模式）。跨位/整体型玩法取 Pool[0]。
+	// Pool 按位对齐的预览号（编辑态缓存）；运行时出号以 Ranks 为准，号码仅作展示。
+	// 无 Ranks 的旧配置：非空行表示该位启用。
 	Pool []string `json:"pool"`
+	// Ranks 权威配置：每位一行名次（0=最热）。运行时按近 N 期重排后取「当前排在这些名次上的号码」。
+	Ranks [][]int `json:"ranks,omitempty"`
 	// every 每期换 / keep 不换号 / after_hit 中后换 / after_miss 挂后换
 	Strategy string `json:"strategy"`
 	// WinRotate 兼容旧配置；Strategy 为空时 true→after_hit、false→keep
 	WinRotate bool `json:"winRotate"`
-	// PickTypes 出号类型：hot / cold（可多选；空则兼容旧 pool）
+	// PickTypes 快捷元数据（热/冷）；有 Ranks 时运行时以 Ranks 为准。无 Ranks 时展开为半区名次。
 	PickTypes []string `json:"pickTypes"`
-	// FaultCount 容错=起点偏移：在「最热→最冷」排序上跳过该端最极端的前 N 名（0=不跳过）。
-	// 旧字段名保留兼容；语义已由「取N个」改为「起点偏移」（对齐富联，见冷热出号逆向）。
+	// FaultCount 已废弃（兼容旧 JSON）；运行时忽略。
 	FaultCount int `json:"faultCount"`
-	// PickCount 每位取几个名次：从起点偏移处连续取 N 个号（默认 1）。
+	// PickCount 已废弃（兼容旧 JSON）；运行时忽略。
 	PickCount int `json:"pickCount"`
 }
 
@@ -75,6 +76,7 @@ type parsedSchemeConfig struct {
 	Kind          string
 	RunTypeID     string
 	PlayTypeLabel string
+	SubPlayLabel  string
 	Play          playRule
 	BetUnitYuan   float64
 	Currency      string
@@ -109,6 +111,7 @@ func parseSchemeConfig(kind string, raw []byte, roundIndex, groupIndex int) pars
 	}
 
 	out.PlayTypeLabel = resolvePlayTypeLabel(cfg)
+	out.SubPlayLabel = resolveSubPlayLabel(cfg)
 	out.BetUnitYuan = schemeBetUnitFromConfig(cfg)
 	out.Currency = normalizeSchemeCurrency(stringVal(cfg, "schemeCurrency"))
 	if rule, ok := resolveCatalogPlayRule(cfg); ok {
@@ -139,7 +142,7 @@ func parseSchemeConfig(kind string, raw []byte, roundIndex, groupIndex int) pars
 	out.Trigger = resolveTriggerBet(cfg)
 	applyTriggerBetPosition(&out)
 	out.HotCold = resolveHotColdWarm(cfg)
-	out.Random = resolveRandomDraw(cfg)
+	out.Random = resolveRandomDraw(cfg, out.Play)
 	_ = roundIndex
 	return out
 }
@@ -358,7 +361,7 @@ func triggerBetUsesPosition(rule playRule) bool {
 	if isDingweiTriggerPlay(rule) {
 		return true
 	}
-	// 前三直选复式 / 后二大小单双等：SegmentLen>=2 的按位玩法
+	// 前三直选复式 / 中三直选单式 / 后二大小单双等：SegmentLen>=2 的按位玩法
 	if rule.SegmentLen >= 2 {
 		if bm == "fushi" || bm == "zhixuan_fs" || bm == "zuhe" || bm == "dxds" {
 			return true
@@ -369,8 +372,33 @@ func triggerBetUsesPosition(rule playRule) bool {
 		if tid == "g016" || tid == "dxds" {
 			return true
 		}
+		// 直选单式（前/中/后三等）：与复式同按位映射，下注前再展开为单式票
+		if isZhixuanDanshiTriggerPlay(rule) {
+			return true
+		}
 	}
 	return false
+}
+
+// isZhixuanDanshiTriggerPlay 段长>=2 的直选单式（排除任选/组选单式）。
+func isZhixuanDanshiTriggerPlay(rule playRule) bool {
+	if rule.SegmentLen < 2 {
+		return false
+	}
+	tid := strings.ToLower(strings.TrimSpace(rule.PlayTypeID))
+	sub := strings.ToLower(strings.TrimSpace(rule.SubPlayID) + " " + strings.TrimSpace(rule.CatalogSubID))
+	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	if tid == "renxuan" || tid == "g011" || tid == "renxuan_ds" || tid == "renxuan_fs" ||
+		strings.Contains(tid, "renxuan") || strings.Contains(sub, "renxuan") {
+		return false
+	}
+	if bm == "zuxuan_ds" || strings.Contains(sub, "zuxuan_ds") {
+		return false
+	}
+	if bm == "danshi" || bm == "zhixuan_ds" {
+		return true
+	}
+	return sub == "zhixuan_ds" || strings.Contains(sub, "zhixuan_ds")
 }
 
 // layoutTriggerBetDingweiContent 将单位号码编排到选定投注位（多行），
@@ -426,7 +454,7 @@ func resolveHotColdWarm(cfg map[string]interface{}) *hotColdWarmCfg {
 	if !ok {
 		return nil
 	}
-	out := &hotColdWarmCfg{TotalPeriods: 20, Strategy: "keep", FaultCount: 0, PickCount: 1}
+	out := &hotColdWarmCfg{TotalPeriods: 20, Strategy: "keep"}
 	if v := toInt(raw["totalPeriods"], 0); v > 0 {
 		out.TotalPeriods = v
 	}
@@ -441,23 +469,6 @@ func resolveHotColdWarm(cfg map[string]interface{}) *hotColdWarmCfg {
 	} else if out.WinRotate {
 		out.Strategy = "after_hit"
 	}
-	// 容错=起点偏移（0..9），允许显式 0；旧配置的正整数按新语义直接当偏移。
-	if _, has := raw["faultCount"]; has {
-		fc := toInt(raw["faultCount"], 0)
-		if fc < 0 {
-			fc = 0
-		}
-		if fc > 9 {
-			fc = 9
-		}
-		out.FaultCount = fc
-	}
-	if pc := toInt(raw["pickCount"], 0); pc > 0 {
-		if pc > 10 {
-			pc = 10
-		}
-		out.PickCount = pc
-	}
 	if arr, ok := raw["pickTypes"].([]interface{}); ok {
 		for _, item := range arr {
 			s := strings.ToLower(strings.TrimSpace(fmt.Sprint(item)))
@@ -469,21 +480,77 @@ func resolveHotColdWarm(cfg map[string]interface{}) *hotColdWarmCfg {
 	if pool, ok := raw["pool"].([]interface{}); ok {
 		for _, item := range pool {
 			if s, ok := item.(string); ok {
-				s = strings.TrimSpace(s)
-				if s != "" {
-					out.Pool = append(out.Pool, s)
-				}
+				// 保留空串占位，避免「只启用个位」被压成万位
+				out.Pool = append(out.Pool, strings.TrimSpace(s))
+			} else {
+				out.Pool = append(out.Pool, "")
 			}
 		}
 	}
-	// 新口径：出号类型+容错即可运行；旧口径：仅有 pool 也可
-	if len(out.PickTypes) == 0 && len(out.Pool) == 0 {
+	if ranks, ok := raw["ranks"].([]interface{}); ok {
+		out.Ranks = make([][]int, 0, len(ranks))
+		for _, row := range ranks {
+			var line []int
+			switch v := row.(type) {
+			case []interface{}:
+				for _, item := range v {
+					n := toInt(item, -1)
+					if n >= 0 {
+						line = append(line, n)
+					}
+				}
+			case []float64:
+				for _, item := range v {
+					if item >= 0 {
+						line = append(line, int(item))
+					}
+				}
+			}
+			out.Ranks = append(out.Ranks, uniqueInts(line))
+		}
+	}
+	// 名次 / 出号类型 / 号码位置任一有值即可运行
+	if len(out.PickTypes) == 0 && !hotColdCfgHasPool(out.Pool) && !hotColdCfgHasRanks(out.Ranks) {
 		return nil
 	}
 	return out
 }
 
-func resolveRandomDraw(cfg map[string]interface{}) *randomDrawCfg {
+func hotColdCfgHasPool(pool []string) bool {
+	for _, s := range pool {
+		if strings.TrimSpace(s) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func hotColdCfgHasRanks(ranks [][]int) bool {
+	for _, row := range ranks {
+		if len(row) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func uniqueInts(in []int) []int {
+	if len(in) <= 1 {
+		return in
+	}
+	seen := make(map[int]struct{}, len(in))
+	out := make([]int, 0, len(in))
+	for _, n := range in {
+		if _, ok := seen[n]; ok {
+			continue
+		}
+		seen[n] = struct{}{}
+		out = append(out, n)
+	}
+	return out
+}
+
+func resolveRandomDraw(cfg map[string]interface{}, rule playRule) *randomDrawCfg {
 	raw, ok := cfg["randomDraw"].(map[string]interface{})
 	if !ok {
 		return nil
@@ -492,19 +559,55 @@ func resolveRandomDraw(cfg map[string]interface{}) *randomDrawCfg {
 	if s, ok := raw["strategy"].(string); ok && strings.TrimSpace(s) != "" {
 		out.Strategy = strings.TrimSpace(s)
 	}
+	maxN := randomDrawCountMax(rule)
+	if maxN < 1 {
+		maxN = 1
+	}
 	if counts, ok := raw["counts"].([]interface{}); ok {
 		for _, item := range counts {
 			n := toInt(item, 1)
 			if n < 1 {
 				n = 1
 			}
-			if n > 10 {
-				n = 10
+			if n > maxN {
+				n = maxN
 			}
 			out.Counts = append(out.Counts, n)
 		}
 	}
 	return out
+}
+
+// cloudPlayTypeLabel 写入 cloud_bet_records.play_type 的展示文案（大类 · 子玩法）。
+// 与 playMethodForPayload 去重规则一致，但分隔符固定为「 · 」，且不影响下单参数。
+func cloudPlayTypeLabel(playTypeLabel, subLabel string) string {
+	play := strings.TrimSpace(playTypeLabel)
+	sub := strings.TrimSpace(subLabel)
+	switch {
+	case play == "" && sub == "":
+		return ""
+	case play == "":
+		return sub
+	case sub == "":
+		return play
+	case strings.Contains(play, sub) || strings.Contains(sub, play):
+		if len(sub) >= len(play) {
+			return sub
+		}
+		return play
+	default:
+		return play + " · " + sub
+	}
+}
+
+func resolveSubPlayLabel(cfg map[string]interface{}) string {
+	if v := strings.TrimSpace(stringVal(cfg, "playMethodLabel")); v != "" && !isBarePlayToken(v) {
+		return v
+	}
+	if v := strings.TrimSpace(stringVal(cfg, "subPlayLabel")); v != "" && !isBarePlayToken(v) {
+		return v
+	}
+	return ""
 }
 
 func resolvePlayTypeLabel(cfg map[string]interface{}) string {

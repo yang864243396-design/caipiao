@@ -31,6 +31,25 @@ func TestSupportsAdvTriggerBetPC28(t *testing.T) {
 	}
 }
 
+func TestTriggerOpenMatchesSSCHezhi(t *testing.T) {
+	t.Parallel()
+	// 中三直选和值：千+百+十，不是某一球号
+	rule := playRule{
+		PlayTemplate: "ssc_std", BetMode: "hezhi",
+		PlayTypeID: "g002", SegmentStart: 1, SegmentLen: 3,
+	}
+	balls := []string{"9", "1", "2", "3", "0"} // 中三 1+2+3=6
+	if !triggerOpenMatches(rule, balls, "6") {
+		t.Fatal("zhong3 hezhi open 6 should match")
+	}
+	if !triggerOpenMatches(rule, balls, "06") {
+		t.Fatal("padded open 06 should normalize-match")
+	}
+	if triggerOpenMatches(rule, balls, "1") {
+		t.Fatal("must not match a single ball digit as hezhi open")
+	}
+}
+
 func TestTriggerOpenMatchesPC28(t *testing.T) {
 	rule := playRule{PlayTemplate: "pc28_std", BetMode: "hezhi"}
 	balls := []string{"3", "5", "7"} // sum=15

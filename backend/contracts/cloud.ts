@@ -40,6 +40,8 @@ export type BetRecordStatus = 'hit' | 'miss'
 
 export interface BetRecordItem {
   id: string
+  /** 平台明细编号，详情路由主键 */
+  recordNo: string
   period: string
   /** 第三方接单返回的 periods；仅真实接单成功后有值 */
   periods?: string
@@ -51,6 +53,31 @@ export interface BetRecordItem {
   /** 盈亏（元，负数为亏） */
   pnl: number
   status: BetRecordStatus
+  betContent?: string
+}
+
+/** GET /client/cloud/bet-records/item/{recordNo} — 单笔投注详情 */
+export interface BetRecordItemDetail {
+  recordNo: string
+  thirdPartyId: string
+  period: string
+  lotteryLabel: string
+  playType: string
+  status: string
+  statusLabel: string
+  drawNumbers: string
+  betUnits: number | null
+  multiplier: string
+  round: string
+  amount: number
+  currency: string
+  /** null = 未开奖或中奖无第三方原值 → 前端显示 — */
+  payoutAmount: number | null
+  placedAt: string
+  betContent: string
+  /** 按玩法位段标好位名的展示行（如「千位 1 3 5」）；玩法无按位语义时不下发 */
+  betContentLines?: string[]
+  simBet: boolean
 }
 
 export interface BetRecordDetailData {

@@ -23,6 +23,7 @@ import (
 	"caipiao/backend/internal/guaji/drawsync"
 	"caipiao/backend/internal/guaji/historysync"
 	"caipiao/backend/internal/guaji/oddsrefresh"
+	"caipiao/backend/internal/guaji/periodaudit"
 	"caipiao/backend/internal/guaji/periodsync"
 	"caipiao/backend/internal/handler"
 	"caipiao/backend/internal/maintenance"
@@ -91,6 +92,15 @@ func New(cfg config.Config) (*Server, error) {
 	reportsSvc := reports.NewService(pool)
 	wsSrv := &ws.Server{Hub: wsHub, Auth: authSvc, Origins: cfg.CORSOrigins}
 	guajiClient := guaji.NewClient(cfg.Guaji)
+	// 与方案 Worker 并发对齐，避免默认 MaxConnsPerHost=32 卡住真下单。
+	httpConns := cfg.SchemeWorkerConcurrency
+	if cfg.SchemeWorkerPlaceConcurrency > httpConns {
+		httpConns = cfg.SchemeWorkerPlaceConcurrency
+	}
+	if httpConns < 32 {
+		httpConns = 32
+	}
+	guajiClient.TuneHTTPConcurrency(httpConns)
 	guajiAccounts := accountsvc.NewService(pool, guajiClient, cfg.Guaji.CredentialsKey, cfg.JWTSecret)
 	periodSyncer := periodsync.NewSyncer(pool, guajiClient, guajiAccounts)
 	schemesSvc := schemes.NewService(pool, periodSyncer)
@@ -104,6 +114,7 @@ func New(cfg config.Config) (*Server, error) {
 		historyWorker = historysync.NewWorker(pool, guajiClient, wsHub)
 	}
 	gamesSvc.SetDetailDisplaySync(periodSyncer, historyWorker)
+	betSvc.SetHistorySync(historyWorker)
 	cmsUploads, err := content.NewUploadStore(cfg.CMSUploadDir)
 	if err != nil {
 		workerCancel()
@@ -114,6 +125,8 @@ func New(cfg config.Config) (*Server, error) {
 	var schemeWorker *schemes.Worker
 	if pool != nil && cfg.SchemeWorkerEnabled {
 		if w := schemes.NewWorker(pool, cfg.SchemeWorkerTickSec, wsHub, periodSyncer); w != nil {
+			w.SetConcurrency(cfg.SchemeWorkerConcurrency)
+			w.SetPlaceConcurrency(cfg.SchemeWorkerPlaceConcurrency)
 			schemeWorker = w
 			if guajiAccounts != nil {
 				w.SetGuajiBetPlacer(guajiAccounts)
@@ -137,6 +150,14 @@ func New(cfg config.Config) (*Server, error) {
 	if pool != nil && guajiAccounts != nil && guajiClient.Enabled() {
 		if pw := periodsync.NewWorker(pool, guajiClient, guajiAccounts); pw != nil {
 			go pw.Run(workerCtx)
+		}
+	}
+
+	// 期号归属自检：下注链路（outbound_lottery_code）与开奖链路（guaji_ws_key）
+	// 必须取到同一族期号，否则注单期号永远查不到开奖号
+	if pool != nil && guajiClient.Enabled() {
+		if paw := periodaudit.NewWorker(pool); paw != nil {
+			go paw.Run(workerCtx)
 		}
 	}
 
@@ -208,6 +229,7 @@ func (s *Server) registerRoutes(wsSrv *ws.Server) {
 	api.Handle("GET /admin/orders/ledger", adminAuth(http.HandlerFunc(s.handler.AdminListLedgerEntries)))
 
 	api.Handle("GET /client/cloud/bet-records", clientAuth(http.HandlerFunc(s.handler.BetRecordGroups)))
+	api.Handle("GET /client/cloud/bet-records/item/{recordNo}", clientAuth(http.HandlerFunc(s.handler.BetRecordItem)))
 	api.Handle("GET /client/cloud/bet-records/{schemeId}", clientAuth(http.HandlerFunc(s.handler.BetRecordDetail)))
 
 	api.Handle("GET /client/cloud/schemes/running", clientAuth(http.HandlerFunc(s.handler.CloudRunningSchemes)))
@@ -358,6 +380,7 @@ func (s *Server) registerRoutes(wsSrv *ws.Server) {
 
 func (s *Server) Handler() http.Handler {
 	var h http.Handler = s.mux
+	h = middleware.StripTrailingSlash(h)
 	h = middleware.Logger(h)
 	h = middleware.Recover(h)
 	h = middleware.CORS(s.cfg.CORSOrigins)(h)

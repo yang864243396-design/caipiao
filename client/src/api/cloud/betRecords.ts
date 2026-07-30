@@ -60,6 +60,9 @@ export interface BetRecordItem {
 
   id: string
 
+  /** 平台明细编号，详情路由主键 */
+  recordNo: string
+
   period: string
 
   /** 第三方接单返回的 periods；仅真实接单成功后有值 */
@@ -80,6 +83,29 @@ export interface BetRecordItem {
   /** 实际下注号码（可能多行，含 \n） */
   betContent?: string
 
+}
+
+/** GET /client/cloud/bet-records/item/{recordNo} */
+export interface BetRecordItemDetail {
+  recordNo: string
+  thirdPartyId: string
+  period: string
+  lotteryLabel: string
+  playType: string
+  status: string
+  statusLabel: string
+  drawNumbers: string
+  betUnits: number | null
+  multiplier: string
+  round: string
+  amount: number
+  currency: string
+  payoutAmount: number | null
+  placedAt: string
+  betContent: string
+  /** 后端按玩法位段标好位名的展示行（如「千位 1 3 5」）；无按位语义时不下发 */
+  betContentLines?: string[]
+  simBet: boolean
 }
 
 
@@ -108,6 +134,7 @@ export interface BetRecordDetailData {
 
 /** 方案投注明细表格行 */
 export interface BetRecordDisplayRow {
+  recordNo: string
   period: string
   multiplier: string
   round: string
@@ -160,6 +187,7 @@ export function toDisplayRow(item: BetRecordItem): BetRecordDisplayRow {
   const abs = Math.abs(item.pnl).toFixed(2)
   const statusFmt = formatBetRecordStatus(item.status)
   return {
+    recordNo: (item.recordNo || '').trim(),
     period: betRecordDisplayPeriod(item),
     multiplier: formatBetMultiplierDisplay(item.multiplier),
     round: formatBetRoundDisplay(item.round),
@@ -170,6 +198,13 @@ export function toDisplayRow(item: BetRecordItem): BetRecordDisplayRow {
     statusLabel: statusFmt.label,
     statusHit: statusFmt.hit,
   }
+}
+
+export async function fetchBetRecordItem(recordNo: string): Promise<BetRecordItemDetail> {
+  await ensureClientSession()
+  return requestApi<BetRecordItemDetail>(
+    `/client/cloud/bet-records/item/${encodeURIComponent(recordNo)}`,
+  )
 }
 
 

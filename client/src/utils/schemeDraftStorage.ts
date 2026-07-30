@@ -172,3 +172,37 @@ export function saveDraftBetMultiplier(
   draft.betMultiplierKind = kind
   saveSchemeDraft(draft)
 }
+
+const BM_PENDING_PREFIX = 'scheme-edit-bm-pending:'
+
+/** 云端方案编辑：倍投设定页暂存，返回编辑页后消费并写入定义 */
+export function saveSchemeEditBmPending(
+  schemeId: string,
+  kind: string,
+  payload: BetMultiplierPayload,
+): void {
+  try {
+    sessionStorage.setItem(
+      `${BM_PENDING_PREFIX}${schemeId.trim()}`,
+      JSON.stringify({ kind, payload }),
+    )
+  } catch {
+    /* ignore quota */
+  }
+}
+
+export function consumeSchemeEditBmPending(schemeId: string): BetMultiplierPayload | null {
+  const key = `${BM_PENDING_PREFIX}${schemeId.trim()}`
+  try {
+    const raw = sessionStorage.getItem(key)
+    sessionStorage.removeItem(key)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { payload?: BetMultiplierPayload }
+    if (parsed?.payload && typeof parsed.payload === 'object' && parsed.payload.kind) {
+      return parsed.payload
+    }
+  } catch {
+    /* ignore */
+  }
+  return null
+}

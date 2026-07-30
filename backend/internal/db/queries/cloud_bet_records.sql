@@ -290,6 +290,7 @@ INSERT INTO cloud_bet_records (
 -- name: UpdateCloudBetRecordFromSettlement :execrows
 UPDATE cloud_bet_records
 SET status = $2,
-    pnl = $3
+    pnl = $3,
+    payout_amount = $4
 WHERE bet_order_no = $1
   AND status = 'pending';

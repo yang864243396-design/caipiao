@@ -96,10 +96,11 @@ function cancelTitleEdit() {
 
 
 function defaultRows(): SchemeRoundRule[] {
+  // 默认挂翻倍（1-based 局号）：未中进下一局、命中回第 1 局
   return [
-    { mult: 0, afterHit: 2, afterMiss: 1 },
-    { mult: 1, afterHit: 2, afterMiss: 3 },
-    { mult: 3, afterHit: 2, afterMiss: 1 },
+    { mult: 1, afterHit: 1, afterMiss: 2 },
+    { mult: 2, afterHit: 1, afterMiss: 3 },
+    { mult: 4, afterHit: 1, afterMiss: 1 },
   ]
 }
 

@@ -2,6 +2,7 @@ package guajibet
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -44,6 +45,33 @@ func inferLHCBetMode(meta RuleMeta) string {
 	}
 	label := strings.TrimSpace(meta.Label)
 	text := meta.combinedText()
+	// 玩法名是「组名+子玩法名」，而组名本身可能含别的子玩法关键词：
+	// 「五行家野家野」里「五行」先命中、「一肖尾数一肖」里「尾数」先命中，
+	// 直接匹配整串会取到前缀里的词。先用去掉组名前缀的子玩法名判定，取不到再退回整串。
+	if sub := lhcSubPlayName(meta); sub != "" {
+		if m := lhcModeFromLabel(sub, text); m != "" {
+			return m
+		}
+	}
+	return lhcModeFromLabel(label, text)
+}
+
+// lhcSubPlayName 去掉组名/类型名前缀后的子玩法名，如「五行家野家野」→「家野」。
+// 取不到（玩法名不以组名开头）时返回空串。
+func lhcSubPlayName(meta RuleMeta) string {
+	label := strings.TrimSpace(meta.Label)
+	for _, prefix := range []string{strings.TrimSpace(meta.Group), strings.TrimSpace(meta.TypeLabel)} {
+		if prefix == "" || prefix == label {
+			continue
+		}
+		if rest := strings.TrimSpace(strings.TrimPrefix(label, prefix)); rest != "" && rest != label {
+			return rest
+		}
+	}
+	return ""
+}
+
+func lhcModeFromLabel(label, text string) string {
 	switch {
 	case label == "复式" || strings.Contains(label, "复式"):
 		return "fushi"
@@ -110,7 +138,7 @@ func lhcPickCountFromLabel(text string) int {
 		n   int
 	}{
 		{"十五", 15}, {"十五不中", 15},
-		{"十二", 12}, {"十一", 11}, {"十不中", 10}, {"10", 10},
+		{"十二", 12}, {"十一", 11}, {"十不中", 10}, {"10", 10}, {"十", 10},
 		{"九", 9}, {"八", 8}, {"七", 7}, {"六", 6}, {"五", 5},
 		{"四", 4}, {"三", 3}, {"二", 2}, {"一", 1},
 	}
@@ -127,56 +155,40 @@ func lhcPickCountFromLabel(text string) int {
 	return 0
 }
 
+// lhcBuzhongMinPick 全不中（g013）/ 多选中一（g014）的最少选号数。
+//
+// 一律取玩法名里的数字：2026-07-28 真实下单时第三方回传的约束与玩法名完全一致——
+// rule 362「全不中12不中」→「最少投注12个号码」、364「全不中15不中」→「最少投注15个号码」、
+// 376「十选中一」→「最少投注10个号码」、379「特平中二粒」→「最少投注2个号码」。
+//
+// 原先按 rule_id 硬编码，整张表错位一位（348「全不中5不中」被映射成 6，
+// 350「6不中」映射成 7 …），既被第三方拒单，也让 CountBetNums 的注数与金额偏大。
 func lhcBuzhongMinPick(meta RuleMeta) int {
-	if id, err := strconv.Atoi(strings.TrimSpace(meta.RuleID)); err == nil {
-		// 拖头 outbound 为奇数 rule_id，与复式 sub_id 成对（347↔346）。
-		if strings.Contains(meta.Label, "拖头") && id%2 == 1 {
-			id--
-		}
-		switch strings.TrimSpace(meta.TypeID) {
-		case "g013":
-			switch id {
-			case 346:
-				return 5
-			case 348:
-				return 6
-			case 350:
-				return 7
-			case 352:
-				return 8
-			case 354:
-				return 9
-			case 356:
-				return 10
-			case 358:
-				return 11
-			case 360:
-				return 12
-			case 362:
-				return 15
-			}
-		case "g014":
-			switch id {
-			case 364:
-				return 5
-			case 366:
-				return 6
-			case 368:
-				return 7
-			case 370:
-				return 8
-			case 372:
-				return 9
-			case 374:
-				return 10
-			}
-		}
+	// 取完整上下文：拖头玩法的 label 常只是「拖头」，数字在 team/fullName 里。
+	if n := lhcArabicPickCount(lhcContextText(meta)); n > 0 {
+		return n
 	}
 	if n := lhcPickCountFromLabel(lhcContextText(meta)); n > 0 {
 		return n
 	}
 	return 5
 }
+
+// lhcArabicPickCount 取玩法名中阿拉伯数字写法的选号数，如「全不中12不中」→ 12、「10选中一」→ 10。
+// 「全不中5不中」里「不中」出现两次，只有带数字的那处会被匹配到。
+func lhcArabicPickCount(label string) int {
+	m := lhcArabicPickRe.FindStringSubmatch(label)
+	if len(m) < 2 {
+		return 0
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
+var lhcArabicPickRe = regexp.MustCompile(`(\d+)\s*(?:不中|选中一|粒)`)
 
 func lhcMinPickCount(meta RuleMeta, betMode string) int {
 	sub := strings.ToLower(strings.TrimSpace(meta.SubID))
@@ -220,6 +232,12 @@ func lhcMinPickCount(meta RuleMeta, betMode string) int {
 	case "renzhong":
 		if m := matchLeadingInt(sub, "l_rz"); m > 0 {
 			return m
+		}
+		// 生产库 sub_id 是数字（如 379），matchLeadingInt 取不到，须回退玩法名。
+		// 2026-07-28 实测：rule 379/381/383/385「特平中二/三/四/五粒任中」
+		// 第三方要求「最少投注 2/3/4/5 个号码」，与玩法名一致；原先默认 1 个必被拒单。
+		if n := lhcPickCountFromLabel(text); n > 0 {
+			return n
 		}
 		return 1
 	case "xiao", "xiao_z", "xiao_bz", "wei_z", "wei_bz":
@@ -298,7 +316,7 @@ func sampleLHCGroupContent(meta RuleMeta) string {
 	case "tema", "zhengte":
 		return "07"
 	case "renzhong":
-		return "01"
+		return sampleLHCPickNumbers(lhcMinPickCount(meta, mode))
 	case "texiao":
 		return "鼠"
 	case "xiao", "xiao_z", "xiao_bz":

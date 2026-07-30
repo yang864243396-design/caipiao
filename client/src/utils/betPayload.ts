@@ -1656,6 +1656,51 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
     return { ok: true, normalized, betUnits }
   }
 
+  // 跨度：须落在号池 0–9（前/中/后三直选跨度等），禁止 10+；勿走下方 special 放行
+  if (config.betMode === 'kuadu' || /跨度/.test(config.playMethodLabel ?? '')) {
+    const pool = poolFromConfig(config) ?? { min: 0, max: 9 }
+    const parts = String(content ?? '')
+      .replace(/，/g, ',')
+      .split(/[\s,\n]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+    if (!parts.length) {
+      return {
+        ok: false,
+        message: `跨度须在 ${pool.min}–${pool.max} 范围内，多选用逗号分隔（如 0,3,9）`,
+      }
+    }
+    const tokens: string[] = []
+    const seen = new Set<string>()
+    for (const p of parts) {
+      if (!/^\d{1,2}$/.test(p)) {
+        return {
+          ok: false,
+          message: `跨度须在 ${pool.min}–${pool.max} 范围内，多选用逗号分隔（如 0,3,9）`,
+        }
+      }
+      const n = Number(p)
+      if (!Number.isFinite(n) || n < pool.min || n > pool.max) {
+        return {
+          ok: false,
+          message: `跨度须在 ${pool.min}–${pool.max} 范围内，不能填写 ${p}`,
+        }
+      }
+      const tok = String(n)
+      if (seen.has(tok)) continue
+      seen.add(tok)
+      tokens.push(tok)
+    }
+    const normalized = tokens.join(',')
+    const betUnits = countBetUnits(config, normalized)
+    if (betUnits <= 0) return { ok: false, message: '选号无效' }
+    // 直选跨度组合注数上限与和值一致（三星满选 1000>900）
+    if (betUnits > HEZHI_MAX_BET_UNITS) {
+      return { ok: false, message: HEZHI_MAX_BET_UNITS_MSG }
+    }
+    return { ok: true, normalized, betUnits }
+  }
+
   // 组选包胆：仅允许一个 0–9 胆码
   if (config.betMode === 'baodan' || /包胆/.test(config.playMethodLabel ?? '')) {
     const pool = poolFromConfig(config) ?? { min: 0, max: 9 }
@@ -1673,7 +1718,6 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
   }
 
   const specialBetModes = new Set([
-    'kuadu',
     'longhu',
     'longhuhe',
     'dxds',
@@ -1681,7 +1725,7 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
     'danshuang',
     'budingwei',
     // zuhe 已在上方按位校验 + 单区 2700 / 前中后三 8100 注上限
-    // baodan / weishu 已在上方单独校验
+    // baodan / weishu / kuadu 已在上方单独校验
     'hunhe',
     'teshu',
     'longhubao',
@@ -1723,7 +1767,7 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
     return { ok: true, normalized: content, betUnits: betUnits || 1 }
   }
 
-  // 和值/跨度/龙虎等特殊玩法：允许非空自由文本（与后端 validateGroupContent 对齐）
+  // 无子玩法时勿放行任意文本（跨度等已在上方校验）
   if (!sub) {
     return { ok: true, normalized: content, betUnits: 1 }
   }
@@ -1927,6 +1971,12 @@ export function groupContentPlaceholder(config: PlayConfig): string {
     const pool = poolFromConfig(config)
     if (pool) return `和值：输入 ${pool.min}–${pool.max}，多选用逗号分隔（如 14,15,16）`
     return '和值：输入和值数字，多选用逗号分隔（前三直选 0–27，前二 0–18，快三 3–18）'
+  }
+  if (config.betMode === 'kuadu' || /跨度/.test(config.playMethodLabel ?? '')) {
+    const pool = poolFromConfig(config)
+    const min = pool?.min ?? 0
+    const max = pool?.max ?? 9
+    return `跨度：输入 ${min}–${max}，每个数字用逗号分隔（如 0,3,9）`
   }
   if (config.betMode === 'weishu') {
     const pool = poolFromConfig(config)

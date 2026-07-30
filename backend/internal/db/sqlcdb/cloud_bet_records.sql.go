@@ -837,19 +837,21 @@ func (q *Queries) ListCloudBetRecordsFiltered(ctx context.Context, arg ListCloud
 const updateCloudBetRecordFromSettlement = `-- name: UpdateCloudBetRecordFromSettlement :execrows
 UPDATE cloud_bet_records
 SET status = $2,
-    pnl = $3
+    pnl = $3,
+    payout_amount = $4
 WHERE bet_order_no = $1
   AND status = 'pending'
 `
 
 type UpdateCloudBetRecordFromSettlementParams struct {
-	BetOrderNo pgtype.Text    `json:"bet_order_no"`
-	Status     string         `json:"status"`
-	Pnl        pgtype.Numeric `json:"pnl"`
+	BetOrderNo    pgtype.Text    `json:"bet_order_no"`
+	Status        string         `json:"status"`
+	Pnl           pgtype.Numeric `json:"pnl"`
+	PayoutAmount  pgtype.Numeric `json:"payout_amount"`
 }
 
 func (q *Queries) UpdateCloudBetRecordFromSettlement(ctx context.Context, arg UpdateCloudBetRecordFromSettlementParams) (int64, error) {
-	result, err := q.db.Exec(ctx, updateCloudBetRecordFromSettlement, arg.BetOrderNo, arg.Status, arg.Pnl)
+	result, err := q.db.Exec(ctx, updateCloudBetRecordFromSettlement, arg.BetOrderNo, arg.Status, arg.Pnl, arg.PayoutAmount)
 	if err != nil {
 		return 0, err
 	}

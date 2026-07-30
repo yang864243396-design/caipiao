@@ -2,12 +2,16 @@ package catalogsync
 
 // V6hs1OutboundByCode：正式环境 www.v6hs1.com GET /api/games/new_lott 实测 game_id（2026-06-30）。
 // 保留在售 33 彩种；以太坊系列已 maintenance 下架（迁移 00110）。
+//
+// 哈希系 ↔ 波场系的 game_id 与第三方 new_lott 名称相反，此表按实测期号族归位：
+// 分分彩见迁移 00115，极速彩见 00136。按名称匹配的 guaji-catalog-sync -apply 会把
+// 这几项改回名称对应的 id，改前需人工确认。
 var V6hs1OutboundByCode = map[string]int{
 	"hash_ffc_1m":    25,
 	"hash_ffc_3m":    26,
 	"hash_ffc_5m":    27,
-	"hash_jisu":      23,
-	"tron_jisu":      24,
+	"hash_jisu":      24,
+	"tron_jisu":      23,
 	"tron_ffc_1m":    19,
 	"tron_ffc_3m":    20,
 	"tron_ffc_5m":    21,

@@ -105,6 +105,55 @@ func IsTransientUpstreamError(err error) bool {
 	return !ClassifyUpstreamError(err).IsTokenInvalid
 }
 
+// IsRetryableTransportError 传输层/网关临时故障：方案 Worker 应保留运行并下 tick 再试，勿立刻停投。
+// 不含业务拒单、封盘、余额不足、Token 失效（那些仍应按原逻辑停投或跳过）。
+func IsRetryableTransportError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if IsPeriodClosedError(err) {
+		return false
+	}
+	fault := ClassifyUpstreamError(err)
+	if fault.IsTokenInvalid {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	needles := []string{
+		"context deadline exceeded", "timeout", "connection refused", "connectex",
+		"no such host", "tls:", "eof", "status 502", "status 503", "status 504", "status 429",
+		"too many requests", "第三方服务连接失败", "第三方服务暂时不可用",
+	}
+	for _, n := range needles {
+		if strings.Contains(msg, n) || strings.Contains(fault.UserMessage, n) {
+			return true
+		}
+	}
+	// UserMessage 可能是中文完整句
+	switch fault.UserMessage {
+	case "第三方服务连接失败，请稍后重试", "第三方服务暂时不可用，请稍后重试", "第三方服务异常，请稍后重试":
+		return true
+	}
+	return false
+}
+
+// IsSafeImmediateRetryError 请求很可能未发出的错误，允许同 tick 内短暂重试 PlaceBet（避免超时类二次下单）。
+func IsSafeImmediateRetryError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	needles := []string{
+		"connection refused", "connectex", "no such host", "network is unreachable",
+	}
+	for _, n := range needles {
+		if strings.Contains(msg, n) {
+			return true
+		}
+	}
+	return false
+}
+
 func isTokenInvalidCode(code int) bool {
 	switch code {
 	case CodeTokenInvalid, CodeTokenInvalidAlt, CodeTokenInvalidBiz:

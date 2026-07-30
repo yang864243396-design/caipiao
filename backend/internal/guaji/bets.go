@@ -12,15 +12,15 @@ import (
 
 // LottBetContent 是单个注单内容（接口文档 §11 bet_contents 元素）。
 type LottBetContent struct {
-	RuleID             string   `json:"rule_id"`                        // 规则ID（如 "13"）
-	BetContent         string   `json:"bet_content"`                    // 投注内容（位段逗号分隔，如 ",,,13579,"）
-	AmountUnit         float64  `json:"amount_unit"`                    // 单元金额
-	BetsNums           int      `json:"bets_nums"`                      // 注数
-	Multiple           int      `json:"multiple"`                       // 倍数
-	BetAmount          float64  `json:"bet_amount"`                     // 金额
-	Solo               bool     `json:"solo"`                           // 是否单挑
-	MinSingleBetBonus  *float64 `json:"min_single_bet_bonus,omitempty"` // 每注中奖（单挑校验用，前端常传）
-	SingleBetAmount    *float64 `json:"singleBetAmount,omitempty"`      // 单注金额（前端字段，部分规则校验用）
+	RuleID            string   `json:"rule_id"`                        // 规则ID（如 "13"）
+	BetContent        string   `json:"bet_content"`                    // 投注内容（位段逗号分隔，如 ",,,13579,"）
+	AmountUnit        float64  `json:"amount_unit"`                    // 单元金额
+	BetsNums          int      `json:"bets_nums"`                      // 注数
+	Multiple          int      `json:"multiple"`                       // 倍数
+	BetAmount         float64  `json:"bet_amount"`                     // 金额
+	Solo              bool     `json:"solo"`                           // 是否单挑
+	MinSingleBetBonus *float64 `json:"min_single_bet_bonus,omitempty"` // 每注中奖（单挑校验用，前端常传）
+	SingleBetAmount   *float64 `json:"singleBetAmount,omitempty"`      // 单注金额（前端字段，部分规则校验用）
 }
 
 // LottBetMultipleOuter 外层倍投（§11 bet_multiple；不加倍时传 []）。
@@ -56,16 +56,16 @@ type LottPeriod struct {
 
 // WebBetRecord 是 GET /api/web_bets/ 列表项（T5 派奖同步字段映射）。
 type WebBetRecord struct {
-	ID            int64   `json:"id"`
-	GameID        int     `json:"game_id"`
-	Periods       string  `json:"periods"`
-	BetAmount     float64 `json:"bet_amount"`
-	NetAmount     float64 `json:"net_amount"`
-	PayoutAmount  float64 `json:"payout_amount"`
-	Status        int     `json:"status"`
-	Settled       bool    `json:"settled"`
-	Confirmed     bool    `json:"confirmed"`
-	Currency      int     `json:"currency"`
+	ID           int64   `json:"id"`
+	GameID       int     `json:"game_id"`
+	Periods      string  `json:"periods"`
+	BetAmount    float64 `json:"bet_amount"`
+	NetAmount    float64 `json:"net_amount"`
+	PayoutAmount float64 `json:"payout_amount"`
+	Status       int     `json:"status"`
+	Settled      bool    `json:"settled"`
+	Confirmed    bool    `json:"confirmed"`
+	Currency     int     `json:"currency"`
 }
 
 // PlaceLottBet 调用 /api/web_bets/lott 真实下单（接口文档 §11）。
@@ -343,7 +343,17 @@ const wallClockLayout = "2006-01-02 15:04:05"
 
 func parseLottBetResult(env envelope, raw []byte) LottBetResult {
 	var res LottBetResult
+	// ThirdPartyBetID 是 string，上游把 id 回成数字时这一步会丢掉它
+	// （其余字段仍能填上），所以下面对 data.id 再用 rawJSONID 兜一次。
 	_ = env.dataInto(&res)
+	if res.ThirdPartyBetID == "" && len(env.Data) > 0 {
+		var data struct {
+			ID json.RawMessage `json:"id"`
+		}
+		if json.Unmarshal(env.Data, &data) == nil {
+			res.ThirdPartyBetID = rawJSONID(data.ID)
+		}
+	}
 	var top struct {
 		ID      json.RawMessage `json:"id"`
 		Periods string          `json:"periods"`
@@ -601,6 +611,11 @@ func webBetToSettlement(item *WebBetRecord) *BetSettlement {
 		if absFloat(pnl) < 0.01 {
 			pnl = item.PayoutAmount - item.BetAmount
 		}
+	}
+	// 真·未中：派奖为 0 且 net 缺失/为 0 时，第三方偶发不回 net_amount。
+	// 此时净额应为 −本金。和局退本（payout≈本金、net=0）保持 pnl=0，勿误伤。
+	if status == "lose" && item.BetAmount > 1e-6 && absFloat(pnl) < 0.01 && item.PayoutAmount < 0.01 {
+		pnl = -item.BetAmount
 	}
 	return &BetSettlement{
 		ThirdPartyBetID: strconv.FormatInt(item.ID, 10),
