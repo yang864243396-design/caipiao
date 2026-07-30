@@ -1,0 +1,6 @@
+{"index":29,"lotteryCode":"tron_pk10_jisu","typeId":"g010","subId":"221","label":"冠亚和值大小单双","ruleId":"221","status":"fail","amount":2,"periodWaits":1,"error":"第三方接单失败: guaji api code=40000: 投注数字不合规.","at":"2026-07-28T16:05:01+08:00"}
+
+{"index":30,"lotteryCode":"tron_pk10_jisu","typeId":"g010","subId":"222","label":"前三大小单双","ruleId":"222","status":"ok","orderNo":"BO11785225903978","issueNo":"105202607281931","thirdPartyBetId":"121500113","amount":2,"verifyStatus":"ok","verifyDetail":"第三方注单一致","periodWaits":1,"at":"2026-07-28T16:05:03+08:00"}
+
+{"index":31,"lotteryCode":"tron_pk10_jisu","typeId":"g010","subId":"223","label":"后三大小单双","ruleId":"223","status":"ok","orderNo":"BO11785225908286","issueNo":"105202607281931","thirdPartyBetId":"121500135","amount":2,"verifyStatus":"ok","verifyDetail":"第三方注单一致","periodWaits":1,"at":"2026-07-28T16:05:07+08:00"}
+

@@ -90,6 +90,30 @@ func TestEvaluateZuheQian3(t *testing.T) {
 	}
 }
 
+// TestEvaluateZuheZhong3FullHitNestedPrize 回归：满号池中三组合全中应按嵌套三档合计派奖，
+// 而非整票×三星赔率（曾导致平台返还 5243400 vs 第三方 2153.4）。
+func TestEvaluateZuheZhong3FullHitNestedPrize(t *testing.T) {
+	rule := resolveSSCPlayRule("zhong3", "zhong3_zuhe", "zuhe", "中三组合")
+	content := "1,2,3,4,5,6,7,8,9\n0,1,2,3,4,5,6,7,8,9\n0,1,2,3,4,5,6,7,8,9"
+	balls := []string{"5", "6", "8", "0", "8"} // 中三 6,8,0
+	ev := evaluatePlayHit(rule, balls, content, false, "", 0)
+	if !ev.Hit {
+		t.Fatalf("want hit, ev=%+v", ev)
+	}
+	if ev.BetUnits != 2700 {
+		t.Fatalf("BetUnits=%d want 2700 (9×10×10×3)", ev.BetUnits)
+	}
+	wantPrize := 970.0 + 97.0 + 9.7 // 1 元尺度
+	if ev.PrizeNet < wantPrize-0.01 || ev.PrizeNet > wantPrize+0.01 {
+		t.Fatalf("PrizeNet=%v want %v", ev.PrizeNet, wantPrize)
+	}
+	amount := 5400.0 // 2 元 × 2700 注
+	pnl := calcPnLWithOdds(amount, ev.Hit, ev.Odds)
+	if pnl < 2153.3 || pnl > 2153.5 {
+		t.Fatalf("pnl=%v want ~2153.4 (第三方返还；旧逻辑≈5238000)", pnl)
+	}
+}
+
 func TestEvaluateZuheQianzhonghou3MultiZone(t *testing.T) {
 	rule := resolveSSCPlayRule("qianzhonghou3", "qzh3_zuhe", "zuhe")
 	// 仅中三 2,5,0 命中，前三/后三不中
@@ -100,10 +124,11 @@ func TestEvaluateZuheQianzhonghou3MultiZone(t *testing.T) {
 	if ev.BetUnits != 9 {
 		t.Fatalf("BetUnits=%d want 9 (1×1×1×3组合×3区)", ev.BetUnits)
 	}
-	// 1/3 区中：odds_eff = (三星赔率+1)/3 - 1
-	wantOdds := (oddsZhixuan(3, 0)+1)/3 - 1
+	// 中三全中：嵌套 三星+后二+后一；其它区位未中时按 PrizeNet 记小奖合计
+	wantPrize := oddsZuheNestedPrize(3, 0) // 970+97+9.7
+	wantOdds := wantPrize / 9
 	if ev.Odds < wantOdds-0.01 || ev.Odds > wantOdds+0.01 {
-		t.Fatalf("Odds=%v want ~%v", ev.Odds, wantOdds)
+		t.Fatalf("Odds=%v want ~%v (prize=%v)", ev.Odds, wantOdds, wantPrize)
 	}
 	miss := evaluatePlayHit(rule, []string{"9", "8", "7", "6", "5"}, "2\n5\n0", false, "", 0)
 	if miss.Hit {
@@ -124,15 +149,15 @@ func TestEvaluateZuheNestedYixingMultiZone(t *testing.T) {
 	if ev.BetUnits != 9 {
 		t.Fatalf("BetUnits=%d want 9", ev.BetUnits)
 	}
-	// 小奖净额 9.65 被其它区位亏损淹没 → 按第三方口径记 PrizeNet，odds=9.65/9
-	want := 9.65 / 9
+	// 小奖净额 9.7 被其它区位亏损淹没 → 按第三方口径记 PrizeNet，odds=9.7/9
+	want := 9.7 / 9
 	if ev.Odds < want-0.02 || ev.Odds > want+0.02 {
 		t.Fatalf("Odds=%v want ~%v", ev.Odds, want)
 	}
 	amount := 9.0
 	pnl := amount * ev.Odds
-	if pnl < 9.60 || pnl > 9.70 {
-		t.Fatalf("pnl=%v want ~9.65", pnl)
+	if pnl < 9.65 || pnl > 9.75 {
+		t.Fatalf("pnl=%v want ~9.7", pnl)
 	}
 	miss := evaluatePlayHit(rule, []string{"9", "8", "7", "6", "1"}, "2\n5\n0", false, "", 0)
 	if miss.Hit {

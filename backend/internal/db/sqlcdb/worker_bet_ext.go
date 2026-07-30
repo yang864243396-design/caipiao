@@ -116,6 +116,52 @@ LIMIT 1`, schemeID, simBet).Scan(&period)
 	return strings.TrimSpace(period), nil
 }
 
+// ApplySchemeInstanceBetPlacePending 正式/模拟「待开奖」下单回写：
+// 只累加流水、更新倒计时与期号游标；绝不动 round_index / pick_index / current_pick / last_direction。
+// 避免与派奖事务并发时，用下单前旧游标覆盖已推进的局数/冷热锁号。
+func (q *Queries) ApplySchemeInstanceBetPlacePending(
+	ctx context.Context,
+	id string,
+	countdownSec int32,
+	turnover pgtype.Numeric,
+	lastSettledIssue pgtype.Text,
+) error {
+	_, err := q.db.Exec(ctx, `
+UPDATE scheme_instances
+SET countdown_sec = $2,
+    turnover = turnover + $3,
+    last_settled_issue = $4,
+    status_reason = 'cloud_active',
+    updated_at = now()
+WHERE id = $1
+  AND status = 'running'`, id, countdownSec, turnover, lastSettledIssue)
+	return err
+}
+
+// ApplySchemeInstancePickAfterSettlement 派奖后推进倍投轮次与出号游标。
+// 允许 running/pending：停投后仍须消化游标，否则恢复运行会连投同一局/同一冷热号。
+func (q *Queries) ApplySchemeInstancePickAfterSettlement(ctx context.Context, arg ApplySchemeInstanceBetParams) error {
+	_, err := q.db.Exec(ctx, `
+UPDATE scheme_instances
+SET countdown_sec = $2,
+    turnover = turnover + $3,
+    pnl = pnl + $4,
+    session_pnl = session_pnl + $4,
+    lookback_pnl = lookback_pnl + $8,
+    multiplier = $5,
+    round_index = $6,
+    last_settled_issue = CASE WHEN $7::text IS NOT NULL AND $7::text <> '' THEN $7 ELSE last_settled_issue END,
+    pick_index = $9,
+    current_pick = $10,
+    last_direction = $11,
+    updated_at = now()
+WHERE id = $1
+  AND status IN ('running', 'pending')`,
+		arg.ID, arg.CountdownSec, arg.Turnover, arg.Pnl, arg.Multiplier, arg.RoundIndex,
+		arg.LastSettledIssue, arg.LookbackPnl, arg.PickIndex, arg.CurrentPick, arg.LastDirection)
+	return err
+}
+
 // SchemeUnsettledGuajiPeriod 方案是否有待开奖第三方注单（已接单未派奖）。
 func (q *Queries) SchemeUnsettledGuajiPeriod(ctx context.Context, schemeID string) (string, bool, error) {
 	var period string

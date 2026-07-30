@@ -394,11 +394,15 @@ func attributeCountFeasibleUnderMax(rule playRule, k, max int) bool {
 }
 
 // isWholeTicketRandom 判定为"整注型"玩法——随机产号需抽完整组合，而非按位号池。
-// 组选单式 / 混合组选走整注；前/中/后三等直选单式（段长≥2）走按位随机再展开。
+// 组选单式走整注；前/中/后三直选单式、混合组选（段长≥2）走按位随机再展开。
 func isWholeTicketRandom(rule playRule) bool {
+	// 混合组选：与直选复式同按位（千/百/十），下注前再展成整注并排除豹子
+	if isHunhePlayRule(rule) {
+		return false
+	}
 	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
 	sub := strings.ToLower(strings.TrimSpace(rule.SubPlayID))
-	if bm == "zuxuan_ds" || sub == "zuxuan_ds" || strings.Contains(sub, "zuxuan_ds") || bm == "hunhe" {
+	if bm == "zuxuan_ds" || sub == "zuxuan_ds" || strings.Contains(sub, "zuxuan_ds") {
 		return true
 	}
 	// 前三/中三/后三/前二/后二直选单式：按位（万千百 / 千百十 / …）
@@ -683,6 +687,10 @@ func isZuxuanPoolRandom(rule playRule) bool {
 	if isWholeTicketRandom(rule) {
 		return false
 	}
+	// 混合组选按位产号，勿因 catalog 含 hunhe/zuxuan 误入号池
+	if isHunhePlayRule(rule) {
+		return false
+	}
 	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
 	if bm == "baodan" {
 		return false
@@ -710,17 +718,43 @@ func isZuxuanPoolRandom(rule playRule) bool {
 	return false
 }
 
+// zuxuanPoolMinPick 组选号池随机最少选几个号。
+// 组三最少 2（n*(n-1) 注）；组六最少 3；勿用 SegmentLen 把组三抬成 3。
+func zuxuanPoolMinPick(rule playRule) int {
+	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	sub := strings.ToLower(rule.SubPlayID + " " + rule.CatalogSubID)
+	switch bm {
+	case "zu3":
+		return 2
+	case "zu6":
+		return 3
+	case "zu24", "zu12", "zu60", "zu30", "zu120":
+		if n := playPositionCount(rule); n >= 2 {
+			return n
+		}
+		return 3
+	}
+	if strings.Contains(sub, "zu3") && !strings.Contains(sub, "zu30") {
+		return 2
+	}
+	if strings.Contains(sub, "zu6") {
+		return 3
+	}
+	minK := playPositionCount(rule)
+	if minK < 2 {
+		return 2
+	}
+	return minK
+}
+
 // randomZuxuanPool 随机选 k 个不重复号码组成组选号码池（升序，逗号分隔）。
-// k 下限为段长（保证至少 1 注），上限为号池大小。
+// k 下限见 zuxuanPoolMinPick，上限为号池大小。
 func randomZuxuanPool(rule playRule, k int) string {
 	pool := playNumberPool(rule)
 	if len(pool) == 0 {
 		return ""
 	}
-	minK := playPositionCount(rule)
-	if minK < 2 {
-		minK = 2
-	}
+	minK := zuxuanPoolMinPick(rule)
 	if k < minK {
 		k = minK
 	}
@@ -943,7 +977,9 @@ func (w *Worker) recentDrawBalls(ctx context.Context, lotteryCode, currentIssue 
 // buildHotColdPickContent 按名次取号：
 //
 //	近 N 期频次「最热→最冷」排序后，按 hc.Ranks（0=最热）取当前号码。
-//	无 Ranks 时由 pickTypes 展开为热/冷半区名次（空则默认热区）。Pool 不锁定号码。
+//	无 Ranks 时由 pickTypes 展开为热/冷半区名次（空则默认热区）。
+//	组选/不定位等整体型：配置了号码 pool（如 "0,1,6,7,9"）时锁定频次宇宙，不得出池外号。
+//	按位型：pool 只作位启用标记，不锁死预览复式。
 func buildHotColdPickContent(cfg parsedSchemeConfig, draws [][]string) string {
 	hc := cfg.HotCold
 	if hc == nil {
@@ -958,7 +994,7 @@ func buildHotColdPickContent(cfg parsedSchemeConfig, draws [][]string) string {
 		}
 		res := HotColdWarmAttributeTiers(cfg.Play, draws)
 		full := append(append([]string{}, res.Hot...), res.Cold...)
-		picked := pickHotColdByRanks(full, resolveHotColdRanks(hc, 0, len(full)))
+		picked := pickHotColdByRanks(full, resolveHotColdRanksForOrder(hc, 0, len(full)))
 		return strings.Join(sortHotColdBetTokens(picked), ",")
 	}
 	// 号码整体频次（组选/不定位/包胆）
@@ -966,12 +1002,13 @@ func buildHotColdPickContent(cfg parsedSchemeConfig, draws [][]string) string {
 		if !hotColdLineEnabled(hc, 0) {
 			return ""
 		}
+		pool = hotColdLockedDigitPool(hc, pool, 0)
 		hot, cold := hotColdWarmTiersOverall(draws, cfg.Play, pool)
 		full := append(append([]string{}, hot...), cold...)
-		picked := pickHotColdByRanks(full, resolveHotColdRanks(hc, 0, len(full)))
+		picked := pickHotColdByRanks(full, resolveHotColdRanksForOrder(hc, 0, len(full)))
 		return strings.Join(sortHotColdBetTokens(picked), ",")
 	}
-	// 按位型：启用位按名次取号；未启用位留空行
+	// 按位型：pool 非空仅表示该位启用（编辑预览），运行时仍用玩法全号池动态热冷区
 	n := playPositionCount(cfg.Play)
 	enabled := hotColdPositionEnabled(hc, n)
 	lines := make([]string, n)
@@ -983,7 +1020,7 @@ func buildHotColdPickContent(cfg parsedSchemeConfig, draws [][]string) string {
 		pos := hotColdPositionIdx(cfg.Play, i)
 		hot, _, cold := hotColdWarmTiers(draws, pos, pool)
 		full := append(append([]string{}, hot...), cold...)
-		picked := pickHotColdByRanks(full, resolveHotColdRanks(hc, i, len(full)))
+		picked := pickHotColdByRanks(full, resolveHotColdRanksForOrder(hc, i, len(full)))
 		lines[i] = strings.Join(sortHotColdBetTokens(picked), ",")
 		if lines[i] != "" {
 			filled++
@@ -993,6 +1030,76 @@ func buildHotColdPickContent(cfg parsedSchemeConfig, draws [][]string) string {
 		return ""
 	}
 	return strings.Join(lines, "\n")
+}
+
+// hotColdLockedDigitPool 若配置了号码池则返回池内号码（与玩法宇宙求交）；否则用默认宇宙。
+// 组选整体：pool[0]="0,1,6,7,9"；按位：pool[i] 为该位号串。
+func hotColdLockedDigitPool(hc *hotColdWarmCfg, fallback []string, lineIdx int) []string {
+	if hc == nil {
+		return fallback
+	}
+	raw := ""
+	if lineIdx >= 0 && lineIdx < len(hc.Pool) {
+		raw = strings.TrimSpace(hc.Pool[lineIdx])
+	}
+	// 整体型常把号池写在首行；按位若本行空则不锁
+	if raw == "" && lineIdx == 0 && len(hc.Pool) == 1 {
+		raw = strings.TrimSpace(hc.Pool[0])
+	}
+	if raw == "" {
+		return fallback
+	}
+	allow := map[string]bool{}
+	for _, t := range parseDigitTokens(raw) {
+		allow[t] = true
+	}
+	if len(allow) == 0 {
+		return fallback
+	}
+	out := make([]string, 0, len(allow))
+	for _, d := range fallback {
+		if allow[d] {
+			out = append(out, d)
+		}
+	}
+	if len(out) == 0 {
+		// 池内号码不在玩法宇宙时仍按配置顺序用池
+		for _, t := range parseDigitTokens(raw) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// resolveHotColdRanksForOrder 解析名次；若配置名次相对全号池而当前宇宙已缩小导致全无效，
+// 则回退为按 pickTypes 在当前宇宙上取热/冷半区。
+func resolveHotColdRanksForOrder(hc *hotColdWarmCfg, lineIdx, orderLen int) []int {
+	ranks := resolveHotColdRanks(hc, lineIdx, orderLen)
+	if len(ranks) > 0 || hc == nil || orderLen <= 0 {
+		return ranks
+	}
+	if lineIdx >= 0 && lineIdx < len(hc.Ranks) && len(hc.Ranks[lineIdx]) > 0 {
+		// 有配置名次但相对当前宇宙全越界 → 按 pickTypes 重算
+		types := normalizeHotColdPickTypes(hc.PickTypes)
+		if len(types) == 0 {
+			types = []string{"hot"}
+		}
+		wantHot, wantCold := hotColdWants(types)
+		half := (orderLen + 1) / 2
+		var out []int
+		if wantHot {
+			for i := 0; i < half; i++ {
+				out = append(out, i)
+			}
+		}
+		if wantCold {
+			for i := half; i < orderLen; i++ {
+				out = append(out, i)
+			}
+		}
+		return out
+	}
+	return ranks
 }
 
 // resolveHotColdRanks 优先用配置名次；否则由 pickTypes 展开为半区名次。
@@ -1165,6 +1272,10 @@ func normalizeHotColdPickTypes(raw []string) []string {
 }
 
 func isHotColdDigitOverall(rule playRule) bool {
+	// 混合组选：与直选复式同按位冷热（千/百/十），下注前再展成整注并排除豹子
+	if isHunhePlayRule(rule) {
+		return false
+	}
 	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
 	switch bm {
 	case "zu3", "zu6", "zu24", "zu12", "zu60", "zu30", "zu120", "budingwei", "baodan":
@@ -1289,6 +1400,11 @@ func resolveTriggerBetDecision(cfg parsedSchemeConfig, prevBalls []string, lastD
 	}
 
 	direction := nextTriggerDirection(cfg.Trigger.Mode, lastDirection)
+
+	// 组三/组六等号池玩法：区位内任一位开出命中启用行即投该行正/反号池（非整段逐位各投）
+	if isZuxuanPoolTriggerPlay(cfg.Play) {
+		return pickTriggerBetZuxuanPool(cfg, enabled, prevBalls, direction)
+	}
 
 	// 一星定位胆 / 前三直选复式等：按位独立映射（UI 已取消投注位芯片，默认段内全位）
 	if triggerBetUsesPosition(cfg.Play) {
@@ -1443,6 +1559,52 @@ func findEnabledTriggerRowByOpen(enabled []triggerRow, open string) (triggerRow,
 		}
 	}
 	return triggerRow{}, false
+}
+
+// isZuxuanPoolTriggerPlay 组选号池类开某投某：开出条件看区位内任一位球号。
+func isZuxuanPoolTriggerPlay(rule playRule) bool {
+	return isZuxuanPoolRandom(rule)
+}
+
+// pickTriggerBetZuxuanPool 组三/组六等：上期区位任一位开出命中启用行 → 投该行正/反号池。
+// 例：中三上期 8,0,8 且仅启用 0–4 时，命中开出 0 → 投 pos/neg，而非因 8 未启用整期 Skip。
+func pickTriggerBetZuxuanPool(
+	cfg parsedSchemeConfig,
+	enabled []triggerRow,
+	prevBalls []string,
+	direction string,
+) pickDecision {
+	if len(prevBalls) == 0 {
+		return pickDecision{Skip: true}
+	}
+	seg := drawSegmentForRule(cfg.Play, prevBalls)
+	if len(seg) == 0 {
+		// 无段信息时回退整票球号
+		seg = prevBalls
+	}
+	var row *triggerRow
+	for _, d := range seg {
+		if r, ok := findEnabledTriggerRowByOpen(enabled, d); ok {
+			rr := r
+			row = &rr
+			break
+		}
+	}
+	if row == nil {
+		return pickDecision{Skip: true}
+	}
+	content, dir := triggerRowPickContent(*row, direction)
+	if content == "" {
+		return pickDecision{Skip: true}
+	}
+	// 组三/组六号池不足最少选号时本期 Skip（勿带着 1～2 码去撞第三方「单挑参数错误」）
+	if minK := zuxuanPoolMinPick(cfg.Play); minK >= 2 {
+		n := len(uniqueStringTokens(splitContentTokens(content)))
+		if n < minK {
+			return pickDecision{Skip: true}
+		}
+	}
+	return pickDecision{Content: content, Direction: dir}
 }
 
 // triggerRowPickContent 按投向取正/反投；反投为空时退回正投。

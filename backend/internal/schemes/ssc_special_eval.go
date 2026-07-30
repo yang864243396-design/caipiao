@@ -117,7 +117,7 @@ func evaluateMultiZone(
 		return betEvaluation{Hit: false, BetUnits: units, Odds: base.Odds}
 	}
 	// 嵌套小奖：整单净额被其它区位亏损打成 ≤0（或明显小于小奖本身）时，
-	// 按第三方口径记小奖净奖金，避免派奖对比出现「平台=0 / 第三方≈9.65」。
+	// 按第三方口径记小奖净奖金，避免派奖对比出现「平台=0 / 第三方≈9.7」。
 	if prizeOnly > 0 && sumNet < prizeOnly {
 		sumNet = prizeOnly
 	}

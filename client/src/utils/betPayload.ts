@@ -12,6 +12,8 @@ import {
   countZuxuanSumCombinations,
   hunheDigitLenFromConfig,
 } from '@/utils/playInputProfile'
+
+export { hunheDigitLenFromConfig } from '@/utils/playInputProfile'
 import { segmentBetMultiplier } from '@/utils/runTypeMatrix'
 import {
   isLonghuPlayConfig,
@@ -1103,6 +1105,41 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
   return applySegmentBetMultiplier(config, pool.length || 1)
 }
 
+/**
+ * 组选号池最少选号数（对齐后端 zuxuanPoolMinPick）。
+ * 组三 ≥2；组六 ≥3；其它组选号池玩法返回 null（由各自规则处理）。
+ */
+export function zuxuanPoolMinPick(config: PlayConfig): number | null {
+  const text = `${config.betMode ?? ''} ${config.subPlayId ?? ''} ${config.catalogSubId ?? ''} ${config.playMethodLabel ?? ''}`
+  if (
+    config.betMode === 'zu6' ||
+    (/组六|zu6/i.test(text) && !/组选6|组选60|组选120|zu60|zu120/i.test(text))
+  ) {
+    return 3
+  }
+  if (
+    config.betMode === 'zu3' ||
+    (/组三|zu3/i.test(text) && !/组选3|组选30|zu30/i.test(text))
+  ) {
+    return 2
+  }
+  return null
+}
+
+/** 组三/组六号池不足时的保存提示 */
+export function zuxuanPoolMinPickMessage(config: PlayConfig): string {
+  const min = zuxuanPoolMinPick(config)
+  if (min == null) return '选号无效'
+  const text = `${config.betMode ?? ''} ${config.playMethodLabel ?? ''}`
+  if (
+    config.betMode === 'zu6' ||
+    (/组六|zu6/i.test(text) && !/组选6|组选60|组选120|zu60|zu120/i.test(text))
+  ) {
+    return `组六至少选择 ${min} 个号码`
+  }
+  return `组三至少选择 ${min} 个号码`
+}
+
 /** 组选星数：二星组选=2，组三/组六/三星组选复式=3（不受号池 UI 的 segmentLen=1 影响） */
 function zuxuanStarLen(config: PlayConfig): number {
   if (config.segmentLen === 2) return 2
@@ -1408,6 +1445,17 @@ export type GroupContentValidation =
 export function validateGroupContent(config: PlayConfig, raw: string): GroupContentValidation {
   const content = raw.trim()
   if (!content) return { ok: false, message: '方案内容不能为空' }
+
+  // 组三/组六号池：保存时强制最低选号数（冷热出号与定码共用）
+  const zuxuanMin = zuxuanPoolMinPick(config)
+  if (zuxuanMin != null && !content.includes('\n')) {
+    const digits = [...new Set(parsePickTokens(content))]
+    if (isValidDigitPoolLine(content) || digits.length > 0) {
+      if (digits.length < zuxuanMin) {
+        return { ok: false, message: zuxuanPoolMinPickMessage(config) }
+      }
+    }
+  }
 
   const sub = config.subPlayId
 
@@ -1745,10 +1793,17 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
   if (config.betMode && specialBetModes.has(config.betMode)) {
     const betUnits = countBetUnits(config, content)
     if (config.betMode === 'hunhe') {
+      const digitLen = hunheDigitLenFromConfig(config)
+      // 高级开某投某等按位号池：保存时保留原格式；下注时再展开并排除豹子。
+      // 排除后可能为 0 注（本期跳过），仍允许保存映射。
+      if (digitLen > 1 && isZhixuanPositionPoolContent(content, digitLen)) {
+        const expanded = expandZhixuanPositionPoolToDanshi(content, digitLen) || ''
+        const units = countHunheZuxuanUnits(expanded, digitLen)
+        return { ok: true, normalized: content, betUnits: units }
+      }
       if (isSchemeSoloBaoziContent(config, content)) {
         return { ok: false, message: SOLO_BAOZI_FORBIDDEN_MSG }
       }
-      const digitLen = hunheDigitLenFromConfig(config)
       if (betUnits <= 0) {
         return {
           ok: false,

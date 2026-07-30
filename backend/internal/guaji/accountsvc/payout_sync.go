@@ -193,13 +193,13 @@ func (w *PayoutSyncWorker) syncOne(ctx context.Context, row sqlcdb.ListPendingGu
 		pnl = -row.Amount
 	}
 	// 直选组合嵌套小奖：第三方整单净额常为「小奖−全票本金」（pnl≪0 / ≈0 仍标 win）→ 用本地 PrizeNet。
-	// 绝不在 guaji 已有扎实正净额时用更大本地值覆盖（本地赔率常偏高：不定位/跨度/和值大小等）。
+	// 若第三方已给出扎实派奖额（payout>0），必须以第三方为准——本地组合全中曾误按「整票×三星赔率」放大。
 	if status == "win" {
 		if eval, ok, lerr := w.evalLocalDraw(ctx, row); lerr != nil {
 			slog.Warn("payout sync local prize eval failed", "orderNo", row.OrderNo, "err", lerr)
 		} else if ok && eval.Status == "win" && eval.Pnl > 1 {
-			// 仅当第三方净额近零/负值（字段缺失或嵌套淹没）时采用本地
-			if pnl < 1.0 && eval.Pnl > pnl+0.5 {
+			// 仅当第三方派奖额缺失/近零，且净额近零/负值时采用本地补派奖
+			if payout < 1.0 && pnl < 1.0 && eval.Pnl > pnl+0.5 {
 				slog.Info("payout sync prefer local prize",
 					"orderNo", row.OrderNo, "guajiPnl", pnl, "localPnl", eval.Pnl)
 				pnl = eval.Pnl

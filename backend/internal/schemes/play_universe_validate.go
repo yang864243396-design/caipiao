@@ -39,6 +39,25 @@ func ValidateSchemeBetContent(kind string, config []byte, content string, maxUni
 
 	var out []Violation
 	out = append(out, validateTokens(u, rule, content)...)
+	// 组三/组六号池：保存与审计强制最低选号（组三≥2、组六≥3）
+	if minPick := zuxuanPoolMinPick(rule); minPick >= 2 && u.Kind == UniverseTokenList {
+		n := len(dedupStrings(splitContentTokens(content)))
+		if n > 0 && n < minPick {
+			label := "号码池"
+			bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+			sub := strings.ToLower(rule.SubPlayID + " " + rule.CatalogSubID)
+			switch {
+			case bm == "zu6" || (strings.Contains(sub, "zu6") && !strings.Contains(sub, "zu60") && !strings.Contains(sub, "zu120")):
+				label = "组六"
+			case bm == "zu3" || (strings.Contains(sub, "zu3") && !strings.Contains(sub, "zu30")):
+				label = "组三"
+			}
+			out = append(out, Violation{
+				Code:   ViolationZeroUnits,
+				Detail: fmt.Sprintf("%s至少选择 %d 个号码", label, minPick),
+			})
+		}
+	}
 
 	if isFushiBaoziContent(rule, content) {
 		out = append(out, Violation{

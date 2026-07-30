@@ -414,12 +414,13 @@ func normalizeZhixuanDanshiContent(rule playRule, content string) string {
 	if isHotColdAttributePlay(rule) {
 		return content
 	}
-	// 复式/组选复式按位内容勿展成单式票
+	// 复式/组选复式按位内容勿展成单式票（混合组选虽按位填表，下注前须展成整注）
 	if bm == "fushi" || bm == "zhixuan_fs" || sub == "zhixuan_fs" ||
 		bm == "zuxuan_fs" || sub == "zuxuan_fs" || bm == "zuhe" {
 		return content
 	}
 	isDanshi := bm == "danshi" || bm == "zhixuan_ds" || sub == "zhixuan_ds" || strings.HasSuffix(sub, "_ds")
+	isHunhe := isHunhePlayRule(rule)
 	seg := rule.SegmentLen
 	if seg <= 0 {
 		seg = playPositionCount(rule)
@@ -431,15 +432,64 @@ func normalizeZhixuanDanshiContent(rule playRule, content string) string {
 		}
 	}
 	// betMode 偶发丢失时：内容已是按位号池且段长≥2，仍按单式展开（对齐 guajibet Format）
-	if !isDanshi {
+	if !isDanshi && !isHunhe {
 		if seg <= 1 || !looksLikeZhixuanPositionPool(content, seg) {
 			return content
 		}
 	}
 	if expanded, ok := expandZhixuanPositionPoolToDanshi(content, seg); ok {
-		return expanded
+		content = expanded
+	}
+	// 混合组选：排除豹子并按组选形态去重；全被滤掉时返回空串，由 worker 本期 Skip。
+	if isHunhe {
+		if seg <= 0 {
+			seg = 3
+		}
+		return filterHunheBetTickets(content, seg)
 	}
 	return content
+}
+
+// filterHunheBetTickets 混合组选落注内容：排除豹子，组选形态去重（123 与 321 计 1 注）。
+func filterHunheBetTickets(content string, segLen int) string {
+	if segLen <= 0 {
+		segLen = 3
+	}
+	tokens := parseNumberTokens(content, segLen)
+	if len(tokens) == 0 {
+		return ""
+	}
+	seen := make(map[string]struct{}, len(tokens))
+	out := make([]string, 0, len(tokens))
+	for _, t := range tokens {
+		if isBaoziToken(t) {
+			continue
+		}
+		key := sortStringDigits(t)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, t)
+	}
+	return strings.Join(out, ",")
+}
+
+func isHunhePlayRule(rule playRule) bool {
+	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	if bm == "hunhe" {
+		return true
+	}
+	sub := strings.ToLower(rule.SubPlayID + " " + rule.CatalogSubID)
+	return strings.Contains(sub, "hunhe") || strings.Contains(sub, "混合")
+}
+
+// shouldSkipZeroBetUnits 0 注时本期 Skip（不停方案）：混合排除豹子后空票、组三/组六号池不足最少选号。
+func shouldSkipZeroBetUnits(rule playRule) bool {
+	if isHunhePlayRule(rule) {
+		return true
+	}
+	return zuxuanPoolMinPick(rule) >= 2
 }
 
 // reshapeFlatDigitsToPositionPool 将「无换行、全是单码、且个数能被段长整除」的串还原为按位号池。
@@ -749,8 +799,8 @@ func oddsZhixuan(segLen int, base float64) float64 {
 	case 3:
 		ref = 970.0
 	case 2:
-		// 二星直选 / 组合嵌套后二：对齐 V6 实测净额 ≈19.4
-		ref = 19.4
+		// 二星直选 / 组合嵌套后二：1 元净额 97（2 元注 → 194；旧值 19.4 低一个数量级）
+		ref = 97.0
 	default:
 		ref = 9.0
 	}

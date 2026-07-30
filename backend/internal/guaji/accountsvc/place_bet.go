@@ -169,8 +169,9 @@ func (s *Service) placeRealBetWithRow(
 	if n := guajibet.ResolveBetsNums(req.RuleMeta, content, req.Amount, unit, mult); n > 0 {
 		betsNums = n
 	}
+	// 组六不足 3 码等计 0 注：勿回落成 1，否则会带着非法 content 去撞「单挑参数错误」
 	if betsNums <= 0 {
-		betsNums = 1
+		return guajibet.Result{}, fmt.Errorf("%w: %w", guajibet.ErrPlaceRejected, guajibet.ErrZeroBets)
 	}
 	betAmount := roundLottBetAmount(unit, betsNums, mult)
 	solo := guajibet.ResolveSolo(req.RuleMeta, content, betsNums)

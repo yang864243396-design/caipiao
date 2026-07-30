@@ -6,10 +6,8 @@ func evaluateZu3(rule playRule, balls []string, content string) betEvaluation {
 	seg := drawSegmentForRule(rule, balls)
 	pool := parseDigitTokens(content)
 	units := zu3PoolUnits(pool)
-	if units <= 0 {
-		units = 1
-	}
-	hit := len(seg) == 3 && isZu3Pattern(seg) && allDigitsInPool(seg, pool)
+	// 不足最少选号时注数为 0（勿回落成 1），由 worker 本期 Skip
+	hit := units > 0 && len(seg) == 3 && isZu3Pattern(seg) && allDigitsInPool(seg, pool)
 	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(3, rule.OddsBase)}
 }
 
@@ -17,16 +15,14 @@ func evaluateZu6(rule playRule, balls []string, content string) betEvaluation {
 	seg := drawSegmentForRule(rule, balls)
 	pool := parseDigitTokens(content)
 	units := zu6PoolUnits(pool)
-	if units <= 0 {
-		units = 1
-	}
-	hit := len(seg) == 3 && isZu6Pattern(seg) && allDigitsInPool(seg, pool)
+	hit := units > 0 && len(seg) == 3 && isZu6Pattern(seg) && allDigitsInPool(seg, pool)
 	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(3, rule.OddsBase)}
 }
 
 func evaluateZuhe(rule playRule, balls []string, content string) betEvaluation {
 	// 直选组合：按位复式选号，注数 = 位积 × 段长（三星=三星+后二+后一）。
-	// 开奖按「最长后缀」嵌套派奖：全中用三星赔率；仅后二/后一中则记对应档净奖金。
+	// 开奖按「最长后缀」嵌套派奖：命中 hitLen 时发放 1…hitLen 各档各 1 注奖金，
+	// 绝不是整票注数 × 最高档直选赔率（否则满号池会算出百万级虚高返还）。
 	segLen := rule.SegmentLen
 	if segLen <= 0 {
 		segLen = 3
@@ -58,29 +54,35 @@ func evaluateZuhe(rule playRule, balls []string, content string) betEvaluation {
 	if hitLen <= 0 {
 		return betEvaluation{Hit: false, BetUnits: units, Odds: oddsZhixuan(segLen, rule.OddsBase)}
 	}
-	if hitLen == segLen {
-		// 全中：整区按直选赔率（多区位折算仍走 Odds*BetUnits）
-		return betEvaluation{Hit: true, BetUnits: units, Odds: oddsZhixuan(segLen, rule.OddsBase)}
+	prizeNet := 0.0
+	for n := 1; n <= hitLen; n++ {
+		prizeNet += oddsZuheLevelPrize(n, rule.OddsBase)
 	}
-	// 仅中后二/后一：PrizeNet=该档净奖金（1 元尺度）；Odds 供单区/无多区位时使用
-	prizeNet := oddsZuheNestedPrize(hitLen, rule.OddsBase)
 	odds := prizeNet / float64(units)
 	return betEvaluation{Hit: true, BetUnits: units, Odds: odds, PrizeNet: prizeNet}
 }
 
-// oddsZuheNestedPrize 直选组合嵌套档净奖金（1 元单注尺度），随第三方赔率线缩放。
-// 一星用 9.65：与 v6hs1 哈希彩实测 net_amount 对齐（旧 9.0 会在 E2E 对比里差 0.65）。
-func oddsZuheNestedPrize(hitLen int, base float64) float64 {
-	var ref float64
-	switch hitLen {
+// oddsZuheLevelPrize 直选组合单档净奖金（1 元单注尺度）：一星/二星/三星…各自一注。
+// 实测（tron_ffc 2 元）：三星+后二+后一返还 = 1940+194+19.4 = 2153.4 → 1 元尺度 970+97+9.7。
+func oddsZuheLevelPrize(level int, base float64) float64 {
+	switch level {
 	case 1:
-		ref = 9.65
-	case 2:
-		return oddsZhixuan(2, base)
+		return 9.7 * oddsScale(base)
 	default:
-		return oddsZhixuan(hitLen, base)
+		return oddsZhixuan(level, base)
 	}
-	return ref * oddsScale(base)
+}
+
+// oddsZuheNestedPrize 兼容旧名：命中最长后缀 hitLen 时的嵌套奖金合计。
+func oddsZuheNestedPrize(hitLen int, base float64) float64 {
+	if hitLen <= 0 {
+		return 0
+	}
+	sum := 0.0
+	for n := 1; n <= hitLen; n++ {
+		sum += oddsZuheLevelPrize(n, base)
+	}
+	return sum
 }
 
 // zuhePositionPools 解析直选组合各位号池，并返回位积。
@@ -161,36 +163,29 @@ func baodanUnitsPerDanLocal(segLen int) int {
 }
 
 func evaluateHunhe(rule playRule, balls []string, content string) betEvaluation {
+	odds := oddsZuxuan(rule.SegmentLen, rule.OddsBase)
 	seg := drawSegmentForRule(rule, balls)
-	if len(seg) != rule.SegmentLen {
-		return betEvaluation{BetUnits: 1, Odds: oddsZuxuan(rule.SegmentLen, rule.OddsBase)}
-	}
 	tokens := parseNumberTokens(content, rule.SegmentLen)
-	if len(tokens) > 0 {
-		units := countUniqueHunheTokens(tokens)
-		if units <= 0 {
-			units = 1
-		}
-		drawnSorted := sortDigits(seg)
-		hit := false
-		for _, t := range tokens {
-			if isBaoziToken(t) {
-				continue
-			}
-			if sortStringDigits(t) == drawnSorted {
-				hit = true
-				break
-			}
-		}
-		return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(rule.SegmentLen, rule.OddsBase)}
-	}
-	pool := parseDigitTokens(content)
-	units := zuxuanPoolUnits(pool, rule.SegmentLen)
+	units := countUniqueHunheTokens(tokens)
+	// 排除豹子后无有效注 → 0 注（本期不投），勿回落成 1
 	if units <= 0 {
-		units = 1
+		return betEvaluation{BetUnits: 0, Odds: odds}
 	}
-	hit := zuxuanPoolHit(seg, pool)
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(rule.SegmentLen, rule.OddsBase)}
+	if len(seg) != rule.SegmentLen {
+		return betEvaluation{BetUnits: units, Odds: odds}
+	}
+	drawnSorted := sortDigits(seg)
+	hit := false
+	for _, t := range tokens {
+		if isBaoziToken(t) {
+			continue
+		}
+		if sortStringDigits(t) == drawnSorted {
+			hit = true
+			break
+		}
+	}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: odds}
 }
 
 // countUniqueHunheTokens 排除豹子并按组选形态去重。
@@ -428,7 +423,7 @@ func allDigitsInPool(seg, pool []string) bool {
 func zu3PoolUnits(pool []string) int {
 	n := len(pool)
 	if n < 2 {
-		return n
+		return 0
 	}
 	return n * (n - 1)
 }
@@ -436,7 +431,7 @@ func zu3PoolUnits(pool []string) int {
 func zu6PoolUnits(pool []string) int {
 	n := len(pool)
 	if n < 3 {
-		return n
+		return 0
 	}
 	return n * (n - 1) * (n - 2) / 6
 }

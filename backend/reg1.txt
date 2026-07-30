@@ -1,0 +1,93 @@
+﻿?   	caipiao/backend/cmd/apply-limit-constraint	[no test files]
+?   	caipiao/backend/cmd/apply-lookback-judgment-none	[no test files]
+?   	caipiao/backend/cmd/apply-lookback-sim-bet	[no test files]
+ok  	caipiao/backend/cmd/audit-ws-keys	0.107s
+?   	caipiao/backend/cmd/bet-probe	[no test files]
+?   	caipiao/backend/cmd/diag-countdown-compare	[no test files]
+?   	caipiao/backend/cmd/diag-lookback-schema	[no test files]
+?   	caipiao/backend/cmd/diag-scheme-limits	[no test files]
+?   	caipiao/backend/cmd/diag-scheme-pending	[no test files]
+?   	caipiao/backend/cmd/diag-simbet-schema	[no test files]
+?   	caipiao/backend/cmd/e2e-check	[no test files]
+?   	caipiao/backend/cmd/fetch-periods	[no test files]
+?   	caipiao/backend/cmd/guaji-bet-audit	[no test files]
+?   	caipiao/backend/cmd/guaji-capture	[no test files]
+?   	caipiao/backend/cmd/guaji-catalog-audit	[no test files]
+?   	caipiao/backend/cmd/guaji-catalog-sync	[no test files]
+?   	caipiao/backend/cmd/guaji-rules-sync	[no test files]
+?   	caipiao/backend/cmd/guaji-smoke	[no test files]
+?   	caipiao/backend/cmd/lhc-meta-dump	[no test files]
+?   	caipiao/backend/cmd/migrate	[no test files]
+?   	caipiao/backend/cmd/pause-scheme-limit	[no test files]
+?   	caipiao/backend/cmd/purge-orphan-guaji-pending	[no test files]
+?   	caipiao/backend/cmd/purge-orphan-schemes	[no test files]
+ok  	caipiao/backend/cmd/real-bet-matrix	0.059s
+?   	caipiao/backend/cmd/real-bet-matrix-report	[no test files]
+?   	caipiao/backend/cmd/real-bet-third-party-verify	[no test files]
+?   	caipiao/backend/cmd/restore-demo-cloud-stats	[no test files]
+?   	caipiao/backend/cmd/scheme-audit	[no test files]
+?   	caipiao/backend/cmd/server	[no test files]
+?   	caipiao/backend/cmd/sniff-guaji-ws	[no test files]
+?   	caipiao/backend/cmd/sync-pending-payout	[no test files]
+?   	caipiao/backend/cmd/tmp-audit	[no test files]
+?   	caipiao/backend/cmd/tmp-audit2	[no test files]
+?   	caipiao/backend/cmd/tmp-inst-audit	[no test files]
+?   	caipiao/backend/cmd/tmp-lhc-dump	[no test files]
+?   	caipiao/backend/cmd/tmp-lhc-history	[no test files]
+?   	caipiao/backend/cmd/tmp-lhc-outbound	[no test files]
+?   	caipiao/backend/cmd/tmp-lhc-probe	[no test files]
+?   	caipiao/backend/cmd/tmp-lhc-probe2	[no test files]
+?   	caipiao/backend/cmd/tmp-lhc-probe3	[no test files]
+?   	caipiao/backend/cmd/tmp-lhc-probe4	[no test files]
+?   	caipiao/backend/cmd/tmp-lhc-rules-dump	[no test files]
+?   	caipiao/backend/cmd/tmp-lhc-rules-list	[no test files]
+?   	caipiao/backend/cmd/tmp-pk10-auto	[no test files]
+?   	caipiao/backend/cmd/tmp-pk10-db	[no test files]
+?   	caipiao/backend/cmd/tmp-pk10-dxds-probe	[no test files]
+?   	caipiao/backend/cmd/tmp-pk10-odds	[no test files]
+?   	caipiao/backend/cmd/tmp-pk10-rule-raw	[no test files]
+?   	caipiao/backend/cmd/tmp-pk10-rules-dump	[no test files]
+?   	caipiao/backend/cmd/tmp-pk10-rules-full	[no test files]
+?   	caipiao/backend/cmd/tmp-query	[no test files]
+?   	caipiao/backend/cmd/wire-probe	[no test files]
+?   	caipiao/backend/internal/apix	[no test files]
+?   	caipiao/backend/internal/audit	[no test files]
+ok  	caipiao/backend/internal/auth	0.961s
+ok  	caipiao/backend/internal/cloud/betrecords	4.440s
+ok  	caipiao/backend/internal/cloud/instances	0.167s
+ok  	caipiao/backend/internal/cloud/lookback	0.299s
+?   	caipiao/backend/internal/cloud/schemestate	[no test files]
+ok  	caipiao/backend/internal/cloudlimits	0.058s
+ok  	caipiao/backend/internal/config	0.052s
+?   	caipiao/backend/internal/content	[no test files]
+ok  	caipiao/backend/internal/copyhall	0.054s
+?   	caipiao/backend/internal/dashboard	[no test files]
+?   	caipiao/backend/internal/db	[no test files]
+?   	caipiao/backend/internal/db/sqlcdb	[no test files]
+ok  	caipiao/backend/internal/games	0.637s
+ok  	caipiao/backend/internal/guaji	2.778s
+ok  	caipiao/backend/internal/guaji/accountsvc	0.134s
+ok  	caipiao/backend/internal/guaji/catalogsync	0.091s
+?   	caipiao/backend/internal/guaji/drawsync	[no test files]
+ok  	caipiao/backend/internal/guaji/historysync	0.052s
+?   	caipiao/backend/internal/guaji/oddsrefresh	[no test files]
+ok  	caipiao/backend/internal/guaji/periodaudit	0.090s
+ok  	caipiao/backend/internal/guaji/periodsync	0.175s
+ok  	caipiao/backend/internal/guaji/rulessync	0.094s
+ok  	caipiao/backend/internal/guajibet	0.085s
+ok  	caipiao/backend/internal/handler	3.191s
+ok  	caipiao/backend/internal/lottery	0.076s
+?   	caipiao/backend/internal/maintenance	[no test files]
+ok  	caipiao/backend/internal/member	0.071s
+ok  	caipiao/backend/internal/middleware	0.056s
+?   	caipiao/backend/internal/orders/admin	[no test files]
+ok  	caipiao/backend/internal/orders/bets	0.054s
+?   	caipiao/backend/internal/orders/chases	[no test files]
+?   	caipiao/backend/internal/reports	[no test files]
+ok  	caipiao/backend/internal/schemelimits	0.048s
+ok  	caipiao/backend/internal/schemerounds	0.034s
+ok  	caipiao/backend/internal/schemes	5.281s
+ok  	caipiao/backend/internal/server	1.035s
+ok  	caipiao/backend/internal/timeutil	0.034s
+?   	caipiao/backend/internal/ws	[no test files]
+?   	caipiao/backend/tmp/genhash	[no test files]

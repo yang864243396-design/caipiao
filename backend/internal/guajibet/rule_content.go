@@ -769,6 +769,26 @@ func NeedsSoloForRule(meta RuleMeta, wireContent string) bool {
 	if isSyxwRenxuanMeta(meta) {
 		return syxwRenxuanNeedsSoloTrue(meta, betsNums)
 	}
+	// 三星组六（含前中后三/前后三×段乘数后的总注数）：
+	// 实测 2026-07-30：≤3 注须 solo=true（rule7/261/95/107）；≥4 注须 false（C(4,3)=4）。
+	if mode == "zu6" {
+		return betsNums > 0 && betsNums <= zu6SoloMaxBets
+	}
+	// 三星组三：实测 rule19/106：≤6 注须 solo=true；≥12 注须 false。
+	if mode == "zu3" {
+		return betsNums > 0 && betsNums <= zu3SoloMaxBets
+	}
+	// 混合组选（非任选）：
+	// - 前中后三/前后三：实测多区位须 solo=true（rule 110/98）
+	// - 前/中/后三等单区：实测 rule=23（2026-07-30）
+	//   ≤3 注须 solo=true（2/3 注 solo=false → 单挑参数错误）
+	//   ≥4 注须 solo=false（4/8 注 solo=true → 单挑参数错误）
+	if mode == "hunhe" {
+		if multiZoneHunheRequiresSoloTrue(meta) {
+			return true
+		}
+		return betsNums > 0 && betsNums <= hunheSoloMaxBets
+	}
 	if mode == "hezhi" && strings.Contains(meta.Label, "组选") && group != "前后二" && group != "前后四" {
 		return false
 	}
@@ -943,6 +963,17 @@ func segmentBetMultiplier(meta RuleMeta) int {
 	default:
 		return 1
 	}
+}
+
+// multiZoneHunheRequiresSoloTrue 前中后三/前后三混合组选：实测须 solo=true。
+func multiZoneHunheRequiresSoloTrue(meta RuleMeta) bool {
+	g := strings.TrimSpace(meta.Group)
+	if g == "前中后三" || g == "前后三" {
+		return true
+	}
+	text := meta.Group + " " + meta.TypeLabel + " " + meta.Label + " " + meta.TeamLabel + " " + meta.FullName
+	return strings.Contains(text, "前中后三") ||
+		(strings.Contains(text, "前后三") && !strings.Contains(text, "前后二") && !strings.Contains(text, "前后四"))
 }
 
 func applySegmentMultiplier(meta RuleMeta, n int) int {
@@ -1290,21 +1321,17 @@ func countZuxuanSumMultiset(targetSum, segLen int) int {
 }
 
 func zu3PoolUnits(n int) int {
+	// 组三至少 2 码；不足时第三方无法接单（注数/单挑均拒），计 0 注由上游 Skip/拒单。
 	if n < 2 {
-		if n <= 0 {
-			return 1
-		}
-		return n
+		return 0
 	}
 	return n * (n - 1)
 }
 
 func zu6PoolUnits(n int) int {
+	// 组六至少 3 码（C(n,3)）；2 码时旧实现误计 2 注并带 solo=true →「单挑参数错误」。
 	if n < 3 {
-		if n <= 0 {
-			return 1
-		}
-		return n
+		return 0
 	}
 	return n * (n - 1) * (n - 2) / 6
 }
@@ -2006,6 +2033,18 @@ func sortDigitRunes(s string) string {
 // guajiSoloMaxBets 第三方单挑注数上限（实测中三直选复式：18 注 solo=true 可过，20 注起报「单挑参数错误」）。
 // 五星/前后四等须绕过此上限的玩法走 guajiGroupRequiresSoloTrue。
 const guajiSoloMaxBets = 18
+
+// hunheSoloMaxBets 单区混合组选（前/中/后三等）单挑注数上限。
+// 实测 rule=23（2026-07-30）：3 注 solo=true 过 / solo=false 拒；4 注 solo=false 过 / solo=true 拒。
+const hunheSoloMaxBets = 3
+
+// zu6SoloMaxBets 三星组六单挑注数上限（含段乘数后的总注数）。
+// 实测 2026-07-30：rule261/7 的 C(3,3)=1、rule95 的 2、rule107 的 3 须 solo=true；C(4,3)=4 起须 false。
+const zu6SoloMaxBets = 3
+
+// zu3SoloMaxBets 三星组三单挑注数上限（含段乘数后的总注数）。
+// 实测 2026-07-30：rule19 的 2/6 注须 solo=true；12/20 注须 solo=false。
+const zu3SoloMaxBets = 6
 
 func sampleZuxuanFushiContent(meta RuleMeta) string {
 	_, segLen := segmentRange(meta)

@@ -15,7 +15,7 @@ func TestZuheContent013NestedPnl(t *testing.T) {
 	}
 	amount := float64(ev.BetUnits)
 	pnl := calcPnLWithOdds(amount, ev.Hit, ev.Odds)
-	if pnl < 9.60 || pnl > 9.70 {
-		t.Fatalf("pnl=%v want ~9.65 (not 9.65-27=%v)", pnl, 9.65-amount)
+	if pnl < 9.65 || pnl > 9.75 {
+		t.Fatalf("pnl=%v want ~9.7 (not 9.7-27=%v)", pnl, 9.7-amount)
 	}
 }

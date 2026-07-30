@@ -367,6 +367,7 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 	betMult := effectiveBetMultiple(baseCoef, round)
 
 	// 冷热 / 开某投某：都依赖「相邻上期」开奖。上期未入库时勿用更早开奖硬投。
+	pickIssue := strings.TrimSpace(draw.IssueNo)
 	if cfg.RunTypeID == RunTypeHotColdWarm || cfg.RunTypeID == RunTypeAdvTriggerBet {
 		needsPrev := true
 		if cfg.RunTypeID == RunTypeHotColdWarm {
@@ -380,64 +381,40 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 					"id", inst.ID, "period", draw.IssueNo, "runType", cfg.RunTypeID, "countdown", rem)
 				return nil
 			}
-			// 临近封盘：冷热可降级统计；开某投某继续走 resolvePick，
-			// previousDrawBalls 在缺相邻上期时返回空 → Skip，避免错投上上期映射。
-			if cfg.RunTypeID == RunTypeHotColdWarm {
-				slog.Info("scheme worker hot/cold proceed without previous draw",
+			// 临近封盘仍无上期：
+			// - 冷热：降级用 N-1 期统计继续出号
+			// - 开某投某：必须 Skip（不可落入上上期映射），推进游标不下注
+			if cfg.RunTypeID == RunTypeAdvTriggerBet {
+				slog.Info("scheme worker trigger skip: previous draw missing near close",
 					"id", inst.ID, "period", draw.IssueNo, "countdown", rem)
-			} else {
-				slog.Info("scheme worker trigger: previous draw still missing near close",
-					"id", inst.ID, "period", draw.IssueNo, "countdown", rem)
+				return w.skipPeriodPick(ctx, inst, draw.IssueNo, cfg.RunTypeID)
 			}
+			slog.Info("scheme worker hot/cold proceed without previous draw",
+				"id", inst.ID, "period", draw.IssueNo, "countdown", rem)
 		}
 	}
 
 	// 出号体系：按运行类型决定本期下注内容（与倍投体系独立，v8 §0）
 	dec := w.resolvePick(ctx, cfg, inst, draw)
 	if dec.Skip {
-		slog.Debug("scheme worker bet skipped: pick strategy skip", "id", inst.ID, "period", draw.IssueNo, "runType", cfg.RunTypeID)
-		skipPeriod := draw.IssueNo
-		if p, ok := thirdPartyOpenPeriod(inst.LotteryCode); ok {
-			skipPeriod = p
-		}
-		// 本期跳过：仅推进第三方期号游标，不下注
-		if _, err := w.q.ApplySchemeInstanceBet(ctx, sqlcdb.ApplySchemeInstanceBetParams{
-			ID:               inst.ID,
-			CountdownSec:     w.periodCountdownForInst(inst, time.Now()),
-			Turnover:         numericFromFloat(0),
-			Pnl:              numericFromFloat(0),
-			Multiplier:       inst.Multiplier,
-			RoundIndex:       inst.RoundIndex,
-			LastSettledIssue: pgtype.Text{String: skipPeriod, Valid: skipPeriod != ""},
-			LookbackPnl:      numericFromFloat(0),
-			PickIndex:        inst.PickIndex,
-			CurrentPick:      inst.CurrentPick,
-			LastDirection:    inst.LastDirection,
-		}); err != nil {
-			return err
-		}
-		_ = appendPickSkipAudit(ctx, w.q, inst, draw.IssueNo)
-		return nil
+		return w.skipPeriodPick(ctx, inst, draw.IssueNo, cfg.RunTypeID)
 	}
-	betContent := dec.Content
-	if strings.TrimSpace(betContent) == "" {
-		betContent = cfg.GroupContent
-	}
-	// 前端冷热按位常把每位存成独立 schemeGroups 项（["1,9","1,9","1,9"]），
-	// 单取 GroupContent 只有一位；拼回按位号池后再走单式展开。
-	betContent = joinPositionPoolGroupsIfNeeded(cfg, betContent)
-	betContent = normalizeZhixuanDanshiContent(cfg.Play, betContent)
-	// 随机出号：禁止回落到 schemeGroups 满选（如跨度 0–9=1000>900）；超限则当场重抽。
-	if cfg.RunTypeID == RunTypeRandomDraw {
-		if strings.TrimSpace(betContent) == "" || contentExceedsBetUnitsMax(cfg.Play, betContent) {
-			betContent = randomDrawContentUnderMax(cfg)
-			dec.Content = betContent
-		}
+	betContent := normalizeResolvedBetContent(cfg, &dec)
+	// 混合组选 / 组三组六号池不足：本期跳过（不停方案）
+	if strings.TrimSpace(betContent) == "" && shouldSkipZeroBetUnits(cfg.Play) {
+		slog.Info("scheme worker skip: empty pick content",
+			"id", inst.ID, "period", draw.IssueNo, "betMode", cfg.Play.BetMode)
+		return w.skipPeriodPick(ctx, inst, draw.IssueNo, cfg.RunTypeID)
 	}
 
 	balls := sqlcdb.ParseDrawBalls(draw.Balls)
 	playEval := evaluatePlayHit(cfg.Play, balls, betContent, cfg.Contrary, cfg.ContraryPlan, cfg.Play.PositionIdx)
 	if playEval.BetUnits <= 0 {
+		if shouldSkipZeroBetUnits(cfg.Play) {
+			slog.Info("scheme worker skip: zero bet units",
+				"id", inst.ID, "period", draw.IssueNo, "content", betContent, "betMode", cfg.Play.BetMode)
+			return w.skipPeriodPick(ctx, inst, draw.IssueNo, cfg.RunTypeID)
+		}
 		w.pauseRunningInstance(ctx, inst, StatusReasonBetFailed, guajibet.ErrZeroBets.Error())
 		return errSchemeBetStopped
 	}
@@ -577,6 +554,59 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 		}
 		guajiTargetPeriodNo = dedup.CurrentOpen
 		draw.IssueNo = guajiTargetPeriodNo
+		// 出号期与最终可投期不一致时（periods 缓存跨期）必须按最终期重算。
+		// 开某投某尤其危险：按上期(N-1)映射出的号若落到 N+1，等价于错用上上期。
+		if cfg.RunTypeID == RunTypeAdvTriggerBet || guajiTargetPeriodNo != pickIssue {
+			repick, rerr := w.repickForFinalPeriod(ctx, cfg, inst, &draw, guajiTargetPeriodNo, pickIssue)
+			if rerr != nil {
+				return rerr
+			}
+			switch repick.action {
+			case repickWait:
+				return nil // 事务回滚，下 tick 再等上期
+			case repickSkip:
+				w.syncPeriodBetCursor(ctx, qtx, inst, guajiTargetPeriodNo)
+				if err := w.skipPeriodPickWithQ(ctx, qtx, inst, guajiTargetPeriodNo, cfg.RunTypeID); err != nil {
+					return err
+				}
+				if err := tx.Commit(ctx); err != nil {
+					return err
+				}
+				committed = true
+				return nil
+			case repickOK:
+				dec = repick.dec
+				betContent = repick.content
+				playEval = repick.playEval
+				if playEval.BetUnits <= 0 {
+					if shouldSkipZeroBetUnits(cfg.Play) {
+						w.syncPeriodBetCursor(ctx, qtx, inst, guajiTargetPeriodNo)
+						if err := w.skipPeriodPickWithQ(ctx, qtx, inst, guajiTargetPeriodNo, cfg.RunTypeID); err != nil {
+							return err
+						}
+						if err := tx.Commit(ctx); err != nil {
+							return err
+						}
+						committed = true
+						return nil
+					}
+					w.pauseRunningInstance(ctx, inst, StatusReasonBetFailed, guajibet.ErrZeroBets.Error())
+					return errSchemeBetStopped
+				}
+				amount = calcBetAmount(playEval.BetUnits, betMult, cfg.BetUnitYuan)
+				pnl = calcPnLWithOdds(amount, playEval.Hit, playEval.Odds)
+				betUnits = playEval.BetUnits
+				status = "miss"
+				if playEval.Hit {
+					status = "hit"
+				}
+				nextPickIndex, nextCurrentPick, nextLastDirection = advancePickState(cfg, inst, dec, playEval.Hit)
+				nextRound = nextRoundIndex(cfg.Rounds, roundIdx, playEval.Hit)
+				if resetIndividual || resetOverall {
+					nextRound = 0
+				}
+			}
+		}
 		claimed, cerr := qtx.TryClaimCloudBetPeriod(ctx, sqlcdb.ReserveCloudBetPeriodParams{
 			RecordNo:       recordNo,
 			MemberID:       inst.MemberID,
@@ -679,44 +709,30 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 		}
 	}
 
-	applyPnl := pnl
-	applyLookbackPnl := pnl
-	applyRoundIndex := int32(nextRound)
-	applyPickIndex := nextPickIndex
-	applyCurrentPick := nextCurrentPick
-	applyLastDirection := nextLastDirection
 	if deferSettle {
-		applyPnl = 0
-		applyLookbackPnl = 0
-		resetIndividual = false
-		resetOverall = false
-		// 正式盘/模拟盘：轮次/出号游标待真实开奖后按实际中/未中推进，下单时仅累加流水与期号游标。
-		// 必须读锁内最新值写入，禁止用下单前旧快照覆盖派奖已推进的 pick_index。
-		if locked, lerr := qtx.GetSchemeInstanceFull(ctx, inst.ID); lerr == nil {
-			applyRoundIndex = locked.RoundIndex
-			applyPickIndex = locked.PickIndex
-			applyCurrentPick = locked.CurrentPick
-			applyLastDirection = locked.LastDirection
-		} else {
-			applyRoundIndex = inst.RoundIndex
-			applyPickIndex = inst.PickIndex
-			applyCurrentPick = inst.CurrentPick
-			applyLastDirection = inst.LastDirection
+		// 待开奖：只加流水/期号游标，绝不写 round/pick/current_pick/direction。
+		// 否则会与派奖事务竞态，把已推进的局数/冷热锁号盖回旧值（连投同局、中后丢锁）。
+		if err := qtx.ApplySchemeInstanceBetPlacePending(
+			ctx,
+			inst.ID,
+			w.periodCountdownForInst(inst, time.Now()),
+			numericFromFloat(amount),
+			pgtype.Text{String: acceptedPeriod, Valid: acceptedPeriod != ""},
+		); err != nil {
+			return err
 		}
-	}
-
-	if _, err := qtx.ApplySchemeInstanceBet(ctx, sqlcdb.ApplySchemeInstanceBetParams{
+	} else if _, err := qtx.ApplySchemeInstanceBet(ctx, sqlcdb.ApplySchemeInstanceBetParams{
 		ID:               inst.ID,
 		CountdownSec:     w.periodCountdownForInst(inst, time.Now()),
 		Turnover:         numericFromFloat(amount),
-		Pnl:              numericFromFloat(applyPnl),
+		Pnl:              numericFromFloat(pnl),
 		Multiplier:       inst.Multiplier,
-		RoundIndex:       applyRoundIndex,
+		RoundIndex:       int32(nextRound),
 		LastSettledIssue: pgtype.Text{String: acceptedPeriod, Valid: acceptedPeriod != ""},
-		LookbackPnl:      numericFromFloat(applyLookbackPnl),
-		PickIndex:        applyPickIndex,
-		CurrentPick:      applyCurrentPick,
-		LastDirection:    applyLastDirection,
+		LookbackPnl:      numericFromFloat(pnl),
+		PickIndex:        nextPickIndex,
+		CurrentPick:      nextCurrentPick,
+		LastDirection:    nextLastDirection,
 	}); err != nil {
 		return err
 	}

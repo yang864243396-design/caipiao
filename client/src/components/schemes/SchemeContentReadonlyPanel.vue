@@ -168,11 +168,13 @@ function normalizePoolToken(raw: string): string {
 const hcwDigitOverall = computed(() => {
   const cfg = props.playConfig as { betMode?: string; subPlayId?: string; playMethodLabel?: string }
   const bm = String(cfg.betMode ?? '').toLowerCase()
+  // 混合组选：与直选复式同按位（千/百/十），勿因文案含「组选」进单档号码池
+  if (bm === 'hunhe') return false
   if (['zu3', 'zu6', 'zu24', 'zu12', 'zu60', 'zu30', 'zu120', 'budingwei', 'baodan'].includes(bm)) return true
   const sub = `${String(cfg.subPlayId ?? '')}`.toLowerCase()
   if (/zuxuan_fs|zu3|zu6|zu24|zu12|zu60|zu30|zu120|budingwei|baodan/.test(sub)) return true
   const label = String(cfg.playMethodLabel ?? '')
-  if (label.includes('单式')) return false
+  if (label.includes('单式') || label.includes('混合')) return false
   return /组三|组六|组选|不定位|包胆/.test(label)
 })
 
@@ -558,16 +560,18 @@ const rdStrategy = computed(() => {
   return 'every'
 })
 
-/** 组选单式/混合：整注随机；前/中/后三直选单式按位展示 */
+/** 组选单式：整注随机；直选单式/混合组选：千/百/十按位展示 */
 const rdWholeTicket = computed(() => {
   if (isZhixuanDanshiPerPosPlay(props.playConfig)) return false
   const cfg = props.playConfig as { betMode?: string; subPlayId?: string; playMethodLabel?: string }
   const bm = String(cfg.betMode ?? '').toLowerCase()
   const sub = String(cfg.subPlayId ?? '').toLowerCase()
-  if (['danshi', 'zhixuan_ds', 'zuxuan_ds', 'hunhe'].includes(bm)) return true
+  if (bm === 'hunhe') return false
+  if (['danshi', 'zhixuan_ds', 'zuxuan_ds'].includes(bm)) return true
   if (['zhixuan_ds', 'zuxuan_ds'].includes(sub)) return true
   const label = String(cfg.playMethodLabel ?? '')
-  return label.includes('单式') || label.includes('混合')
+  if (label.includes('混合')) return false
+  return label.includes('单式')
 })
 
 /** 组选号池随机；包胆属属性单选（仅 1 码），勿因文案含「组选」误入。 */
@@ -581,6 +585,7 @@ const rdZuxuanPool = computed(() => {
   }
   const bm = String(cfg.betMode ?? '').toLowerCase()
   const label = String(cfg.playMethodLabel ?? '')
+  if (bm === 'hunhe' || label.includes('混合')) return false
   if (bm === 'baodan' || /包胆/.test(label)) return false
   if (['zu3', 'zu6', 'zu24', 'zu12', 'zu60', 'zu30', 'zu120'].includes(bm)) return true
   const cat = `${String(cfg.subPlayId ?? '')} ${String(cfg.catalogSubId ?? '')}`.toLowerCase()

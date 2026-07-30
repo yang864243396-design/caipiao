@@ -677,6 +677,10 @@ export function supportsAdvTriggerPerPosColumns(config: AdvTriggerPosConfig): bo
   if (config.inputMode === 'multiline') return true
   if (bm === 'fushi' || bm === 'zhixuan_fs' || bm === 'zuhe') return true
   if (sub === 'zhixuan_fs' || sub.includes('zhixuan_fs') || label.includes('直选复式')) return true
+  // 中三/前三混合组选：与直选复式同布局（千/百/十按位填正反投）
+  if (bm === 'hunhe' || label.includes('混合组选') || (label.includes('混合') && !label.includes('组合'))) {
+    return true
+  }
   // 中三/前三直选单式：千百十（或万千百）三位分列
   if (isZhixuanDanshiPerPosPlay(config)) return true
   return false

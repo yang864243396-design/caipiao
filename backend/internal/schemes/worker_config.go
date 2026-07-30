@@ -361,9 +361,9 @@ func triggerBetUsesPosition(rule playRule) bool {
 	if isDingweiTriggerPlay(rule) {
 		return true
 	}
-	// 前三直选复式 / 中三直选单式 / 后二大小单双等：SegmentLen>=2 的按位玩法
+	// 前三直选复式 / 中三混合组选 / 中三直选单式 / 后二大小单双等：SegmentLen>=2 的按位玩法
 	if rule.SegmentLen >= 2 {
-		if bm == "fushi" || bm == "zhixuan_fs" || bm == "zuhe" || bm == "dxds" {
+		if bm == "fushi" || bm == "zhixuan_fs" || bm == "zuhe" || bm == "dxds" || bm == "hunhe" {
 			return true
 		}
 		if sub == "zhixuan_fs" || strings.Contains(sub, "zhixuan_fs") {

@@ -55,4 +55,19 @@ describe('supportsAdvTriggerPerPosColumns', () => {
       }),
     ).toBe(true)
   })
+
+  it('中三混合组选与直选复式同按位分列（千/百/十）', () => {
+    expect(
+      supportsAdvTriggerPerPosColumns({
+        betMode: 'hunhe',
+        playTypeId: 'g002',
+        subPlayId: '23',
+        playMethodLabel: '混合组选',
+        playTypeLabel: '中三',
+        inputMode: 'danshi',
+        segmentLen: 3,
+        segmentLabels: ['千', '百', '十'],
+      }),
+    ).toBe(true)
+  })
 })

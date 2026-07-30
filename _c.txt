@@ -1,0 +1,144 @@
+﻿	caipiao/backend/cmd/apply-limit-constraint		coverage: 0.0% of statements
+	caipiao/backend/cmd/apply-lookback-judgment-none		coverage: 0.0% of statements
+	caipiao/backend/cmd/apply-lookback-sim-bet		coverage: 0.0% of statements
+ok  	caipiao/backend/cmd/audit-ws-keys	0.989s	coverage: 12.0% of statements
+	caipiao/backend/cmd/bet-probe		coverage: 0.0% of statements
+	caipiao/backend/cmd/diag-countdown-compare		coverage: 0.0% of statements
+	caipiao/backend/cmd/diag-lookback-schema		coverage: 0.0% of statements
+	caipiao/backend/cmd/diag-scheme-limits		coverage: 0.0% of statements
+	caipiao/backend/cmd/diag-scheme-pending		coverage: 0.0% of statements
+	caipiao/backend/cmd/diag-simbet-schema		coverage: 0.0% of statements
+	caipiao/backend/cmd/e2e-check		coverage: 0.0% of statements
+	caipiao/backend/cmd/fetch-periods		coverage: 0.0% of statements
+	caipiao/backend/cmd/guaji-bet-audit		coverage: 0.0% of statements
+	caipiao/backend/cmd/guaji-capture		coverage: 0.0% of statements
+	caipiao/backend/cmd/guaji-catalog-audit		coverage: 0.0% of statements
+	caipiao/backend/cmd/guaji-catalog-sync		coverage: 0.0% of statements
+	caipiao/backend/cmd/guaji-rules-sync		coverage: 0.0% of statements
+	caipiao/backend/cmd/guaji-smoke		coverage: 0.0% of statements
+	caipiao/backend/cmd/lhc-meta-dump		coverage: 0.0% of statements
+	caipiao/backend/cmd/migrate		coverage: 0.0% of statements
+	caipiao/backend/cmd/pause-scheme-limit		coverage: 0.0% of statements
+	caipiao/backend/cmd/purge-orphan-guaji-pending		coverage: 0.0% of statements
+	caipiao/backend/cmd/purge-orphan-schemes		coverage: 0.0% of statements
+ok  	caipiao/backend/cmd/real-bet-matrix	2.053s	coverage: 2.3% of statements
+	caipiao/backend/cmd/real-bet-matrix-report		coverage: 0.0% of statements
+	caipiao/backend/cmd/real-bet-third-party-verify		coverage: 0.0% of statements
+	caipiao/backend/cmd/restore-demo-cloud-stats		coverage: 0.0% of statements
+	caipiao/backend/cmd/scheme-audit		coverage: 0.0% of statements
+go : # caipiao/backend/cmd/tmp-audit
+所在位置 C:\Users\Administrator\AppData\Local\Temp\ps-script-70b5c078-c37b-4f06-ab40-fa069a6ad2b3.ps1:110 字符: 1
++ go test ./... -cover -count=1 2>&1 | Out-File -Encoding utf8 ..\_c.tx ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (# caipiao/backend/cmd/tmp-audit:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+cmd\tmp-audit\main.go:1:1: invalid BOM in the middle of the file
+	caipiao/backend/cmd/server		coverage: 0.0% of statements
+	caipiao/backend/cmd/sniff-guaji-ws		coverage: 0.0% of statements
+	caipiao/backend/cmd/sync-pending-payout		coverage: 0.0% of statements
+FAIL	caipiao/backend/cmd/tmp-audit [build failed]
+	caipiao/backend/cmd/tmp-audit2		coverage: 0.0% of statements
+	caipiao/backend/cmd/tmp-inst-audit		coverage: 0.0% of statements
+	caipiao/backend/cmd/tmp-lhc-dump		coverage: 0.0% of statements
+	caipiao/backend/cmd/tmp-lhc-history		coverage: 0.0% of statements
+	caipiao/backend/cmd/tmp-lhc-outbound		coverage: 0.0% of statements
+	caipiao/backend/cmd/tmp-lhc-probe		coverage: 0.0% of statements
+	caipiao/backend/cmd/tmp-lhc-probe2		coverage: 0.0% of statements
+	caipiao/backend/cmd/tmp-lhc-probe3		coverage: 0.0% of statements
+	caipiao/backend/cmd/tmp-lhc-probe4		coverage: 0.0% of statements
+	caipiao/backend/cmd/tmp-lhc-rules-dump		coverage: 0.0% of statements
+	caipiao/backend/cmd/tmp-lhc-rules-list		coverage: 0.0% of statements
+	caipiao/backend/cmd/tmp-pk10-auto		coverage: 0.0% of statements
+	caipiao/backend/cmd/tmp-pk10-db		coverage: 0.0% of statements
+# caipiao/backend/cmd/tmp-pk10-rules-dump
+cmd\tmp-pk10-rules-dump\main.go:1:1: invalid BOM in the middle of the file
+# caipiao/backend/cmd/tmp-pk10-rules-full
+cmd\tmp-pk10-rules-full\main.go:1:1: invalid BOM in the middle of the file
+# caipiao/backend/cmd/tmp-query
+cmd\tmp-query\main.go:1:1: invalid BOM in the middle of the file
+	caipiao/backend/cmd/tmp-pk10-dxds-probe		coverage: 0.0% of statements
+	caipiao/backend/cmd/tmp-pk10-odds		coverage: 0.0% of statements
+	caipiao/backend/cmd/tmp-pk10-rule-raw		coverage: 0.0% of statements
+FAIL	caipiao/backend/cmd/tmp-pk10-rules-dump [build failed]
+FAIL	caipiao/backend/cmd/tmp-pk10-rules-full [build failed]
+FAIL	caipiao/backend/cmd/tmp-query [build failed]
+	caipiao/backend/cmd/wire-probe		coverage: 0.0% of statements
+	caipiao/backend/internal/apix		coverage: 0.0% of statements
+	caipiao/backend/internal/audit		coverage: 0.0% of statements
+	caipiao/backend/internal/auth		coverage: 0.0% of statements
+ok  	caipiao/backend/internal/cloud/betrecords	13.969s	coverage: 68.8% of statements
+ok  	caipiao/backend/internal/cloud/instances	1.088s	coverage: 51.0% of statements
+ok  	caipiao/backend/internal/cloud/lookback	6.861s	coverage: 20.0% of statements
+	caipiao/backend/internal/cloud/schemestate		coverage: 0.0% of statements
+ok  	caipiao/backend/internal/cloudlimits	5.454s	coverage: 11.5% of statements
+ok  	caipiao/backend/internal/config	3.578s	coverage: 38.1% of statements
+	caipiao/backend/internal/content		coverage: 0.0% of statements
+ok  	caipiao/backend/internal/copyhall	4.757s	coverage: 15.6% of statements
+	caipiao/backend/internal/dashboard		coverage: 0.0% of statements
+	caipiao/backend/internal/db		coverage: 0.0% of statements
+	caipiao/backend/internal/db/sqlcdb		coverage: 0.0% of statements
+ok  	caipiao/backend/internal/games	4.211s	coverage: 23.9% of statements
+ok  	caipiao/backend/internal/guaji	6.611s	coverage: 44.8% of statements
+ok  	caipiao/backend/internal/guaji/accountsvc	13.662s	coverage: 6.3% of statements
+ok  	caipiao/backend/internal/guaji/catalogsync	7.330s	coverage: 44.4% of statements
+	caipiao/backend/internal/guaji/drawsync		coverage: 0.0% of statements
+ok  	caipiao/backend/internal/guaji/historysync	3.793s	coverage: 7.4% of statements
+	caipiao/backend/internal/guaji/oddsrefresh		coverage: 0.0% of statements
+ok  	caipiao/backend/internal/guaji/periodaudit	5.533s	coverage: 26.5% of statements
+ok  	caipiao/backend/internal/guaji/periodsync	4.824s	coverage: 31.6% of statements
+ok  	caipiao/backend/internal/guaji/rulessync	3.381s	coverage: 27.3% of statements
+ok  	caipiao/backend/internal/guajibet	3.265s	coverage: 64.4% of statements
+ok  	caipiao/backend/internal/handler	14.872s	coverage: 2.7% of statements
+ok  	caipiao/backend/internal/lottery	1.929s	coverage: 58.5% of statements
+	caipiao/backend/internal/maintenance		coverage: 0.0% of statements
+ok  	caipiao/backend/internal/member	7.541s	coverage: 1.1% of statements
+ok  	caipiao/backend/internal/middleware	4.891s	coverage: 22.2% of statements
+	caipiao/backend/internal/orders/admin		coverage: 0.0% of statements
+ok  	caipiao/backend/internal/orders/bets	3.184s	coverage: 7.1% of statements
+	caipiao/backend/internal/orders/chases		coverage: 0.0% of statements
+	caipiao/backend/internal/reports		coverage: 0.0% of statements
+ok  	caipiao/backend/internal/schemelimits	4.806s	coverage: 29.2% of statements
+ok  	caipiao/backend/internal/schemerounds	4.793s	coverage: 14.1% of statements
+--- FAIL: TestGetCloudCenterStatsIntegration (0.06s)
+    cloud_center_stats_test.go:270: formal |runningSessionPnl| 64075.4 exceeds |totalSessionPnl| -38013.9
+    cloud_center_stats_test.go:278: account=vs8888 formal={TotalTurnover:2.2097061e+06 TotalSessionPnl:-38013.9 RunningSessionPnl:64075.4} sim={TotalTurnover:0 TotalSessionPnl:0 RunningSessionPnl:0}
+2026/07/28 13:26:58 INFO ensured members sim scheme quota columns (00130)
+2026/07/28 13:26:58 INFO scheme skipped start period from cache instanceId=inst-1-1785216418331 period=991785216418001 closeAt=2026-07-28T05:25:58Z
+2026/07/28 13:26:58 INFO scheme worker activated after start period ended id=inst-1-1785216418331 skippedPeriod=991785216418001 simBet=true
+2026/07/28 13:26:58 INFO scheme worker bet placed instanceId=inst-1-1785216418331 memberId=1 period=991785216418002 guajiPeriod="" amount=2 simBet=true thirdParty=false
+2026/07/28 13:26:58 INFO scheme worker sim bet settled instanceId=inst-1-1785216418331 period=991785216418002 status=hit pnl=18 amount=2
+2026/07/28 13:26:58 INFO scheme skipped start period from cache instanceId=inst-1-1785216418527 period=991785216418003 closeAt=2026-07-28T05:25:58Z
+2026/07/28 13:26:58 INFO scheme worker activated after start period ended id=inst-1-1785216418527 skippedPeriod=991785216418003 simBet=true
+2026/07/28 13:26:58 INFO scheme worker bet placed instanceId=inst-1-1785216418527 memberId=1 period=991785216418004 guajiPeriod="" amount=2 simBet=true thirdParty=false
+2026/07/28 13:26:58 INFO scheme worker sim bet settled instanceId=inst-1-1785216418527 period=991785216418004 status=miss pnl=-2 amount=2
+2026/07/28 13:26:58 INFO scheme skipped start period from cache instanceId=inst-1-1785216418639 period=991785216418005 closeAt=2026-07-28T05:25:58Z
+2026/07/28 13:26:58 INFO scheme worker activated after start period ended id=inst-1-1785216418639 skippedPeriod=991785216418005 simBet=true
+2026/07/28 13:26:58 INFO scheme worker bet placed instanceId=inst-1-1785216418639 memberId=1 period=991785216418006 guajiPeriod="" amount=6 simBet=true thirdParty=false
+2026/07/28 13:26:58 INFO scheme worker sim bet settled instanceId=inst-1-1785216418639 period=991785216418006 status=miss pnl=-6 amount=6
+2026/07/28 13:26:58 INFO scheme skipped start period from cache instanceId=inst-1-1785216418755 period=991785216418007 closeAt=2026-07-28T05:25:58Z
+2026/07/28 13:26:58 INFO scheme worker activated after start period ended id=inst-1-1785216418755 skippedPeriod=991785216418007 simBet=true
+2026/07/28 13:26:58 INFO scheme worker bet placed instanceId=inst-1-1785216418755 memberId=1 period=991785216418008 guajiPeriod="" amount=1 simBet=true thirdParty=false
+2026/07/28 13:26:58 INFO scheme worker sim bet settled instanceId=inst-1-1785216418755 period=991785216418008 status=hit pnl=9 amount=1
+2026/07/28 13:26:58 INFO scheme skipped start period from cache instanceId=inst-1-1785216418856 period=991785216418009 closeAt=2026-07-28T05:25:58Z
+2026/07/28 13:26:58 INFO scheme worker activated after start period ended id=inst-1-1785216418856 skippedPeriod=991785216418009 simBet=true
+2026/07/28 13:26:58 INFO scheme worker bet placed instanceId=inst-1-1785216418856 memberId=1 period=991785216418010 guajiPeriod="" amount=5 simBet=true thirdParty=false
+2026/07/28 13:26:58 INFO scheme worker sim bet settled instanceId=inst-1-1785216418856 period=991785216418010 status=hit pnl=45 amount=5
+2026/07/28 13:26:58 INFO scheme skipped start period from cache instanceId=inst-1-1785216418962 period=991785216418011 closeAt=2026-07-28T05:25:58Z
+2026/07/28 13:26:58 INFO scheme worker activated after start period ended id=inst-1-1785216418962 skippedPeriod=991785216418011 simBet=true
+2026/07/28 13:26:59 INFO scheme worker bet placed instanceId=inst-1-1785216418962 memberId=1 period=991785216418012 guajiPeriod="" amount=5 simBet=true thirdParty=false
+2026/07/28 13:26:59 INFO scheme worker sim bet settled instanceId=inst-1-1785216418962 period=991785216418012 status=hit pnl=45 amount=5
+2026/07/28 13:26:59 INFO scheme skipped start period from cache instanceId=inst-1-1785216419201 period=991785216418011 closeAt=2026-07-28T05:25:58Z
+2026/07/28 13:26:59 INFO scheme worker activated after start period ended id=inst-1-1785216419201 skippedPeriod=991785216418011 simBet=true
+2026/07/28 13:26:59 INFO scheme worker bet placed instanceId=inst-1-1785216419201 memberId=1 period=991785216419902 guajiPeriod="" amount=1 simBet=true thirdParty=false
+2026/07/28 13:26:59 INFO scheme worker sim bet settled instanceId=inst-1-1785216419201 period=991785216419902 status=hit pnl=9 amount=1
+2026/07/28 13:26:59 INFO scheme activated on list read after start period ended id=inst-1-1785214042255 skippedPeriod=""
+2026/07/28 13:26:59 INFO scheme worker maintenance auto resumed instanceId=inst-1-1785214042255 memberId=1 lottery=hash_jisu sessionPnl=88.8
+FAIL
+coverage: 58.4% of statements
+FAIL	caipiao/backend/internal/schemes	5.395s
+	caipiao/backend/internal/server		coverage: 0.0% of statements
+ok  	caipiao/backend/internal/timeutil	0.114s	coverage: 7.5% of statements
+	caipiao/backend/internal/ws		coverage: 0.0% of statements
+	caipiao/backend/tmp/genhash		coverage: 0.0% of statements
+FAIL

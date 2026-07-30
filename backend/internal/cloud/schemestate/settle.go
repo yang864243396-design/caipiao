@@ -55,7 +55,11 @@ func ProcessAfterSettlement(
 	definitionConfig []byte,
 	numericFromFloat func(float64) pgtype.Numeric,
 ) error {
-	if q == nil || inst.Status != "running" {
+	if q == nil {
+		return nil
+	}
+	// 停投(pending)后仍须推进游标；否则恢复运行会连投同一局/冷热锁号丢失。
+	if inst.Status != "running" && inst.Status != "pending" {
 		return nil
 	}
 
@@ -91,7 +95,7 @@ func ProcessAfterSettlement(
 		)
 	}
 
-	if _, err := q.ApplySchemeInstanceBet(ctx, sqlcdb.ApplySchemeInstanceBetParams{
+	if err := q.ApplySchemeInstancePickAfterSettlement(ctx, sqlcdb.ApplySchemeInstanceBetParams{
 		ID:               inst.ID,
 		CountdownSec:     inst.CountdownSec,
 		Turnover:         numericFromFloat(0),

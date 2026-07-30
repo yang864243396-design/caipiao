@@ -1,0 +1,18 @@
+{"index":41,"lotteryCode":"tron_ffc_1m","typeId":"g004","subId":"43","label":"前二组选单式","ruleId":"43","status":"ok","orderNo":"BO11785224557452","issueNo":"1014141800066","thirdPartyBetId":"121494820","amount":2,"verifyStatus":"ok","verifyDetail":"第三方注单一致","periodWaits":1,"at":"2026-07-28T15:42:37+08:00"}
+
+{"index":49,"lotteryCode":"tron_ffc_1m","typeId":"g005","subId":"51","label":"后二组选单式","ruleId":"51","status":"ok","orderNo":"BO11785224561340","issueNo":"1014141800066","thirdPartyBetId":"121494844","amount":2,"verifyStatus":"ok","verifyDetail":"第三方注单一致","periodWaits":1,"at":"2026-07-28T15:42:41+08:00"}
+
+{"index":57,"lotteryCode":"tron_ffc_1m","typeId":"g007","subId":"105","label":"前中后三组合","ruleId":"105","status":"ok","orderNo":"BO11785224565599","issueNo":"1014141800066","thirdPartyBetId":"121494860","amount":18,"verifyStatus":"ok","verifyDetail":"第三方注单一致","periodWaits":1,"at":"2026-07-28T15:42:45+08:00"}
+
+{"index":62,"lotteryCode":"tron_ffc_1m","typeId":"g007","subId":"110","label":"前中后三混合组选","ruleId":"110","status":"ok","orderNo":"BO11785224569833","issueNo":"1014141800066","thirdPartyBetId":"121494880","amount":6,"verifyStatus":"ok","verifyDetail":"第三方注单一致","periodWaits":1,"at":"2026-07-28T15:42:49+08:00"}
+
+{"index":107,"lotteryCode":"tron_ffc_1m","typeId":"g011","subId":"75","label":"任二直选单式","ruleId":"75","status":"ok","orderNo":"BO11785224573703","issueNo":"1014141800066","thirdPartyBetId":"121494899","amount":2,"verifyStatus":"ok","verifyDetail":"第三方注单一致","periodWaits":1,"at":"2026-07-28T15:42:53+08:00"}
+
+{"index":113,"lotteryCode":"tron_ffc_1m","typeId":"g011","subId":"81","label":"任三直选单式","ruleId":"81","status":"ok","orderNo":"BO11785224578955","issueNo":"1014141800066","thirdPartyBetId":"121494919","amount":2,"verifyStatus":"ok","verifyDetail":"第三方注单一致","periodWaits":1,"at":"2026-07-28T15:42:58+08:00"}
+
+{"index":124,"lotteryCode":"tron_ffc_1m","typeId":"g011","subId":"144","label":"任选四组选12","ruleId":"144","status":"fail","amount":4,"periodWaits":1,"error":"第三方接单失败: guaji api code=40000: 投注数字不合规.","at":"2026-07-28T15:43:02+08:00"}
+
+{"index":130,"lotteryCode":"tron_ffc_1m","typeId":"g012","subId":"93","label":"前后三组合","ruleId":"93","status":"ok","orderNo":"BO11785224585974","issueNo":"1014141800066","thirdPartyBetId":"121494946","amount":12,"verifyStatus":"ok","verifyDetail":"第三方注单一致","periodWaits":1,"at":"2026-07-28T15:43:05+08:00"}
+
+{"index":135,"lotteryCode":"tron_ffc_1m","typeId":"g012","subId":"98","label":"前后三混合组选","ruleId":"98","status":"ok","orderNo":"BO11785224589841","issueNo":"1014141800066","thirdPartyBetId":"121494971","amount":4,"verifyStatus":"ok","verifyDetail":"第三方注单一致","periodWaits":1,"at":"2026-07-28T15:43:09+08:00"}
+

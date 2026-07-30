@@ -534,10 +534,17 @@ func TestHotColdWarmAttributeTiers(t *testing.T) {
 }
 
 func TestPickRandomDrawHunhe(t *testing.T) {
-	// 混合组选单式：整注随机应产出 N 个组选组合（升序去重），且排除豹子（全同号），可被 evaluateHunhe 解析。
-	cfg := pickTestConfig(t, `{"runTypeId":"random_draw","playTypeId":"qian3","subPlayId":"qian3_hunhe","betMode":"hunhe","randomDraw":{"counts":[8]}}`)
-	if !isWholeTicketRandom(cfg.Play) {
-		t.Fatalf("混合 should be whole-ticket random, rule=%+v", cfg.Play)
+	// 混合组选：与直选复式同按位随机（千/百/十），展开后排除豹子、形态去重。
+	cfg := pickTestConfig(t, `{
+		"runTypeId":"random_draw","playTemplate":"ssc_std",
+		"playTypeId":"g002","subPlayId":"23","betMode":"hunhe",
+		"randomDraw":{"counts":[2,2,2],"strategy":"every"}
+	}`)
+	if isWholeTicketRandom(cfg.Play) {
+		t.Fatalf("混合组选 should be per-position random, rule=%+v", cfg.Play)
+	}
+	if isZuxuanPoolRandom(cfg.Play) {
+		t.Fatalf("混合组选不应走组选号池, rule=%+v", cfg.Play)
 	}
 	dec := pickRandomDraw(cfg, sqlcdb.SchemeInstance{Kind: "custom"})
 	toks := strings.Split(dec.Content, ",")
@@ -547,27 +554,23 @@ func TestPickRandomDrawHunhe(t *testing.T) {
 	seen := map[string]bool{}
 	for _, tk := range toks {
 		if len(tk) != 3 {
-			t.Fatalf("每注应 3 位, got %q", tk)
+			t.Fatalf("每注应 3 位, got %q in %q", tk, dec.Content)
 		}
-		// 排除豹子（三位全同）
 		if tk[0] == tk[1] && tk[1] == tk[2] {
 			t.Fatalf("混合应排除豹子, got %q in %q", tk, dec.Content)
 		}
-		// 升序归一去重
-		if seen[tk] {
-			t.Fatalf("应按组合去重, dup %q", tk)
+		key := sortStringDigits(tk)
+		if seen[key] {
+			t.Fatalf("应按组选形态去重, dup shape %q from %q", key, dec.Content)
 		}
-		seen[tk] = true
-		if !(tk[0] <= tk[1] && tk[1] <= tk[2]) {
-			t.Fatalf("组选应升序, got %q", tk)
-		}
+		seen[key] = true
 	}
 	ev := evaluatePlayHit(cfg.Play, []string{"1", "2", "3", "7", "5"}, dec.Content, cfg.Contrary, cfg.ContraryPlan, cfg.Play.PositionIdx)
 	if ev.BetUnits <= 0 {
 		t.Fatalf("混合内容 %q 不可评估 (units=%d)", dec.Content, ev.BetUnits)
 	}
-	if !SupportsRandomDrawSubPlay("前三码", "前三混合组选单式") {
-		t.Fatal("随机出号应支持前三混合组选单式")
+	if !SupportsRandomDrawSubPlay("中三码", "中三混合组选") {
+		t.Fatal("随机出号应支持中三混合组选")
 	}
 }
 
@@ -588,7 +591,7 @@ func TestSimRandomDrawAllFamiliesMultiPeriod(t *testing.T) {
 		{"跨度", `{"runTypeId":"random_draw","playTypeId":"qian3","subPlayId":"qian3_kuadu","betMode":"kuadu","randomDraw":{"counts":[2],"strategy":"every"}}`},
 		{"不定位", `{"runTypeId":"random_draw","playTypeId":"budingwei","subPlayId":"qian3_2ma","betMode":"budingwei","randomDraw":{"counts":[4],"strategy":"every"}}`},
 		{"包胆", `{"runTypeId":"random_draw","playTypeId":"baodan","subPlayId":"qian3_baodan","betMode":"baodan","randomDraw":{"counts":[2],"strategy":"every"}}`},
-		{"混合组选单式", `{"runTypeId":"random_draw","playTypeId":"qian3","subPlayId":"qian3_hunhe","betMode":"hunhe","randomDraw":{"counts":[6],"strategy":"every"}}`},
+		{"混合组选", `{"runTypeId":"random_draw","playTemplate":"ssc_std","playTypeId":"g002","subPlayId":"23","betMode":"hunhe","randomDraw":{"counts":[2,2,2],"strategy":"every"}}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

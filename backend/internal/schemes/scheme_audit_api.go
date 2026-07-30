@@ -164,6 +164,12 @@ func validateHotColdWarmConfig(kind string, config []byte, cfg parsedSchemeConfi
 		}
 		return nil
 	}
+	// 组三/组六等整体号池：保存时强制最低选号（组三≥2、组六≥3）
+	if isHotColdDigitOverall(cfg.Play) {
+		if v := validateZuxuanPoolMinPick(cfg.Play, cfg.HotCold); len(v) > 0 {
+			return v
+		}
+	}
 	// 号码 / 单式 / 按位：pool 只是「该位是否启用 + 编辑预览」，运行时按热冷区重算。
 	// 此处只拦越界单码，绝不把「5+5+5 个单码」误报成「15 个单式组合不合法」。
 	min, max := ruleNumberPool(cfg.Play)
@@ -183,6 +189,51 @@ func validateHotColdWarmConfig(kind string, config []byte, cfg parsedSchemeConfi
 		pool = append(pool, strconv.Itoa(v))
 	}
 	return outOfPoolViolation(dedupStrings(bad), pool)
+}
+
+// validateZuxuanPoolMinPick 冷热整体号池最少选号（以 ranks 为准，无 ranks 时看 pool）。
+func validateZuxuanPoolMinPick(rule playRule, hcw *hotColdWarmCfg) []Violation {
+	if hcw == nil {
+		return nil
+	}
+	minPick := zuxuanPoolMinPick(rule)
+	if minPick < 2 {
+		return nil
+	}
+	pickN := 0
+	if hotColdCfgHasRanks(hcw.Ranks) {
+		if len(hcw.Ranks) > 0 {
+			pickN = len(hcw.Ranks[0])
+		}
+	} else {
+		seen := map[string]struct{}{}
+		for _, line := range hcw.Pool {
+			for _, tok := range splitContentTokens(line) {
+				tok = strings.TrimSpace(tok)
+				if tok == "" {
+					continue
+				}
+				seen[tok] = struct{}{}
+			}
+		}
+		pickN = len(seen)
+	}
+	if pickN >= minPick {
+		return nil
+	}
+	label := "号码池"
+	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	sub := strings.ToLower(rule.SubPlayID + " " + rule.CatalogSubID)
+	switch {
+	case bm == "zu6" || (strings.Contains(sub, "zu6") && !strings.Contains(sub, "zu60") && !strings.Contains(sub, "zu120")):
+		label = "组六"
+	case bm == "zu3" || (strings.Contains(sub, "zu3") && !strings.Contains(sub, "zu30")):
+		label = "组三"
+	}
+	return []Violation{{
+		Code:   ViolationZeroUnits,
+		Detail: fmt.Sprintf("%s至少选择 %d 个号码", label, minPick),
+	}}
 }
 
 // validateAdvTriggerBetConfig 校验启用行的正投/反投（按位号池会在 ValidateSchemeBetContent 内展开）。

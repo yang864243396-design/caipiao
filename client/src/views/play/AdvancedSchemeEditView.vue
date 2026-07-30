@@ -41,11 +41,13 @@ import {
   countBetUnits,
   expandZhixuanPositionPoolToDanshi,
   groupContentPlaceholder,
+  isHunhePlayConfig,
   isYixingDingweiPlayConfig,
   isMaxBetUnitsExceededMessage,
   isSscDanshiLikeConfig,
   isZhixuanFushiPlayConfig,
   isZhixuanPositionPoolContent,
+  normalizeHunheGroupContent,
   WEISHU_MAX_BET_UNITS,
   YIXING_MAX_PICKS_MSG,
   YIXING_MAX_PICKS_PER_POS,
@@ -55,6 +57,8 @@ import {
   validateSchemeGroups,
   schemeSoloBaoziError,
   zhixuanFushiMaxBetUnits,
+  zuxuanPoolMinPick,
+  zuxuanPoolMinPickMessage,
 } from '@/utils/betPayload'
 import { defaultPlaySelection, formatSubPlayLabel } from '@/utils/playConfig'
 import { normalizeSchemeTimePairFromConfig, schemeTimeRangeError } from '@/utils/schemeDateTime'
@@ -669,7 +673,7 @@ const showTriggerPositionPicker = computed(() => {
   return supportsAdvTriggerPositionPicker(schemePlayConfig.value)
 })
 
-/** 一星定位胆 / 前三复式 / 中三直选单式 / 后二大小单双等：按位分列正投/反投 */
+/** 一星定位胆 / 前三复式 / 中三混合组选 / 中三直选单式 / 后二大小单双等：按位分列正投/反投 */
 const showTriggerPerPosColumns = computed(() => {
   if (runTypeId.value !== 'adv_trigger_bet') return false
   if (isLonghuPlay.value) return false
@@ -1063,17 +1067,18 @@ const hcwTiers = ref<HcwTier[]>([])
 const hcwFreq = ref<Array<Record<string, number>>>([])
 
 /**
- * 号码整体频次模式（组选家族/不定位/包胆）：单档选号池（跨位合并频次），
- * 区别于按位型（每位一档）。
+ * 号码整体频次模式（组三/组六/组选复式/不定位/包胆）：单档选号池（跨位合并频次），
+ * 区别于按位型（每位一档）。混合组选与直选复式同按位（千/百/十）。
  */
 const hcwDigitOverall = computed(() => {
   const cfg = schemePlayConfig.value as { betMode?: string; subPlayId?: string; playMethodLabel?: string }
   const bm = String(cfg.betMode ?? '').toLowerCase()
+  if (bm === 'hunhe') return false
   if (['zu3', 'zu6', 'zu24', 'zu12', 'zu60', 'zu30', 'zu120', 'budingwei', 'baodan'].includes(bm)) return true
   const sub = `${String(cfg.subPlayId ?? '')}`.toLowerCase()
   if (/zuxuan_fs|zu3|zu6|zu24|zu12|zu60|zu30|zu120|budingwei|baodan/.test(sub)) return true
   const label = String(cfg.playMethodLabel ?? '')
-  if (label.includes('单式')) return false
+  if (label.includes('单式') || label.includes('混合')) return false
   return /组三|组六|组选|不定位|包胆/.test(label)
 })
 
@@ -1607,17 +1612,20 @@ function ensureRdCounts(): void {
   if (rdCounts.value.length === 0) rdCounts.value.push(1)
 }
 
-/** 组选单式/混合：整注随机（仅需注数 rdCounts[0]）。前/中/后三直选单式改按位产号。 */
+/** 组选单式：整注随机（仅需注数 rdCounts[0]）。直选单式/混合组选：千/百/十按位产号。 */
 const rdWholeTicket = computed(() => {
   // 直选单式（段长≥2）：千/百/十…各位配数量，与直选复式同布局
   if (isZhixuanDanshiPerPosPlay(schemePlayConfig.value)) return false
   const cfg = schemePlayConfig.value as { betMode?: string; subPlayId?: string; playMethodLabel?: string }
   const bm = String(cfg.betMode ?? '').toLowerCase()
   const sub = String(cfg.subPlayId ?? '').toLowerCase()
-  if (['danshi', 'zhixuan_ds', 'zuxuan_ds', 'hunhe'].includes(bm)) return true
+  // 混合组选：与直选复式同按位（千/百/十），勿走整注「注数」
+  if (bm === 'hunhe') return false
+  if (['danshi', 'zhixuan_ds', 'zuxuan_ds'].includes(bm)) return true
   if (['zhixuan_ds', 'zuxuan_ds'].includes(sub)) return true
   const label = String(cfg.playMethodLabel ?? '')
-  return label.includes('单式') || label.includes('混合')
+  if (label.includes('混合')) return false
+  return label.includes('单式')
 })
 
 /** 单式整注随机的本地预览注单 */
@@ -1629,6 +1637,8 @@ const rdZuxuanPool = computed(() => {
   const cfg = schemePlayConfig.value as { betMode?: string; subPlayId?: string; catalogSubId?: string; playMethodLabel?: string }
   const bm = String(cfg.betMode ?? '').toLowerCase()
   const label = String(cfg.playMethodLabel ?? '')
+  // 混合组选已按位分列，勿因文案含「组选」进单档号码池
+  if (bm === 'hunhe' || label.includes('混合')) return false
   if (bm === 'baodan' || /包胆/.test(label)) return false
   if (['zu3', 'zu6', 'zu24', 'zu12', 'zu60', 'zu30', 'zu120'].includes(bm)) return true
   const cat = `${String(cfg.subPlayId ?? '')} ${String(cfg.catalogSubId ?? '')}`.toLowerCase()
@@ -1683,7 +1693,10 @@ const rdSingleCountMax = computed(() => {
 })
 const rdSingleCountMin = computed(() => {
   if (rdWholeTicket.value) return 1
-  if (rdZuxuanPool.value) return Math.max(2, positionCount.value)
+  if (rdZuxuanPool.value) {
+    // 组三≥2、组六≥3（与冷热/定码保存校验一致）；其它组选号池仍按位长兜底
+    return zuxuanPoolMinPick(schemePlayConfig.value) ?? Math.max(2, positionCount.value)
+  }
   return 1
 })
 
@@ -2792,22 +2805,61 @@ async function onSaveCloud() {
       await warn('请至少选择一个投注位')
       return
     }
+    // 组三/组六：启用行的正投/反投须满足最少选号（组三≥2、组六≥3）
+    {
+      const minPick = zuxuanPoolMinPick(schemePlayConfig.value)
+      if (minPick != null) {
+        for (const r of triggerRows.value) {
+          if (!r.enabled) continue
+          for (const [name, raw] of [
+            ['正投', r.pos],
+            ['反投', r.neg],
+          ] as const) {
+            const cell = String(raw ?? '').trim()
+            if (!cell) continue
+            const check = validateGroupContent(schemePlayConfig.value, cell)
+            if (!check.ok) {
+              await warn(`开出 ${r.open} 的${name}：${check.message}`)
+              return
+            }
+          }
+        }
+      }
+    }
     // schemeGroups 仅作占位样例；按位号池需展开成单式整注，避免保存校验误报「单式组合不合法」
     const sample = triggerRows.value.find((r) => r.enabled && String(r.pos).trim())
     let sampleContent = sample ? String(sample.pos).trim() : '0'
     const seg = schemePlayConfig.value.segmentLen
+    const cfg = schemePlayConfig.value
     if (
       sampleContent &&
       showTriggerPerPosColumns.value &&
-      isSscDanshiLikeConfig(schemePlayConfig.value) &&
+      (isSscDanshiLikeConfig(cfg) || isHunhePlayConfig(cfg)) &&
       seg > 1 &&
       isZhixuanPositionPoolContent(sampleContent, seg)
     ) {
       sampleContent = expandZhixuanPositionPoolToDanshi(sampleContent, seg) || sampleContent
+      if (isHunhePlayConfig(cfg)) {
+        // 排除豹子后可能为空：占位给一注合法样例，真实出号仍看 triggerBet
+        sampleContent = normalizeHunheGroupContent(sampleContent, seg) || '123'
+      }
     }
     schemeGroups.value = [sampleContent]
   } else if (rt === 'hot_cold_warm') {
     ensureHcwPools()
+    // 组三/组六冷热：号码池最少选号（组三≥2、组六≥3），与定码校验一致
+    if (hcwDigitOverall.value) {
+      const minPick = zuxuanPoolMinPick(schemePlayConfig.value)
+      if (minPick != null) {
+        const rankN = (hcwRanks.value[0] ?? []).length
+        const poolN = new Set((hcwPools.value[0] ?? []).map((t) => String(t).trim()).filter(Boolean)).size
+        const pickN = Math.max(rankN, poolN)
+        if (pickN < minPick) {
+          await warn(zuxuanPoolMinPickMessage(schemePlayConfig.value))
+          return
+        }
+      }
+    }
     // schemeGroups 仅占位：直选单式勿塞按位号池（会被校验成「N 个单式组合不合法」）。
     // 真正出号看 hotColdWarm；这里写一注合法样例即可。
     const seg = schemePlayConfig.value.segmentLen
@@ -2933,11 +2985,20 @@ async function onSaveCloud() {
         await warn(r.message)
         return
       }
+      if (r.betUnits <= 0) {
+        await warn(
+          zuxuanPoolMinPick(schemePlayConfig.value) != null
+            ? zuxuanPoolMinPickMessage(schemePlayConfig.value)
+            : '选号无效',
+        )
+        return
+      }
     }
   }
 
   // 直选单式 / 直选复式 / 混合组选：不得「单独只有」111/222/333 等豹子号（含冷热/局数等入口）
-  {
+  // 高级开某投某 + 混合组选：映射按位保存，下注时再排除豹子；排除后无号则本期跳过，此处不拦保存。
+  if (!(rt === 'adv_trigger_bet' && isHunhePlayConfig(schemePlayConfig.value))) {
     const baoziContents =
       rt === 'adv_fixed_rotate'
         ? jushuList.value.map((r) => r.content)
