@@ -16,7 +16,7 @@ describe('validateGroupContent kuadu', () => {
   it('rejects values above 9', () => {
     const r = validateGroupContent(kuaduConfig, '3,11,15')
     expect(r.ok).toBe(false)
-    expect(r.message).toMatch(/0–9|0-9|不能填写/)
+    if (!r.ok) expect(r.message).toMatch(/0–9|0-9|不能填写/)
   })
 
   it('rejects only-invalid content (no betUnits||1 bypass)', () => {
@@ -34,6 +34,6 @@ describe('validateGroupContent kuadu', () => {
     const cfg = { ...kuaduConfig, segmentLen: 3, playTypeId: 'g002' }
     const r = validateGroupContent(cfg, '0,1,2,3,4,5,6,7,8,9')
     expect(r.ok).toBe(false)
-    expect(r.message).toMatch(/900/)
+    if (!r.ok) expect(r.message).toMatch(/900/)
   })
 })
