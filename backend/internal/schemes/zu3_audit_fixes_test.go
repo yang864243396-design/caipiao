@@ -95,6 +95,46 @@ func TestTriggerZu3MatchesAnySegmentDigit(t *testing.T) {
 	}
 }
 
+func TestTriggerQian2ZuxuanDanshiMatchesAnySegmentDigit(t *testing.T) {
+	t.Parallel()
+	// 前二组选单式：单框「开出 0」= 万或千任一位开出 0（不是只认万位）
+	cfg := pickTestConfig(t, `{
+		"runTypeId":"adv_trigger_bet","playTemplate":"ssc_std",
+		"playTypeId":"g004","subPlayId":"43","betMode":"zuxuan_ds",
+		"triggerBet":{"mode":"always_pos","rows":[
+			{"enabled":true,"open":"0","pos":"12,13","neg":"45,46"},
+			{"enabled":true,"open":"1","pos":"12,14","neg":""},
+			{"enabled":false,"open":"2"},{"enabled":false,"open":"3"},
+			{"enabled":false,"open":"4"},{"enabled":false,"open":"5"},
+			{"enabled":false,"open":"6"},{"enabled":false,"open":"7"},
+			{"enabled":false,"open":"8"},{"enabled":false,"open":"9"}
+		]}
+	}`)
+	if !isZuxuanDanshiSegmentTriggerPlay(cfg.Play) {
+		t.Fatalf("前二组选单式应走区位任一位开出, rule=%+v", cfg.Play)
+	}
+	// 万=8 千=0 → 命中开出 0（千位），投 12,13
+	dec := resolveTriggerBetDecision(cfg, []string{"8", "0", "1", "2", "3"}, "")
+	if dec.Skip || dec.Content != "12,13" {
+		t.Fatalf("千位开 0 want 12,13, got skip=%v content=%q", dec.Skip, dec.Content)
+	}
+	// 万=0 千=8 → 同样命中开出 0
+	dec2 := resolveTriggerBetDecision(cfg, []string{"0", "8", "1", "2", "3"}, "")
+	if dec2.Skip || dec2.Content != "12,13" {
+		t.Fatalf("万位开 0 want 12,13, got skip=%v content=%q", dec2.Skip, dec2.Content)
+	}
+	// 万=1 千=0：两行都能命中时按万→千，只取开出 1
+	dec3 := resolveTriggerBetDecision(cfg, []string{"1", "0", "2", "3", "4"}, "")
+	if dec3.Skip || dec3.Content != "12,14" {
+		t.Fatalf("万1千0 want 开出1→12,14, got skip=%v content=%q", dec3.Skip, dec3.Content)
+	}
+	// 前二 5,6 均未启用 → Skip
+	skip := resolveTriggerBetDecision(cfg, []string{"5", "6", "1", "2", "3"}, "")
+	if !skip.Skip {
+		t.Fatalf("前二无启用开出应 Skip, got %q", skip.Content)
+	}
+}
+
 func TestTriggerHunhePerPosLikeFushi(t *testing.T) {
 	t.Parallel()
 	cfg := pickTestConfig(t, `{

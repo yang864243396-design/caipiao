@@ -63,6 +63,43 @@ func TestNormalizeZhixuanDanshiContent_reshapesFlatDigitPools(t *testing.T) {
 	}
 }
 
+func TestValidateSchemeConfig_triggerBetRequiresPosAndNeg(t *testing.T) {
+	t.Parallel()
+	// 中三组选和值：启用行缺反投时须拦下（前端同口径）
+	cfg := map[string]any{
+		"runTypeId":       "adv_trigger_bet",
+		"playTemplate":    "ssc_std",
+		"playTypeId":      "g002",
+		"subPlayId":       "262",
+		"betMode":         "hezhi",
+		"playMethodLabel": "中三组选和值",
+		"schemeGroups":    []string{"1"},
+		"triggerBet": map[string]any{
+			"mode": "always_pos",
+			"rows": []map[string]any{
+				{"enabled": true, "open": "1", "pos": "1", "neg": ""},
+				{"enabled": true, "open": "2", "pos": "2", "neg": "3"},
+				{"enabled": false, "open": "3", "pos": "", "neg": ""},
+			},
+		},
+	}
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vs := ValidateSchemeConfig("custom", raw)
+	found := false
+	for _, v := range vs {
+		if v.Code == ViolationEmptyContent && strings.Contains(v.Detail, "开出 1") && strings.Contains(v.Detail, "反投") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("want empty neg violation for open=1, got %+v", vs)
+	}
+}
+
 func TestValidateSchemeConfig_triggerBetValidatesRowsNotSampleGroup(t *testing.T) {
 	t.Parallel()
 	type row struct {

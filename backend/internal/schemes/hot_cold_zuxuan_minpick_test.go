@@ -90,6 +90,33 @@ func TestValidateSchemeBetContent_zu3Zu6MinPick(t *testing.T) {
 	}
 }
 
+func TestValidateSchemeBetContent_baodanSingleDan(t *testing.T) {
+	t.Parallel()
+	// 中三组选包胆：单胆合法；勿误报「号码池至少选择 3 个」；多胆拒。
+	raw := []byte(`{
+		"playTemplate":"ssc_std","playTypeId":"g002","subPlayId":"263",
+		"catalogSubId":"zhong3_zuxuan_bd","betMode":"baodan",
+		"playMethodLabel":"中三组选包胆","segmentLen":3
+	}`)
+	if vs := ValidateSchemeBetContent("custom", raw, "5", 0); len(vs) > 0 {
+		t.Fatalf("单胆应通过: %+v", vs)
+	}
+	if vs := ValidateSchemeBetContent("custom", raw, "5,6", 0); !hasDetail(vs, "包胆：只能选择一个 0–9 的号码") {
+		t.Fatalf("多胆应拒: %+v", vs)
+	}
+	cfg := []byte(`{
+		"runTypeId":"fixed_rotate","playTemplate":"ssc_std",
+		"playTypeId":"g002","subPlayId":"263","catalogSubId":"zhong3_zuxuan_bd",
+		"betMode":"baodan","playMethodLabel":"中三组选包胆",
+		"schemeGroups":["5","7"]
+	}`)
+	for _, v := range ValidateSchemeConfig("custom", cfg) {
+		if strings.Contains(v.Detail, "至少选择") {
+			t.Fatalf("包胆方案不应报号池下限: %+v", v)
+		}
+	}
+}
+
 func hasDetail(vs []Violation, want string) bool {
 	for _, v := range vs {
 		if v.Detail == want {

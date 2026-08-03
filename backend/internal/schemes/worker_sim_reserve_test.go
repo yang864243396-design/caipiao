@@ -6,7 +6,7 @@ import (
 	"caipiao/backend/internal/db/sqlcdb"
 )
 
-// 回归：模拟盘占位后若再跑 GuajiPeriodAlreadyTaken，会把刚插入的记录当成已占用。
+// 回归：模拟盘占位后若再跑 CloudBetPeriodHandled，会把刚插入的记录当成已占用。
 func TestSimBetDoesNotTreatOwnReserveAsDedupSkip(t *testing.T) {
 	// 文档化约定：usesGuajiThirdParty(sim)=false → 走 reserve 路径；
 	// 事务内不得再次 evaluateGuajiBetDedup（见 worker.placePeriodBet）。

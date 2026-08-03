@@ -47,6 +47,22 @@ function isKuaduPoolConfig(config: PlayConfig): boolean {
   return /跨度/.test(config.playMethodLabel ?? '')
 }
 
+/** 不定位号池（前三一码/二码等）：0–9，须逗号分隔（如 1,2；勿连写成 12） */
+function isBudingweiPoolConfig(config: PlayConfig): boolean {
+  if (config.betMode === 'budingwei') return true
+  const tid = String(config.playTypeId ?? '').toLowerCase()
+  if (tid === 'g009' || tid === 'budingwei') return true
+  const text = `${config.playTypeLabel ?? ''} ${config.playMethodLabel ?? ''} ${config.guajiGroup ?? ''}`
+  return text.includes('不定位')
+}
+
+/** 组选复式号池（前二/后二/前三组选复式等）：0–9，须逗号分隔展示与录入 */
+function isZuxuanFushiPoolPlay(config: PlayConfig): boolean {
+  if (config.betMode === 'zuxuan_fs') return true
+  const text = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''}`
+  return /组选复式|zuxuan_fs/i.test(text)
+}
+
 /** 投注/方案面板：按玩法号池生成可选号码 */
 export function digitOptionsForConfig(config: PlayConfig): string[] {
   const min = config.numberPoolMin ?? 0
@@ -144,8 +160,10 @@ export function poolUsesCommaSeparatedInput(config: PlayConfig): boolean {
   if (isWeishuPoolConfig(config)) return true
   // 跨度 0–9：输入框内每个数字用逗号分隔（如 0,3,9），勿连写成 039
   if (isKuaduPoolConfig(config)) return true
-  // 组三/组六：第三方提示为逗号多选（如 0,1,2,3…），勿连写/按位
-  if (isZu3PoolPlay(config) || isZu6PoolPlay(config)) return true
+  // 不定位（前三一码等）：每个数字用逗号分隔（如 1,2），勿连写成 12
+  if (isBudingweiPoolConfig(config)) return true
+  // 组选复式 / 组三 / 组六：号池多选须逗号分隔（如 0,1,2），勿连写成 012
+  if (isZuxuanFushiPoolPlay(config) || isZu3PoolPlay(config) || isZu6PoolPlay(config)) return true
   const options = digitOptionsForConfig(config)
   if (options.length < 2) return false
   const widths = new Set(options.map((o) => o.length))
@@ -218,8 +236,14 @@ function parseDigitSegmentTokens(seg: string, config: PlayConfig): string[] {
 export function schemeGroupInputBoxToContent(box: string, config: PlayConfig): string {
   const segLen = Math.max(1, config.segmentLen || 1)
   const cap = poolMaxPicksForConfig(config)
-  // 号池型（组三/组六/和值等）：单行逗号多选，勿按 segmentLen 拆成按位
-  if (segLen <= 1 || config.inputMode === 'pool' || isZu3PoolPlay(config) || isZu6PoolPlay(config)) {
+  // 号池型（组选复式/组三/组六/和值等）：单行逗号多选，勿按 segmentLen 拆成按位
+  if (
+    segLen <= 1 ||
+    config.inputMode === 'pool' ||
+    isZuxuanFushiPoolPlay(config) ||
+    isZu3PoolPlay(config) ||
+    isZu6PoolPlay(config)
+  ) {
     let toks = parseDigitSegmentTokens(box, config)
     if (cap != null && cap > 0) toks = toks.slice(0, cap)
     return toks.join(',')
@@ -246,9 +270,20 @@ export function schemeGroupContentToInputBox(content: string, config: PlayConfig
   // 无有效号码时保持空串，避免 '' → ',,,,' 盖住 placeholder
   if (c.replace(/[\s,，]/g, '') === '') return ''
   const segLen = Math.max(1, config.segmentLen || 1)
-  if (segLen <= 1 || config.inputMode === 'pool' || isZu3PoolPlay(config) || isZu6PoolPlay(config)) {
-    // 和值/跨度/组三等：显示时保留逗号；粘连串先按号池解析再拼回（039 → 0,3,9）
-    if (poolUsesCommaSeparatedInput(config) || isZu3PoolPlay(config) || isZu6PoolPlay(config)) {
+  if (
+    segLen <= 1 ||
+    config.inputMode === 'pool' ||
+    isZuxuanFushiPoolPlay(config) ||
+    isZu3PoolPlay(config) ||
+    isZu6PoolPlay(config)
+  ) {
+    // 和值/跨度/组选复式/组三等：显示时保留逗号；粘连串先按号池解析再拼回（039 → 0,3,9）
+    if (
+      poolUsesCommaSeparatedInput(config) ||
+      isZuxuanFushiPoolPlay(config) ||
+      isZu3PoolPlay(config) ||
+      isZu6PoolPlay(config)
+    ) {
       const toks = parseDigitSegmentTokens(c.replace(/\n/g, ','), config)
       return toks.join(',')
     }
@@ -340,6 +375,12 @@ export function groupDigitInputHint(config: PlayConfig): string {
   if (isZu6PoolPlay(config)) {
     return '输入三个及以上 0-9 的号码，多选用逗号分隔，如 1,3,5,7'
   }
+  // 前二/后二等组选复式：至少 2 个号；三星组选复式至少 3 个
+  if (isZuxuanFushiPoolPlay(config)) {
+    const text = `${config.playMethodLabel ?? ''} ${config.playTypeLabel ?? ''} ${config.playTypeId ?? ''}`
+    const min = /前二|后二|g004|g005|g008|qian2|hou2/i.test(text) ? 2 : 3
+    return `输入 ${min} 个及以上 0-9 的号码，多选用逗号分隔，如 1,3,5,7`
+  }
   // 直选/组选和值：与 groupContentPlaceholder 一致，逗号分隔；组选池为 1–26
   if (isHezhiPoolConfig(config)) {
     const min = config.numberPoolMin ?? 0
@@ -357,6 +398,24 @@ export function groupDigitInputHint(config: PlayConfig): string {
     const min = config.numberPoolMin ?? 0
     const max = config.numberPoolMax ?? 9
     return `跨度：输入 ${min}–${max}，每个数字用逗号分隔（如 0,3,9）`
+  }
+  // 不定位：每个数字用逗号分隔（一码最多 2 个）
+  if (isBudingweiPoolConfig(config)) {
+    if (isYimaBudingweiConfig(config)) {
+      return '一码不定位：输入 1–2 个 0–9 号码，每个数字用逗号分隔（如 1,2）'
+    }
+    const text = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''}`
+    const sid = String(config.catalogSubId ?? config.subPlayId ?? '').trim()
+    if (/五星|wuxing/i.test(text) || sid === '151' || sid === '152') {
+      return '五星不定位：至少 4 个 0–9 号码，每个数字用逗号分隔（如 1,2,3,4）'
+    }
+    if (/三码|_3ma/i.test(text) || sid === '152') {
+      return '三码不定位：至少 3 个 0–9 号码，每个数字用逗号分隔（如 1,2,3,4）'
+    }
+    if (/二码|_2ma/i.test(text)) {
+      return '二码不定位：至少 2 个 0–9 号码，每个数字用逗号分隔（如 1,2）'
+    }
+    return '不定位：输入 0–9 号码，每个数字用逗号分隔（如 1,2）'
   }
   // 组选包胆：仅单选一个胆码
   if (isBaodanPoolPlay(config)) {
@@ -403,7 +462,23 @@ export function poolMaxPicksForConfig(config: PlayConfig): number | null {
   if (method.includes('包胆')) return 1
   // 一星：0–9 共 10 个号，禁止单位置满号（对齐第三方/既定规则）
   if (isYixingDingweiPlayConfig(config)) return YIXING_MAX_PICKS_PER_POS
+  // 一码不定位：最多 2 个号（第三方「投注数字不可超过两位数」）
+  if (isYimaBudingweiConfig(config)) return 2
   return null
+}
+
+function isYimaBudingweiConfig(config: PlayConfig): boolean {
+  const tid = String(config.playTypeId ?? '').toLowerCase()
+  const bm = String(config.betMode ?? '')
+  const text = `${config.playMethodLabel ?? ''} ${config.playTypeLabel ?? ''} ${config.guajiGroup ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''}`
+  const isBdw =
+    bm === 'budingwei' || tid === 'g009' || tid === 'budingwei' || text.includes('不定位')
+  if (!isBdw) return false
+  if (/三码|_3ma|(?:^|[^a-z])3ma/.test(text.toLowerCase()) && text.includes('不定位')) return false
+  if (/二码|_2ma|(?:^|[^a-z])2ma/.test(text.toLowerCase()) && text.includes('不定位')) return false
+  const sid = String(config.catalogSubId ?? config.subPlayId ?? '').trim()
+  if (['114', '116', '118', '147', '149', '151', '152'].includes(sid)) return false
+  return true
 }
 
 /** 在上限内切换号池选中（max=1 时点选替换；达上限时拒绝再加，保留原选） */

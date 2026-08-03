@@ -6,8 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
-
 	"caipiao/backend/internal/db/sqlcdb"
 	"caipiao/backend/internal/lottery"
 )
@@ -33,18 +31,44 @@ func normalizeResolvedBetContent(cfg parsedSchemeConfig, dec *pickDecision) stri
 		return ""
 	}
 	betContent := dec.Content
+	// 随机出号：空内容直接重抽，勿回落 schemeGroups（满选可能超限，且违背「每期随机」）。
+	if cfg.RunTypeID == RunTypeRandomDraw {
+		betContent = joinPositionPoolGroupsIfNeeded(cfg, betContent)
+		betContent = normalizeZhixuanDanshiContent(cfg.Play, betContent)
+		if strings.TrimSpace(betContent) == "" || contentExceedsBetUnitsMax(cfg.Play, betContent) {
+			betContent = randomDrawContentUnderMax(cfg)
+			dec.Content = betContent
+		}
+		return betContent
+	}
 	if strings.TrimSpace(betContent) == "" {
 		betContent = cfg.GroupContent
 	}
 	betContent = joinPositionPoolGroupsIfNeeded(cfg, betContent)
 	betContent = normalizeZhixuanDanshiContent(cfg.Play, betContent)
-	if cfg.RunTypeID == RunTypeRandomDraw {
-		if strings.TrimSpace(betContent) == "" || contentExceedsBetUnitsMax(cfg.Play, betContent) {
-			betContent = randomDrawContentUnderMax(cfg)
-			dec.Content = betContent
-		}
-	}
 	return betContent
+}
+
+// syncEvalBetUnitsWithWire 金额/上限以 wire 组合注数为准（和值/跨度 evaluate 可能是选项个数）。
+func syncEvalBetUnitsWithWire(rule playRule, content string, eval *betEvaluation) {
+	if eval == nil {
+		return
+	}
+	if wire := countPlayWireBetUnits(rule, content); wire > 0 {
+		eval.BetUnits = wire
+	}
+}
+
+// resolveRandomDrawUnderMax 随机出号超限时再抽一次；仍超限或空则应跳过本期（不停方案）。
+func resolveRandomDrawUnderMax(cfg parsedSchemeConfig, content string) (string, bool) {
+	if strings.TrimSpace(content) != "" && !contentExceedsBetUnitsMax(cfg.Play, content) {
+		return content, true
+	}
+	next := randomDrawContentUnderMax(cfg)
+	if strings.TrimSpace(next) == "" || contentExceedsBetUnitsMax(cfg.Play, next) {
+		return "", false
+	}
+	return next, true
 }
 
 // skipPeriodPick 本期策略跳过：推进第三方期号游标，不下注。
@@ -63,31 +87,9 @@ func (w *Worker) skipPeriodPickWithQ(
 	inst sqlcdb.SchemeInstance,
 	period, runType string,
 ) error {
-	if q == nil {
-		return nil
-	}
-	skipPeriod := strings.TrimSpace(period)
-	if p, ok := thirdPartyOpenPeriod(inst.LotteryCode); ok {
-		skipPeriod = p
-	}
-	if _, err := q.ApplySchemeInstanceBet(ctx, sqlcdb.ApplySchemeInstanceBetParams{
-		ID:               inst.ID,
-		CountdownSec:     w.periodCountdownForInst(inst, time.Now()),
-		Turnover:         numericFromFloat(0),
-		Pnl:              numericFromFloat(0),
-		Multiplier:       inst.Multiplier,
-		RoundIndex:       inst.RoundIndex,
-		LastSettledIssue: pgtype.Text{String: skipPeriod, Valid: skipPeriod != ""},
-		LookbackPnl:      numericFromFloat(0),
-		PickIndex:        inst.PickIndex,
-		CurrentPick:      inst.CurrentPick,
-		LastDirection:    inst.LastDirection,
-	}); err != nil {
-		return err
-	}
-	_ = appendPickSkipAudit(ctx, q, inst, period)
-	_ = runType
-	return nil
+	// 必须以「策略判定的本期」写游标。若此处改写成第三方当前开放期，
+	// 临近翻页时会把 N+1 提前占掉，下一期开盘即 period_cursor_taken 失投。
+	return w.skipPeriodPickWithCurrentPick(ctx, q, inst, period, runType, inst.CurrentPick)
 }
 
 // repickForFinalPeriod 在最终可投期锁定后重算出号（开某投某 / 跨期）。
@@ -107,15 +109,16 @@ func (w *Worker) repickForFinalPeriod(
 	needsPrev := cfg.RunTypeID == RunTypeAdvTriggerBet || cfg.RunTypeID == RunTypeHotColdWarm
 	if needsPrev && !w.hotColdPreviousDrawReady(ctx, inst.LotteryCode, finalPeriod) {
 		rem, ok := lottery.PeriodsCountdownSec(inst.LotteryCode, time.Now())
+		// 开某投某：上期未到只 Wait，勿 Skip（Skip 会推进游标，期号翻页时易误占下一期）
+		if cfg.RunTypeID == RunTypeAdvTriggerBet {
+			slog.Debug("scheme worker bet deferred: waiting previous draw after period lock",
+				"id", inst.ID, "period", finalPeriod, "pickIssue", pickIssue, "countdown", rem, "countdownOK", ok)
+			return repickResult{action: repickWait}, nil
+		}
 		if !ok || rem >= hotColdPrevDrawWaitMinSec {
 			slog.Debug("scheme worker bet deferred: waiting previous draw after period lock",
 				"id", inst.ID, "period", finalPeriod, "pickIssue", pickIssue, "runType", cfg.RunTypeID, "countdown", rem)
 			return repickResult{action: repickWait}, nil
-		}
-		if cfg.RunTypeID == RunTypeAdvTriggerBet {
-			slog.Info("scheme worker trigger skip: previous draw missing after period lock",
-				"id", inst.ID, "period", finalPeriod, "pickIssue", pickIssue, "countdown", rem)
-			return repickResult{action: repickSkip}, nil
 		}
 		// 冷热临近封盘：允许降级统计后重出号
 		slog.Info("scheme worker hot/cold proceed without previous draw after period lock",

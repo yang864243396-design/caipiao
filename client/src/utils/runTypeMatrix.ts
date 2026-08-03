@@ -593,11 +593,93 @@ function isAdvTriggerDingweiPlay(config: AdvTriggerPosConfig): boolean {
 }
 
 /**
- * 高级开某投某：投注位芯片（已废弃）。
- * 一星/定位胆改为与前三码相同的按位分列，不再单独勾选投注位。
+ * 任选非直选复式：开某投某需勾选恰好 k 个投注位（任二默认万千）；
+ * 一星等仍不单独勾选投注位。
  */
-export function supportsAdvTriggerPositionPicker(_config: AdvTriggerPosConfig): boolean {
-  return false
+export function supportsAdvTriggerPositionPicker(config: AdvTriggerPosConfig): boolean {
+  return isRenxuanNeedsPositionTriggerPlay(config)
+}
+
+function isAdvTriggerRenxuanPlay(config: AdvTriggerPosConfig): boolean {
+  const tid = String(config.playTypeId ?? '').toLowerCase()
+  const label = `${config.playMethodLabel ?? ''} ${config.playTypeLabel ?? ''}`
+  return (
+    tid === 'g011' ||
+    tid === 'renxuan' ||
+    tid.includes('renxuan') ||
+    label.includes('任选') ||
+    String(config.guajiGroup ?? '') === '任选'
+  )
+}
+
+function isAdvTriggerRenxuanZhixuanFushi(config: AdvTriggerPosConfig): boolean {
+  if (!isAdvTriggerRenxuanPlay(config)) return false
+  const text = `${config.betMode ?? ''} ${config.subPlayId ?? ''} ${config.catalogSubId ?? ''} ${config.playMethodLabel ?? ''}`
+  if (/单式|组选|和值|组三|组六|zu\d|hunhe|混合/i.test(text)) return false
+  return (
+    config.inputMode === 'multiline' ||
+    /直选复式|zhixuan_fs/i.test(text) ||
+    (String(config.betMode ?? '') === 'fushi' && !/组选/.test(text))
+  )
+}
+
+/** 任选非直选复式（须选位）：对齐任二直选单式 */
+export function isRenxuanNeedsPositionTriggerPlay(config: AdvTriggerPosConfig): boolean {
+  if (!isAdvTriggerRenxuanPlay(config)) return false
+  if (isAdvTriggerRenxuanZhixuanFushi(config)) return false
+  const k = Math.max(0, Number(config.segmentLen) || 0)
+  // 和值/号池 segmentLen 可能为 1，仍按任 k 选位（由文案/子玩法推断至少 2）
+  if (k >= 2) return true
+  const text = `${config.catalogSubId ?? ''} ${config.subPlayId ?? ''} ${config.playMethodLabel ?? ''}`
+  return /任[二三四]|ren[234]|组选|和值|单式|组三|组六|zu\d/i.test(text)
+}
+
+/**
+ * 任选单式类开某投某：按所选位分行填正/反投（直选/组选/混合单式）。
+ * 号池/和值类仅选位 + 整行映射，不分列。
+ */
+export function isRenxuanPerPosTriggerPlay(config: AdvTriggerPosConfig): boolean {
+  if (!isRenxuanNeedsPositionTriggerPlay(config)) return false
+  const bm = String(config.betMode ?? '').toLowerCase()
+  const sub = String(config.catalogSubId ?? config.subPlayId ?? '').toLowerCase()
+  const label = `${config.playMethodLabel ?? ''}`
+  if (
+    bm === 'hezhi' ||
+    bm === 'weishu' ||
+    bm === 'zuxuan_fs' ||
+    bm === 'zu3' ||
+    bm === 'zu6' ||
+    bm === 'zu24' ||
+    bm === 'zu12' ||
+    bm === 'zu4' ||
+    /组和|直选和值|组选复式|组选24|组选12|组选6|组选4/.test(label)
+  ) {
+    return false
+  }
+  return (
+    bm === 'danshi' ||
+    bm === 'zhixuan_ds' ||
+    bm === 'zuxuan_ds' ||
+    bm === 'hunhe' ||
+    sub.includes('zhixuan_ds') ||
+    sub.includes('zuxuan_ds') ||
+    /直选单式|组选单式|混合组选|组三单式|组六单式/.test(label) ||
+    config.inputMode === 'danshi'
+  )
+}
+
+/** @deprecated 使用 isRenxuanPerPosTriggerPlay；保留兼容旧测试名 */
+export function isRenxuanZhixuanDanshiTriggerPlay(config: AdvTriggerPosConfig): boolean {
+  return isRenxuanPerPosTriggerPlay(config)
+}
+
+/** 任选开某投某默认选位：任二万千；任三万千个；任四万千百十 */
+export function defaultRenxuanTriggerPositionIdxs(k: number): number[] {
+  const n = k >= 2 && k <= 5 ? k : 2
+  if (n <= 2) return [0, 1]
+  if (n === 3) return [0, 1, 4]
+  if (n === 4) return [0, 1, 2, 3]
+  return [0, 1, 2, 3, 4]
 }
 
 /**
@@ -683,6 +765,8 @@ export function supportsAdvTriggerPerPosColumns(config: AdvTriggerPosConfig): bo
   }
   // 中三/前三直选单式：千百十（或万千百）三位分列
   if (isZhixuanDanshiPerPosPlay(config)) return true
+  // 任选单式类：按勾选的 k 个绝对位分列（配合选位芯片）
+  if (isRenxuanPerPosTriggerPlay(config)) return true
   return false
 }
 

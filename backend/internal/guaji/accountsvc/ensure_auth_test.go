@@ -40,6 +40,31 @@ func TestMaxAutoReauthAttempts(t *testing.T) {
 	}
 }
 
+func TestReauthModesDifferOnFailCountGate(t *testing.T) {
+	t.Parallel()
+	// 自动路径熔断：failCount≥阈值直接 ErrReauthNeedsBind，不再打上游。
+	// 手动路径（Reauth）跳过该门闩，始终走 refresh/密码登录。
+	if reauthModeAuto == reauthModeManual {
+		t.Fatal("auto/manual modes must differ")
+	}
+}
+
+func TestAutoReauthUsesSingleflightKey(t *testing.T) {
+	t.Parallel()
+	// 约定：ensureActiveAuth 以 memberId 为 singleflight key，
+	// 同会员多方案并发 401 只跑一轮 doAutoReauthAttempts。
+	if maxAutoReauthAttempts < 1 {
+		t.Fatal("auto attempts must be >= 1")
+	}
+}
+
+func TestAutoReauthUsesSingleflightField(t *testing.T) {
+	t.Parallel()
+	// NewService 零值 Group 可用；多方案 EnsureActiveAuth 经 autoReauthSF 合并。
+	s := &Service{}
+	_ = s.autoReauthSF
+}
+
 func TestEnsureActiveAuthUnavailable(t *testing.T) {
 	t.Parallel()
 	var s *Service

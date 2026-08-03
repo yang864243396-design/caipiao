@@ -48,6 +48,30 @@ func TestClassifyUpstreamError_friendlyPassthrough(t *testing.T) {
 	}
 }
 
+func TestClassifyUpstreamError_businessChineseNotTokenInvalid(t *testing.T) {
+	cases := []string{
+		"第三方服务暂时不可用，请稍后重试",
+		"第三方接单失败: 投注注数为0（选号无效或不足）",
+		"投注注数为0（选号无效或不足）",
+	}
+	for _, msg := range cases {
+		f := ClassifyUpstreamError(errors.New(msg))
+		if f.IsTokenInvalid {
+			t.Fatalf("%q should not be token invalid: %+v", msg, f)
+		}
+		if f.UserMessage != msg {
+			t.Fatalf("UserMessage=%q want %q", f.UserMessage, msg)
+		}
+	}
+}
+
+func TestIsRetryableTransportError_errUpstreamMessage(t *testing.T) {
+	err := errors.New("第三方服务暂时不可用，请稍后重试")
+	if !IsRetryableTransportError(err) {
+		t.Fatal("ErrUpstream message must be retryable (was misclassified as token invalid)")
+	}
+}
+
 func TestIsRetryableTransportError(t *testing.T) {
 	cases := []struct {
 		err  error
@@ -60,11 +84,22 @@ func TestIsRetryableTransportError(t *testing.T) {
 		{&APIError{Code: 40055, Message: "封盘时间,下注失败"}, false},
 		{&APIError{Code: CodeTokenInvalid, Message: "无效的令牌"}, false},
 		{&APIError{Code: 40000, Message: "余额不足"}, false},
+		{&APIError{Code: CodeBlockFetch, Message: "区块获取异常,下注失败"}, true},
+		{errors.New("guaji api code=40050: 区块获取异常,下注失败"), true},
 	}
 	for _, c := range cases {
 		if got := IsRetryableTransportError(c.err); got != c.want {
 			t.Fatalf("%v => %v want %v", c.err, got, c.want)
 		}
+	}
+}
+
+func TestIsBlockFetchError(t *testing.T) {
+	if !IsBlockFetchError(&APIError{Code: CodeBlockFetch, Message: "区块获取异常,下注失败"}) {
+		t.Fatal("40050 should be block fetch")
+	}
+	if IsBlockFetchError(&APIError{Code: 40000, Message: "余额不足"}) {
+		t.Fatal("balance error must not be block fetch")
 	}
 }
 

@@ -44,7 +44,7 @@ import {
   buildRenxuanPositionContent,
   countBetUnits,
   defaultRenxuanPositions,
-  isRenxuanPositionDanshiConfig,
+  isRenxuanNeedsPositionConfig,
   resolvePlayConfig,
   seedDigitsFromNumbers,
   type PlayConfig,
@@ -157,7 +157,8 @@ const pickDigits = ref<string[]>(['1', '3', '7'])
 const pickLines = ref<string[][]>([])
 const danshiInput = ref('')
 const renxuanDanshiContent = ref('')
-const usesRenxuanDanshi = computed(() => isRenxuanPositionDanshiConfig(playConfig.value))
+/** 任选非直选复式：选位壳（单式票面或号池/和值） */
+const usesRenxuanDanshi = computed(() => isRenxuanNeedsPositionConfig(playConfig.value))
 
 const isLhcTemplate = computed(() => playTree.value?.playTemplate === 'lhc_std')
 
@@ -182,21 +183,26 @@ const lhcPickOptions = computed((): readonly string[] => {
 
 function initManualPicks(cfg: PlayConfig = playConfig.value) {
   if (snapshotId.value) return
+  if (isRenxuanNeedsPositionConfig(cfg)) {
+    const k = cfg.renPositionCount ?? 2
+    const n = cfg.segmentLen > 0 ? cfg.segmentLen : k
+    let sample = '1,3,5'
+    if (cfg.inputMode === 'danshi' || cfg.betMode === 'danshi' || cfg.betMode === 'zhixuan_ds') {
+      sample = Array.from({ length: n }, (_, i) => String((i + 1) % 10)).join('')
+    } else if (cfg.betMode === 'hezhi' || (cfg.playMethodLabel ?? '').includes('和值')) {
+      sample = '5,6,7'
+    }
+    renxuanDanshiContent.value = buildRenxuanPositionContent(
+      defaultRenxuanPositions(k),
+      sample,
+    )
+    return
+  }
   if (cfg.inputMode === 'multiline') {
     pickLines.value = cfg.segmentLabels.map(() => ['0'])
     return
   }
   if (cfg.inputMode === 'danshi') {
-    if (isRenxuanPositionDanshiConfig(cfg)) {
-      const k = cfg.renPositionCount ?? 2
-      const n = cfg.segmentLen > 0 ? cfg.segmentLen : k
-      const sample = Array.from({ length: n }, (_, i) => String((i + 1) % 10)).join('')
-      renxuanDanshiContent.value = buildRenxuanPositionContent(
-        defaultRenxuanPositions(k),
-        sample,
-      )
-      return
-    }
     danshiInput.value = isLhcTemplate.value ? '大,单' : '0'.repeat(cfg.segmentLen)
     return
   }

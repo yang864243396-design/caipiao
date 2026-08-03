@@ -31,15 +31,20 @@ func guajiBetFailedDetail(err error) string {
 		return "无启用中的授权账号"
 	case errors.Is(err, guajibet.ErrTokenInvalid):
 		return "授权已失效，请重新授权"
+	case errors.Is(err, guajibet.ErrUpstream):
+		return guajibet.ErrUpstream.Error()
+	case errors.Is(err, guajibet.ErrInsufficient):
+		return guajibet.ErrInsufficient.Error()
+	case errors.Is(err, guajibet.ErrPeriodClosed):
+		return guajibet.ErrPeriodClosed.Error()
+	case errors.Is(err, guajibet.ErrZeroBets):
+		return guajibet.ErrZeroBets.Error()
 	}
 	var api *guaji.APIError
 	if errors.As(err, &api) && strings.TrimSpace(api.Message) != "" {
 		return normalizeBetFailedDetail(api.Message)
 	}
-	fault := guaji.ClassifyUpstreamError(err)
-	if msg := strings.TrimSpace(fault.UserMessage); msg != "" {
-		return normalizeBetFailedDetail(msg)
-	}
+	// 接单失败包装：剥前缀，避免 Classify 把整串「第三方接单失败: …」原样吐出。
 	if errors.Is(err, guajibet.ErrPlaceRejected) {
 		base := guajibet.ErrPlaceRejected.Error()
 		msg := strings.TrimSpace(err.Error())
@@ -49,6 +54,11 @@ func guajiBetFailedDetail(err error) string {
 		if msg != "" && msg != base {
 			return normalizeBetFailedDetail(msg)
 		}
+		return base
+	}
+	fault := guaji.ClassifyUpstreamError(err)
+	if msg := strings.TrimSpace(fault.UserMessage); msg != "" {
+		return normalizeBetFailedDetail(msg)
 	}
 	return normalizeBetFailedDetail(err.Error())
 }

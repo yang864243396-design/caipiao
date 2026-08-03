@@ -47,7 +47,7 @@ func TestValidateDefinitionContentOnSave(t *testing.T) {
 			cfg: wuxingFushi(strings.Join([]string{
 				allDigits, allDigits, allDigits, allDigits, allDigits,
 			}, "\n")),
-			patch: contentPatch("x"), wantErr: true, wantMatch: "超过上限",
+			patch: contentPatch("x"), wantErr: true, wantMatch: "最大投注注数",
 		},
 		{
 			name:  "五星直选复式各位只选一个号合法",

@@ -38,7 +38,7 @@ func triggerOpenMatches(rule playRule, balls []string, open string, watchPositio
 			return normalizeTriggerToken(pc28LonghubaoResult(balls)) == open
 		}
 	}
-	// SSC/哈希等：和值/跨度/尾数的「开出」是区位派生值，不是某一球号
+	// SSC/哈希等：和值/跨度/尾数/特殊号的「开出」是区位派生形态，不是某一球号
 	switch strings.ToLower(strings.TrimSpace(rule.BetMode)) {
 	case "hezhi":
 		return strconv.Itoa(triggerSegmentSum(rule, balls)) == open
@@ -46,6 +46,14 @@ func triggerOpenMatches(rule playRule, balls []string, open string, watchPositio
 		return strconv.Itoa(triggerSegmentKuadu(rule, balls)) == open
 	case "weishu":
 		return strconv.Itoa(triggerSegmentSum(rule, balls)%10) == open
+	case "teshu":
+		// 中三特殊号：开出=豹子/对子/顺子（def-1-1785499025837 曾因落入球号比较而永不命中）
+		seg := drawSegmentForRule(rule, balls)
+		sub := strings.TrimSpace(rule.CatalogSubID)
+		if sub == "" {
+			sub = strings.TrimSpace(rule.SubPlayID)
+		}
+		return teshuPickHit(sub, seg, open)
 	}
 	positions := []int{rule.PositionIdx}
 	if len(watchPositions) > 0 && len(watchPositions[0]) > 0 {

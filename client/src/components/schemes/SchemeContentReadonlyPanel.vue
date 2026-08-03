@@ -9,8 +9,10 @@ import type { PlayConfig } from '@/utils/betPayload'
 import {
   countBetUnits,
   groupContentPlaceholder,
-  isRenxuanPositionDanshiConfig,
+  isRenxuanNeedsPositionConfig,
+  isZuxuanDanshiConfig,
   playConfigSummary,
+  SSC_POSITION_LABELS,
 } from '@/utils/betPayload'
 import {
   digitOptionsForConfig,
@@ -19,8 +21,11 @@ import {
   schemeGroupUsesPickPanel,
 } from '@/utils/pickPanelOptions'
 import {
+  defaultRenxuanTriggerPositionIdxs,
   isLonghuPlayConfigLike,
   isPerPosDxdsPlayConfig,
+  isRenxuanNeedsPositionTriggerPlay,
+  isRenxuanPerPosTriggerPlay,
   isZhixuanDanshiPerPosPlay,
   supportsAdvTriggerPerPosColumns,
   supportsAdvTriggerPositionPicker,
@@ -87,7 +92,19 @@ const positionLabels = computed(() =>
   ),
 )
 
-/** 投注位芯片已废弃；一星与前三码同为按位分列 */
+const isRenxuanTriggerPlay = computed(() =>
+  isRenxuanNeedsPositionTriggerPlay(props.playConfig),
+)
+const isRenxuanPerPosTrigger = computed(() =>
+  isRenxuanPerPosTriggerPlay(props.playConfig),
+)
+
+const triggerRenPosNeed = computed(() => {
+  const k = props.playConfig.renPositionCount ?? props.playConfig.segmentLen ?? 2
+  return k >= 2 && k <= 5 ? k : 2
+})
+
+/** 任选直选单式显示选位芯片；一星等仍按位分列 */
 const showTriggerPositionPicker = computed(() => {
   if (props.runTypeId !== 'adv_trigger_bet') return false
   return supportsAdvTriggerPositionPicker(props.playConfig)
@@ -97,6 +114,48 @@ const showTriggerPerPosColumns = computed(() => {
   if (props.runTypeId !== 'adv_trigger_bet') return false
   if (isLonghuPlayConfigLike(props.playConfig)) return false
   return supportsAdvTriggerPerPosColumns(props.playConfig)
+})
+
+const triggerPickerLabels = computed(() => {
+  if (isRenxuanTriggerPlay.value) return [...SSC_POSITION_LABELS]
+  return positionLabels.value
+})
+
+const triggerColumnLabels = computed(() => {
+  if (isRenxuanTriggerPlay.value) {
+    return triggerPositionIdxs.value.map((i) => SSC_POSITION_LABELS[i] ?? `第${i + 1}位`)
+  }
+  return positionLabels.value
+})
+
+const triggerSegmentOpenTip = computed(() => {
+  if (props.runTypeId !== 'adv_trigger_bet') return ''
+  const cfg = props.playConfig
+  if (isRenxuanTriggerPlay.value) {
+    const need = triggerRenPosNeed.value
+    const picked = triggerColumnLabels.value.join('/') || '所选位'
+    if (isRenxuanPerPosTrigger.value) {
+      return `先勾选恰好 ${need} 个位置（默认万/千）；启用区按 ${picked} 分行填写正/反投。开出：所选各位球号分别查映射；下注带选位前缀。`
+    }
+    return `先勾选恰好 ${need} 个位置（默认万/千）；正/反投填号池或和值号码。开出：按所选位判定命中；下注带选位前缀。`
+  }
+  const labels = (cfg.segmentLabels ?? []).filter(Boolean)
+  const posHint =
+    labels.length >= 2 ? labels.join('/') : cfg.segmentLen >= 2 ? `前 ${cfg.segmentLen} 位` : ''
+  if (!posHint) return ''
+  if (isZuxuanDanshiConfig(cfg)) {
+    return `开出：${posHint}任一位开出该号码即命中（多号同时开出时按${labels[0] || '首位'}优先，只投一行）；正/反投为组选单式整注。`
+  }
+  const bm = String(cfg.betMode ?? '').toLowerCase()
+  if (
+    bm === 'zuxuan_fs' ||
+    bm === 'zu3' ||
+    bm === 'zu6' ||
+    /组选复式|组三|组六/.test(cfg.playMethodLabel ?? '')
+  ) {
+    return `开出：${posHint}任一位开出该号码即命中（多号同时开出时按${labels[0] || '首位'}优先，只投一行）。`
+  }
+  return ''
 })
 
 function triggerPosName(posLabel: string): string {
@@ -119,6 +178,18 @@ function triggerFieldParts(raw: string, len: number): string[] {
 
 const triggerPositionIdxs = computed(() => {
   const tb = props.triggerBet
+  if (isRenxuanTriggerPlay.value) {
+    const need = triggerRenPosNeed.value
+    const max = 5
+    if (tb?.positionIdxs?.length) {
+      const idxs = [...tb.positionIdxs]
+        .map((x) => Number(x))
+        .filter((i) => Number.isInteger(i) && i >= 0 && i < max)
+        .sort((a, b) => a - b)
+      if (idxs.length === need) return idxs
+    }
+    return defaultRenxuanTriggerPositionIdxs(need)
+  }
   const n = Math.max(1, positionCount.value)
   const all = Array.from({ length: n }, (_, i) => i)
   if (!tb) return all
@@ -185,25 +256,11 @@ const hcwAttribute = computed(() => {
 
 const hcwSingleGroup = computed(() => hcwDigitOverall.value || hcwAttribute.value)
 
-/** 按位展示档数：以玩法位数为准，并兼容历史配置中更长的选号池 */
+/** 按位展示档数：以玩法位数与 ranks 为准 */
 const hcwPosCount = computed(() => {
   if (hcwSingleGroup.value) return 1
-  const fromPool = (props.hotColdWarm?.pool ?? []).length
   const fromRanks = (props.hotColdWarm?.ranks ?? []).length
-  return Math.max(1, positionCount.value, fromPool, fromRanks)
-})
-
-const hcwPools = computed(() => {
-  const pool = props.hotColdWarm?.pool ?? []
-  const mapped = pool.map((p) =>
-    String(p ?? '')
-      .split(/[,，\s]+/)
-      .map((t) => t.trim())
-      .filter(Boolean),
-  )
-  const n = hcwPosCount.value
-  while (mapped.length < n) mapped.push([])
-  return mapped.slice(0, n)
+  return Math.max(1, positionCount.value, fromRanks)
 })
 
 const hcwStrategy = computed(() => {
@@ -217,13 +274,6 @@ const hcwTotalPeriods = computed(() => {
   if (Number.isFinite(tp) && tp >= 20 && tp <= 100) return tp
   if (Number.isFinite(tp) && tp > 100) return 100
   return 20
-})
-
-const hcwPickTypes = computed<Array<'hot' | 'cold'>>(() => {
-  const arr = props.hotColdWarm?.pickTypes ?? []
-  return arr
-    .map((t) => String(t ?? '').toLowerCase())
-    .filter((t): t is 'hot' | 'cold' => t === 'hot' || t === 'cold')
 })
 
 const hcwRanks = computed(() => {
@@ -243,11 +293,67 @@ const hcwRanks = computed(() => {
   })
 })
 
+/** 无 ranks 的旧配置：仅用 pool/pickTypes 合成一次展示名次（不反向驱动按钮态） */
+const hcwLegacyRanks = computed(() => {
+  if (hcwRanks.value.some((r) => (r?.length ?? 0) > 0)) return null as number[][] | null
+  const poolRaw = props.hotColdWarm?.pool ?? []
+  const savedPool = poolRaw.map((p) =>
+    String(p ?? '')
+      .split(/[,，\s]+/)
+      .map((t) => t.trim())
+      .filter(Boolean),
+  )
+  const kinds = (props.hotColdWarm?.pickTypes ?? [])
+    .map((t) => String(t ?? '').toLowerCase())
+    .filter((t): t is 'hot' | 'cold' => t === 'hot' || t === 'cold')
+  const n = hcwPosCount.value
+  const out: number[][] = Array.from({ length: n }, () => [])
+  if (!hcwStatsReady.value) return out
+  const wantHot = !kinds.length || kinds.includes('hot')
+  const wantCold = kinds.includes('cold')
+  const anyPool = savedPool.some((p) => p.length > 0)
+  for (let pi = 0; pi < n; pi++) {
+    const enabled = !anyPool || (savedPool[pi]?.length ?? 0) > 0
+    if (!enabled) continue
+    const ordered = hcwOrderedTokens(pi)
+    if (!ordered.length) continue
+    const pool = savedPool[pi] ?? []
+    if (pool.length) {
+      const ranks: number[] = []
+      for (const tok of pool) {
+        const idx = ordered.findIndex((x) => tokenEq(x, tok))
+        if (idx >= 0 && !ranks.includes(idx)) ranks.push(idx)
+      }
+      if (ranks.length) {
+        out[pi] = ranks
+        continue
+      }
+    }
+    const half = Math.ceil(ordered.length / 2)
+    const ranks: number[] = []
+    if (wantHot) for (let i = 0; i < half; i++) ranks.push(i)
+    if (wantCold) for (let i = half; i < ordered.length; i++) ranks.push(i)
+    out[pi] = ranks
+  }
+  return out
+})
+
+/** 展示用名次：优先配置 ranks */
+const hcwEffectiveRanks = computed(() => {
+  if (hcwRanks.value.some((r) => (r?.length ?? 0) > 0)) {
+    const n = hcwPosCount.value
+    return Array.from({ length: n }, (_, i) => [...(hcwRanks.value[i] ?? [])])
+  }
+  return hcwLegacyRanks.value ?? Array.from({ length: hcwPosCount.value }, () => [])
+})
+
 const hcwAttrUniverse = ref<string[]>([])
 const hcwLoading = ref(false)
 const hcwStatsReady = ref(false)
 const hcwTiers = ref<HcwTier[]>([])
 const hcwFreq = ref<Array<Record<string, number>>>([])
+/** 与编辑页一致：玩法树异步就绪后需能作废旧请求并重拉，禁止用 loading 挡掉重入 */
+let hcwLoadSeq = 0
 
 function hcwOrderedTokens(pos: number): string[] {
   if (hcwStatsReady.value) {
@@ -261,34 +367,36 @@ function hcwOrderedTokens(pos: number): string[] {
   return [...hcwFallbackOptions.value]
 }
 
-/** 有 ranks 时按当前排名映射预览；否则回退 pickTypes 整区 / 已存 pool */
+/** 统计未就绪时用配置占位号池，避免详情先按位频次、树就绪后重入被挡导致 90/98 漂移 */
+function hcwSavedPoolLine(pos: number): string[] {
+  const raw = props.hotColdWarm?.pool?.[pos] ?? props.schemeGroups[pos] ?? ''
+  return String(raw)
+    .split(/[,，\s]+/)
+    .map((t) => t.trim())
+    .filter(Boolean)
+}
+
+/** 以 ranks 为权威：按当前排名映射选中号码（不读 pool / pickTypes 按钮态） */
 const hcwEstimatePools = computed(() => {
-  const saved = hcwPools.value
   const n = hcwPosCount.value
-  const hasRanks = hcwRanks.value.some((r) => (r?.length ?? 0) > 0)
-  if (hasRanks && hcwStatsReady.value) {
-    return Array.from({ length: n }, (_, pi) => {
-      const ranks = hcwRanks.value[pi] ?? []
-      if (!ranks.length) return []
-      const ordered = hcwOrderedTokens(pi)
-      return sortHcwTokens(ranks.filter((r) => r >= 0 && r < ordered.length).map((r) => ordered[r]!))
-    })
+  if (!hcwStatsReady.value) {
+    // 未就绪：回退配置 pool / schemeGroups（与编辑页保存快照一致，如跨度 1–9=90）
+    return Array.from({ length: n }, (_, pi) => sortHcwTokens(hcwSavedPoolLine(pi)))
   }
-  const kinds = hcwPickTypes.value
-  if (!hcwStatsReady.value || !kinds.length) return saved
-  const wantHot = kinds.includes('hot')
-  const wantCold = kinds.includes('cold')
-  if (!wantHot && !wantCold) return saved
-  const anyEnabled = saved.some((p) => p.length > 0)
-  const kind: 'hot' | 'cold' | 'all' = wantHot && wantCold ? 'all' : wantHot ? 'hot' : 'cold'
-  return saved.map((line, pi) => {
-    if (anyEnabled && line.length === 0) return []
-    return sortHcwTokens(hcwQuickTargets(pi, kind))
+  return Array.from({ length: n }, (_, pi) => {
+    const ranks = hcwEffectiveRanks.value[pi] ?? []
+    if (!ranks.length) return sortHcwTokens(hcwSavedPoolLine(pi))
+    const ordered = hcwOrderedTokens(pi)
+    return sortHcwTokens(ranks.filter((r) => r >= 0 && r < ordered.length).map((r) => ordered[r]!))
   })
 })
 
 const hcwFallbackOptions = computed(() =>
-  hcwAttribute.value ? hcwAttrUniverse.value : numberPoolTokens.value,
+  hcwAttribute.value
+    ? hcwAttrUniverse.value.length
+      ? hcwAttrUniverse.value
+      : numberPoolTokens.value
+    : numberPoolTokens.value,
 )
 
 const hcwGroupLabels = computed(() => {
@@ -346,10 +454,11 @@ function hcwPositionOffset(ballsLen: number): number {
   return 0
 }
 
-async function loadHcwAttrStats(): Promise<void> {
+async function loadHcwAttrStats(seq: number): Promise<void> {
   const cfg = props.playConfig
   const code = String(props.lotteryCode ?? '').trim()
   if (!code) {
+    if (seq !== hcwLoadSeq) return
     hcwStatsReady.value = false
     hcwFreq.value = []
     return
@@ -359,7 +468,7 @@ async function loadHcwAttrStats(): Promise<void> {
     lotteryCode: code,
     playTypeId: cfg.playTypeId,
     subPlayId: cfg.subPlayId,
-    playTemplate: cfg.playTemplate,
+    playTemplate: cfg.playTemplate || 'ssc_std',
     betMode: cfg.betMode,
     catalogSubId: cfg.catalogSubId,
     playMethodLabel: cfg.playMethodLabel,
@@ -367,33 +476,41 @@ async function loadHcwAttrStats(): Promise<void> {
     numberPoolMax: cfg.numberPoolMax,
     periods: hcwTotalPeriods.value,
   })
+  if (seq !== hcwLoadSeq) return
   if (res.mode !== 'attribute' || !Array.isArray(res.universe) || res.universe.length === 0) {
+    if (hcwStatsReady.value && hcwFreq.value.length) return
     hcwStatsReady.value = false
     hcwFreq.value = []
     return
   }
-  hcwAttrUniverse.value = res.universe
+  const uni = res.universe
+  const rawCounts = res.counts && typeof res.counts === 'object' ? res.counts : {}
+  const counts: Record<string, number> = {}
+  for (const opt of uni) counts[opt] = Number(rawCounts[opt]) || 0
+  hcwAttrUniverse.value = uni
   hcwTiers.value = [{ hot: res.hot ?? [], warm: res.warm ?? [], cold: res.cold ?? [] }]
-  hcwFreq.value = [res.counts && typeof res.counts === 'object' ? { ...res.counts } : {}]
+  hcwFreq.value = [counts]
   hcwStatsReady.value = true
 }
 
 async function loadHcwStats(): Promise<void> {
-  if (hcwLoading.value) return
   if (props.runTypeId !== 'hot_cold_warm') return
+  const seq = ++hcwLoadSeq
   hcwLoading.value = true
   try {
     if (hcwAttribute.value) {
-      await loadHcwAttrStats()
+      await loadHcwAttrStats(seq)
       return
     }
     const code = String(props.lotteryCode ?? '').trim()
     if (!code) {
+      if (seq !== hcwLoadSeq) return
       hcwStatsReady.value = false
       hcwFreq.value = []
       return
     }
     const res = await fetchGameDraws(code, undefined, hcwTotalPeriods.value)
+    if (seq !== hcwLoadSeq) return
     const items = Array.isArray(res?.items) ? res.items : []
     const segLen = positionCount.value
     const pool = numberPoolTokens.value
@@ -414,6 +531,7 @@ async function loadHcwStats(): Promise<void> {
       }
     }
     if (!counted) {
+      if (hcwStatsReady.value && hcwFreq.value.length) return
       hcwStatsReady.value = false
       hcwFreq.value = []
       return
@@ -433,32 +551,28 @@ async function loadHcwStats(): Promise<void> {
     hcwFreq.value = freq.map((counts) => ({ ...counts }))
     hcwStatsReady.value = true
   } catch {
+    if (seq !== hcwLoadSeq) return
+    if (hcwStatsReady.value && hcwFreq.value.length) return
     hcwStatsReady.value = false
     hcwFreq.value = []
   } finally {
-    hcwLoading.value = false
+    if (seq === hcwLoadSeq) hcwLoading.value = false
   }
 }
 
-function hcwQuickTargets(pos: number, kind: 'cold' | 'hot' | 'all'): string[] {
-  if (kind === 'all') {
-    if (hcwStatsReady.value) {
-      const t = hcwTiers.value[pos]
-      return [...(t?.hot ?? []), ...(t?.cold ?? [])]
-    }
-    return [...hcwFallbackOptions.value]
-  }
-  if (!hcwStatsReady.value) return []
-  const t = hcwTiers.value[pos]
-  return kind === 'hot' ? [...(t?.hot ?? [])] : [...(t?.cold ?? [])]
-}
-
+/** 快捷钮高亮：仅当当前名次集与该快捷目标完全一致（不持久化按钮态） */
 function hcwQuickActive(pos: number, kind: 'cold' | 'hot' | 'all'): boolean {
-  const pool = hcwEstimatePools.value[pos] ?? []
-  const targets = hcwQuickTargets(pos, kind)
-  if (!targets.length) return false
-  if (pool.length !== targets.length) return false
-  return targets.every((t) => poolHasToken(pool, t))
+  const ordered = hcwOrderedTokens(pos)
+  if (!ordered.length) return false
+  const half = Math.ceil(ordered.length / 2)
+  let want: number[] = []
+  if (kind === 'hot') want = Array.from({ length: half }, (_, i) => i)
+  else if (kind === 'cold') want = Array.from({ length: Math.max(0, ordered.length - half) }, (_, i) => half + i)
+  else want = Array.from({ length: ordered.length }, (_, i) => i)
+  const got = [...(hcwEffectiveRanks.value[pos] ?? [])].sort((a, b) => a - b)
+  const w = [...want].sort((a, b) => a - b)
+  if (got.length !== w.length) return false
+  return w.every((r, i) => r === got[i])
 }
 
 function hcwLookupCount(pos: number, token: string): number {
@@ -540,7 +654,7 @@ watch(
 
 const schemeUsesPickPanel = computed(() => schemeGroupUsesPickPanel(props.playConfig))
 const schemeUsesDigitInput = computed(() => schemeGroupUsesDigitInput(props.playConfig))
-const schemeUsesRenxuanDanshi = computed(() => isRenxuanPositionDanshiConfig(props.playConfig))
+const schemeUsesRenxuanDanshi = computed(() => isRenxuanNeedsPositionConfig(props.playConfig))
 const groupInputPlaceholder = computed(() => groupContentPlaceholder(props.playConfig))
 
 const displayedGroupIndexes = computed(() => {
@@ -574,7 +688,7 @@ const rdWholeTicket = computed(() => {
   return label.includes('单式')
 })
 
-/** 组选号池随机；包胆属属性单选（仅 1 码），勿因文案含「组选」误入。 */
+/** 组选号池随机；包胆/和值属属性单选，勿因文案含「组选」误入。 */
 const rdZuxuanPool = computed(() => {
   if (rdWholeTicket.value) return false
   const cfg = props.playConfig as {
@@ -587,9 +701,11 @@ const rdZuxuanPool = computed(() => {
   const label = String(cfg.playMethodLabel ?? '')
   if (bm === 'hunhe' || label.includes('混合')) return false
   if (bm === 'baodan' || /包胆/.test(label)) return false
+  // 组选和值等：走属性「选项个数」，下限 1
+  if (['hezhi', 'kuadu', 'weishu', 'budingwei'].includes(bm) || /和值|跨度|尾数/.test(label)) return false
   if (['zu3', 'zu6', 'zu24', 'zu12', 'zu60', 'zu30', 'zu120'].includes(bm)) return true
   const cat = `${String(cfg.subPlayId ?? '')} ${String(cfg.catalogSubId ?? '')}`.toLowerCase()
-  if (/baodan|_bd\b|包胆/.test(`${cat} ${label}`)) return false
+  if (/baodan|_bd\b|包胆|hezhi|_hz\b|kuadu|和值|跨度/.test(`${cat} ${label}`)) return false
   if (/zuxuan_fs|zuxuan|zu3|zu6|zu24|zu12|zu60|zu30|zu120/.test(cat)) return true
   return /组三|组六|组选/.test(label)
 })
@@ -765,16 +881,17 @@ function formatGroupContent(content: string): string {
 
     <!-- 高级开某投某 -->
     <div v-else-if="runTypeId === 'adv_trigger_bet'" class="scr-content-card scr-panel">
+      <p v-if="triggerSegmentOpenTip" class="scr-run-tip">{{ triggerSegmentOpenTip }}</p>
       <div v-if="showTriggerPositionPicker" class="scr-field">
-        <span class="scr-lbl">投注位</span>
+        <span class="scr-lbl">选位</span>
         <div
           class="scr-trig-pos-chips"
           role="group"
           aria-label="投注位"
-          :style="{ '--scr-trig-pos-n': String(positionLabels.length || 5) }"
+          :style="{ '--scr-trig-pos-n': String(triggerPickerLabels.length || 5) }"
         >
           <span
-            v-for="(label, idx) in positionLabels"
+            v-for="(label, idx) in triggerPickerLabels"
             :key="`pos-${idx}`"
             class="scr-trig-pos-chip"
             :class="{ 'is-on': triggerPositionIdxs.includes(idx) }"
@@ -802,7 +919,7 @@ function formatGroupContent(content: string): string {
           :class="{ 'is-off': !row.enabled }"
         >
           <div
-            v-for="(label, pIdx) in positionLabels"
+            v-for="(label, pIdx) in triggerColumnLabels"
             :key="`scr-trig-c-${row.open}-${pIdx}`"
             class="scr-trig-grid scr-trig-grid--posrow"
           >
@@ -812,12 +929,12 @@ function formatGroupContent(content: string): string {
             <span v-else class="scr-trig-cell-placeholder" aria-hidden="true" />
             <span class="scr-trig-pos-name">{{ triggerPosName(label) }}</span>
             <el-input
-              :model-value="triggerFieldParts(row.pos, positionCount)[pIdx] ?? ''"
+              :model-value="triggerFieldParts(row.pos, triggerColumnLabels.length)[pIdx] ?? ''"
               size="small"
               disabled
             />
             <el-input
-              :model-value="triggerFieldParts(row.neg, positionCount)[pIdx] ?? ''"
+              :model-value="triggerFieldParts(row.neg, triggerColumnLabels.length)[pIdx] ?? ''"
               size="small"
               disabled
             />

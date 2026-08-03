@@ -403,6 +403,8 @@ func (c *Client) findBetIDByPeriod(ctx context.Context, accessToken string, game
 			lastErr = err
 			continue
 		}
+		// 取同期限匹配中 id 最大者（最新单），避免回查到上一笔造成一单两期/漏挂新单。
+		var bestID int64
 		for _, it := range items {
 			if strings.TrimSpace(it.Periods) != periods {
 				continue
@@ -413,7 +415,12 @@ func (c *Client) findBetIDByPeriod(ctx context.Context, accessToken string, game
 			if amount > 0 && it.BetAmount > 0 && !floatNear(it.BetAmount, amount) {
 				continue
 			}
-			return strconv.FormatInt(it.ID, 10), nil
+			if it.ID > bestID {
+				bestID = it.ID
+			}
+		}
+		if bestID > 0 {
+			return strconv.FormatInt(bestID, 10), nil
 		}
 		lastErr = fmt.Errorf("guaji find bet: not found periods=%s", periods)
 	}

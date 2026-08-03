@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { isZhixuanDanshiPerPosPlay, supportsAdvTriggerPerPosColumns } from './runTypeMatrix'
+import {
+  defaultRenxuanTriggerPositionIdxs,
+  isRenxuanZhixuanDanshiTriggerPlay,
+  isZhixuanDanshiPerPosPlay,
+  supportsAdvTriggerPerPosColumns,
+  supportsAdvTriggerPositionPicker,
+} from './runTypeMatrix'
 
 describe('supportsAdvTriggerPerPosColumns', () => {
   it('中三直选单式按千/百/十三位分列', () => {
@@ -28,18 +34,51 @@ describe('supportsAdvTriggerPerPosColumns', () => {
     ).toBe(true)
   })
 
-  it('任选单式（仅选号）不分列', () => {
-    expect(
-      supportsAdvTriggerPerPosColumns({
-        betMode: 'danshi',
-        playTypeId: 'g011',
-        playMethodLabel: '任二直选单式',
-        playTypeLabel: '任选',
-        inputMode: 'danshi',
-        segmentLen: 2,
-        segmentLabels: ['选号'],
-      }),
-    ).toBe(false)
+  it('任选直选单式按选位分列，并显示选位芯片（默认万千）', () => {
+    const cfg = {
+      betMode: 'danshi',
+      playTypeId: 'g011',
+      playMethodLabel: '任二直选单式',
+      playTypeLabel: '任选',
+      guajiGroup: '任选',
+      inputMode: 'danshi' as const,
+      segmentLen: 2,
+      segmentLabels: ['选号'],
+    }
+    expect(isRenxuanZhixuanDanshiTriggerPlay(cfg)).toBe(true)
+    expect(supportsAdvTriggerPerPosColumns(cfg)).toBe(true)
+    expect(supportsAdvTriggerPositionPicker(cfg)).toBe(true)
+    expect(defaultRenxuanTriggerPositionIdxs(2)).toEqual([0, 1])
+  })
+
+  it('任选组选复式须选位芯片，但不按位分列正反投', () => {
+    const cfg = {
+      betMode: 'zuxuan_fs',
+      playTypeId: 'g011',
+      playMethodLabel: '任二组选复式',
+      playTypeLabel: '任选',
+      guajiGroup: '任选',
+      inputMode: 'pool' as const,
+      segmentLen: 2,
+      segmentLabels: ['选号'],
+    }
+    expect(supportsAdvTriggerPositionPicker(cfg)).toBe(true)
+    expect(supportsAdvTriggerPerPosColumns(cfg)).toBe(false)
+    expect(isRenxuanZhixuanDanshiTriggerPlay(cfg)).toBe(false)
+  })
+
+  it('任选直选复式不显示选位芯片', () => {
+    const cfg = {
+      betMode: 'fushi',
+      playTypeId: 'g011',
+      playMethodLabel: '任二直选复式',
+      playTypeLabel: '任选',
+      guajiGroup: '任选',
+      inputMode: 'multiline' as const,
+      segmentLen: 2,
+      segmentLabels: ['万', '千', '百', '十', '个'],
+    }
+    expect(supportsAdvTriggerPositionPicker(cfg)).toBe(false)
   })
 
   it('前三直选复式仍按位分列', () => {

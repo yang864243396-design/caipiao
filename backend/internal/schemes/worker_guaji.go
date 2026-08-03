@@ -20,6 +20,17 @@ import (
 // guajiBetPlacer 与 guajibet.Placer 对齐；accountsvc.Service 实现该接口。
 type guajiBetPlacer = guajibet.Placer
 
+// errGuajiPlacePreflight 表示尚未调用第三方 Place（可安全释放占位重试）。
+// 一旦进入 PlaceRealBet，失败一律保留占位，避免「上游已接单、本地删占位」同期限连打。
+var errGuajiPlacePreflight = errors.New("guaji place preflight")
+
+func preflightPlaceErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: %w", errGuajiPlacePreflight, err)
+}
+
 type schemeGuajiBetMeta struct {
 	OrderNo         string
 	ThirdPartyBetID string
@@ -27,6 +38,7 @@ type schemeGuajiBetMeta struct {
 	Amount          float64 // 与第三方 bets_nums×单位×倍数对齐后的实扣金额
 	BetsNums        int     // wire 口径注数；供 cloud_bet_records.bet_units
 	PlayType        string  // 大类 · 子玩法展示文案
+	GroupContent    string  // 实际 groupContent，回写 cloud.bet_content
 }
 
 func (w *Worker) SetGuajiBetPlacer(p guajiBetPlacer) {
@@ -52,20 +64,20 @@ func (w *Worker) placeGuajiSchemeBet(
 	mult float64,
 ) (schemeGuajiBetMeta, error) {
 	if !w.guajiRealEnabled() {
-		return schemeGuajiBetMeta{}, errors.New("guaji disabled")
+		return schemeGuajiBetMeta{}, preflightPlaceErr(errors.New("guaji disabled"))
 	}
 	var account string
 	if err := w.pool.QueryRow(ctx, `SELECT account FROM members WHERE id = $1`, inst.MemberID).Scan(&account); err != nil {
-		return schemeGuajiBetMeta{}, err
+		return schemeGuajiBetMeta{}, preflightPlaceErr(err)
 	}
 	account = strings.TrimSpace(account)
 	if account == "" {
-		return schemeGuajiBetMeta{}, member.ErrNotFound
+		return schemeGuajiBetMeta{}, preflightPlaceErr(member.ErrNotFound)
 	}
 
 	cat, err := qtx.GetLotteryCatalogByCode(ctx, inst.LotteryCode)
 	if err != nil {
-		return schemeGuajiBetMeta{}, err
+		return schemeGuajiBetMeta{}, preflightPlaceErr(err)
 	}
 	gameID := strings.TrimSpace(textVal(cat.OutboundLotteryCode))
 	if gameID == "" {
@@ -73,7 +85,7 @@ func (w *Worker) placeGuajiSchemeBet(
 	}
 	ruleID, subPlay, err := resolveOutboundPlayCode(ctx, qtx, cfg, textVal(cat.PlayTemplate))
 	if err != nil {
-		return schemeGuajiBetMeta{}, err
+		return schemeGuajiBetMeta{}, preflightPlaceErr(err)
 	}
 	multInt := betMultipleAsInt(mult)
 	amountUnit := cfg.BetUnitYuan
@@ -93,6 +105,10 @@ func (w *Worker) placeGuajiSchemeBet(
 		subPlay.SegmentRule,
 		ruleID,
 	)
+	// 方案 betMode 优先：防文案推断把「组选和值」打成「组选复式」→ 单和值 content=1 计 0 注。
+	if bm := strings.TrimSpace(cfg.Play.BetMode); bm != "" {
+		ruleMeta.ForcedBetMode = bm
+	}
 	// 冷热按位号池先展开为单式整注，并在调用第三方之前完成本端校验落库载荷。
 	// 避免「先下到第三方、后 Normalize 失败」造成对账孤儿单。
 	normalizedContent := normalizeZhixuanDanshiContent(cfg.Play, betContent)
@@ -105,7 +121,7 @@ func (w *Worker) placeGuajiSchemeBet(
 		PlayMethod:   playMethodForPayload(cfg.PlayTypeLabel, subPlay.Label),
 	})
 	if err != nil {
-		return schemeGuajiBetMeta{}, err
+		return schemeGuajiBetMeta{}, preflightPlaceErr(err)
 	}
 	var normalizedPayload BetPayload
 	if err := json.Unmarshal(payload, &normalizedPayload); err == nil && strings.TrimSpace(normalizedPayload.GroupContent) != "" {
@@ -113,26 +129,27 @@ func (w *Worker) placeGuajiSchemeBet(
 	}
 	guajiContent := guajibet.FormatBetContentForRule(ruleMeta, normalizedContent)
 	if guajibet.IsFushiBaoziZeroBet(ruleMeta, guajiContent) {
-		return schemeGuajiBetMeta{}, fmt.Errorf("%w: %w", guajibet.ErrPlaceRejected, guajibet.ErrZeroBets)
+		return schemeGuajiBetMeta{}, preflightPlaceErr(fmt.Errorf("%w: %w", guajibet.ErrPlaceRejected, guajibet.ErrZeroBets))
 	}
 	betsNums = guajibet.ResolveBetsNums(ruleMeta, guajiContent, amount, amountUnit, multInt)
 	if betsNums <= 0 {
-		return schemeGuajiBetMeta{}, fmt.Errorf("%w: %w", guajibet.ErrPlaceRejected, guajibet.ErrZeroBets)
+		// 组选号池不足等：0 注，勿带非法 content 撞第三方「投注数字不合规」
+		return schemeGuajiBetMeta{}, preflightPlaceErr(fmt.Errorf("%w: %w", guajibet.ErrPlaceRejected, guajibet.ErrZeroBets))
 	}
 	// 按玩法独立上限拦一层（随机出号侧会重抽；此处防其它运行模式/缓存漏网）。
 	if max := maxBetUnitsForPlay(cfg.Play); max > 0 && betsNums > max {
-		return schemeGuajiBetMeta{}, fmt.Errorf("%w: %w", guajibet.ErrPlaceRejected, errMaxBetUnitsExceeded(max))
+		return schemeGuajiBetMeta{}, preflightPlaceErr(fmt.Errorf("%w: %w", guajibet.ErrPlaceRejected, errMaxBetUnitsExceeded(max)))
 	}
 	// 本端 evaluate 注数偶发偏少（如单式未按逗号切分）；以 wire 注数为准同步金额，避免账本少扣、对账差一倍。
 	amount = calcBetAmount(betsNums, float64(multInt), amountUnit)
 
 	periodNo := strings.TrimSpace(draw.IssueNo)
 	if !guajiBetPeriodMatches(inst.LotteryCode, periodNo) {
-		return schemeGuajiBetMeta{}, fmt.Errorf("%w: period %s not current guaji open issue", guajibet.ErrPeriodClosed, periodNo)
+		return schemeGuajiBetMeta{}, preflightPlaceErr(fmt.Errorf("%w: period %s not current guaji open issue", guajibet.ErrPeriodClosed, periodNo))
 	}
 
 	if slotErr := w.acquirePlaceSlot(ctx); slotErr != nil {
-		return schemeGuajiBetMeta{}, slotErr
+		return schemeGuajiBetMeta{}, preflightPlaceErr(slotErr)
 	}
 	defer w.releasePlaceSlot()
 
@@ -183,6 +200,15 @@ func (w *Worker) placeGuajiSchemeBet(
 		return schemeGuajiBetMeta{}, fmt.Errorf("%w: upstream did not return periods", guajibet.ErrPlaceRejected)
 	}
 
+	meta := schemeGuajiBetMeta{
+		ThirdPartyBetID: strings.TrimSpace(betRes.ThirdPartyBetID),
+		Periods:         returned,
+		Amount:          amount,
+		BetsNums:        betsNums,
+		PlayType:        cloudPlayTypeLabel(cfg.PlayTypeLabel, subPlay.Label),
+		GroupContent:    normalizedContent,
+	}
+
 	// 并发下单同一毫秒会撞 uq_bet_orders_order_no；带实例尾缀 + 纳秒降低冲突。
 	orderNo := fmt.Sprintf("BO%d%d%s", inst.MemberID, time.Now().UnixNano(), shortIDSuffix(inst.ID))
 	outLottery := pgtype.Text{String: gameID, Valid: gameID != ""}
@@ -204,21 +230,20 @@ func (w *Worker) placeGuajiSchemeBet(
 		Currency:            pgtype.Text{String: betRes.Currency, Valid: betRes.Currency != ""},
 	})
 	if err != nil {
-		return schemeGuajiBetMeta{}, err
+		// 第三方已接单：绝不可把错误抛给上层去「删占位重投」，否则同期限连打。
+		slog.Warn("scheme worker bet_orders insert failed after upstream accept",
+			"instanceId", inst.ID, "period", returned, "thirdPartyBetId", meta.ThirdPartyBetID, "err", err)
+		return meta, nil
 	}
+	meta.OrderNo = orderNo
 	if w.guajiBets != nil {
 		if err := w.guajiBets.MirrorBetDebitLedger(ctx, qtx, inst.MemberID, orderNo, amount, betRes.GuajiAccountID, betRes.Currency); err != nil {
-			return schemeGuajiBetMeta{}, err
+			slog.Warn("scheme worker ledger mirror failed after upstream accept",
+				"instanceId", inst.ID, "period", returned, "orderNo", orderNo, "err", err)
+			return meta, nil
 		}
 	}
-	return schemeGuajiBetMeta{
-		OrderNo:         orderNo,
-		ThirdPartyBetID: strings.TrimSpace(betRes.ThirdPartyBetID),
-		Periods:         returned,
-		Amount:          amount,
-		BetsNums:        betsNums,
-		PlayType:        cloudPlayTypeLabel(cfg.PlayTypeLabel, subPlay.Label),
-	}, nil
+	return meta, nil
 }
 
 func textVal(t pgtype.Text) string {
@@ -340,6 +365,11 @@ func pauseInstanceForInsufficientFunds(ctx context.Context, qtx *sqlcdb.Queries,
 
 func pauseInstanceForBetFailed(ctx context.Context, qtx *sqlcdb.Queries, instanceID, detail string) error {
 	detail = normalizeBetFailedDetail(detail)
+	if refuseRandomDrawMaxUnitsPause(ctx, qtx, instanceID, StatusReasonBetFailed, detail) {
+		slog.Info("scheme worker refuse pause: random_draw over max",
+			"instanceId", instanceID, "detail", detail)
+		return nil
+	}
 	_, err := qtx.PauseSchemeInstanceByWorker(ctx, sqlcdb.PauseSchemeInstanceByWorkerParams{
 		ID:           instanceID,
 		StatusReason: StatusReasonBetFailed,

@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"golang.org/x/sync/singleflight"
 
 	"caipiao/backend/internal/db"
 	"caipiao/backend/internal/guaji"
@@ -23,10 +24,12 @@ const (
 )
 
 type Service struct {
-	pool    *db.Pool
-	guaji   *guaji.Client
-	credKey []byte
+	pool        *db.Pool
+	guaji       *guaji.Client
+	credKey     []byte
 	jwtFallback string
+	// autoReauthSF 同账号自动重授权单飞：多方案同期撞 token 失效时只打一次上游。
+	autoReauthSF singleflight.Group
 }
 
 func NewService(pool *db.Pool, client *guaji.Client, credentialsKey, jwtFallback string) *Service {
@@ -217,7 +220,25 @@ func (s *Service) Unbind(ctx context.Context, memberAccount string, accountID in
 	return tx.Commit(ctx)
 }
 
+// reauthMode 区分自动/手动重新授权：自动受失败次数熔断；手动始终真试一次。
+type reauthMode int
+
+const (
+	reauthModeAuto reauthMode = iota
+	reauthModeManual
+)
+
+// Reauth 手动重新授权（授权列表「重新授权」）：不受 reauth_fail_count 熔断，始终尝试 refresh/密码登录。
 func (s *Service) Reauth(ctx context.Context, memberAccount string, accountID int64) (Account, error) {
+	return s.reauth(ctx, memberAccount, accountID, reauthModeManual)
+}
+
+// reauthAuto 投注/EnsureActiveAuth 触发的自动重连：失败次数达阈值后不再盲试，引导绑定页。
+func (s *Service) reauthAuto(ctx context.Context, memberAccount string, accountID int64) (Account, error) {
+	return s.reauth(ctx, memberAccount, accountID, reauthModeAuto)
+}
+
+func (s *Service) reauth(ctx context.Context, memberAccount string, accountID int64, mode reauthMode) (Account, error) {
 	if s == nil {
 		return Account{}, ErrUnavailable
 	}
@@ -238,7 +259,8 @@ func (s *Service) Reauth(ctx context.Context, memberAccount string, accountID in
 		}
 		return Account{}, err
 	}
-	if row.reauthFailCount >= maxReauthFailures {
+	// 仅自动路径熔断；手动点击必须真正重试（密码/上游可能已恢复）。
+	if mode == reauthModeAuto && row.reauthFailCount >= maxReauthFailures {
 		return Account{}, ErrReauthNeedsBind
 	}
 
@@ -278,9 +300,16 @@ func (s *Service) Reauth(ctx context.Context, memberAccount string, accountID in
 			} else if err != nil {
 				msg = guaji.ClassifyUpstreamError(err).UserMessage
 			}
-			_ = s.markTokenError(ctx, m, accountID, row.accessTokenEnc.String, msg)
-			if row.reauthFailCount+1 >= maxReauthFailures {
+			_ = s.bumpReauthFailure(ctx, m, accountID, row.accessTokenEnc.String, msg)
+			if mode == reauthModeAuto && row.reauthFailCount+1 >= maxReauthFailures {
 				return Account{}, ErrReauthNeedsBind
+			}
+			// 手动路径返回上游可读原因；自动路径未达阈值也统一 ErrTokenInvalid。
+			if mode == reauthModeManual {
+				if mfaErr != nil {
+					return Account{}, ErrReauthNeedsBind
+				}
+				return Account{}, fmt.Errorf("%w: %s", ErrTokenInvalid, msg)
 			}
 			return Account{}, ErrTokenInvalid
 		}

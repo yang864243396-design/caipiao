@@ -3,6 +3,8 @@ package schemes
 import (
 	"sort"
 	"strings"
+
+	"caipiao/backend/internal/guajibet"
 )
 
 // playRule describes which draw segment and sub-play mode to evaluate.
@@ -406,8 +408,14 @@ func joinPositionPoolGroupsIfNeeded(cfg parsedSchemeConfig, content string) stri
 func normalizeZhixuanDanshiContent(rule playRule, content string) string {
 	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
 	sub := strings.ToLower(strings.TrimSpace(rule.SubPlayID))
-	if bm == "zuxuan_ds" || sub == "zuxuan_ds" {
-		return content
+	if bm == "zuxuan_ds" || sub == "zuxuan_ds" || strings.Contains(sub, "zuxuan_ds") {
+		// 与 guajibet.Format 对齐：单码号池→整注；对子/豹子剔除（空串由 worker Skip/0 注拦截）
+		meta := guajibet.ParseRuleMeta(rule.PlayTemplate, rule.PlayTypeID, rule.CatalogSubID, "", "", nil, rule.CatalogSubID)
+		meta.ForcedBetMode = "zuxuan_ds"
+		if wire := guajibet.FormatBetContentForRule(meta, content); strings.TrimSpace(wire) != "" {
+			return wire
+		}
+		return ""
 	}
 	// 属性玩法（和值/尾数/大小单双…）内容是选项 token，绝不能按位展开。
 	// 否则「3,6,9」会被 reshape 成 3\n6\n9 再展成「369」，校验与落库全错。
@@ -487,6 +495,11 @@ func isHunhePlayRule(rule playRule) bool {
 // shouldSkipZeroBetUnits 0 注时本期 Skip（不停方案）：混合排除豹子后空票、组三/组六号池不足最少选号。
 func shouldSkipZeroBetUnits(rule playRule) bool {
 	if isHunhePlayRule(rule) {
+		return true
+	}
+	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	if bm == "zuxuan_ds" {
+		// 对子被滤空或号池不足：跳过本期，勿停方案报「注数为0」
 		return true
 	}
 	return zuxuanPoolMinPick(rule) >= 2
@@ -573,8 +586,9 @@ func evaluateZuxuanFushi(rule playRule, balls []string, groupContent string) bet
 		}
 		hit := zuxuanPoolHit(seg, pool)
 		units := zuxuanPoolUnitsForRule(rule, pool)
+		// 号池不足最少选号时计 0 注（前二组选复式须 ≥2 码）；勿回落成 1 → 第三方「投注数字不合规」
 		if units <= 0 {
-			units = 1
+			return betEvaluation{Hit: false, BetUnits: 0, Odds: oddsZuxuan(rule.SegmentLen, rule.OddsBase)}
 		}
 		return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(rule.SegmentLen, rule.OddsBase)}
 	}
@@ -686,6 +700,10 @@ func zuxuanPoolHit(seg, pool []string) bool {
 			return false
 		}
 	}
+	if len(seg) == 2 {
+		// 前二组选复式按 C(n,2)，开出对子不计中（与第三方一致）。
+		return seg[0] != seg[1]
+	}
 	if len(seg) == 3 {
 		return zuxuan3Pattern(seg)
 	}
@@ -731,13 +749,20 @@ func digitCounts(seg []string) map[string]int {
 func zuxuanPoolUnits(pool []string, segLen int) int {
 	n := len(pool)
 	if n <= 0 {
-		return 1
+		return 0
+	}
+	if segLen == 2 {
+		// 前二/后二组选复式：C(n,2)；1 码无法组号（实测 content=5 →「投注数字不合规」）
+		if n < 2 {
+			return 0
+		}
+		return n * (n - 1) / 2
 	}
 	if segLen == 3 {
 		// 通用组选复式：组三 n*(n-1) + 组六 C(n,3)
 		if n < 3 {
 			if n < 2 {
-				return n
+				return 0
 			}
 			return n * (n - 1)
 		}

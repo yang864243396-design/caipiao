@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"caipiao/backend/internal/apix"
 	"caipiao/backend/internal/guaji"
@@ -284,9 +285,15 @@ func (h *Handler) handleGuajiErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, accountsvc.ErrNoActiveAccount):
 		apix.Fail(w, http.StatusOK, apix.CodeValidation, "无启用中的授权账号")
 	case errors.Is(err, accountsvc.ErrTokenInvalid):
-		apix.Fail(w, http.StatusOK, apix.CodeUnauthorized, "授权已失效，请在授权列表页重新授权")
+		msg := "授权已失效，请在授权列表页重新授权"
+		if plain := err.Error(); plain != accountsvc.ErrTokenInvalid.Error() {
+			if _, after, ok := strings.Cut(plain, ": "); ok && strings.TrimSpace(after) != "" {
+				msg = strings.TrimSpace(after)
+			}
+		}
+		apix.Fail(w, http.StatusOK, apix.CodeUnauthorized, msg)
 	case errors.Is(err, accountsvc.ErrReauthNeedsBind):
-		apix.Fail(w, http.StatusOK, apix.CodeValidation, "自动重新授权失败，请前往绑定页重填密码")
+		apix.Fail(w, http.StatusOK, apix.CodeValidation, accountsvc.ErrReauthNeedsBind.Error())
 	case errors.Is(err, accountsvc.ErrInvalidCredentials):
 		apix.Fail(w, http.StatusOK, apix.CodeUnauthorized, "第三方账号或密码错误")
 	case errors.Is(err, accountsvc.ErrInvalidCurrency):

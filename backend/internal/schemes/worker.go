@@ -333,7 +333,10 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 	if dedup.Skip {
 		slog.Info("scheme worker bet skipped: period dedup",
 			"id", inst.ID, "reason", dedup.Reason, "currentOpen", dedup.CurrentOpen, "lastBet", dedup.LastBet, "simBet", inst.SimBet)
-		if dedup.CurrentOpen != "" {
+		// 仅本方案已在该第三方期下过注时对齐游标。
+		// period_record_exists / period_cursor_taken 再 sync
+		// 会把未出手的期号提前写进 last_settled，开某投某等依赖上期的方案会整段失投。
+		if dedup.Reason == "same_third_party_period" && dedup.CurrentOpen != "" {
 			w.syncPeriodBetCursor(ctx, w.q, inst, dedup.CurrentOpen)
 		}
 		return nil
@@ -376,19 +379,20 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 		}
 		if needsPrev && !w.hotColdPreviousDrawReady(ctx, inst.LotteryCode, draw.IssueNo) {
 			rem, ok := lottery.PeriodsCountdownSec(inst.LotteryCode, time.Now())
+			// 开某投某：上期未入库则只等待，绝不推进 last_settled 游标。
+			// 旧逻辑 rem<8 即 skipPeriodPick，且期号翻页时可能把「下一期」游标提前占掉，
+			// 导致 1 分彩（history 延迟约一期）整段永远 period_cursor_taken。
+			if cfg.RunTypeID == RunTypeAdvTriggerBet {
+				slog.Debug("scheme worker bet deferred: waiting previous draw",
+					"id", inst.ID, "period", draw.IssueNo, "countdown", rem, "countdownOK", ok)
+				return nil
+			}
 			if !ok || rem >= hotColdPrevDrawWaitMinSec {
 				slog.Debug("scheme worker bet deferred: waiting previous draw",
 					"id", inst.ID, "period", draw.IssueNo, "runType", cfg.RunTypeID, "countdown", rem)
 				return nil
 			}
-			// 临近封盘仍无上期：
-			// - 冷热：降级用 N-1 期统计继续出号
-			// - 开某投某：必须 Skip（不可落入上上期映射），推进游标不下注
-			if cfg.RunTypeID == RunTypeAdvTriggerBet {
-				slog.Info("scheme worker trigger skip: previous draw missing near close",
-					"id", inst.ID, "period", draw.IssueNo, "countdown", rem)
-				return w.skipPeriodPick(ctx, inst, draw.IssueNo, cfg.RunTypeID)
-			}
+			// 冷热临近封盘：降级用更早开奖统计继续出号
 			slog.Info("scheme worker hot/cold proceed without previous draw",
 				"id", inst.ID, "period", draw.IssueNo, "countdown", rem)
 		}
@@ -397,19 +401,29 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 	// 出号体系：按运行类型决定本期下注内容（与倍投体系独立，v8 §0）
 	dec := w.resolvePick(ctx, cfg, inst, draw)
 	if dec.Skip {
+		slog.Info("scheme worker bet skipped: pick strategy skip",
+			"id", inst.ID, "period", draw.IssueNo, "runType", cfg.RunTypeID)
 		return w.skipPeriodPick(ctx, inst, draw.IssueNo, cfg.RunTypeID)
 	}
 	betContent := normalizeResolvedBetContent(cfg, &dec)
-	// 混合组选 / 组三组六号池不足：本期跳过（不停方案）
-	if strings.TrimSpace(betContent) == "" && shouldSkipZeroBetUnits(cfg.Play) {
-		slog.Info("scheme worker skip: empty pick content",
-			"id", inst.ID, "period", draw.IssueNo, "betMode", cfg.Play.BetMode)
-		return w.skipPeriodPick(ctx, inst, draw.IssueNo, cfg.RunTypeID)
+	// 混合组选 / 组三组六号池不足：本期跳过。随机出号无解走连续计数（满 10 期停方案）。
+	if strings.TrimSpace(betContent) == "" {
+		if cfg.RunTypeID == RunTypeRandomDraw {
+			return w.skipRandomDrawUnsolvable(ctx, inst, draw.IssueNo)
+		}
+		if shouldSkipZeroBetUnits(cfg.Play) {
+			slog.Info("scheme worker skip: empty pick content",
+				"id", inst.ID, "period", draw.IssueNo, "betMode", cfg.Play.BetMode, "runType", cfg.RunTypeID)
+			return w.skipPeriodPick(ctx, inst, draw.IssueNo, cfg.RunTypeID)
+		}
 	}
 
 	balls := sqlcdb.ParseDrawBalls(draw.Balls)
 	playEval := evaluatePlayHit(cfg.Play, balls, betContent, cfg.Contrary, cfg.ContraryPlan, cfg.Play.PositionIdx)
 	if playEval.BetUnits <= 0 {
+		if cfg.RunTypeID == RunTypeRandomDraw {
+			return w.skipRandomDrawUnsolvable(ctx, inst, draw.IssueNo)
+		}
 		if shouldSkipZeroBetUnits(cfg.Play) {
 			slog.Info("scheme worker skip: zero bet units",
 				"id", inst.ID, "period", draw.IssueNo, "content", betContent, "betMode", cfg.Play.BetMode)
@@ -418,15 +432,25 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 		w.pauseRunningInstance(ctx, inst, StatusReasonBetFailed, guajibet.ErrZeroBets.Error())
 		return errSchemeBetStopped
 	}
-	// 超该玩法第三方单组上限则暂停（随机出号会先重抽；此处拦复式满号等已入库内容）
-	if max := maxBetUnitsForPlay(cfg.Play); max > 0 {
-		units := playEval.BetUnits
-		// 和值/跨度等 evaluate 注数是「选项个数」，真下单以 wire 组合注数为准
-		if wire := countPlayWireBetUnits(cfg.Play, betContent); wire > 0 {
-			units = wire
-		}
-		if units > max {
+	syncEvalBetUnitsWithWire(cfg.Play, betContent, &playEval)
+	// 超该玩法第三方单组上限：随机出号再重抽；仍超限则计入连续无解。其它模式暂停。
+	if max := maxBetUnitsForPlay(cfg.Play); max > 0 && playEval.BetUnits > max {
+		if cfg.RunTypeID == RunTypeRandomDraw {
+			next, ok := resolveRandomDrawUnderMax(cfg, "")
+			if !ok {
+				return w.skipRandomDrawUnsolvable(ctx, inst, draw.IssueNo)
+			}
+			betContent = next
+			dec.Content = next
+			playEval = evaluatePlayHit(cfg.Play, balls, betContent, cfg.Contrary, cfg.ContraryPlan, cfg.Play.PositionIdx)
+			syncEvalBetUnitsWithWire(cfg.Play, betContent, &playEval)
+			if playEval.BetUnits <= 0 || playEval.BetUnits > max {
+				return w.skipRandomDrawUnsolvable(ctx, inst, draw.IssueNo)
+			}
+		} else {
 			detail := errMaxBetUnitsExceeded(max).Error()
+			slog.Warn("scheme worker pause: bet units over max",
+				"id", inst.ID, "runType", cfg.RunTypeID, "units", playEval.BetUnits, "max", max, "content", betContent)
 			w.pauseRunningInstance(ctx, inst, StatusReasonBetFailed, detail)
 			return errSchemeBetStopped
 		}
@@ -501,12 +525,13 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 	committed := false
 	guajiAccepted := false
 	var betMeta schemeGuajiBetMeta
+	var guajiTargetPeriodNo string
 	defer func() {
 		if committed || guajiReal {
 			if committed || !guajiAccepted {
 				return
 			}
-			w.finalizeCloudBetAfterGuaji(ctx, inst, cfg, recordNo, amount, betMult, roundIdx, betContent, betMeta, playEval.BetUnits)
+			w.finalizeCloudBetAfterGuaji(ctx, inst, cfg, recordNo, amount, betMult, roundIdx, betContent, betMeta, playEval.BetUnits, guajiTargetPeriodNo)
 			return
 		}
 		if derr := w.q.DeleteCloudBetRecordForInstancePeriod(ctx, inst.ID, draw.IssueNo); derr != nil {
@@ -518,7 +543,12 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	rollbackTx := true
+	defer func() {
+		if rollbackTx {
+			_ = tx.Rollback(ctx)
+		}
+	}()
 
 	qtx := w.q.WithTx(tx)
 
@@ -535,10 +565,9 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 	}
 
 	// 模拟盘：期号已在 reserveCloudBetPeriod 占位；此处不可再跑 evaluateGuajiBetDedup，
-	// 否则 GuajiPeriodAlreadyTaken 会把刚插入的 cloud_bet_records 判成 period_record_exists，
+	// 否则 CloudBetPeriodHandled 会把刚插入的 cloud_bet_records 判成 period_record_exists，
 	// 返回后 defer 删除占位，表现为永远无模拟投注记录/流水。
 
-	var guajiTargetPeriodNo string
 	if guajiReal {
 		dedup, herr := w.evaluateGuajiBetDedup(ctx, qtx, inst)
 		if herr != nil {
@@ -547,7 +576,7 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 		if dedup.Skip {
 			slog.Debug("scheme worker bet skipped: guaji period dedup in tx",
 				"id", inst.ID, "reason", dedup.Reason, "currentOpen", dedup.CurrentOpen, "lastBet", dedup.LastBet)
-			if dedup.CurrentOpen != "" {
+			if dedup.Reason == "same_third_party_period" && dedup.CurrentOpen != "" {
 				w.syncPeriodBetCursor(ctx, qtx, inst, dedup.CurrentOpen)
 			}
 			return nil
@@ -572,6 +601,7 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 				if err := tx.Commit(ctx); err != nil {
 					return err
 				}
+				rollbackTx = false
 				committed = true
 				return nil
 			case repickOK:
@@ -587,11 +617,49 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 						if err := tx.Commit(ctx); err != nil {
 							return err
 						}
+						rollbackTx = false
 						committed = true
 						return nil
 					}
 					w.pauseRunningInstance(ctx, inst, StatusReasonBetFailed, guajibet.ErrZeroBets.Error())
 					return errSchemeBetStopped
+				}
+				syncEvalBetUnitsWithWire(cfg.Play, betContent, &playEval)
+				if max := maxBetUnitsForPlay(cfg.Play); max > 0 && playEval.BetUnits > max {
+					if cfg.RunTypeID == RunTypeRandomDraw {
+						next, ok := resolveRandomDrawUnderMax(cfg, "")
+						if !ok {
+							w.syncPeriodBetCursor(ctx, qtx, inst, guajiTargetPeriodNo)
+							if err := w.skipRandomDrawUnsolvableWithQ(ctx, qtx, inst, guajiTargetPeriodNo); err != nil {
+								return err
+							}
+							if err := tx.Commit(ctx); err != nil {
+								return err
+							}
+							rollbackTx = false
+							committed = true
+							return nil
+						}
+						betContent = next
+						dec.Content = next
+						playEval = evaluatePlayHit(cfg.Play, sqlcdb.ParseDrawBalls(draw.Balls), betContent, cfg.Contrary, cfg.ContraryPlan, cfg.Play.PositionIdx)
+						syncEvalBetUnitsWithWire(cfg.Play, betContent, &playEval)
+						if playEval.BetUnits <= 0 || playEval.BetUnits > max {
+							w.syncPeriodBetCursor(ctx, qtx, inst, guajiTargetPeriodNo)
+							if err := w.skipRandomDrawUnsolvableWithQ(ctx, qtx, inst, guajiTargetPeriodNo); err != nil {
+								return err
+							}
+							if err := tx.Commit(ctx); err != nil {
+								return err
+							}
+							rollbackTx = false
+							committed = true
+							return nil
+						}
+					} else {
+						w.pauseRunningInstance(ctx, inst, StatusReasonBetFailed, errMaxBetUnitsExceeded(max).Error())
+						return errSchemeBetStopped
+					}
 				}
 				amount = calcBetAmount(playEval.BetUnits, betMult, cfg.BetUnitYuan)
 				pnl = calcPnLWithOdds(amount, playEval.Hit, playEval.Odds)
@@ -636,39 +704,57 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 			slog.Debug("scheme worker bet skipped: period claim conflict", "id", inst.ID, "period", guajiTargetPeriodNo)
 			return nil
 		}
-		betMeta, err = w.placeGuajiSchemeBet(ctx, qtx, inst, cfg, draw, betContent, amount, playEval.BetUnits, betMult)
+		// 占位必须先提交，再调第三方。若占位与 PlaceRealBet 同事务，
+		// 接单成功后本地 InsertBetOrder/Commit 失败会回滚占位，下 tick 再次 Place → 同期限连打。
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+		rollbackTx = false
+		committed = true
+
+		betMeta, err = w.placeGuajiSchemeBet(ctx, w.q, inst, cfg, draw, betContent, amount, playEval.BetUnits, betMult)
 		if err != nil {
+			// 仅「未发第三方请求」的预检失败可删占位重试；其余一律保留占位+推进游标，
+			// 防止上游已接单而本地释放后同期限连打。
+			if errors.Is(err, errGuajiPlacePreflight) {
+				if derr := w.q.DeleteCloudBetRecordForInstancePeriod(ctx, inst.ID, guajiTargetPeriodNo); derr != nil {
+					slog.Debug("scheme worker release claim after preflight fail", "id", inst.ID, "period", guajiTargetPeriodNo, "err", derr)
+				}
+			} else {
+				w.syncPeriodBetCursor(ctx, w.q, inst, guajiTargetPeriodNo)
+				slog.Error("scheme worker keep claim after place fail",
+					"instanceId", inst.ID, "period", guajiTargetPeriodNo, "err", err)
+			}
 			if errors.Is(err, guajibet.ErrPeriodClosed) {
 				return guajibet.ErrPeriodClosed
 			}
-			// 传输层抖动：回滚本期占位，保持 running，下个 tick 再试（避免误停成「连接失败」）。
 			if guaji.IsRetryableTransportError(err) {
-				slog.Warn("scheme worker bet deferred: transient upstream",
+				// 占位已保留：下 tick 会被 period_record_exists 挡住，不会重投；
+				// 若实为未接单，待期号翻页后自然越过该占位。
+				slog.Warn("scheme worker bet deferred: transient upstream (claim kept)",
 					"instanceId", inst.ID, "memberId", inst.MemberID, "period", draw.IssueNo, "err", err)
 				return nil
 			}
-			// placeGuajiSchemeBet 可能已在 qtx 上留下失败语句 → 事务 aborted。
-			// 必须先回滚再停投，否则 Pause 会报 25P02，把真实原因盖掉。
+			// 随机出号超限（本端或第三方文案）：计入连续无解；满 10 期停方案。
+			if cfg.RunTypeID == RunTypeRandomDraw && isBetUnitsExceededError(err) {
+				return w.skipRandomDrawUnsolvable(ctx, inst, guajiTargetPeriodNo)
+			}
 			placeErr := err
-			_ = tx.Rollback(ctx)
 			stopErr := w.stopAfterThirdPartyBetFailed(ctx, w.q, inst, amount, placeErr)
 			if errors.Is(stopErr, guajibet.ErrPeriodClosed) {
 				return guajibet.ErrPeriodClosed
 			}
 			if errors.Is(stopErr, errSchemeBetStopped) {
-				committed = true // 占位将由 defer 清理；停投已在新连接提交
 				reason := betFailureReason(placeErr)
 				w.notifySchemeInstance(ctx, inst.MemberID, inst.ID, runModeFromSimBet(inst.SimBet), "pending", reason)
 				slog.Warn("scheme worker stopped: third party bet failed",
 					"instanceId", inst.ID, "memberId", inst.MemberID, "period", draw.IssueNo, "reason", reason, "err", placeErr)
 				return errSchemeBetStopped
 			}
-			// 停投本身失败：仍返回原始下注错误，避免只剩 25P02
 			if stopErr != nil {
 				slog.Warn("scheme worker stop after bet failed also errored",
 					"instanceId", inst.ID, "placeErr", placeErr, "stopErr", stopErr)
 				w.pauseRunningInstance(ctx, inst, StatusReasonBetFailed, guajiBetFailedDetail(placeErr))
-				committed = true
 				return errSchemeBetStopped
 			}
 			return placeErr
@@ -682,30 +768,84 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 		if label := strings.TrimSpace(betMeta.PlayType); label != "" {
 			playTypeLabel = label
 		}
+		if gc := strings.TrimSpace(betMeta.GroupContent); gc != "" {
+			betContent = gc
+		}
 		guajiAccepted = true
+		// 接单后立刻 upsert 第三方注单号，缩小「已扣款但 cloud 无 tid」窗口。
+		w.finalizeCloudBetAfterGuaji(ctx, inst, cfg, recordNo, amount, betMult, roundIdx, betContent, betMeta, playEval.BetUnits, guajiTargetPeriodNo)
+
+		// 新事务写流水/游标。失败时 defer 再 finalize 一次（幂等 upsert）。
+		tx, err = w.pool.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		rollbackTx = true
+		qtx = w.q.WithTx(tx)
+		committed = false
+		if _, err := qtx.LockSchemeInstanceForBet(ctx, inst.ID); err != nil {
+			return err
+		}
 	}
 
 	acceptedPeriod := strings.TrimSpace(draw.IssueNo)
+	cursorPeriod := acceptedPeriod
 	if guajiReal {
 		acceptedPeriod = strings.TrimSpace(betMeta.Periods)
 		if acceptedPeriod == "" {
 			return fmt.Errorf("%w: upstream did not return periods", guajibet.ErrPlaceRejected)
 		}
+		metaPeriod := acceptedPeriod
 		if acceptedPeriod != guajiTargetPeriodNo {
-			if err := qtx.MoveCloudBetRecordPeriod(ctx, inst.ID, guajiTargetPeriodNo, acceptedPeriod); err != nil {
-				return err
+			renamed, merr := qtx.MoveCloudBetRecordPeriod(ctx, inst.ID, guajiTargetPeriodNo, acceptedPeriod)
+			if merr != nil {
+				return merr
+			}
+			if !renamed {
+				// 目标期已有单：占位仍在本地开放期，元数据写回占位行。
+				metaPeriod = guajiTargetPeriodNo
+				slog.Error("scheme worker place period mismatch; keep claim on local open",
+					"instanceId", inst.ID, "claimed", guajiTargetPeriodNo, "accepted", acceptedPeriod,
+					"thirdPartyBetId", betMeta.ThirdPartyBetID)
 			}
 		}
-		if err := qtx.UpdateCloudBetRecordGuajiMeta(ctx, inst.ID, acceptedPeriod,
-			pgtype.Text{String: betMeta.ThirdPartyBetID, Valid: betMeta.ThirdPartyBetID != ""},
-			pgtype.Text{String: betMeta.OrderNo, Valid: betMeta.OrderNo != ""},
+		metaTID := strings.TrimSpace(betMeta.ThirdPartyBetID)
+		metaOrder := strings.TrimSpace(betMeta.OrderNo)
+		metaAmount := amount
+		// 同一第三方单号已挂在本方案其它期：多为回查命中旧单，禁止再写到新占位造成「一单两期」。
+		if metaTID != "" {
+			if prevPeriod, ok, perr := qtx.SchemePeriodForThirdPartyBetID(ctx, inst.ID, metaTID); perr != nil {
+				return perr
+			} else if ok && prevPeriod != metaPeriod {
+				slog.Error("scheme worker skip duplicate third-party bet id on claim",
+					"instanceId", inst.ID, "tid", metaTID, "prevPeriod", prevPeriod, "claimPeriod", metaPeriod,
+					"accepted", acceptedPeriod)
+				metaTID, metaOrder = "", ""
+				metaAmount = 0
+				metaPeriod = guajiTargetPeriodNo
+			}
+		}
+		if err := qtx.UpdateCloudBetRecordGuajiMeta(ctx, inst.ID, metaPeriod,
+			pgtype.Text{String: metaTID, Valid: metaTID != ""},
+			pgtype.Text{String: metaOrder, Valid: metaOrder != ""},
 			guajiPeriodsPgtext(betMeta.Periods),
 			numericFromFloat(0), "pending",
-			numericFromFloat(amount),
+			numericFromFloat(metaAmount),
 			betUnits,
 			playTypeLabel,
+			betContent,
 		); err != nil {
 			return err
+		}
+		if metaAmount > 0 {
+			amount = metaAmount
+		} else {
+			amount = 0
+		}
+		// 游标必须推进「本地开放期」：接单期错位时若只写 accepted，会再次对同一开放期下单。
+		cursorPeriod = strings.TrimSpace(guajiTargetPeriodNo)
+		if cursorPeriod == "" {
+			cursorPeriod = acceptedPeriod
 		}
 	}
 
@@ -717,7 +857,7 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 			inst.ID,
 			w.periodCountdownForInst(inst, time.Now()),
 			numericFromFloat(amount),
-			pgtype.Text{String: acceptedPeriod, Valid: acceptedPeriod != ""},
+			pgtype.Text{String: cursorPeriod, Valid: cursorPeriod != ""},
 		); err != nil {
 			return err
 		}
@@ -755,6 +895,7 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
+	rollbackTx = false
 	committed = true
 	// 即时结算路径（历史兼容）：下单即有盈亏后检查止盈止损。
 	// 模拟盘改走开奖后结算，止盈止损在 settleSimCloudBet 中检查。
@@ -806,7 +947,7 @@ func (w *Worker) reserveCloudBetPeriod(
 		return false, err
 	}
 	if dedup.Skip {
-		if dedup.CurrentOpen != "" {
+		if dedup.Reason == "same_third_party_period" && dedup.CurrentOpen != "" {
 			w.syncPeriodBetCursor(ctx, qtx, inst, dedup.CurrentOpen)
 		}
 		if err := tx.Commit(ctx); err != nil {

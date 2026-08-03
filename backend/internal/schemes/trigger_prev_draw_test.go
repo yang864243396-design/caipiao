@@ -60,6 +60,48 @@ func TestHotColdAdjacentPrevMissing_triggerScenario(t *testing.T) {
 	if !hotColdAdjacentPrevMissing("1014150300108", "1014150300107") {
 		t.Fatal("0108 missing while latest=0107 must block")
 	}
+	// 投 0215 期望 0214；库止于 0212（缺两期）也必须阻塞，禁止回退用 0212 后三 719
+	if !hotColdAdjacentPrevMissing("1014157300214", "1014157300212") {
+		t.Fatal("0214 missing while latest=0212 must block")
+	}
+}
+
+// TestTriggerBetHou3FushiStalePrevShape 回归 inst-1-1785503619886：
+// 后三直选复式 + 前反后正；若误用 0212=07719 后三 719 会得到 789/123/901，
+// 正确上期 0214=49427 后三 427 应为 456/234/789。
+func TestTriggerBetHou3FushiStalePrevShape(t *testing.T) {
+	t.Parallel()
+	raw := []byte(`{
+		"runTypeId":"adv_trigger_bet","playTemplate":"ssc_std",
+		"playTypeId":"g003","subId":"26","betMode":"fushi",
+		"triggerBet":{"mode":"alt_neg_first","rows":[
+			{"enabled":true,"open":"0","pos":"0,1\n0,1\n0,1","neg":"0,1,2\n0,1,2\n0,1,2"},
+			{"enabled":true,"open":"1","pos":"1,2\n1,2\n1,2","neg":"1,2,3\n1,2,3\n1,2,3"},
+			{"enabled":true,"open":"2","pos":"2,3\n2,3\n2,3","neg":"2,3,4\n2,3,4\n2,3,4"},
+			{"enabled":true,"open":"3","pos":"3,4\n3,4\n3,4","neg":"3,4,5\n3,4,5\n3,4,5"},
+			{"enabled":true,"open":"4","pos":"4,5\n4,5\n4,5","neg":"4,5,6\n4,5,6\n4,5,6"},
+			{"enabled":true,"open":"5","pos":"5,6\n5,6\n5,6","neg":"5,6,7\n5,6,7\n5,6,7"},
+			{"enabled":true,"open":"6","pos":"6,7\n6,7\n6,7","neg":"6,7,8\n6,7,8\n6,7,8"},
+			{"enabled":true,"open":"7","pos":"7,8\n7,8\n7,8","neg":"7,8,9\n7,8,9\n7,8,9"},
+			{"enabled":true,"open":"8","pos":"8,9\n8,9\n8,9","neg":"8,9,0\n8,9,0\n8,9,0"},
+			{"enabled":true,"open":"9","pos":"9,0\n9,0\n9,0","neg":"9,0,1\n9,0,1\n9,0,1"}
+		]}
+	}`)
+	cfg := parseSchemeConfig("custom", raw, 0, 0)
+	if cfg.Play.SegmentStart != 2 || cfg.Play.SegmentLen != 3 {
+		t.Fatalf("hou3 segment want start=2 len=3, got start=%d len=%d", cfg.Play.SegmentStart, cfg.Play.SegmentLen)
+	}
+	// 正确：0214 → 后三 427 → 首局 neg
+	want := resolveTriggerBetDecision(cfg, []string{"4", "9", "4", "2", "7"}, "")
+	if want.Skip || want.Direction != "neg" || want.Content != "4,5,6\n2,3,4\n7,8,9" {
+		t.Fatalf("correct prev: want 4,5,6\\n2,3,4\\n7,8,9 neg, got skip=%v content=%q dir=%q",
+			want.Skip, want.Content, want.Direction)
+	}
+	// 错票形态：误用 0212 → 后三 719 → 789/123/901
+	stale := resolveTriggerBetDecision(cfg, []string{"0", "7", "7", "1", "9"}, "")
+	if stale.Content != "7,8,9\n1,2,3\n9,0,1" {
+		t.Fatalf("stale prev sanity: want 7,8,9\\n1,2,3\\n9,0,1, got %q", stale.Content)
+	}
 }
 
 // TestTriggerBetZhong3ZuheSkipsDisabledOpen 回归：中三组合开投重，

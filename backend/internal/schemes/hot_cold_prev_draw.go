@@ -14,7 +14,8 @@ import (
 // 冷热出号依赖「当期之前最近 N 期」。下注时上期开奖常尚未入库，统计窗会少一期，
 // 表现为实下内容约等于「应下(N-1)」。上期相邻开奖未到且封盘前仍有余量时，推迟本 tick。
 
-// hotColdPrevDrawWaitMinSec：倒计时低于该值则不再等待，避免错过投注窗。
+// hotColdPrevDrawWaitMinSec：倒计时低于该值时冷热可降级出号；开某投某仍继续等上期，
+// 直至 rem<=0 才 Skip（1 分彩 history 入库常落在最后几秒）。
 const hotColdPrevDrawWaitMinSec = 8
 
 func compareIssueNo(a, b string) int {
@@ -50,12 +51,19 @@ func prevIssueNo(issue string) string {
 	return strconv.FormatInt(n-1, 10)
 }
 
+// adjacentPrevSameSeriesMaxGap：同日/同系列内允许的最大期号差。
+// 差值在此内且 latest < expected → 视为缺上期（含缺 1 期、缺多期），必须阻塞。
+// 更大跳变视为跨日/换号段（numeric-1 可能永不存在），不阻塞，由 GetPrevious 取真实上期。
+//
+// 实盘：投 0215 期望上期 0214，库止于 0212（差 2）时旧逻辑只拦差=1，误用 0212 后三 719 映射出号。
+const adjacentPrevSameSeriesMaxGap int64 = 1000
+
 // hotColdAdjacentPrevMissing 判断「期望上期」是否仍缺库。
 //
 //   - expectedPrev 空：无法推断，不阻塞
 //   - latestBefore == expectedPrev：已就绪
 //   - latestBefore 空：缺上期，阻塞
-//   - 数值上 expectedPrev - latestBefore == 1：刚好缺相邻一期，阻塞
+//   - 数值上 0 < expectedPrev-latestBefore ≤ adjacentPrevSameSeriesMaxGap：同系列缺期，阻塞
 //   - 差值更大：期号跳号/换日（如 6800040 的期望上期 6800039 永不存在），不阻塞
 func hotColdAdjacentPrevMissing(expectedPrev, latestBefore string) bool {
 	expectedPrev = strings.TrimSpace(expectedPrev)
@@ -77,7 +85,7 @@ func hotColdAdjacentPrevMissing(expectedPrev, latestBefore string) bool {
 	if ne <= nl {
 		return false
 	}
-	return ne-nl == 1
+	return ne-nl <= adjacentPrevSameSeriesMaxGap
 }
 
 // hotColdPreviousDrawReady 冷热统计所需的相邻上期开奖是否已在库。

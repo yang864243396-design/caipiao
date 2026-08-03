@@ -209,19 +209,8 @@ func (w *PayoutSyncWorker) syncOne(ctx context.Context, row sqlcdb.ListPendingGu
 			}
 		}
 	}
-	// guaji 记挂但派奖额为 0：API 偶发漏字段。本地已判中且有派奖时补救（组合嵌套/任选）。
-	// 勿在 guaji 已有正派奖却记挂时用本地硬改（避免「平台=中 第三方=挂」回潮）。
-	if status == "lose" && payout < 1e-6 {
-		if eval, ok, lerr := w.evalLocalDraw(ctx, row); lerr != nil {
-			slog.Warn("payout sync local win check failed", "orderNo", row.OrderNo, "err", lerr)
-		} else if ok && eval.Status == "win" && eval.Payout > 1e-6 {
-			slog.Info("payout sync prefer local win (guaji miss payout)",
-				"orderNo", row.OrderNo, "localPnl", eval.Pnl, "localPayout", eval.Payout)
-			status = "win"
-			pnl = eval.Pnl
-			payout = eval.Payout
-		}
-	}
+	// 第三方已结算且明确记挂（payout=0）：必须以第三方为准。
+	// 旧逻辑「本地判中则覆盖」会在组选对子等场景造成「平台=中 第三方=挂」虚高派奖。
 	currency := row.Currency
 	balanceSnapshot := 0.0
 	if info, ierr := w.svc.guaji.UserInfo(ctx, token); ierr == nil {

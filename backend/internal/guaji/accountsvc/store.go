@@ -147,7 +147,26 @@ WHERE id = $1 AND member_id = $2`, id, memberID, nullText(accessEnc), nullText(r
 
 // markTokenError 仅当库内 access_token_enc 仍与失败请求所用密文一致时写入。
 // 避免 reauth 已换新 token 后，旧 in-flight 请求的 401 把账号重新标为失效。
+// 同 token 已带 last_token_error 时不再累加 reauth_fail_count（多方案同期 401 只算一波）。
 func (s *Service) markTokenError(ctx context.Context, memberID, id int64, accessTokenEnc, msg string) error {
+	_, err := s.pool.Exec(ctx, `
+UPDATE member_guaji_accounts
+SET last_token_error = $4,
+    reauth_fail_count = CASE
+      WHEN NULLIF(TRIM(COALESCE(last_token_error, '')), '') IS NOT NULL
+        AND access_token_enc IS NOT DISTINCT FROM $3
+      THEN reauth_fail_count
+      ELSE reauth_fail_count + 1
+    END,
+    updated_at = now()
+WHERE id = $1 AND member_id = $2
+  AND access_token_enc IS NOT DISTINCT FROM $3`,
+		id, memberID, nullText(accessTokenEnc), msg)
+	return err
+}
+
+// bumpReauthFailure 重新授权登录失败：始终 +1（与下注侧同波次 401 去重分开）。
+func (s *Service) bumpReauthFailure(ctx context.Context, memberID, id int64, accessTokenEnc, msg string) error {
 	_, err := s.pool.Exec(ctx, `
 UPDATE member_guaji_accounts
 SET last_token_error = $4, reauth_fail_count = reauth_fail_count + 1, updated_at = now()

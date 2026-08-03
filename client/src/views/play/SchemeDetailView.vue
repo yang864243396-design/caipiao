@@ -104,6 +104,7 @@ const randomDraw = ref<SchemeRandomDraw | null>(null)
 const builtinPlanSnapshotId = ref('')
 const cachedPlayTypeLabel = ref('')
 const cachedSubPlayLabel = ref('')
+const cachedBetMode = ref('')
 
 function asTriggerBet(raw: unknown): SchemeTriggerBet | null {
   if (!raw || typeof raw !== 'object') return null
@@ -168,8 +169,24 @@ const { playConfig: schemePlayConfig, load: loadPlayTree } = usePlayTreeConfig(
   subPlayId,
 )
 
+/** 方案 config 内 betMode/文案；玩法树未回填前供冷热属性计频与注数推断 */
+const panelPlayConfig = computed(() => {
+  const base = schemePlayConfig.value
+  const betMode = String(base.betMode || cachedBetMode.value || '').trim()
+  const playMethodLabel = String(base.playMethodLabel || cachedSubPlayLabel.value || '').trim()
+  const playTypeLabel = String(base.playTypeLabel || cachedPlayTypeLabel.value || '').trim()
+  if (
+    betMode === String(base.betMode ?? '') &&
+    playMethodLabel === String(base.playMethodLabel ?? '') &&
+    playTypeLabel === String(base.playTypeLabel ?? '')
+  ) {
+    return base
+  }
+  return { ...base, betMode, playMethodLabel, playTypeLabel }
+})
+
 const playDisplay = computed(() => {
-  const cfg = schemePlayConfig.value as {
+  const cfg = panelPlayConfig.value as {
     playTypeLabel?: string
     playMethodLabel?: string
   }
@@ -211,7 +228,7 @@ const runTimeLines = computed(() => {
 })
 
 const betCount = computed(() => {
-  const cfg = schemePlayConfig.value
+  const cfg = panelPlayConfig.value
   return schemeGroups.value.reduce((sum, g) => sum + countBetUnits(cfg, g), 0)
 })
 
@@ -271,6 +288,7 @@ async function load(): Promise<void> {
     subPlayId.value = asString(cfg.subPlayId ?? cfg.subId)
     cachedPlayTypeLabel.value = asString(cfg.playTypeLabel)
     cachedSubPlayLabel.value = asString(cfg.playMethodLabel ?? cfg.subPlayLabel)
+    cachedBetMode.value = asString(cfg.betMode)
     schemeGroups.value = Array.isArray(cfg.schemeGroups)
       ? cfg.schemeGroups.map((g) => asString(g))
       : []
@@ -287,6 +305,21 @@ async function load(): Promise<void> {
             : h.winRotate === true
               ? 'after_hit'
               : 'keep'
+        // 权威为 ranks；pool/pickTypes 仅兼容旧配置（无 ranks 时合成）
+        const ranks: number[][] = Array.isArray(h.ranks)
+          ? h.ranks.map((row) => {
+              if (!Array.isArray(row)) return []
+              const seen = new Set<number>()
+              const out: number[] = []
+              for (const item of row) {
+                const n = Math.trunc(Number(item))
+                if (!Number.isFinite(n) || n < 0 || seen.has(n)) continue
+                seen.add(n)
+                out.push(n)
+              }
+              return out
+            })
+          : []
         const pickTypes: SchemeHotColdPickType[] = []
         if (Array.isArray(h.pickTypes)) {
           for (const t of h.pickTypes) {
@@ -296,6 +329,7 @@ async function load(): Promise<void> {
         }
         hotColdWarm.value = {
           totalPeriods: Math.max(1, Math.trunc(Number(h.totalPeriods) || 20)),
+          ranks,
           pool: Array.isArray(h.pool) ? h.pool.map((p) => asString(p)) : [],
           strategy,
           pickTypes: pickTypes.length ? pickTypes : undefined,
@@ -483,7 +517,7 @@ onMounted(() => {
         class="sd-content-panel"
         :run-type-id="runTypeId"
         :run-type-label="runTypeLabel"
-        :play-config="schemePlayConfig"
+        :play-config="panelPlayConfig"
         :scheme-groups="schemeGroups"
         :jushu-list="jushuList"
         :trigger-bet="triggerBet"

@@ -183,8 +183,12 @@ func TestCountBetNums_zuxuanHezhi(t *testing.T) {
 	if n := CountBetNums(meta, "6"); n != 6 {
 		t.Fatalf("sum6 betsNums=%d want 6", n)
 	}
+	// base=6>1：须 solo=false（实测 solo=true→单挑参数错误）
 	if NeedsSoloForRule(meta, "6") {
-		t.Fatal("组选和值不应 solo")
+		t.Fatal("前三组选和值 sum=6 须 solo=false")
+	}
+	if !NeedsSoloForRule(meta, "1") {
+		t.Fatal("前三组选和值 sum=1 须 solo=true")
 	}
 	meta2 := ParseRuleMeta("ssc_std", "g004", "44", "组选和值", "前二", nil, "44")
 	if n := CountBetNums(meta2, "6"); n != 3 {
@@ -194,6 +198,88 @@ func TestCountBetNums_zuxuanHezhi(t *testing.T) {
 	meta4 := ParseRuleMeta("ssc_std", "g007", "108", "组选和值", "前中后三", seg, "108")
 	if n := CountBetNums(meta4, "6"); n != 18 {
 		t.Fatalf("qianzhonghou3 sum6 betsNums=%d want 18", n)
+	}
+}
+
+// 复现 def-1-1785490406841 / 1785488745547 等中三组选和值：
+// 总注≤3 须 solo=true；≥4 须 solo=false（2026-07-31 实测 rule262/108）。
+// Label 空时仍须按组选计注（1 注）。
+func TestResolveSolo_zhong3ZuxuanHezhiSoloByBets(t *testing.T) {
+	seg, _ := json.Marshal(map[string]string{
+		"guajiGroup":    "中三码",
+		"guajiTeam":     "中三组选",
+		"guajiFullName": "中三组选和值",
+		"guajiRuleId":   "262",
+	})
+	meta := ParseRuleMeta("ssc_std", "g002", "262", "", "中三码", seg, "262")
+	if mode := InferBetMode(meta); mode != "hezhi" {
+		t.Fatalf("mode=%q want hezhi", mode)
+	}
+	if n := CountBetNums(meta, "1"); n != 1 {
+		t.Fatalf("组选和值 sum=1 bets=%d want 1（空 Label 时勿按直选计成 3）", n)
+	}
+	if !NeedsSoloForRule(meta, "1") || !ResolveSolo(meta, "1", 1) {
+		t.Fatal("中三组选和值 bets=1 须 solo=true")
+	}
+	metaOK := ParseRuleMeta("ssc_std", "g002", "262", "中三组选和值", "中三码", seg, "262")
+	if !ResolveSolo(metaOK, "1", 1) {
+		t.Fatal("中三组选和值 bets=1 须 solo=true（solo=false→单挑参数错误）")
+	}
+	// content=25 → 2 注；solo=false 拒单、solo=true 接单（随机出号曾踩坑）
+	if n := CountBetNums(metaOK, "25"); n != 2 {
+		t.Fatalf("sum=25 bets=%d want 2", n)
+	}
+	if !NeedsSoloForRule(metaOK, "25") || !ResolveSolo(metaOK, "25", 2) {
+		t.Fatal("中三组选和值 bets=2 须 solo=true（solo=false→单挑参数错误）")
+	}
+	for _, sum := range []string{"2", "3", "24"} {
+		if n := CountBetNums(metaOK, sum); n != 2 {
+			t.Fatalf("sum=%s bets=%d want 2", sum, n)
+		}
+		if !ResolveSolo(metaOK, sum, 2) {
+			t.Fatalf("中三组选和值 sum=%s bets=2 须 solo=true", sum)
+		}
+	}
+	// content=4 → 4 注；solo=true 拒单、solo=false 接单
+	if n := CountBetNums(metaOK, "4"); n != 4 {
+		t.Fatalf("sum=4 bets=%d want 4", n)
+	}
+	if NeedsSoloForRule(metaOK, "4") || ResolveSolo(metaOK, "4", 4) {
+		t.Fatal("中三组选和值 bets=4 须 solo=false")
+	}
+	// content=12 → 14 注；solo=true 拒单、solo=false 接单
+	if n := CountBetNums(metaOK, "12"); n != 14 {
+		t.Fatalf("sum=12 bets=%d want 14", n)
+	}
+	if NeedsSoloForRule(metaOK, "12") || ResolveSolo(metaOK, "12", 14) {
+		t.Fatal("中三组选和值 bets≥4 须 solo=false（solo=true→单挑参数错误）")
+	}
+	if NeedsSoloForRule(metaOK, "21,22") || ResolveSolo(metaOK, "21,22", 11) {
+		t.Fatal("中三组选和值多和值须 solo=false")
+	}
+	// 前中后三：按总注（含×3）判；content=1 总注3 solo=true；content=25 总注6 solo=false
+	seg3, _ := json.Marshal(map[string]string{
+		"guajiGroup": "前中后三", "guajiTeam": "前中后三组选",
+		"guajiFullName": "前中后三组选和值", "guajiRuleId": "108",
+	})
+	meta3 := ParseRuleMeta("ssc_std", "g007", "108", "前中后三组选和值", "前中后三", seg3, "108")
+	if n := CountBetNums(meta3, "1"); n != 3 {
+		t.Fatalf("前中后三 sum=1 bets=%d want 3", n)
+	}
+	if !NeedsSoloForRule(meta3, "1") || !ResolveSolo(meta3, "1", 3) {
+		t.Fatal("前中后三组选和值 总注3 须 solo=true")
+	}
+	if n := CountBetNums(meta3, "25"); n != 6 {
+		t.Fatalf("前中后三 sum=25 bets=%d want 6", n)
+	}
+	if NeedsSoloForRule(meta3, "25") || ResolveSolo(meta3, "25", 6) {
+		t.Fatal("前中后三组选和值 总注6 须 solo=false（勿按倍乘前 base=2 判 solo）")
+	}
+	if n := CountBetNums(meta3, "6"); n != 18 {
+		t.Fatalf("前中后三 sum=6 bets=%d want 18", n)
+	}
+	if NeedsSoloForRule(meta3, "6") || ResolveSolo(meta3, "6", 18) {
+		t.Fatal("前中后三组选和值 总注18 须 solo=false")
 	}
 }
 
@@ -218,6 +304,30 @@ func TestFormatBetContentForRule_zuxuanFs(t *testing.T) {
 	}
 	if n := CountBetNums(meta, got); n != 1 {
 		t.Fatalf("betsNums=%d want 1", n)
+	}
+}
+
+// 前二组选复式：按位误产号会带重号（3,5\\n5）；粘连 12 也不能整段上送。
+func TestFormatBetContentForRule_qian2ZuxuanFsDedupeAndExplode(t *testing.T) {
+	seg, err := json.Marshal(map[string]string{
+		"guajiGroup": "前二码", "guajiTeam": "前二组选", "guajiFullName": "前二组选复式", "guajiRuleId": "42",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := ParseRuleMeta("ssc_std", "g004", "42", "前二组选复式", "前二码", seg, "42")
+	if got := FormatBetContentForRule(meta, "3,5\n5"); got != "3,5" {
+		t.Fatalf("dup wire=%q want 3,5", got)
+	}
+	if got := FormatBetContentForRule(meta, "12"); got != "1,2" {
+		t.Fatalf("glued wire=%q want 1,2", got)
+	}
+	if n := CountBetNums(meta, "12"); n != 1 {
+		t.Fatalf("CountBetNums(12)=%d want 1", n)
+	}
+	if n := CountBetNums(meta, "5,5"); n != 0 {
+		// 去重后只剩 1 码，C(1,2)=0
+		t.Fatalf("CountBetNums(5,5)=%d want 0", n)
 	}
 }
 
@@ -247,12 +357,33 @@ func TestCountBetNums_qian2ZuxuanDanshiExcludeDuizi(t *testing.T) {
 	if n := CountBetNums(meta, "12,21,11"); n != 1 {
 		t.Fatalf("CountBetNums form-dedup=%d want 1", n)
 	}
+	// 冷热/误按位单码号池：展成整注，勿计 0
+	for _, pool := range []string{"5,6", "5\n6", "1,2,3"} {
+		n := CountBetNums(meta, pool)
+		wire := FormatBetContentForRule(meta, pool)
+		if n <= 0 || wire == "" {
+			t.Fatalf("digit-pool %q count=%d wire=%q", pool, n, wire)
+		}
+	}
+	if got := FormatBetContentForRule(meta, "5,6"); got != "56" {
+		t.Fatalf("pool 5,6 wire=%q want 56", got)
+	}
+	if n := CountBetNums(meta, "1,2,3"); n != 3 {
+		t.Fatalf("pool 1,2,3 count=%d want 3 (12,13,23)", n)
+	}
 }
 
 func TestCountBetNums_baodanQian2(t *testing.T) {
 	meta := ParseRuleMeta("ssc_std", "g004", "45", "组选包胆", "前二", nil, "45")
 	if n := CountBetNums(meta, "3"); n != 9 {
 		t.Fatalf("qian2 baodan betsNums=%d want 9", n)
+	}
+	// 多胆须压成单胆再计注（冷热多档曾出 1,3,5,6,7 → 第三方「投注数字不合规」）
+	if got := FormatBetContentForRule(meta, "1,3,5,6,7"); got != "1" {
+		t.Fatalf("baodan wire=%q want 1", got)
+	}
+	if n := CountBetNums(meta, FormatBetContentForRule(meta, "1,3,5,6,7")); n != 9 {
+		t.Fatalf("baodan after format betsNums=%d want 9", n)
 	}
 }
 
@@ -427,6 +558,13 @@ func TestCountBudingwei_yimaMaxTwo(t *testing.T) {
 	if got := FormatBetContentForRule(meta, "0,2,4"); got != "0,2" {
 		t.Fatalf("wire=%q want 0,2", got)
 	}
+	// 粘连三码会被第三方拒「投注数字不可超过两位数」；须拆开再截断
+	if got := FormatBetContentForRule(meta, "123"); got != "1,2" {
+		t.Fatalf("glued wire=%q want 1,2", got)
+	}
+	if n := CountBetNums(meta, FormatBetContentForRule(meta, "123")); n != 2 {
+		t.Fatalf("glued bets=%d want 2", n)
+	}
 }
 
 func TestCountBetNums_zu12Wire(t *testing.T) {
@@ -464,6 +602,64 @@ func TestResolveSolo_highBets(t *testing.T) {
 	meta := ParseRuleMeta("ssc_std", "g007", "103", "直选和值", "前中后三", seg, "103")
 	if ResolveSolo(meta, "6", 84) {
 		t.Fatal("84 注前中后三直选和值不应 solo")
+	}
+}
+
+// 前中后三直选和值 0–9：单区三星组合 220 × 3 区 = 660（对齐第三方；非四星 715×3=2145）。
+func TestCountBetNums_qianZhongHou3ZhixuanHezhi0to9(t *testing.T) {
+	seg, _ := json.Marshal(map[string]string{
+		"guajiGroup":    "前中后三",
+		"guajiTeam":     "前中后三直选",
+		"guajiFullName": "前中后三直选和值",
+		"guajiRuleId":   "103",
+	})
+	meta := ParseRuleMeta("ssc_std", "g007", "103", "直选和值", "前中后三", seg, "103")
+	if n := CountBetNums(meta, "0,1,2,3,4,5,6,7,8,9"); n != 660 {
+		t.Fatalf("betsNums=%d want 660", n)
+	}
+}
+
+// 前中后三和值尾数 1–9：单区 9 × 3 区 = 27（对齐第三方；勿只计选项个数 9）。
+func TestCountBetNums_qianZhongHou3Weishu1to9(t *testing.T) {
+	seg, _ := json.Marshal(map[string]string{
+		"guajiGroup":    "前中后三",
+		"guajiTeam":     "前中后三其他",
+		"guajiFullName": "前中后三和值尾数",
+		"guajiRuleId":   "111",
+	})
+	meta := ParseRuleMeta("ssc_std", "g007", "111", "和值尾数", "前中后三", seg, "111")
+	if n := CountBetNums(meta, "1,2,3,4,5,6,7,8,9"); n != 27 {
+		t.Fatalf("betsNums=%d want 27", n)
+	}
+}
+
+// def-1-1785643738664：前中后三混合组选按总注数判 solo（含×3）。
+// ju1=123→3 注 solo=true；ju2=4 形→12 注须 solo=false（旧逻辑无条件 true → 单挑参数错误）。
+func TestResolveSolo_qianZhongHou3HunheByBets(t *testing.T) {
+	seg, _ := json.Marshal(map[string]string{
+		"guajiGroup":    "前中后三",
+		"guajiTeam":     "前中后三组选",
+		"guajiFullName": "前中后三混合组选",
+		"guajiRuleId":   "110",
+	})
+	meta := ParseRuleMeta("ssc_std", "g007", "110", "混合组选", "前中后三", seg, "110")
+	cases := []struct {
+		wire string
+		want int
+		solo bool
+	}{
+		{"123", 3, true},
+		{"123,432", 6, false},
+		{"123,432,654,786", 12, false},
+	}
+	for _, c := range cases {
+		n := CountBetNums(meta, c.wire)
+		if n != c.want {
+			t.Fatalf("wire=%q bets=%d want %d", c.wire, n, c.want)
+		}
+		if got := ResolveSolo(meta, c.wire, n); got != c.solo {
+			t.Fatalf("wire=%q bets=%d ResolveSolo=%v want %v", c.wire, n, got, c.solo)
+		}
 	}
 }
 
@@ -636,6 +832,57 @@ func TestResolveSolo_sscQian2ZuxuanFs(t *testing.T) {
 	metaHou := ParseRuleMeta("ssc_std", "g005", "52", "组选复式", "后二", nil, "52")
 	if ResolveSolo(metaHou, "0,1", 1) {
 		t.Fatal("SSC 后二组选复式应 solo=false")
+	}
+}
+
+// def-1-1785564083367：按位残留去重后只剩 1 码时须 0 注，禁止 ResolveBetsNums 回落成 1。
+func TestResolveBetsNums_qian2ZuxuanFsInsufficientPool(t *testing.T) {
+	meta := ParseRuleMeta("ssc_std", "g004", "42", "组选复式", "前二", nil, "42")
+	for _, raw := range []string{"5", "5,5", "5\n5"} {
+		wire := FormatBetContentForRule(meta, raw)
+		if n := CountBetNums(meta, wire); n != 0 {
+			t.Fatalf("content=%q wire=%q Count=%d want 0", raw, wire, n)
+		}
+		if n := ResolveBetsNums(meta, wire, 2, 2, 1); n != 0 {
+			t.Fatalf("content=%q wire=%q ResolveBetsNums=%d want 0（勿回落 1→投注数字不合规）", raw, wire, n)
+		}
+	}
+	if n := ResolveBetsNums(meta, "1,2", 2, 2, 1); n != 1 {
+		t.Fatalf("合法 2 码 ResolveBetsNums=%d want 1", n)
+	}
+	if n := ResolveBetsNums(meta, "6,8,0", 6, 2, 1); n != 3 {
+		t.Fatalf("3 码 ResolveBetsNums=%d want 3", n)
+	}
+}
+
+// def-1-1785567172297：前二组选和值任意注数 solo=true → 单挑参数错误。
+func TestResolveSolo_sscQian2ZuxuanHezhi(t *testing.T) {
+	meta := ParseRuleMeta("ssc_std", "g004", "44", "组选和值", "前二", nil, "44")
+	if ResolveSolo(meta, "1", 1) {
+		t.Fatal("前二组选和值单注须 solo=false（实测 solo=true→单挑参数错误）")
+	}
+	if ResolveSolo(meta, "6", 3) {
+		t.Fatal("前二组选和值 3 注须 solo=false")
+	}
+	if NeedsSoloForRule(meta, "1") {
+		t.Fatal("前二组选和值 NeedsSolo 亦须 false")
+	}
+	// 仅数字 id、无「组选」文案时仍须识别
+	metaID := ParseRuleMeta("ssc_std", "g004", "44", "和值", "前二码", nil, "44")
+	if !isZuxuanHezhiMeta(metaID) {
+		t.Fatal("rule 44 应按组选和值识别")
+	}
+	if ResolveSolo(metaID, "1", 1) {
+		t.Fatal("rule 44 无组选文案时单注仍须 solo=false")
+	}
+	metaHou := ParseRuleMeta("ssc_std", "g005", "52", "组选和值", "后二", nil, "52")
+	if ResolveSolo(metaHou, "1", 1) {
+		t.Fatal("后二组选和值单注须 solo=false")
+	}
+	// 直选和值不受影响
+	metaZX := ParseRuleMeta("ssc_std", "g004", "40", "直选和值", "前二", nil, "40")
+	if !ResolveSolo(metaZX, "0", 1) {
+		t.Fatal("前二直选和值 1 注仍应 solo=true")
 	}
 }
 

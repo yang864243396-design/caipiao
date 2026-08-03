@@ -171,17 +171,19 @@ export interface SchemeHotColdWarm {
   totalPeriods: number
   /**
    * 权威配置：每位一行名次（0=最热）。运行时按近 N 期重排后取「当前排在这些名次上的号码」。
-   * 热/冷/全/清只是快捷勾选名次；点格子切换的也是名次。
+   * 热/冷/全/清只是编辑态快捷勾选名次，不落库；点格子切换的也是名次。
+   * 预览与编辑回显均以 ranks 为准。
    */
   ranks?: number[][]
   /**
-   * 编辑预览缓存（当前排名映射后的号码）；运行时不锁定。
-   * 无 ranks 的旧配置：非空行表示该位启用。
+   * @deprecated 旧配置兼容；新保存不再写入。无 ranks 时非空行表示该位启用，可反查为名次。
    */
-  pool: string[]
+  pool?: string[]
   /** every 每期换 / keep 不换号 / after_hit 中后换 / after_miss 挂后换 */
   strategy?: SchemeRotateStrategy
-  /** 快捷元数据（热/冷）；有 ranks 时运行时以 ranks 为准 */
+  /**
+   * @deprecated 旧配置兼容（热/冷整区）；新保存不再写入。有 ranks 时忽略。
+   */
   pickTypes?: SchemeHotColdPickType[]
   /** @deprecated 已废弃，忽略 */
   faultCount?: number
@@ -191,6 +193,11 @@ export interface SchemeHotColdWarm {
    * @deprecated 兼容旧配置；优先读 strategy。true≈after_hit，false≈keep
    */
   winRotate?: boolean
+  /**
+   * 任选非直选复式：万千百十个选位下标（0=万…4=个），至少 k、最多 5。
+   * 出号内容带选位前缀，注数 × C(选位数,k)。
+   */
+  positionIdxs?: number[]
 }
 
 export interface SchemeRandomDraw {
@@ -198,6 +205,11 @@ export interface SchemeRandomDraw {
   counts: number[]
   /** every 每期换 / keep 不换号 / after_hit 中后换 / after_miss 挂后换 */
   strategy: 'every' | 'keep' | 'after_hit' | 'after_miss'
+  /**
+   * 任选非直选复式：万千百十个选位下标（0=万…4=个），至少 k、最多 5。
+   * 出号内容带选位前缀，注数 × C(选位数,k)。
+   */
+  positionIdxs?: number[]
 }
 
 export interface UpdateSchemeInput {

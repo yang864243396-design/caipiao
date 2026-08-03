@@ -83,14 +83,8 @@ func (w *Worker) evaluateGuajiBetDedup(
 		}
 	}
 
-	// 模拟盘只看本方案 cloud 记录；正式盘另检会员 pending 第三方注单占期。
-	var taken bool
-	var errTaken error
-	if inst.SimBet {
-		taken, errTaken = q.CloudBetPeriodHandled(ctx, inst.ID, currentOpen)
-	} else {
-		taken, errTaken = q.GuajiPeriodAlreadyTaken(ctx, inst.ID, inst.MemberID, currentOpen)
-	}
+	// 模拟/正式均按本方案 cloud 记录防重（一期一注）；同会员其它方案互不影响。
+	taken, errTaken := q.CloudBetPeriodHandled(ctx, inst.ID, currentOpen)
 	if errTaken != nil {
 		return betPeriodDedup{}, errTaken
 	}
@@ -101,6 +95,23 @@ func (w *Worker) evaluateGuajiBetDedup(
 			LastBet:     lastBet,
 			Reason:      "period_record_exists",
 		}, nil
+	}
+	// 上笔第三方接单期仍 pending，但本地开放期已翻到下一期：再 Place 常会叠单到旧第三方期，
+	// 投注记录按 third_party_period 展示会出现「同一期两条」。
+	unsettled, hasPending, uerr := q.SchemeUnsettledGuajiPeriod(ctx, inst.ID)
+	if uerr != nil {
+		return betPeriodDedup{}, uerr
+	}
+	if hasPending {
+		unsettled = strings.TrimSpace(unsettled)
+		if unsettled != "" && unsettled != currentOpen {
+			return betPeriodDedup{
+				Skip:        true,
+				CurrentOpen: currentOpen,
+				LastBet:     unsettled,
+				Reason:      "prior_third_party_pending",
+			}, nil
+		}
 	}
 	return betPeriodDedup{CurrentOpen: currentOpen, LastBet: lastBet}, nil
 }
@@ -128,8 +139,13 @@ func (w *Worker) finalizeCloudBetAfterGuaji(
 	betContent string,
 	meta schemeGuajiBetMeta,
 	fallbackBetUnits int,
+	claimPeriod string, // 本地占位期号；必须写回占位行，禁止按接单期 upsert 覆盖其它期
 ) {
-	periodNo := strings.TrimSpace(meta.Periods)
+	// 优先写占位期：接单期错位时若按 meta.Periods upsert，会盖掉目标期已有注单并制造「一单两期」。
+	periodNo := strings.TrimSpace(claimPeriod)
+	if periodNo == "" {
+		periodNo = strings.TrimSpace(meta.Periods)
+	}
 	if periodNo == "" {
 		return
 	}
@@ -143,6 +159,16 @@ func (w *Worker) finalizeCloudBetAfterGuaji(
 	betUnits := meta.BetsNums
 	if betUnits <= 0 {
 		betUnits = fallbackBetUnits
+	}
+	tid := strings.TrimSpace(meta.ThirdPartyBetID)
+	// 第三方单号已挂在其它期：只保留占位与接单期游标，不再把旧 tid 写到新占位。
+	if tid != "" {
+		if prev, ok, err := w.q.SchemePeriodForThirdPartyBetID(ctx, inst.ID, tid); err == nil && ok && prev != periodNo {
+			slog.Error("finalize skip duplicate third-party bet id",
+				"instanceId", inst.ID, "tid", tid, "prevPeriod", prev, "claimPeriod", periodNo)
+			tid = ""
+			amount = 0
+		}
 	}
 	guajiID := activeGuajiAccountIDForInst(ctx, w.q, inst)
 	if err := w.q.InsertCloudBetRecordEx(ctx, sqlcdb.InsertCloudBetRecordExParams{
@@ -160,9 +186,9 @@ func (w *Worker) finalizeCloudBetAfterGuaji(
 		Status:           "pending",
 		BetContent:       betContent,
 		GuajiAccountID:   guajiID,
-		ThirdPartyBetID:  pgtype.Text{String: meta.ThirdPartyBetID, Valid: meta.ThirdPartyBetID != ""},
+		ThirdPartyBetID:  pgtype.Text{String: tid, Valid: tid != ""},
 		ThirdPartyPeriod: guajiPeriodsPgtext(meta.Periods),
-		BetOrderNo:       pgtype.Text{String: meta.OrderNo, Valid: meta.OrderNo != ""},
+		BetOrderNo:       pgtype.Text{String: meta.OrderNo, Valid: tid != "" && meta.OrderNo != ""},
 		Currency:         cfg.Currency,
 		LotteryCode:      inst.LotteryCode,
 		LotteryLabel:     inst.LotteryLabel,
@@ -172,6 +198,7 @@ func (w *Worker) finalizeCloudBetAfterGuaji(
 		slog.Warn("scheme worker finalize cloud bet insert failed", "id", inst.ID, "period", periodNo, "err", err)
 		return
 	}
+	// 游标推进本地占位期，挡住同开放期重投。
 	w.syncPeriodBetCursor(ctx, w.q, inst, periodNo)
 }
 
@@ -187,6 +214,28 @@ func (w *Worker) hasUnsettledGuajiBet(ctx context.Context, inst sqlcdb.SchemeIns
 	if w == nil || w.q == nil || !requiresGuajiRealBet(inst) {
 		return false
 	}
-	_, ok, err := w.q.SchemeUnsettledGuajiPeriod(ctx, inst.ID)
-	return err == nil && ok
+	currentOpen, openOK := thirdPartyOpenPeriod(inst.LotteryCode)
+	if !openOK || strings.TrimSpace(currentOpen) == "" {
+		// 取不到当前开放期时保守等待，避免同期限重复下单。
+		return true
+	}
+	currentOpen = strings.TrimSpace(currentOpen)
+	// 本期已有 cloud 占位（含尚未写回 third_party_bet_id 的刚占位行）即阻塞。
+	// 防止「第三方已接单、本地事务回滚丢占位」后的同期限连打。
+	if taken, err := w.q.CloudBetPeriodHandled(ctx, inst.ID, currentOpen); err == nil && taken {
+		return true
+	}
+	unsettled, ok, err := w.q.SchemeUnsettledGuajiPeriod(ctx, inst.ID)
+	if err != nil || !ok {
+		return false
+	}
+	unsettled = strings.TrimSpace(unsettled)
+	if unsettled == "" {
+		return false
+	}
+	// 任一笔已接单未派奖都阻塞再投：
+	// - unsettled == currentOpen：与 CloudBetPeriodHandled 双保险；
+	// - unsettled != currentOpen：本地期号超前，再 Place 会叠单到旧第三方期，
+	//   投注记录按 third_party_period 展示会变成「同一期两条」。
+	return true
 }

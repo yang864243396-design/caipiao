@@ -99,11 +99,26 @@ func validateGroupContent(rule playRule, content string) error {
 		return fmt.Errorf("groupContent 不能为空")
 	}
 	content = normalizeZhixuanDanshiContent(rule, content)
+	// 任选选位类：位名+号码，上限/注数走任选口径（任二=900，C(n,k)×内层）
+	if isRenxuanNeedsPositionRule(rule) {
+		if max := maxBetUnitsForPlay(rule); max > 0 {
+			if units := countRenxuanNeedsPositionBetUnits(rule, content); units > max {
+				return errMaxBetUnitsExceeded(max)
+			}
+		}
+		return nil
+	}
 	sub := rule.SubPlayID
-	if sub == "zhixuan_ds" || rule.BetMode == "danshi" {
+	if sub == "zhixuan_ds" || rule.BetMode == "danshi" || rule.BetMode == "zhixuan_ds" {
 		tokens := parseNumberTokens(content, rule.SegmentLen)
 		if len(tokens) == 0 {
 			return fmt.Errorf("直选单式须为 %d 位数字", rule.SegmentLen)
+		}
+		// 与复式同上限（前二=90、前三=900…）
+		if max := maxBetUnitsForPlay(rule); max > 0 {
+			if units := countPlayWireBetUnits(rule, content); units > max {
+				return errMaxBetUnitsExceeded(max)
+			}
 		}
 		return nil
 	}
@@ -176,10 +191,19 @@ func validateGroupContent(rule playRule, content string) error {
 		return fmt.Errorf("选号无效")
 	}
 	if isSpecialBetMode(rule.BetMode) {
-		if strings.TrimSpace(content) != "" {
-			return nil
+		if strings.TrimSpace(content) == "" {
+			return fmt.Errorf("选号无效")
 		}
-		return fmt.Errorf("选号无效")
+		// 和值/跨度：组合注数上限（前二=90、前三=900…）
+		bm := strings.TrimSpace(rule.BetMode)
+		if bm == "hezhi" || bm == "kuadu" {
+			if max := maxBetUnitsForPlay(rule); max > 0 {
+				if units := countPlayWireBetUnits(rule, content); units > max {
+					return errMaxBetUnitsExceeded(max)
+				}
+			}
+		}
+		return nil
 	}
 	if rule.PlayTypeID == "renxuan_fs" || rule.PlayTypeID == "renxuan_ds" {
 		if validateSyxwRenxuanContent(rule, content) {

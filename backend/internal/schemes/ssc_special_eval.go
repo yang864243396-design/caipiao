@@ -254,19 +254,25 @@ func normalizeLonghuPick(s string) string {
 }
 
 func evaluateHezhi(rule playRule, balls []string, content string) betEvaluation {
+	// 注数按 wire 组合数（与第三方 bets_nums / 上限一致），勿用选项个数
+	units := countPlayWireBetUnits(rule, content)
+	if units <= 0 {
+		units = 1
+	}
+	unitNet := oddsZhixuan(rule.SegmentLen, rule.OddsBase)
+	if rule.HezhiZuxuan {
+		// 组选和值：中奖组合按组选单注赔率，未中组合扣本（勿整票×直选 97）
+		unitNet = oddsZuxuan(rule.SegmentLen, rule.OddsBase)
+	}
 	seg := drawSegmentForRule(rule, balls)
 	if len(seg) == 0 {
-		return betEvaluation{BetUnits: 1, Odds: oddsZhixuan(rule.SegmentLen, rule.OddsBase)}
+		return betEvaluation{BetUnits: units, Odds: unitNet}
 	}
 	sum := 0
 	for _, d := range seg {
 		sum += atoiBall(d)
 	}
 	picks := parseIntTokens(content)
-	units := len(picks)
-	if units <= 0 {
-		units = 1
-	}
 	hit := false
 	for _, p := range picks {
 		if p == sum {
@@ -274,13 +280,22 @@ func evaluateHezhi(rule playRule, balls []string, content string) betEvaluation 
 			break
 		}
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(rule.SegmentLen, rule.OddsBase)}
+	if !hit {
+		return betEvaluation{Hit: false, BetUnits: units, Odds: unitNet}
+	}
+	hitUnits := countHezhiHitUnits(rule, sum)
+	return hezhiKuaduPartialWin(units, hitUnits, unitNet)
 }
 
 func evaluateKuadu(rule playRule, balls []string, content string) betEvaluation {
+	units := countPlayWireBetUnits(rule, content)
+	if units <= 0 {
+		units = 1
+	}
+	unitNet := oddsZhixuan(rule.SegmentLen, rule.OddsBase)
 	seg := drawSegmentForRule(rule, balls)
 	if len(seg) == 0 {
-		return betEvaluation{BetUnits: 1, Odds: oddsZhixuan(rule.SegmentLen, rule.OddsBase)}
+		return betEvaluation{BetUnits: units, Odds: unitNet}
 	}
 	vals := make([]int, len(seg))
 	for i, d := range seg {
@@ -288,10 +303,6 @@ func evaluateKuadu(rule playRule, balls []string, content string) betEvaluation 
 	}
 	span := maxInt(vals) - minInt(vals)
 	picks := parseIntTokens(content)
-	units := len(picks)
-	if units <= 0 {
-		units = 1
-	}
 	hit := false
 	for _, p := range picks {
 		if p == span {
@@ -299,24 +310,68 @@ func evaluateKuadu(rule playRule, balls []string, content string) betEvaluation 
 			break
 		}
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(rule.SegmentLen, rule.OddsBase)}
+	if !hit {
+		return betEvaluation{Hit: false, BetUnits: units, Odds: unitNet}
+	}
+	segLen := rule.SegmentLen
+	if segLen <= 0 {
+		segLen = len(seg)
+	}
+	hitUnits := countOrderedSpanCombinationsLocal(span, segLen)
+	return hezhiKuaduPartialWin(units, hitUnits, unitNet)
+}
+
+// countHezhiHitUnits 开奖和值对应的中奖组合注数（单区；多区位由 evaluateMultiZone 汇总）。
+func countHezhiHitUnits(rule playRule, sum int) int {
+	segLen := rule.SegmentLen
+	if segLen <= 0 {
+		segLen = 3
+	}
+	if rule.HezhiZuxuan {
+		return countZuxuanSumCombinationsLocal(sum, segLen)
+	}
+	return countOrderedSumCombinationsLocal(sum, segLen)
+}
+
+// hezhiKuaduPartialWin 和值/跨度多选项：仅中奖组合拿单注赔率，其余组合按未中扣本。
+// 对齐不定位 evaluateBudingwei；避免「全包和值中一个却整票×直选赔率」。
+func hezhiKuaduPartialWin(units, hitUnits int, unitNet float64) betEvaluation {
+	if units <= 0 {
+		units = 1
+	}
+	if hitUnits <= 0 {
+		hitUnits = 1
+	}
+	if hitUnits > units {
+		hitUnits = units
+	}
+	net := float64(hitUnits)*unitNet - float64(units-hitUnits)
+	odds := net / float64(units)
+	return betEvaluation{Hit: true, BetUnits: units, Odds: odds, PrizeNet: net}
 }
 
 func evaluateBudingwei(rule playRule, balls []string, content string) betEvaluation {
 	seg := drawSegmentForRule(rule, balls)
 	need := budingweiNeedCount(rule.CatalogSubID)
+	if n := budingweiNeedCount(rule.SubPlayID); n > need {
+		need = n
+	}
 	picks := parsePickTokensForRule(rule, content)
 	n := len(picks)
 	if need <= 0 {
 		need = 1
 	}
+	unitNet := oddsBudingweiUnitNet(need, rule.SegmentLen, rule.OddsBase)
+	// 五星二/三码：第三方要求至少 4 个号；号池不足计 0 注（勿回落成 1）
+	if mp := budingweiMinPoolForRule(rule); mp >= 4 && n < mp {
+		return betEvaluation{Hit: false, BetUnits: 0, Odds: unitNet}
+	}
 	// 一码：选几个号几注；二码/三码：C(n,k)（与 guajibet countBudingweiBetNums / 第三方一致）
 	units := budingweiBetUnits(n, need)
 	if units <= 0 {
-		units = 1
+		return betEvaluation{Hit: false, BetUnits: 0, Odds: unitNet}
 	}
 	hitN := budingweiHitComboCount(seg, picks, need)
-	unitNet := oddsBudingweiUnitNet(need, rule.SegmentLen, rule.OddsBase)
 	if hitN <= 0 {
 		return betEvaluation{Hit: false, BetUnits: units, Odds: unitNet}
 	}
@@ -435,15 +490,25 @@ func combinInt(n, k int) int {
 }
 
 func budingweiNeedCount(subID string) int {
-	s := strings.ToLower(subID)
+	s := strings.ToLower(strings.TrimSpace(subID))
 	switch {
 	case strings.Contains(subID, "三码") || strings.Contains(s, "_3ma") || strings.Contains(s, "3ma"):
 		return 3
 	case strings.Contains(subID, "二码") || strings.Contains(s, "_2ma") || strings.Contains(s, "2ma"):
 		return 2
-	default:
+	case strings.Contains(subID, "一码") || strings.Contains(s, "_1ma") || strings.Contains(s, "1ma"):
 		return 1
 	}
+	// rules/v2 数字 id（对齐 guajibet.budingweiPickCount）
+	switch strings.TrimSpace(subID) {
+	case "152": // 五星三码
+		return 3
+	case "114", "116", "118", "147", "149", "151": // 各星二码
+		return 2
+	case "113", "115", "117", "146", "148", "150": // 各星一码
+		return 1
+	}
+	return 1
 }
 
 func evaluateDxds(rule playRule, balls []string, content string) betEvaluation {
@@ -711,30 +776,40 @@ func looksLikeRenxuanDanshiPicks(picks string, n int) bool {
 }
 
 func evaluateRenxuanZhixuanDanshi(balls []string, posLabel, picks string, n int) betEvaluation {
+	if n <= 0 {
+		n = 2
+	}
 	positions := renxuanPositionsFromLabel(posLabel, n)
-	draw := renxuanDrawDigits(balls, positions)
 	tokens := renxuanDanshiTokens(picks, n)
-	units := len(tokens)
+	ticketN := len(tokens)
+	if ticketN <= 0 {
+		ticketN = 1
+	}
+	combos := renxuanPositionCombos(positions, n)
+	units := len(combos) * ticketN
 	hit := false
-	for _, tok := range tokens {
-		if tok == draw {
-			hit = true
+	for _, combo := range combos {
+		draw := renxuanDrawDigits(balls, combo)
+		for _, tok := range tokens {
+			if tok == draw {
+				hit = true
+				break
+			}
+		}
+		if hit {
 			break
 		}
-	}
-	if units <= 0 {
-		units = 1
 	}
 	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(n, 0)}
 }
 
 func evaluateRenxuanZuxuanDanshi(balls []string, posLabel, picks string, n int, forceZu3, forceZu6 bool) betEvaluation {
+	if n <= 0 {
+		n = 2
+	}
 	positions := renxuanPositionsFromLabel(posLabel, n)
-	draw := renxuanDrawDigits(balls, positions)
-	drawKey := sortDigitString(draw)
 	tokens := renxuanDanshiTokens(picks, n)
-	units := 0
-	hit := false
+	validTickets := 0
 	for _, tok := range tokens {
 		if forceZu3 && !isZu3DigitString(tok) {
 			continue
@@ -742,19 +817,40 @@ func evaluateRenxuanZuxuanDanshi(balls []string, posLabel, picks string, n int, 
 		if forceZu6 && !isZu6DigitString(tok) {
 			continue
 		}
-		// 混合/组选单式：排除豹子
 		if isBaoziDigitString(tok) {
 			continue
 		}
-		units++
-		if sortDigitString(tok) == drawKey {
-			if forceZu3 && !isZu3DigitString(draw) {
+		validTickets++
+	}
+	combos := renxuanPositionCombos(positions, n)
+	units := len(combos) * validTickets
+	hit := false
+	for _, combo := range combos {
+		draw := renxuanDrawDigits(balls, combo)
+		drawKey := sortDigitString(draw)
+		if forceZu3 && !isZu3DigitString(draw) {
+			continue
+		}
+		if forceZu6 && !isZu6DigitString(draw) {
+			continue
+		}
+		for _, tok := range tokens {
+			if forceZu3 && !isZu3DigitString(tok) {
 				continue
 			}
-			if forceZu6 && !isZu6DigitString(draw) {
+			if forceZu6 && !isZu6DigitString(tok) {
 				continue
 			}
-			hit = true
+			if isBaoziDigitString(tok) {
+				continue
+			}
+			if sortDigitString(tok) == drawKey {
+				hit = true
+				break
+			}
+		}
+		if hit {
+			break
 		}
 	}
 	if units <= 0 {
@@ -763,24 +859,69 @@ func evaluateRenxuanZuxuanDanshi(balls []string, posLabel, picks string, n int, 
 	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(n, 0)}
 }
 
-func evaluateRenxuanZuxuanFixedPos(balls []string, posLabel, picks string, n int, patternFn func([]string) bool) betEvaluation {
-	positions := renxuanPositionsFromLabel(posLabel, n)
-	pool := parseDigitTokens(picks)
-	units := len(pool)
-	if units <= 0 {
-		units = 1
+// renxuanPositionCombos 从已选位中取 C(nPos, k) 组（按位序），供任选单式多选位验奖。
+func renxuanPositionCombos(positions []int, k int) [][]int {
+	if k <= 0 {
+		k = 2
 	}
-	seg := make([]string, 0, len(positions))
-	for _, p := range positions {
-		if p >= 0 && p < len(balls) {
-			seg = append(seg, balls[p])
+	if len(positions) < k {
+		return nil
+	}
+	if len(positions) == k {
+		return [][]int{append([]int(nil), positions...)}
+	}
+	var out [][]int
+	var walk func(start int, cur []int)
+	walk = func(start int, cur []int) {
+		if len(cur) == k {
+			out = append(out, append([]int(nil), cur...))
+			return
+		}
+		need := k - len(cur)
+		for i := start; i <= len(positions)-need; i++ {
+			walk(i+1, append(cur, positions[i]))
 		}
 	}
-	hit := len(seg) == n && allDigitsInPool(seg, pool)
-	if hit && patternFn != nil {
-		hit = patternFn(seg)
-	} else if hit {
-		hit = zuxuanPoolHit(seg, pool)
+	walk(0, nil)
+	return out
+}
+
+func evaluateRenxuanZuxuanFixedPos(balls []string, posLabel, picks string, n int, patternFn func([]string) bool) betEvaluation {
+	if n <= 0 {
+		n = 2
+	}
+	positions := renxuanPositionsFromLabel(posLabel, n)
+	pool := parseDigitTokens(picks)
+	poolUnits := zuxuanPoolUnits(pool, n)
+	if poolUnits <= 0 {
+		poolUnits = len(pool)
+	}
+	if poolUnits <= 0 {
+		poolUnits = 1
+	}
+	combos := renxuanPositionCombos(positions, n)
+	units := len(combos) * poolUnits
+	if units <= 0 {
+		units = poolUnits
+	}
+	hit := false
+	for _, combo := range combos {
+		seg := make([]string, 0, len(combo))
+		for _, p := range combo {
+			if p >= 0 && p < len(balls) {
+				seg = append(seg, balls[p])
+			}
+		}
+		ok := len(seg) == n && allDigitsInPool(seg, pool)
+		if ok && patternFn != nil {
+			ok = patternFn(seg)
+		} else if ok {
+			ok = zuxuanPoolHit(seg, pool)
+		}
+		if ok {
+			hit = true
+			break
+		}
 	}
 	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(n, 0)}
 }
@@ -916,8 +1057,9 @@ func renxuanPositionsFromLabel(posLabel string, n int) []int {
 			found = append(found, o.idx)
 		}
 	}
+	// 多选位：保留全部已选（最多 5），勿截成恰好 n；验奖侧再按 C(len,n) 展开
 	if len(found) >= n {
-		return found[:n]
+		return found
 	}
 	switch n {
 	case 4:
@@ -929,11 +1071,20 @@ func renxuanPositionsFromLabel(posLabel string, n int) []int {
 	}
 }
 
+// renxuanExactPositions 和值/组选复式等仍按恰好 n 位取值（多选时取前 n 个）。
+func renxuanExactPositions(posLabel string, n int) []int {
+	positions := renxuanPositionsFromLabel(posLabel, n)
+	if n > 0 && len(positions) > n {
+		return positions[:n]
+	}
+	return positions
+}
+
 func evaluateRenxuanHezhi(balls []string, content string, pickCount int) betEvaluation {
 	posLabel, picks, ok := splitPipeContent(content)
 	if !ok {
 		lines := splitGroupLines(content)
-		if len(lines) >= 2 {
+		if len(lines) >= 2 && looksLikeRenxuanPosLabel(lines[0]) {
 			posLabel = lines[0]
 			picks = strings.Join(lines[1:], ",")
 		} else {
@@ -941,27 +1092,43 @@ func evaluateRenxuanHezhi(balls []string, content string, pickCount int) betEval
 			posLabel = ""
 		}
 	}
+	if pickCount <= 0 {
+		pickCount = 2
+	}
 	positions := renxuanPositionsFromLabel(posLabel, pickCount)
-	sum := 0
-	for _, p := range positions {
-		if p >= 0 && p < len(balls) {
-			sum += atoiBall(balls[p])
-		}
+	combos := renxuanPositionCombos(positions, pickCount)
+	if len(combos) == 0 {
+		combos = [][]int{renxuanExactPositions(posLabel, pickCount)}
 	}
 	vals := parseIntTokens(picks)
-	units := 0
-	hit := false
+	baseUnits := 0
 	for _, v := range vals {
-		units += countOrderedSumCombos(v, pickCount)
-		if v == sum {
-			hit = true
+		baseUnits += countOrderedSumCombos(v, pickCount)
+	}
+	if baseUnits <= 0 {
+		baseUnits = len(vals)
+	}
+	if baseUnits <= 0 {
+		baseUnits = 1
+	}
+	units := len(combos) * baseUnits
+	hit := false
+	for _, combo := range combos {
+		sum := 0
+		for _, p := range combo {
+			if p >= 0 && p < len(balls) {
+				sum += atoiBall(balls[p])
+			}
 		}
-	}
-	if units <= 0 {
-		units = len(vals)
-	}
-	if units <= 0 {
-		units = 1
+		for _, v := range vals {
+			if v == sum {
+				hit = true
+				break
+			}
+		}
+		if hit {
+			break
+		}
 	}
 	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(pickCount, 0)}
 }
@@ -970,32 +1137,46 @@ func evaluateRenxuanWeishu(balls []string, content string, pickCount int) betEva
 	posLabel, picks, ok := splitPipeContent(content)
 	if !ok {
 		lines := splitGroupLines(content)
-		if len(lines) >= 2 {
+		if len(lines) >= 2 && looksLikeRenxuanPosLabel(lines[0]) {
 			posLabel = lines[0]
 			picks = strings.Join(lines[1:], ",")
 		} else {
 			picks = content
 		}
 	}
-	positions := renxuanPositionsFromLabel(posLabel, pickCount)
-	sum := 0
-	for _, p := range positions {
-		if p >= 0 && p < len(balls) {
-			sum += atoiBall(balls[p])
-		}
+	if pickCount <= 0 {
+		pickCount = 2
 	}
-	tail := sum % 10
+	positions := renxuanPositionsFromLabel(posLabel, pickCount)
+	combos := renxuanPositionCombos(positions, pickCount)
+	if len(combos) == 0 {
+		combos = [][]int{renxuanExactPositions(posLabel, pickCount)}
+	}
+	// 尾数：多选位按组合展开，命中任一组合即中；注数 × C(nPos,k)
 	vals := parseIntTokens(picks)
+	baseUnits := len(vals)
+	if baseUnits <= 0 {
+		baseUnits = 1
+	}
+	units := len(combos) * baseUnits
 	hit := false
-	for _, v := range vals {
-		if v == tail {
-			hit = true
+	for _, combo := range combos {
+		sum := 0
+		for _, p := range combo {
+			if p >= 0 && p < len(balls) {
+				sum += atoiBall(balls[p])
+			}
+		}
+		tail := sum % 10
+		for _, v := range vals {
+			if v == tail {
+				hit = true
+				break
+			}
+		}
+		if hit {
 			break
 		}
-	}
-	units := len(vals)
-	if units <= 0 {
-		units = 1
 	}
 	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZhixuan(pickCount, 0)}
 }

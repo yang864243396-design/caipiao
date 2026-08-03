@@ -14,7 +14,8 @@ import (
 )
 
 const (
-	defaultSyncInterval = 15 * time.Second
+	// 1 分彩开某投某依赖相邻上期；15s 轮询时常拖到临近封盘才入库。
+	defaultSyncInterval = 5 * time.Second
 	defaultPageLimit    = 30
 )
 

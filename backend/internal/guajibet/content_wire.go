@@ -283,6 +283,7 @@ func formatPaddedPickDigits(template, groupContent string) string {
 }
 
 // formatSSCZuxuanDanshiDigits 组选单式：N 位一注、逗号分隔；排除对子/豹子，形态去重保序。
+// 若内容是「单码号池」（冷热整体频次 / 误按位出号如 "5,6"、"5\n6"），按 C(n,k) 展成整注。
 func formatSSCZuxuanDanshiDigits(segLen int, groupContent string) string {
 	if segLen <= 0 {
 		segLen = 2
@@ -309,7 +310,71 @@ func formatSSCZuxuanDanshiDigits(segLen int, groupContent string) string {
 		seen[key] = struct{}{}
 		out = append(out, d)
 	}
+	if len(out) > 0 {
+		return strings.Join(out, ",")
+	}
+	return expandZuxuanDigitPoolToDanshi(parts, segLen)
+}
+
+// expandZuxuanDigitPoolToDanshi 将去重单码号池展成组选单式整注（升序、不含对子/豹子）。
+func expandZuxuanDigitPoolToDanshi(parts []string, segLen int) string {
+	if segLen <= 0 {
+		segLen = 2
+	}
+	digits := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, p := range parts {
+		d := digitsOnly(p)
+		if len(d) != 1 {
+			return ""
+		}
+		if _, ok := seen[d]; ok {
+			continue
+		}
+		seen[d] = struct{}{}
+		digits = append(digits, d)
+	}
+	if len(digits) < segLen {
+		return ""
+	}
+	// 升序，保证组合稳定
+	for i := 0; i < len(digits); i++ {
+		for j := i + 1; j < len(digits); j++ {
+			if digits[j] < digits[i] {
+				digits[i], digits[j] = digits[j], digits[i]
+			}
+		}
+	}
+	combos := combineDigitTokens(digits, segLen)
+	out := make([]string, 0, len(combos))
+	for _, c := range combos {
+		ticket := strings.Join(c, "")
+		if isBaoziDigits(ticket) {
+			continue
+		}
+		out = append(out, ticket)
+	}
 	return strings.Join(out, ",")
+}
+
+func combineDigitTokens(digits []string, k int) [][]string {
+	if k <= 0 || k > len(digits) {
+		return nil
+	}
+	var out [][]string
+	var walk func(start int, cur []string)
+	walk = func(start int, cur []string) {
+		if len(cur) == k {
+			cp := append([]string(nil), cur...)
+			out = append(out, cp)
+			return
+		}
+		for i := start; i < len(digits); i++ {
+			walk(i+1, append(cur, digits[i]))
+		}
+	}
+	walk(0, nil)
+	return out
 }
 
 // expandPositionPoolToDanshiTickets 将按位号池（每位一行单码）展开为直选单式票。

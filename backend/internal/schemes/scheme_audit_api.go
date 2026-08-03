@@ -237,11 +237,41 @@ func validateZuxuanPoolMinPick(rule playRule, hcw *hotColdWarmCfg) []Violation {
 }
 
 // validateAdvTriggerBetConfig 校验启用行的正投/反投（按位号池会在 ValidateSchemeBetContent 内展开）。
+// 启动要求：每个启用号码的正投、反投都必须填写（和值/组选和值等单档与按位分列均适用）。
 func validateAdvTriggerBetConfig(kind string, config []byte, cfg parsedSchemeConfig) []Violation {
 	var out []Violation
+	anyEnabled := false
+	usesPos := triggerBetUsesPosition(cfg.Play)
+	segLen := cfg.Play.SegmentLen
+	if segLen < 1 {
+		segLen = 1
+	}
+	if !usesPos {
+		segLen = 1
+	}
 	for _, row := range cfg.Trigger.Rows {
 		if !row.Enabled {
 			continue
+		}
+		anyEnabled = true
+		open := strings.TrimSpace(row.Open)
+		posParts := triggerFieldPartsForValidate(row.Pos, segLen)
+		negParts := triggerFieldPartsForValidate(row.Neg, segLen)
+		for i := 0; i < segLen; i++ {
+			if strings.TrimSpace(posParts[i]) == "" {
+				detail := "开出 " + open + " 的正投未填写"
+				if usesPos && segLen > 1 {
+					detail = "开出 " + open + " 的正投第 " + strconv.Itoa(i+1) + " 位未填写"
+				}
+				out = append(out, Violation{Code: ViolationEmptyContent, Detail: detail})
+			}
+			if strings.TrimSpace(negParts[i]) == "" {
+				detail := "开出 " + open + " 的反投未填写"
+				if usesPos && segLen > 1 {
+					detail = "开出 " + open + " 的反投第 " + strconv.Itoa(i+1) + " 位未填写"
+				}
+				out = append(out, Violation{Code: ViolationEmptyContent, Detail: detail})
+			}
 		}
 		for _, cell := range []struct {
 			name string
@@ -257,9 +287,37 @@ func validateAdvTriggerBetConfig(kind string, config []byte, cfg parsedSchemeCon
 			for _, v := range ValidateSchemeBetContent(kind, config, c, 0) {
 				out = append(out, Violation{
 					Code:   v.Code,
-					Detail: "开出 " + strings.TrimSpace(row.Open) + " 的" + cell.name + "：" + v.Detail,
+					Detail: "开出 " + open + " 的" + cell.name + "：" + v.Detail,
 				})
 			}
+		}
+	}
+	if !anyEnabled {
+		out = append(out, Violation{Code: ViolationEmptyContent, Detail: "请至少启用一行开某投某映射"})
+	}
+	return out
+}
+
+// triggerFieldPartsForValidate 与前端 triggerFieldParts 对齐：无换行时各位共用；有换行按位切。
+func triggerFieldPartsForValidate(raw string, n int) []string {
+	if n < 1 {
+		n = 1
+	}
+	text := strings.ReplaceAll(raw, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	if !strings.Contains(text, "\n") {
+		one := strings.TrimSpace(text)
+		out := make([]string, n)
+		for i := range out {
+			out[i] = one
+		}
+		return out
+	}
+	parts := strings.Split(text, "\n")
+	out := make([]string, n)
+	for i := 0; i < n; i++ {
+		if i < len(parts) {
+			out[i] = strings.TrimSpace(parts[i])
 		}
 	}
 	return out

@@ -59,6 +59,8 @@ type hotColdWarmCfg struct {
 	WinRotate bool `json:"winRotate"`
 	// PickTypes 快捷元数据（热/冷）；有 Ranks 时运行时以 Ranks 为准。无 Ranks 时展开为半区名次。
 	PickTypes []string `json:"pickTypes"`
+	// PositionIdxs 任选选位（万千百十个，≥k ≤5）；出号时加位名前缀。
+	PositionIdxs []int `json:"positionIdxs,omitempty"`
 	// FaultCount 已废弃（兼容旧 JSON）；运行时忽略。
 	FaultCount int `json:"faultCount"`
 	// PickCount 已废弃（兼容旧 JSON）；运行时忽略。
@@ -69,6 +71,8 @@ type randomDrawCfg struct {
 	Counts []int `json:"counts"`
 	// every 每期换 / keep 不换号 / after_hit 中后换 / after_miss 挂后换
 	Strategy string `json:"strategy"`
+	// PositionIdxs 任选选位（万千百十个，≥k ≤5）；出号时加位名前缀。
+	PositionIdxs []int `json:"positionIdxs,omitempty"`
 }
 
 
@@ -271,6 +275,20 @@ func applyTriggerBetPosition(out *parsedSchemeConfig) {
 	if out == nil || out.Trigger == nil {
 		return
 	}
+	// 任选非直选复式：始终规范化恰好 k 个绝对位（缺省万千…）；号池/和值亦需选位落库
+	if isRenxuanNeedsPositionTriggerPlay(out.Play) {
+		k := out.Play.SegmentLen
+		if k <= 0 {
+			k = renPickCount(out.Play.CatalogSubID)
+		}
+		if k <= 0 {
+			k = 2
+		}
+		out.Trigger.PositionIdxs = normalizeRenxuanTriggerPositionIdxs(out.Trigger.PositionIdxs, k)
+		out.Trigger.PositionIdx = out.Trigger.PositionIdxs[0]
+		out.Trigger.HasPosition = true
+		return
+	}
 	if !triggerBetUsesPosition(out.Play) {
 		return
 	}
@@ -361,6 +379,10 @@ func triggerBetUsesPosition(rule playRule) bool {
 	if isDingweiTriggerPlay(rule) {
 		return true
 	}
+	// 任选单式类：按 triggerBet.positionIdxs 所选绝对位分列出号（号池/和值走独立取数，不在此列）
+	if isRenxuanPerPosTriggerPlay(rule) {
+		return true
+	}
 	// 前三直选复式 / 中三混合组选 / 中三直选单式 / 后二大小单双等：SegmentLen>=2 的按位玩法
 	if rule.SegmentLen >= 2 {
 		if bm == "fushi" || bm == "zhixuan_fs" || bm == "zuhe" || bm == "dxds" || bm == "hunhe" {
@@ -380,7 +402,7 @@ func triggerBetUsesPosition(rule playRule) bool {
 	return false
 }
 
-// isZhixuanDanshiTriggerPlay 段长>=2 的直选单式（排除任选/组选单式）。
+// isZhixuanDanshiTriggerPlay 段长>=2 的直选单式（排除任选/组选单式；任选走 isRenxuanPerPosTriggerPlay）。
 func isZhixuanDanshiTriggerPlay(rule playRule) bool {
 	if rule.SegmentLen < 2 {
 		return false
@@ -399,6 +421,91 @@ func isZhixuanDanshiTriggerPlay(rule playRule) bool {
 		return true
 	}
 	return sub == "zhixuan_ds" || strings.Contains(sub, "zhixuan_ds")
+}
+
+// isRenxuanNeedsPositionTriggerPlay 任选非直选复式：开某投某须选位。
+func isRenxuanNeedsPositionTriggerPlay(rule playRule) bool {
+	return isRenxuanNeedsPositionRule(rule)
+}
+
+// isRenxuanPerPosTriggerPlay 任选单式类：按所选位分行填正/反投。
+func isRenxuanPerPosTriggerPlay(rule playRule) bool {
+	if !isRenxuanNeedsPositionTriggerPlay(rule) {
+		return false
+	}
+	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	sub := strings.ToLower(rule.SubPlayID + " " + rule.CatalogSubID)
+	if bm == "hezhi" || bm == "weishu" || bm == "zuxuan_fs" ||
+		bm == "zu3" || bm == "zu6" || bm == "zu24" || bm == "zu12" || bm == "zu4" {
+		return false
+	}
+	if strings.Contains(sub, "和值") || strings.Contains(sub, "hezhi") ||
+		strings.Contains(sub, "组选复式") || strings.Contains(sub, "组选24") ||
+		strings.Contains(sub, "组选12") || strings.Contains(sub, "组选6") ||
+		strings.Contains(sub, "组选4") || strings.Contains(sub, "zuxuan_fs") ||
+		strings.Contains(sub, "zu24") || strings.Contains(sub, "zu12") {
+		return false
+	}
+	return isRenxuanPositionDanshiRule(rule)
+}
+
+// isRenxuanZhixuanDanshiTriggerPlay 兼容旧名 → 任选单式类按位分列。
+func isRenxuanZhixuanDanshiTriggerPlay(rule playRule) bool {
+	return isRenxuanPerPosTriggerPlay(rule)
+}
+
+// defaultRenxuanTriggerPositionIdxs 任选开某投某默认选位：任二万千；任三万千个；任四万千百十。
+func defaultRenxuanTriggerPositionIdxs(k int) []int {
+	if k <= 2 {
+		return []int{0, 1}
+	}
+	if k == 3 {
+		return []int{0, 1, 4}
+	}
+	if k == 4 {
+		return []int{0, 1, 2, 3}
+	}
+	return []int{0, 1, 2, 3, 4}
+}
+
+func normalizeRenxuanTriggerPositionIdxs(idxs []int, k int) []int {
+	if k <= 0 {
+		k = 2
+	}
+	if k > 5 {
+		k = 5
+	}
+	seen := map[int]bool{}
+	out := make([]int, 0, k)
+	for _, idx := range idxs {
+		if idx < 0 {
+			idx = 0
+		}
+		if idx > 4 {
+			idx = 4
+		}
+		if seen[idx] {
+			continue
+		}
+		seen[idx] = true
+		out = append(out, idx)
+	}
+	sort.Ints(out)
+	if len(out) != k {
+		return defaultRenxuanTriggerPositionIdxs(k)
+	}
+	return out
+}
+
+func renxuanPositionNamesCSV(idxs []int) string {
+	names := []string{"万", "千", "百", "十", "个"}
+	parts := make([]string, 0, len(idxs))
+	for _, idx := range idxs {
+		if idx >= 0 && idx < len(names) {
+			parts = append(parts, names[idx])
+		}
+	}
+	return strings.Join(parts, ",")
 }
 
 // layoutTriggerBetDingweiContent 将单位号码编排到选定投注位（多行），
@@ -509,6 +616,16 @@ func resolveHotColdWarm(cfg map[string]interface{}) *hotColdWarmCfg {
 			out.Ranks = append(out.Ranks, uniqueInts(line))
 		}
 	}
+	if arr, ok := raw["positionIdxs"].([]interface{}); ok {
+		for _, item := range arr {
+			idx := toInt(item, -1)
+			if idx >= 0 && idx <= 4 {
+				out.PositionIdxs = append(out.PositionIdxs, idx)
+			}
+		}
+		out.PositionIdxs = uniqueInts(out.PositionIdxs)
+		sort.Ints(out.PositionIdxs)
+	}
 	// 名次 / 出号类型 / 号码位置任一有值即可运行
 	if len(out.PickTypes) == 0 && !hotColdCfgHasPool(out.Pool) && !hotColdCfgHasRanks(out.Ranks) {
 		return nil
@@ -575,7 +692,67 @@ func resolveRandomDraw(cfg map[string]interface{}, rule playRule) *randomDrawCfg
 			out.Counts = append(out.Counts, n)
 		}
 	}
+	if arr, ok := raw["positionIdxs"].([]interface{}); ok {
+		for _, item := range arr {
+			idx := toInt(item, -1)
+			if idx >= 0 && idx <= 4 {
+				out.PositionIdxs = append(out.PositionIdxs, idx)
+			}
+		}
+		out.PositionIdxs = uniqueInts(out.PositionIdxs)
+		sort.Ints(out.PositionIdxs)
+	}
 	return out
+}
+
+// normalizeRenxuanRunPositionIdxs 冷热/随机选位：至少 k、最多 5；非法则回退默认。
+func normalizeRenxuanRunPositionIdxs(idxs []int, k int) []int {
+	if k <= 0 {
+		k = 2
+	}
+	if k > 5 {
+		k = 5
+	}
+	seen := map[int]bool{}
+	out := make([]int, 0, 5)
+	for _, idx := range idxs {
+		if idx < 0 {
+			idx = 0
+		}
+		if idx > 4 {
+			idx = 4
+		}
+		if seen[idx] {
+			continue
+		}
+		seen[idx] = true
+		out = append(out, idx)
+	}
+	sort.Ints(out)
+	if len(out) >= k && len(out) <= 5 {
+		return out
+	}
+	return defaultRenxuanTriggerPositionIdxs(k)
+}
+
+// wrapRenxuanNeedsPositionContent 任选选位出号：号码前加位名行（已带前缀则原样）。
+func wrapRenxuanNeedsPositionContent(rule playRule, picks string, idxs []int) string {
+	picks = strings.TrimSpace(picks)
+	if picks == "" || !isRenxuanNeedsPositionRule(rule) {
+		return picks
+	}
+	k := rule.SegmentLen
+	if k <= 0 {
+		k = renPickCount(rule.CatalogSubID)
+	}
+	if k <= 0 {
+		k = 2
+	}
+	if _, _, ok := parseRenxuanPosPicksContent(picks, k); ok {
+		return picks
+	}
+	idxs = normalizeRenxuanRunPositionIdxs(idxs, k)
+	return renxuanPositionNamesCSV(idxs) + "\n" + picks
 }
 
 // cloudPlayTypeLabel 写入 cloud_bet_records.play_type 的展示文案（大类 · 子玩法）。

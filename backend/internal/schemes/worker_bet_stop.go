@@ -49,6 +49,16 @@ func (w *Worker) stopAfterThirdPartyBetFailed(
 	}
 	reason := betFailureReason(betErr)
 	detail := guajiBetFailedDetail(betErr)
+	// 随机出号超限：不停方案（调用方应已释放占位；下期重抽）。
+	if reason == StatusReasonBetFailed && isBetUnitsExceededError(betErr) {
+		q := qtx
+		if q == nil && w != nil {
+			q = w.q
+		}
+		if refuseRandomDrawMaxUnitsPause(ctx, q, inst.ID, reason, detail) {
+			return nil
+		}
+	}
 	if err := applyBetFailurePause(ctx, qtx, inst, amount, reason, detail); err != nil {
 		return err
 	}

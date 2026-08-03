@@ -799,27 +799,41 @@ export function resolvePlayConfigFromTree(
   const panelType = typeNode.panelType ?? ''
   let inputMode = inputModeFromPanelType(panelType, betMode, subPlayId, segmentLen) ?? inputModeFromBetMode(betMode, subPlayId, segmentLen)
 
-  if ((guajiGroup === '任选' || typeLabel === '任选' || typeId === 'g011') &&
-      (betMode === 'zuxuan_fs' || betMode === 'zu3' || betMode === 'zu6' || betMode === 'hezhi')) {
-    inputMode = 'pool'
-    segmentLen = 1
-    segmentLabels = ['选号']
-  }
-  if ((guajiGroup === '任选' || typeLabel === '任选' || typeId === 'g011' || typeId === 'renxuan') &&
-      (betMode === 'danshi' || betMode === 'zuxuan_ds' || betMode === 'hunhe')) {
+  // 任选：除直选复式外一律带选位（renPositionCount=k）；直选复式保持五位逗号定位
+  if (guajiGroup === '任选' || typeLabel === '任选' || typeId === 'g011' || typeId === 'renxuan') {
     const k =
       renPickCount(subId) ||
       renxuanSegmentLenFromText(`${guajiTeam} ${guajiFullName} ${subLabel}`) ||
       2
-    if (betMode === 'hunhe') {
-      inputMode = 'danshi'
-      segmentLen = 1
-      segmentLabels = ['选号']
-    } else {
-      inputMode = 'danshi'
-      segmentLen = k
-      segmentLabels = ['选号']
+    const renText = `${betMode} ${subPlayId} ${subLabel} ${guajiFullName}`
+    const isZhixuanFs =
+      (betMode === 'fushi' || subPlayId === 'zhixuan_fs' || /直选复式|zhixuan_fs/i.test(renText)) &&
+      !/单式|组选|和值|组三|组六|zu\d|hunhe|混合/i.test(renText)
+    if (!isZhixuanFs) {
       renPositionCount = k
+      if (
+        betMode === 'danshi' ||
+        betMode === 'zuxuan_ds' ||
+        betMode === 'hunhe' ||
+        /直选单式|组选单式|混合组选|组三单式|组六单式/.test(renText)
+      ) {
+        inputMode = 'danshi'
+        segmentLen = k
+        segmentLabels = ['选号']
+      } else if (
+        betMode === 'zuxuan_fs' ||
+        betMode === 'zu3' ||
+        betMode === 'zu6' ||
+        betMode === 'zu24' ||
+        betMode === 'zu12' ||
+        betMode === 'zu4' ||
+        betMode === 'hezhi' ||
+        /组选复式|组三|组六|组选24|组选12|组选6|组选4|和值|zu24|zu12|zu4/i.test(renText)
+      ) {
+        inputMode = 'pool'
+        segmentLen = 1
+        segmentLabels = ['选号']
+      }
     }
   }
   if (betMode === 'tuotou' || betMode.endsWith('_dp')) inputMode = 'danshi'
@@ -881,6 +895,14 @@ export function resolvePlayConfigFromTree(
     if (numberPoolMax == null) numberPoolMax = 9
     segmentLen = 1
     segmentLabels = ['选号']
+    // 一码不定位：号池最多勾 2 个（对齐第三方）
+    if (
+      betMode === 'budingwei' &&
+      !/二码|三码/.test(`${subLabel} ${guajiFullName}`) &&
+      !['114', '116', '118', '147', '149', '151', '152'].includes(String(subId).trim())
+    ) {
+      poolMaxPicks = 2
+    }
   }
   if (betMode === 'teshu') {
     inputMode = 'pool'

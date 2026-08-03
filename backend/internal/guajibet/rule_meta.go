@@ -15,6 +15,9 @@ type RuleMeta struct {
 	FullName     string
 	RuleID       string
 	Group        string
+	// ForcedBetMode 方案配置的 betMode（如 hezhi）；非空时优先于文案推断，
+	// 避免 label 缺失/错位时把组选和值误判成组选复式 → 计 0 注。
+	ForcedBetMode string
 }
 
 func ParseRuleMeta(template, typeID, subID, label, typeLabel string, segmentRule []byte, outboundCode string) RuleMeta {
@@ -64,8 +67,26 @@ func (m RuleMeta) combinedText() string {
 	return strings.Join([]string{m.FullName, m.Group, m.TeamLabel, m.TypeLabel, m.Label}, " ")
 }
 
+// normalizeForcedBetMode 将方案 betMode 归一为 InferBetMode 口径（zhixuan_fs→fushi 等）。
+func normalizeForcedBetMode(mode string) string {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	switch mode {
+	case "":
+		return ""
+	case "zhixuan_fs":
+		return "fushi"
+	case "zhixuan_ds":
+		return "danshi"
+	default:
+		return mode
+	}
+}
+
 // InferBetMode 按 label / guajiGroup 推断 bet_mode（对齐 client runTypeMatrix + seeds bet_mode）。
 func InferBetMode(meta RuleMeta) string {
+	if mode := normalizeForcedBetMode(meta.ForcedBetMode); mode != "" {
+		return mode
+	}
 	label := strings.TrimSpace(meta.Label)
 	if label == "" {
 		label = strings.TrimSpace(meta.FullName)

@@ -28,23 +28,11 @@ SELECT EXISTS(
 	return exists, err
 }
 
-// GuajiPeriodAlreadyTaken cloud 记录或 bet_orders 待开奖占用该期号。
+// GuajiPeriodAlreadyTaken 本方案是否已占用该期号（含 pending）。
+// 按 scheme_id 防重：同会员其它方案同期可并行下注，互不影响。
 func (q *Queries) GuajiPeriodAlreadyTaken(ctx context.Context, schemeID string, memberID int64, periodNo string) (bool, error) {
-	handled, err := q.CloudBetPeriodHandled(ctx, schemeID, periodNo)
-	if err != nil || handled {
-		return handled, err
-	}
-	var exists bool
-	err = q.db.QueryRow(ctx, `
-SELECT EXISTS(
-    SELECT 1 FROM bet_orders
-    WHERE member_id = $1
-      AND issue_no = $2
-      AND status = 'pending'
-      AND guaji_account_id IS NOT NULL
-      AND NULLIF(TRIM(third_party_bet_id), '') IS NOT NULL
-)`, memberID, periodNo).Scan(&exists)
-	return exists, err
+	_ = memberID
+	return q.CloudBetPeriodHandled(ctx, schemeID, periodNo)
 }
 
 // UpdateSchemeInstanceLastSettledIssue 仅云端挂机阶段推进第三方期号游标；await_next_bet 跳过期标记不可被覆盖。
@@ -96,6 +84,28 @@ WHERE id = $1
 	return tag.RowsAffected(), nil
 }
 
+// SchemePeriodForThirdPartyBetID 本方案是否已登记该第三方注单号，返回已挂靠的 period_no。
+func (q *Queries) SchemePeriodForThirdPartyBetID(ctx context.Context, schemeID, thirdPartyBetID string) (period string, ok bool, err error) {
+	schemeID = strings.TrimSpace(schemeID)
+	thirdPartyBetID = strings.TrimSpace(thirdPartyBetID)
+	if schemeID == "" || thirdPartyBetID == "" {
+		return "", false, nil
+	}
+	err = q.db.QueryRow(ctx, `
+SELECT period_no FROM cloud_bet_records
+WHERE scheme_id = $1
+  AND NULLIF(TRIM(third_party_bet_id), '') = $2
+ORDER BY id ASC
+LIMIT 1`, schemeID, thirdPartyBetID).Scan(&period)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return strings.TrimSpace(period), period != "", nil
+}
+
 // SchemeLastThirdPartyBetPeriod 本方案在指定通道（模拟/真实）最近一次下注的第三方 periods。
 // 按 sim_bet 隔离，避免正式盘历史期号挡住模拟盘首投。
 func (q *Queries) SchemeLastThirdPartyBetPeriod(ctx context.Context, schemeID string, simBet bool) (string, error) {
@@ -132,6 +142,11 @@ SET countdown_sec = $2,
     turnover = turnover + $3,
     last_settled_issue = $4,
     status_reason = 'cloud_active',
+    -- 成功下注后清掉随机出号「连续超限跳过」计数标记，避免下一期误累计
+    current_pick = CASE
+        WHEN current_pick LIKE '__rd_overmax_skip:%' THEN ''
+        ELSE current_pick
+    END,
     updated_at = now()
 WHERE id = $1
   AND status = 'running'`, id, countdownSec, turnover, lastSettledIssue)
@@ -313,7 +328,7 @@ RETURNING id`,
 	return id > 0, nil
 }
 
-// UpdateCloudBetRecordGuajiMeta 第三方接单后回写注单号、接单期号与对齐后的金额/注数/玩法。
+// UpdateCloudBetRecordGuajiMeta 第三方接单后回写注单号、接单期号与对齐后的金额/注数/玩法/内容。
 func (q *Queries) UpdateCloudBetRecordGuajiMeta(
 	ctx context.Context,
 	schemeID, periodNo string,
@@ -323,6 +338,7 @@ func (q *Queries) UpdateCloudBetRecordGuajiMeta(
 	amount pgtype.Numeric,
 	betUnits int,
 	playType string,
+	betContent string,
 ) error {
 	_, err := q.db.Exec(ctx, `
 UPDATE cloud_bet_records
@@ -333,20 +349,24 @@ SET third_party_bet_id = $3,
     status = $7,
     amount = $8,
     bet_units = COALESCE($9::int, bet_units),
-    play_type = CASE WHEN NULLIF(TRIM($10), '') IS NOT NULL THEN TRIM($10) ELSE play_type END
+    play_type = CASE WHEN NULLIF(TRIM($10), '') IS NOT NULL THEN TRIM($10) ELSE play_type END,
+    bet_content = CASE WHEN NULLIF(TRIM($11), '') IS NOT NULL THEN $11 ELSE bet_content END
 WHERE scheme_id = $1 AND period_no = $2`,
 		schemeID, periodNo, thirdPartyBetID, betOrderNo, thirdPartyPeriod, pnl, status, amount,
-		nullInt4(betUnits), strings.TrimSpace(playType))
+		nullInt4(betUnits), strings.TrimSpace(playType), betContent)
 	return err
 }
 
 // MoveCloudBetRecordPeriod 将占位记录从预期期号改到第三方实际接单期号。
-// 目标期已有记录时删掉预期期占位（避免留下幽灵期号），由后续 GuajiMeta 回写目标期。
-func (q *Queries) MoveCloudBetRecordPeriod(ctx context.Context, schemeID, fromPeriod, toPeriod string) error {
+// 返回 renamed=true 表示已改到 toPeriod；false 表示目标期已有记录、占位仍留在 fromPeriod。
+//
+// 目标期已占用时绝不可删除 from 占位：第三方接单期与本地开放期错位时，删占位会让
+// 同一开放期在下一 tick 再次 Place → 同期限连打（已在正式盘复现）。
+func (q *Queries) MoveCloudBetRecordPeriod(ctx context.Context, schemeID, fromPeriod, toPeriod string) (renamed bool, err error) {
 	fromPeriod = strings.TrimSpace(fromPeriod)
 	toPeriod = strings.TrimSpace(toPeriod)
 	if schemeID == "" || fromPeriod == "" || toPeriod == "" || fromPeriod == toPeriod {
-		return nil
+		return false, nil
 	}
 	tag, err := q.db.Exec(ctx, `
 UPDATE cloud_bet_records
@@ -356,15 +376,9 @@ WHERE scheme_id = $1 AND period_no = $2
     SELECT 1 FROM cloud_bet_records WHERE scheme_id = $1 AND period_no = $3
   )`, schemeID, fromPeriod, toPeriod)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if tag.RowsAffected() > 0 {
-		return nil
-	}
-	_, err = q.db.Exec(ctx, `
-DELETE FROM cloud_bet_records
-WHERE scheme_id = $1 AND period_no = $2`, schemeID, fromPeriod)
-	return err
+	return tag.RowsAffected() > 0, nil
 }
 
 func (q *Queries) DeleteCloudBetRecordForInstancePeriod(ctx context.Context, schemeID, periodNo string) error {
@@ -418,7 +432,8 @@ ON CONFLICT (scheme_id, period_no) DO UPDATE SET
     definition_id = CASE WHEN EXCLUDED.definition_id <> '' THEN EXCLUDED.definition_id ELSE cloud_bet_records.definition_id END,
     amount = EXCLUDED.amount,
     bet_units = COALESCE(EXCLUDED.bet_units, cloud_bet_records.bet_units),
-    play_type = CASE WHEN NULLIF(TRIM(EXCLUDED.play_type), '') IS NOT NULL THEN EXCLUDED.play_type ELSE cloud_bet_records.play_type END`,
+    play_type = CASE WHEN NULLIF(TRIM(EXCLUDED.play_type), '') IS NOT NULL THEN EXCLUDED.play_type ELSE cloud_bet_records.play_type END,
+    bet_content = CASE WHEN NULLIF(TRIM(EXCLUDED.bet_content), '') IS NOT NULL THEN EXCLUDED.bet_content ELSE cloud_bet_records.bet_content END`,
 		arg.RecordNo, arg.MemberID, arg.SimBet, arg.SchemeID, arg.SchemeName,
 		arg.PeriodNo, arg.PlayType, arg.Multiplier, arg.RoundLabel, arg.Amount, arg.Pnl, arg.Status,
 		arg.BetContent, arg.GuajiAccountID, arg.ThirdPartyBetID, arg.ThirdPartyPeriod, arg.BetOrderNo,

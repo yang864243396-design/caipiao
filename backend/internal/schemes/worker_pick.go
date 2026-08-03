@@ -254,13 +254,47 @@ func pickFixedNumber(cfg parsedSchemeConfig) pickDecision {
 // ---------- 随机出号 ----------
 
 func pickRandomDraw(cfg parsedSchemeConfig, inst sqlcdb.SchemeInstance) pickDecision {
-	if cur := strings.TrimSpace(inst.CurrentPick); cur != "" {
+	if cur := strings.TrimSpace(inst.CurrentPick); cur != "" && !isRandomOverMaxSkipMarker(cur) {
 		// 缓存号若已超该玩法注数上限，丢弃并重抽（真下单前兜底）。
+		cur = applyRenxuanRunPositionWrap(cfg, cur)
 		if !contentExceedsBetUnitsMax(cfg.Play, cur) {
 			return pickDecision{Content: cur}
 		}
 	}
 	return pickDecision{Content: randomDrawContentUnderMax(cfg)}
+}
+
+func renxuanRunPositionIdxs(cfg parsedSchemeConfig) []int {
+	if cfg.Random != nil && len(cfg.Random.PositionIdxs) > 0 {
+		return cfg.Random.PositionIdxs
+	}
+	if cfg.HotCold != nil && len(cfg.HotCold.PositionIdxs) > 0 {
+		return cfg.HotCold.PositionIdxs
+	}
+	return nil
+}
+
+func applyRenxuanRunPositionWrap(cfg parsedSchemeConfig, picks string) string {
+	picks = strings.TrimSpace(picks)
+	if picks == "" || !isRenxuanNeedsPositionRule(cfg.Play) {
+		return picks
+	}
+	k := cfg.Play.SegmentLen
+	if k <= 0 {
+		k = renPickCount(cfg.Play.CatalogSubID)
+	}
+	if k <= 0 {
+		k = 2
+	}
+	// 单式类：冷热/随机若产出按位号池（4\n5），先展开再加选位前缀
+	if isRenxuanPositionDanshiRule(cfg.Play) {
+		if _, _, ok := parseRenxuanPosPicksContent(picks, k); !ok {
+			if exp, ok := expandZhixuanPositionPoolToDanshi(picks, k); ok && strings.TrimSpace(exp) != "" {
+				picks = exp
+			}
+		}
+	}
+	return wrapRenxuanNeedsPositionContent(cfg.Play, picks, renxuanRunPositionIdxs(cfg))
 }
 
 // randomDrawContentUnderMax 生成随机内容；有玩法上限时重抽，并逐步收缩选号规模直至可下单。
@@ -273,7 +307,7 @@ func randomDrawContentUnderMax(cfg parsedSchemeConfig) string {
 	var last string
 	for scale := 0; scale <= maxScale; scale++ {
 		for attempt := 0; attempt < maxAttempts; attempt++ {
-			last = generateRandomDrawContent(cfg, scale)
+			last = applyRenxuanRunPositionWrap(cfg, generateRandomDrawContent(cfg, scale))
 			if max <= 0 {
 				return last
 			}
@@ -288,11 +322,11 @@ func randomDrawContentUnderMax(cfg parsedSchemeConfig) string {
 	if bm == "kuadu" || bm == "hezhi" {
 		k := randomDrawCountAt(cfg, 0, 0)
 		if fallback := greedyAttributeContentUnderMax(cfg.Play, k, max); fallback != "" {
-			return fallback
+			return applyRenxuanRunPositionWrap(cfg, fallback)
 		}
 		// 再降到 1 个选项，保证可下单
 		if fallback := greedyAttributeContentUnderMax(cfg.Play, 1, max); fallback != "" {
-			return fallback
+			return applyRenxuanRunPositionWrap(cfg, fallback)
 		}
 	}
 	// 绝不返回超限内容（避免 worker 回落到 schemeGroups 满选）
@@ -480,6 +514,11 @@ func randomDrawCountMax(rule playRule) int {
 			}
 			return n
 		case "budingwei":
+			// 一码不定位第三方最多 2 个号（超过 →「投注数字不可超过两位数」）
+			need := budingweiNeedCount(rule.CatalogSubID)
+			if need <= 1 {
+				return 2
+			}
 			n := len(playNumberPool(rule))
 			if n < 1 {
 				return 1
@@ -642,6 +681,14 @@ func randomAttributeContent(rule playRule, k int) string {
 		maxK := len(pool)
 		if bm == "budingwei" {
 			minK = budingweiNeedCount(rule.CatalogSubID)
+			// 五星二/三码至少 4；普通二码至少 2
+			if mp := budingweiMinPoolForRule(rule); mp > minK {
+				minK = mp
+			}
+			// 一码不定位第三方最多 2 个号（超过 →「投注数字不可超过两位数」）
+			if isYimaBudingweiPlayRule(rule) {
+				maxK = 2
+			}
 		}
 		if bm == "baodan" {
 			// 组选包胆第三方仅单胆
@@ -682,7 +729,7 @@ func randomAttributeContent(rule playRule, k int) string {
 
 // isZuxuanPoolRandom 判定为"组选号码池型"玩法（组三/组六/组选N/组选复式）——
 // 随机产号为"选 K 个号组成号码池"，非按位、也非整注单式。
-// 组选包胆属属性单选（仅 1 胆），勿因 catalog 含 zuxuan 误入号池分支。
+// 组选包胆/组选和值属属性单选，勿因 catalog/文案含 zuxuan|组选 误入号池分支。
 func isZuxuanPoolRandom(rule playRule) bool {
 	if isWholeTicketRandom(rule) {
 		return false
@@ -692,11 +739,13 @@ func isZuxuanPoolRandom(rule playRule) bool {
 		return false
 	}
 	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
-	if bm == "baodan" {
-		return false
-	}
 	switch bm {
-	case "zu3", "zu6", "zu24", "zu12", "zu60", "zu30", "zu120":
+	case "baodan", "hezhi", "kuadu", "weishu", "budingwei":
+		// 组选和值等：选项个数下限 1，走 isAttributeRandom（勿被 catalog 含 zuxuan 抬成组选号池）
+		return false
+	// zuxuan_fs：目录 subId 常为数字（如 g004/42），不能只靠 catalog 含 zuxuan_fs 判断；
+	// 漏判会走按位随机 → 位间重号（如 3,5\n5 → 3,5,5）被第三方拒「投注数字不合规」。
+	case "zuxuan_fs", "zu3", "zu6", "zu24", "zu12", "zu60", "zu30", "zu120":
 		return true
 	}
 	cat := strings.ToLower(rule.SubPlayID + " " + rule.CatalogSubID)
@@ -704,6 +753,10 @@ func isZuxuanPoolRandom(rule playRule) bool {
 		return false
 	}
 	if strings.Contains(cat, "baodan") || strings.Contains(cat, "_bd") {
+		return false
+	}
+	// catalog 带 hezhi/_hz/kuadu 时勿进组选号池（即使同时含 zuxuan）
+	if strings.Contains(cat, "hezhi") || strings.Contains(cat, "_hz") || strings.Contains(cat, "kuadu") {
 		return false
 	}
 	if strings.Contains(cat, "zuxuan_fs") {
@@ -720,19 +773,32 @@ func isZuxuanPoolRandom(rule playRule) bool {
 
 // zuxuanPoolMinPick 组选号池随机最少选几个号。
 // 组三最少 2（n*(n-1) 注）；组六最少 3；勿用 SegmentLen 把组三抬成 3。
+// 包胆/和值/跨度等非组选号池玩法返回 0（勿因中三 SegmentLen=3 误报「号码池至少选择 3 个」）。
 func zuxuanPoolMinPick(rule playRule) int {
 	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
 	sub := strings.ToLower(rule.SubPlayID + " " + rule.CatalogSubID)
 	switch bm {
+	case "baodan", "hezhi", "kuadu", "weishu", "budingwei", "teshu",
+		"daxiao", "danshuang", "dxds", "longhu", "longhuhe", "longhubao", "zhuangxian":
+		return 0
 	case "zu3":
 		return 2
 	case "zu6":
 		return 3
+	case "zuxuan_fs":
+		// 前二/后二 C(n,2)、三星组选复式（组三+组六）均至少 2 码
+		return 2
 	case "zu24", "zu12", "zu60", "zu30", "zu120":
 		if n := playPositionCount(rule); n >= 2 {
 			return n
 		}
 		return 3
+	}
+	// catalog 标明包胆/和值等：即使位长=3 也不套用组选号池下限
+	if strings.Contains(sub, "baodan") || strings.Contains(sub, "_bd") ||
+		strings.Contains(sub, "hezhi") || strings.Contains(sub, "_hz") ||
+		strings.Contains(sub, "kuadu") || strings.Contains(sub, "budingwei") {
+		return 0
 	}
 	if strings.Contains(sub, "zu3") && !strings.Contains(sub, "zu30") {
 		return 2
@@ -740,11 +806,8 @@ func zuxuanPoolMinPick(rule playRule) int {
 	if strings.Contains(sub, "zu6") {
 		return 3
 	}
-	minK := playPositionCount(rule)
-	if minK < 2 {
-		return 2
-	}
-	return minK
+	// 未识别为组三/组六/组选N 时不加硬下限（避免包胆/未知玩法被 SegmentLen 抬成 ≥2/≥3）
+	return 0
 }
 
 // randomZuxuanPool 随机选 k 个不重复号码组成组选号码池（升序，逗号分隔）。
@@ -809,8 +872,8 @@ func randomWholeTickets(rule playRule, n int) string {
 			key = strings.Join(sorted, "")
 			digits = sorted
 		}
-		if isHunhe && allSameTokens(digits) {
-			// 混合组选单式排除豹子（全同号）
+		if (isHunhe || isZuxuan) && allSameTokens(digits) {
+			// 混合/组选单式排除豹子（二星即对子；第三方计 0 注）
 			continue
 		}
 		if _, dup := seen[key]; dup {
@@ -901,14 +964,15 @@ func (w *Worker) pickHotColdWarm(
 	draw sqlcdb.LotteryDraw,
 ) pickDecision {
 	if cur := strings.TrimSpace(inst.CurrentPick); cur != "" && !hotColdPickNeedsRebuild(cfg, cur) {
-		return pickDecision{Content: cur}
+		cur = applyRenxuanRunPositionWrap(cfg, cur)
+		return pickDecision{Content: normalizeZhixuanDanshiContent(cfg.Play, cur)}
 	}
 	periods := 20
 	if cfg.HotCold != nil && cfg.HotCold.TotalPeriods > 0 {
 		periods = cfg.HotCold.TotalPeriods
 	}
 	draws := w.recentDrawBalls(ctx, inst.LotteryCode, draw.IssueNo, periods)
-	content := buildHotColdPickContent(cfg, draws)
+	content := applyRenxuanRunPositionWrap(cfg, buildHotColdPickContent(cfg, draws))
 	// 不再把手选号池/schemeGroups 整页回退成固定复式
 	return pickDecision{Content: normalizeZhixuanDanshiContent(cfg.Play, content)}
 }
@@ -916,15 +980,20 @@ func (w *Worker) pickHotColdWarm(
 // pickHotColdWarmFromDraws 供预览/单测：无 DB 时用传入开奖序列取码。
 func pickHotColdWarmFromDraws(cfg parsedSchemeConfig, inst sqlcdb.SchemeInstance, draws [][]string) pickDecision {
 	if cur := strings.TrimSpace(inst.CurrentPick); cur != "" && !hotColdPickNeedsRebuild(cfg, cur) {
+		cur = applyRenxuanRunPositionWrap(cfg, cur)
 		return pickDecision{Content: normalizeZhixuanDanshiContent(cfg.Play, cur)}
 	}
-	content := buildHotColdPickContent(cfg, draws)
+	content := applyRenxuanRunPositionWrap(cfg, buildHotColdPickContent(cfg, draws))
 	return pickDecision{Content: normalizeZhixuanDanshiContent(cfg.Play, content)}
 }
 
 // hotColdPickNeedsRebuild 多位面板却保了单位内容（无换行）时强制重取，避免旧引擎单号锁死。
 // 直选单式展开后的整注串（如 "555" / "432,435"）无换行，属合法保号，不重取。
 func hotColdPickNeedsRebuild(cfg parsedSchemeConfig, currentPick string) bool {
+	// 任选选位：出号为「位名\n号码」或整体号池，勿按多位面板强制重取
+	if isRenxuanNeedsPositionRule(cfg.Play) {
+		return false
+	}
 	if playPositionCount(cfg.Play) <= 1 {
 		return false
 	}
@@ -1005,7 +1074,22 @@ func buildHotColdPickContent(cfg parsedSchemeConfig, draws [][]string) string {
 		pool = hotColdLockedDigitPool(hc, pool, 0)
 		hot, cold := hotColdWarmTiersOverall(draws, cfg.Play, pool)
 		full := append(append([]string{}, hot...), cold...)
-		picked := pickHotColdByRanks(full, resolveHotColdRanksForOrder(hc, 0, len(full)))
+		ranks := resolveHotColdRanksForOrder(hc, 0, len(full))
+		// 组选包胆第三方仅单胆：多档名次只取最先命中的一码（勿拼成 1,3,5,6,7 →「投注数字不合规」）
+		if isBaodanPlayRule(cfg.Play) && len(ranks) > 1 {
+			ranks = ranks[:1]
+		}
+		// 一码不定位最多 2 个号（超过 →「投注数字不可超过两位数」）
+		if isYimaBudingweiPlayRule(cfg.Play) && len(ranks) > 2 {
+			ranks = ranks[:2]
+		}
+		picked := pickHotColdByRanks(full, ranks)
+		if isBaodanPlayRule(cfg.Play) && len(picked) > 1 {
+			picked = picked[:1]
+		}
+		if isYimaBudingweiPlayRule(cfg.Play) && len(picked) > 2 {
+			picked = picked[:2]
+		}
 		return strings.Join(sortHotColdBetTokens(picked), ",")
 	}
 	// 按位型：pool 非空仅表示该位启用（编辑预览），运行时仍用玩法全号池动态热冷区
@@ -1278,7 +1362,9 @@ func isHotColdDigitOverall(rule playRule) bool {
 	}
 	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
 	switch bm {
-	case "zu3", "zu6", "zu24", "zu12", "zu60", "zu30", "zu120", "budingwei", "baodan":
+	case "zu3", "zu6", "zu24", "zu12", "zu60", "zu30", "zu120", "budingwei", "baodan",
+		"zuxuan_fs", "zuxuan_ds":
+		// 组选单式勿走按位「5\n6」——guaji 计 0 注；整体号频后由 Format 展成整注
 		return true
 	}
 	sub := strings.ToLower(strings.TrimSpace(rule.SubPlayID) + " " + strings.TrimSpace(rule.CatalogSubID))
@@ -1401,8 +1487,16 @@ func resolveTriggerBetDecision(cfg parsedSchemeConfig, prevBalls []string, lastD
 
 	direction := nextTriggerDirection(cfg.Trigger.Mode, lastDirection)
 
-	// 组三/组六等号池玩法：区位内任一位开出命中启用行即投该行正/反号池（非整段逐位各投）
-	if isZuxuanPoolTriggerPlay(cfg.Play) {
+	// 任选非直选复式：须先于通用组选路径（否则组选复式会丢选位前缀）
+	if isRenxuanNeedsPositionTriggerPlay(cfg.Play) {
+		if isRenxuanPerPosTriggerPlay(cfg.Play) {
+			return pickTriggerBetRenxuanDanshi(cfg, enabled, prevBalls, direction)
+		}
+		return pickTriggerBetRenxuanPool(cfg, enabled, prevBalls, direction)
+	}
+
+	// 组选号池 / 组选单式：开出看区位内任一位球号（前二=万或千），命中后投该行正/反内容
+	if isZuxuanSegmentOpenTriggerPlay(cfg.Play) {
 		return pickTriggerBetZuxuanPool(cfg, enabled, prevBalls, direction)
 	}
 
@@ -1430,6 +1524,116 @@ func resolveTriggerBetDecision(cfg parsedSchemeConfig, prevBalls []string, lastD
 		return pickDecision{Skip: true}
 	}
 	return pickDecision{Content: content, Direction: dir}
+}
+
+// pickTriggerBetRenxuanDanshi 任选单式类开某投某：
+// 对 Trigger.PositionIdxs（恰好 k 个绝对位）各位取上期开奖查映射，按相对序拼号池后展开为单式，
+// 再加位名前缀（如「万,千\n45」）。
+func pickTriggerBetRenxuanDanshi(
+	cfg parsedSchemeConfig,
+	enabled []triggerRow,
+	prevBalls []string,
+	direction string,
+) pickDecision {
+	k := cfg.Play.SegmentLen
+	if k <= 0 {
+		k = renPickCount(cfg.Play.CatalogSubID)
+	}
+	if k <= 0 {
+		k = 2
+	}
+	var idxs []int
+	if cfg.Trigger != nil {
+		idxs = normalizeRenxuanTriggerPositionIdxs(cfg.Trigger.PositionIdxs, k)
+	} else {
+		idxs = defaultRenxuanTriggerPositionIdxs(k)
+	}
+	lines := make([]string, len(idxs))
+	filled := 0
+	outDir := direction
+	for rel, abs := range idxs {
+		if abs < 0 || abs >= len(prevBalls) {
+			return pickDecision{Skip: true}
+		}
+		open := normalizeTriggerToken(strings.TrimSpace(prevBalls[abs]))
+		row, ok := findEnabledTriggerRowByOpen(enabled, open)
+		if !ok {
+			return pickDecision{Skip: true}
+		}
+		content, dir := triggerRowPickContentAt(row, direction, rel, len(idxs))
+		if content == "" {
+			return pickDecision{Skip: true}
+		}
+		lines[rel] = content
+		filled++
+		outDir = dir
+	}
+	if filled == 0 {
+		return pickDecision{Skip: true}
+	}
+	pool := strings.Join(lines, "\n")
+	expanded := pool
+	if exp, ok := expandZhixuanPositionPoolToDanshi(pool, k); ok {
+		expanded = exp
+	}
+	posLine := renxuanPositionNamesCSV(idxs)
+	if strings.TrimSpace(expanded) == "" {
+		return pickDecision{Skip: true}
+	}
+	return pickDecision{Content: posLine + "\n" + expanded, Direction: outDir}
+}
+
+// pickTriggerBetRenxuanPool 任选号池/和值开某投某：
+// 所选绝对位任一位开出命中启用行 → 投该行整段正/反内容，并加位名前缀。
+func pickTriggerBetRenxuanPool(
+	cfg parsedSchemeConfig,
+	enabled []triggerRow,
+	prevBalls []string,
+	direction string,
+) pickDecision {
+	if len(prevBalls) == 0 {
+		return pickDecision{Skip: true}
+	}
+	k := cfg.Play.SegmentLen
+	if k <= 0 {
+		k = renPickCount(cfg.Play.CatalogSubID)
+	}
+	if k <= 0 {
+		k = 2
+	}
+	var idxs []int
+	if cfg.Trigger != nil {
+		idxs = normalizeRenxuanTriggerPositionIdxs(cfg.Trigger.PositionIdxs, k)
+	} else {
+		idxs = defaultRenxuanTriggerPositionIdxs(k)
+	}
+	var row *triggerRow
+	for _, abs := range idxs {
+		if abs < 0 || abs >= len(prevBalls) {
+			continue
+		}
+		open := normalizeTriggerToken(strings.TrimSpace(prevBalls[abs]))
+		if r, ok := findEnabledTriggerRowByOpen(enabled, open); ok {
+			rr := r
+			row = &rr
+			break
+		}
+	}
+	if row == nil {
+		return pickDecision{Skip: true}
+	}
+	content, dir := triggerRowPickContent(*row, direction)
+	if content == "" {
+		return pickDecision{Skip: true}
+	}
+	if minK := zuxuanPoolMinPick(cfg.Play); minK >= 2 {
+		n := len(uniqueStringTokens(splitContentTokens(content)))
+		if n > 0 && n < minK {
+			return pickDecision{Skip: true}
+		}
+	}
+	posLine := renxuanPositionNamesCSV(idxs)
+	return pickDecision{Content: posLine + "\n" + content, Direction: dir}
 }
 
 func pickTriggerBetPerPosition(
@@ -1566,7 +1770,30 @@ func isZuxuanPoolTriggerPlay(rule playRule) bool {
 	return isZuxuanPoolRandom(rule)
 }
 
-// pickTriggerBetZuxuanPool 组三/组六等：上期区位任一位开出命中启用行 → 投该行正/反号池。
+// isZuxuanDanshiSegmentTriggerPlay 组选单式：正反投为整注，但「开出」按区位任一位球号（非仅万位）。
+func isZuxuanDanshiSegmentTriggerPlay(rule playRule) bool {
+	if rule.SegmentLen < 2 {
+		return false
+	}
+	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	sub := strings.ToLower(strings.TrimSpace(rule.SubPlayID) + " " + strings.TrimSpace(rule.CatalogSubID))
+	if bm == "zuxuan_ds" || strings.Contains(sub, "zuxuan_ds") {
+		return true
+	}
+	// 数字 subId + 文案「组选单式」（catalog 合并 playMethod 时）
+	if strings.Contains(sub, "组选单式") {
+		return true
+	}
+	return false
+}
+
+// isZuxuanSegmentOpenTriggerPlay 组选复式号池 + 组选单式：开出均看区位任一位。
+func isZuxuanSegmentOpenTriggerPlay(rule playRule) bool {
+	return isZuxuanPoolTriggerPlay(rule) || isZuxuanDanshiSegmentTriggerPlay(rule)
+}
+
+// pickTriggerBetZuxuanPool 组三/组六/组选单式等：上期区位任一位开出命中启用行 → 投该行正/反内容。
+// 例：前二上期万=8 千=0 且仅启用 0–4 时，命中开出 0 → 投 pos/neg（不要求必须是万位）。
 // 例：中三上期 8,0,8 且仅启用 0–4 时，命中开出 0 → 投 pos/neg，而非因 8 未启用整期 Skip。
 func pickTriggerBetZuxuanPool(
 	cfg parsedSchemeConfig,
@@ -1598,10 +1825,13 @@ func pickTriggerBetZuxuanPool(
 		return pickDecision{Skip: true}
 	}
 	// 组三/组六号池不足最少选号时本期 Skip（勿带着 1～2 码去撞第三方「单挑参数错误」）
-	if minK := zuxuanPoolMinPick(cfg.Play); minK >= 2 {
-		n := len(uniqueStringTokens(splitContentTokens(content)))
-		if n < minK {
-			return pickDecision{Skip: true}
+	// 组选单式整注不走号池下限
+	if !isZuxuanDanshiSegmentTriggerPlay(cfg.Play) {
+		if minK := zuxuanPoolMinPick(cfg.Play); minK >= 2 {
+			n := len(uniqueStringTokens(splitContentTokens(content)))
+			if n < minK {
+				return pickDecision{Skip: true}
+			}
 		}
 	}
 	return pickDecision{Content: content, Direction: dir}

@@ -3,6 +3,7 @@ package accountsvc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 )
 
@@ -18,6 +19,7 @@ func (s *Service) EnsureActiveAuth(ctx context.Context, memberAccount string) er
 
 // ensureActiveAuth force=true 时即使本地判定 token 仍「健康」也强制走重新授权
 //（用于上游已返回令牌无效、但本地尚未标记失效的情形）。
+// 同会员并发调用会单飞合并：多方案同时 401 时只打一轮上游，避免 refresh 互踩与失败次数被打满。
 func (s *Service) ensureActiveAuth(ctx context.Context, memberAccount string, force bool) error {
 	if s == nil {
 		return ErrUnavailable
@@ -40,9 +42,28 @@ func (s *Service) ensureActiveAuth(ctx context.Context, memberAccount string, fo
 		return nil
 	}
 
+	key := fmt.Sprintf("auto-reauth:%d", m)
+	_, sfErr, shared := s.autoReauthSF.Do(key, func() (any, error) {
+		return nil, s.doAutoReauthAttempts(ctx, memberAccount, m, force)
+	})
+	if shared {
+		slog.Info("guaji auto reauth singleflight shared", "member", memberAccount, "memberId", m)
+	}
+	if sfErr == nil {
+		return nil
+	}
+	// 等待方拿到失败时再读一次：可能其它路径（手动重授权）已恢复。
+	row, err = s.getActiveRow(ctx, m)
+	if err == nil && s.tokenHealthy(row) {
+		return nil
+	}
+	return sfErr
+}
+
+func (s *Service) doAutoReauthAttempts(ctx context.Context, memberAccount string, memberID int64, force bool) error {
 	var last error
 	for attempt := 1; attempt <= maxAutoReauthAttempts; attempt++ {
-		row, err = s.getActiveRow(ctx, m)
+		row, err := s.getActiveRow(ctx, memberID)
 		if err != nil {
 			if isNoRows(err) {
 				return ErrNoActiveAccount
@@ -52,7 +73,7 @@ func (s *Service) ensureActiveAuth(ctx context.Context, memberAccount string, fo
 		if !force && s.tokenHealthy(row) {
 			return nil
 		}
-		acct, reauthErr := s.Reauth(ctx, memberAccount, row.id)
+		acct, reauthErr := s.reauthAuto(ctx, memberAccount, row.id)
 		if reauthErr == nil && !acct.AuthExpired {
 			slog.Info("guaji auto reauth succeeded",
 				"member", memberAccount, "accountId", row.id, "attempt", attempt)

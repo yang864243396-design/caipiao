@@ -11,6 +11,12 @@ const (
 	zuheMaxBetUnitsBase   = 2700
 )
 
+// 任二直选复式第三方上限 900（勿按 SegmentLen=2 套前二公式 → 90）。
+const ren2ZhixuanFushiMaxBetUnits = 900
+
+// 任二直选和值第三方上限 100。
+const ren2ZhixuanHezhiMaxBetUnits = 100
+
 // maxBetUnitsForPlay 该玩法单组最大注数；0 表示本端尚未定义上限（不拦截）。
 // 按 BetMode / 区位独立取值，供随机出号重抽、真下单与审计共用。
 func maxBetUnitsForPlay(rule playRule) int {
@@ -19,6 +25,14 @@ func maxBetUnitsForPlay(rule playRule) int {
 	if z < 1 {
 		z = 1
 	}
+	// 任二直选和值：第三方上限 100（勿套任二直选复式/单式 900）
+	if isRen2ZhixuanHezhiRule(rule) {
+		return ren2ZhixuanHezhiMaxBetUnits
+	}
+	// 任选直选复式 / 任选选位类（单式·号池·和值）：上限不能套前二 SegmentLen=2 → 90（任二第三方 900）
+	if isRenxuanPlayType(rule.PlayTypeID) && (isRenxuanZhixuanFushiRule(rule) || isRenxuanNeedsPositionRule(rule)) {
+		return renxuanZhixuanFushiMaxBetUnits(rule)
+	}
 	switch bm {
 	case "fushi", "zhixuan_fs":
 		base := zhixuanFushiMaxBetUnits(rule)
@@ -26,16 +40,142 @@ func maxBetUnitsForPlay(rule playRule) int {
 			return 0
 		}
 		return base * z
+	case "danshi", "zhixuan_ds":
+		// 直选单式与复式同第三方上限（前二=90、前三=900…）；组选单式不走此分支
+		if !isZhixuanDanshiRule(rule) {
+			return 0
+		}
+		base := zhixuanSegmentMaxBetUnits(rule)
+		if base <= 0 {
+			return 0
+		}
+		return base * z
 	case "hezhi", "kuadu":
-		// 与前端 HEZHI_MAX_BET_UNITS 一致：对比区位倍乘后的组合注数
+		// 任选和值勿落到前二 90（任二直选和值=100；其它选位类=任选上限）
+		if isRen2ZhixuanHezhiRule(rule) {
+			return ren2ZhixuanHezhiMaxBetUnits
+		}
+		if isRenxuanNeedsPositionRule(rule) {
+			return renxuanZhixuanFushiMaxBetUnits(rule)
+		}
+		// 与直选复式同第三方上限：前二/后二=90、前三=900；再×区位倍乘
+		if base := zhixuanSegmentMaxBetUnits(rule); base > 0 {
+			return base * z
+		}
 		return hezhiKuaduMaxBetUnits
 	case "weishu":
-		return weishuMaxBetUnitsCap
+		// 单区最多 9 个尾数；前中后三等再×区位（9×3=27）
+		return weishuMaxBetUnitsCap * z
 	case "zuhe":
 		return zuheMaxBetUnitsBase * z
 	default:
 		return 0
 	}
+}
+
+// isRenxuanZhixuanFushiRule 任选·直选复式（五位号池，按 C(5,n) 计注）。
+func isRenxuanZhixuanFushiRule(rule playRule) bool {
+	if !isRenxuanPlayType(rule.PlayTypeID) {
+		return false
+	}
+	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	sub := strings.ToLower(rule.SubPlayID + " " + rule.CatalogSubID)
+	if strings.Contains(sub, "单式") || strings.Contains(sub, "组选") || strings.Contains(sub, "和值") ||
+		strings.Contains(sub, "组三") || strings.Contains(sub, "组六") || strings.Contains(sub, "混合") ||
+		strings.Contains(sub, "zuxuan") || strings.Contains(sub, "danshi") || strings.Contains(sub, "hezhi") ||
+		strings.Contains(sub, "hunhe") || strings.Contains(sub, "zu3") || strings.Contains(sub, "zu6") {
+		return false
+	}
+	return bm == "fushi" || bm == "zhixuan_fs" || strings.Contains(sub, "直选复式") || strings.Contains(sub, "zhixuan_fs")
+}
+
+// isRenxuanNeedsPositionRule 任选非直选复式：均需万千百十个选位（对齐任二直选单式）。
+func isRenxuanNeedsPositionRule(rule playRule) bool {
+	if !isRenxuanPlayType(rule.PlayTypeID) {
+		return false
+	}
+	if isRenxuanZhixuanFushiRule(rule) {
+		return false
+	}
+	k := rule.SegmentLen
+	if k <= 0 {
+		k = renPickCount(rule.CatalogSubID)
+	}
+	if k <= 0 {
+		k = renPickCount(rule.SubPlayID)
+	}
+	return k >= 2 && k <= 5
+}
+
+// isRenxuanPositionDanshiRule 任选选位 + 单式票面（直选/组选/混合单式）。
+func isRenxuanPositionDanshiRule(rule playRule) bool {
+	if !isRenxuanNeedsPositionRule(rule) {
+		return false
+	}
+	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	sub := strings.ToLower(rule.SubPlayID + " " + rule.CatalogSubID)
+	if bm == "danshi" || bm == "zhixuan_ds" || bm == "zuxuan_ds" || bm == "hunhe" {
+		return true
+	}
+	if strings.Contains(sub, "直选单式") || strings.Contains(sub, "组选单式") ||
+		strings.Contains(sub, "混合组选") || strings.Contains(sub, "组三单式") ||
+		strings.Contains(sub, "组六单式") || strings.Contains(sub, "zhixuan_ds") ||
+		strings.Contains(sub, "zuxuan_ds") || strings.Contains(sub, "hunhe") {
+		return true
+	}
+	return isZhixuanDanshiRule(rule)
+}
+
+// isRenxuanZhixuanDanshiRule 任选·直选单式（兼容旧名；含组选/混合单式票面）。
+func isRenxuanZhixuanDanshiRule(rule playRule) bool {
+	return isRenxuanPositionDanshiRule(rule)
+}
+
+// isRen2ZhixuanHezhiRule 任选·任二直选和值（不含组选和值；catalog 常为 76）。
+func isRen2ZhixuanHezhiRule(rule playRule) bool {
+	if !isRenxuanNeedsPositionRule(rule) {
+		return false
+	}
+	if rule.HezhiZuxuan {
+		return false
+	}
+	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	sub := strings.ToLower(rule.SubPlayID + " " + rule.CatalogSubID)
+	if strings.Contains(sub, "组选") {
+		return false
+	}
+	if bm != "hezhi" && !strings.Contains(sub, "hezhi") && !strings.Contains(sub, "和值") {
+		return false
+	}
+	k := rule.SegmentLen
+	if k <= 0 {
+		k = renPickCount(rule.CatalogSubID)
+	}
+	if k <= 0 {
+		k = renPickCount(rule.SubPlayID)
+	}
+	return k == 2
+}
+
+// renxuanZhixuanFushiMaxBetUnits 任选直选复式单组上限。
+// 任二实测 900；任三/任四按选码位数套直选公式（任三→900、任四→9000）。
+func renxuanZhixuanFushiMaxBetUnits(rule playRule) int {
+	n := rule.SegmentLen
+	if n <= 0 {
+		n = renPickCount(rule.CatalogSubID)
+	}
+	if n <= 0 {
+		n = renPickCount(rule.SubPlayID)
+	}
+	if n <= 2 {
+		return ren2ZhixuanFushiMaxBetUnits
+	}
+	tmp := rule
+	tmp.SegmentLen = n
+	if base := zhixuanSegmentMaxBetUnits(tmp); base > 0 {
+		return base
+	}
+	return ren2ZhixuanFushiMaxBetUnits
 }
 
 // playZoneMultiplier 多区位玩法注数倍乘（前中后三×3、前后三/二/四×2）。
@@ -80,6 +220,14 @@ func countPlayWireBetUnits(rule playRule, content string) int {
 		z = 1
 	}
 	var base int
+	// 任选直选复式：C(5,n) 位组合计注（勿按五位乘积 10×10×9…）
+	if isRenxuanPlayType(rule.PlayTypeID) && isRenxuanZhixuanFushiRule(rule) {
+		return countRenxuanZhixuanFushiBetUnits(rule, content)
+	}
+	// 任选选位类：C(选位数,k)×内层注数（单式/号池/和值）
+	if isRenxuanNeedsPositionRule(rule) {
+		return countRenxuanNeedsPositionBetUnits(rule, content)
+	}
 	switch bm {
 	case "fushi", "zhixuan_fs":
 		base = countZhixuanFushiBetUnits(content, seg)
@@ -98,6 +246,10 @@ func countPlayWireBetUnits(rule playRule, content string) int {
 			// 整注逗号串
 			base = len(splitContentTokens(content))
 		}
+	case "zuxuan_fs", "zu3", "zu6", "zu24", "zu12", "zu4", "zu120", "zu60", "zu30":
+		// 与 evaluateZuxuanFushi / guajibet C(n,k) 对齐，供上限与金额同步
+		pool := uniqueStringTokens(parseDigitTokens(content))
+		base = zuxuanPoolUnitsForRule(rule, pool)
 	default:
 		return 0
 	}
@@ -105,6 +257,154 @@ func countPlayWireBetUnits(rule playRule, content string) int {
 		return 0
 	}
 	return base * z
+}
+
+// countRenxuanNeedsPositionBetUnits 任选选位注数：C(选位数,k)×剥位后内层注数。
+func countRenxuanNeedsPositionBetUnits(rule playRule, content string) int {
+	k := rule.SegmentLen
+	if k <= 0 {
+		k = renPickCount(rule.CatalogSubID)
+	}
+	if k <= 0 {
+		k = renPickCount(rule.SubPlayID)
+	}
+	if k <= 0 || k > 5 {
+		k = 2
+	}
+	posLabel, picks, ok := parseRenxuanPosPicksContent(content, k)
+	if !ok {
+		if isRenxuanPositionDanshiRule(rule) {
+			tickets := len(renxuanDanshiTokens(content, k))
+			if tickets <= 0 {
+				return 0
+			}
+			return tickets
+		}
+		picks = content
+		return countRenxuanInnerBetUnits(rule, picks)
+	}
+	positions := renxuanPositionsFromLabel(posLabel, k)
+	nPos := len(positions)
+	if nPos < k {
+		return 0
+	}
+	mul := combinInt(nPos, k)
+	if mul <= 0 {
+		return 0
+	}
+	inner := countRenxuanInnerBetUnits(rule, picks)
+	if inner <= 0 {
+		return 0
+	}
+	return mul * inner
+}
+
+// countRenxuanInnerBetUnits 剥位后的内层注数（单式票数或号池/和值组合数）。
+func countRenxuanInnerBetUnits(rule playRule, picks string) int {
+	picks = strings.TrimSpace(picks)
+	if picks == "" {
+		return 0
+	}
+	k := rule.SegmentLen
+	if k <= 0 {
+		k = renPickCount(rule.CatalogSubID)
+	}
+	if k <= 0 {
+		k = renPickCount(rule.SubPlayID)
+	}
+	if k <= 0 || k > 5 {
+		k = 2
+	}
+	if isRenxuanPositionDanshiRule(rule) {
+		return len(renxuanDanshiTokens(picks, k))
+	}
+	// 临时去掉任选标记，避免 countPlayWireBetUnits 再走选位分支
+	tmp := rule
+	tmp.PlayTypeID = "ssc_inner"
+	return countPlayWireBetUnits(tmp, picks)
+}
+
+// countRenxuanZhixuanDanshiBetUnits 兼容旧名 → 选位计注。
+func countRenxuanZhixuanDanshiBetUnits(rule playRule, content string) int {
+	return countRenxuanNeedsPositionBetUnits(rule, content)
+}
+
+// countRenxuanZhixuanFushiBetUnits 任选直选复式注数（对齐 evaluateRenxuanZhixuan）。
+func countRenxuanZhixuanFushiBetUnits(rule playRule, content string) int {
+	k := rule.SegmentLen
+	if k <= 0 {
+		k = renPickCount(rule.CatalogSubID)
+	}
+	if k <= 0 {
+		k = renPickCount(rule.SubPlayID)
+	}
+	if k <= 0 || k > 5 {
+		k = 2
+	}
+	pools := renxuanZhixuanFushiPools(content)
+	units := 0
+	for _, combo := range combinations(5, k) {
+		u := 1
+		ok := true
+		for _, pos := range combo {
+			n := len(pools[pos])
+			if n == 0 {
+				ok = false
+				break
+			}
+			u *= n
+		}
+		if ok {
+			units += u
+		}
+	}
+	return units
+}
+
+// renxuanZhixuanFushiPools 解析五位号池（换行按位，或五段逗号 wire）。
+// 勿用 parseDigitTokens：其空池会回落 ["0"]，把空位/粘连误成单码 0。
+func renxuanZhixuanFushiPools(content string) [][]string {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	pools := make([][]string, 5)
+	// 无换行的五段 wire：如 1234567890,1234567890,123456789,123456789,123456789
+	if !strings.Contains(content, "\n") {
+		if parts := strings.Split(content, ","); len(parts) == 5 {
+			for i := 0; i < 5; i++ {
+				pools[i] = expandGluedDigitPool(parts[i])
+			}
+			return pools
+		}
+	}
+	lines := strings.Split(content, "\n")
+	for len(lines) < 5 {
+		lines = append(lines, "")
+	}
+	for i := 0; i < 5; i++ {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		// "1,2,3" 与粘连 "123" 均按出现过的 0–9 去重计数
+		pools[i] = expandGluedDigitPool(line)
+	}
+	return pools
+}
+
+func expandGluedDigitPool(raw string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(raw))
+	for _, r := range raw {
+		if r < '0' || r > '9' {
+			continue
+		}
+		s := string(r)
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }
 
 func countKuaduCombinatorialUnits(content string, segLen int) int {
@@ -195,28 +495,43 @@ func countOrderedSumCombinationsLocal(targetSum, positions int) int {
 }
 
 // countZuxuanSumCombinationsLocal 组选和值组合数（三星：无序、排除豹子；与 guajibet 常用口径对齐的简化版）。
+// countZuxuanSumCombinationsLocal 对齐 guajibet.countZuxuanSumCombinations：
+// 非豹子多重集个数（每个和值形态 1 注），勿按有序排列把 sum=6 计成 27。
 func countZuxuanSumCombinationsLocal(targetSum, segLen int) int {
-	if segLen != 3 {
-		return countOrderedSumCombinationsLocal(targetSum, segLen)
+	if segLen == 4 {
+		return countZuxuanSumMultisetLocal(targetSum, 3) * 4
+	}
+	return countZuxuanSumMultisetLocal(targetSum, segLen)
+}
+
+func countZuxuanSumMultisetLocal(targetSum, segLen int) int {
+	if segLen <= 0 || targetSum < 0 {
+		return 0
 	}
 	count := 0
-	for a := 0; a <= 9; a++ {
-		for b := a; b <= 9; b++ {
-			for c := b; c <= 9; c++ {
-				if a+b+c != targetSum {
-					continue
-				}
-				if a == b && b == c {
-					continue // 豹子
-				}
-				// 有序排列数
-				if a == b || b == c || a == c {
-					count += 3 // 组三
-				} else {
-					count += 6 // 组六
+	digits := make([]int, segLen)
+	var dfs func(pos, minVal, sum int)
+	dfs = func(pos, minVal, sum int) {
+		if pos == segLen {
+			if sum != targetSum {
+				return
+			}
+			for i := 1; i < segLen; i++ {
+				if digits[i] != digits[0] {
+					count++
+					return
 				}
 			}
+			return // 豹子不计
+		}
+		for d := minVal; d <= 9; d++ {
+			if sum+d > targetSum {
+				break
+			}
+			digits[pos] = d
+			dfs(pos+1, d, sum+d)
 		}
 	}
+	dfs(0, 0, 0)
 	return count
 }

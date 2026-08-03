@@ -397,7 +397,8 @@ func FormatBetContentForRule(meta RuleMeta, groupContent string) string {
 		if usesPaddedDigits(meta.PlayTemplate) {
 			return formatPaddedPickDigits(meta.PlayTemplate, groupContent)
 		}
-		return formatCommaPickDigits(groupContent)
+		// SSC：号池单码去重；粘连「12」拆成 1,2（否则 Count=0 却 ResolveBetsNums 回落 1 → 第三方「投注数字不合规」）
+		return formatSSCZuxuanPoolDigits(groupContent)
 	case "zuxuan_ds":
 		if usesPaddedDigits(meta.PlayTemplate) {
 			_, segLen := segmentRange(meta)
@@ -431,8 +432,12 @@ func FormatBetContentForRule(meta RuleMeta, groupContent string) string {
 			_, segLen := segmentRange(meta)
 			return formatSSCZuxuanDanshiDigits(segLen, groupContent)
 		}
+		// 组选包胆：第三方仅单胆（冷热多档误出「1,3,5」须压成一码）
+		if mode == "baodan" {
+			return formatBaodanSingleDan(groupContent)
+		}
 		// SSC 和值/跨度等：须去前导零（01→1）。第三方对 "01,02,…" 一律「投注注数不正确」。
-		if mode == "hezhi" || mode == "kuadu" || mode == "weishu" || mode == "baodan" {
+		if mode == "hezhi" || mode == "kuadu" || mode == "weishu" {
 			return formatNaturalIntTokens(groupContent)
 		}
 		return formatCommaPickDigits(groupContent)
@@ -568,13 +573,14 @@ func CountBetNums(meta RuleMeta, wireContent string) int {
 	case "zuxuan_fs":
 		_, segLen := segmentRange(meta)
 		if paddedFushiUsesFlatPick(meta) {
-			tokens := splitPickTokens(wireContent)
+			tokens := uniqueStringsPreserve(splitPickTokens(wireContent))
 			if len(tokens) == segLen {
 				return applySegmentMultiplier(meta, 1)
 			}
 			return applySegmentMultiplier(meta, countZuxuanFushiBetNums(len(tokens), segLen))
 		}
-		return applySegmentMultiplier(meta, countZuxuanFushiBetNums(len(splitPickDigits(wireContent)), segLen))
+		poolN := len(uniqueStringsPreserve(splitPickDigits(formatSSCZuxuanPoolDigits(wireContent))))
+		return applySegmentMultiplier(meta, countZuxuanFushiBetNums(poolN, segLen))
 	case "zuxuan_ds":
 		// 与混合组选一致：排除对子/豹子，按排序形态去重（对齐第三方预览）
 		n := countSSCHunheBetNums(wireContent, segLen)
@@ -778,23 +784,28 @@ func NeedsSoloForRule(meta RuleMeta, wireContent string) bool {
 	if mode == "zu3" {
 		return betsNums > 0 && betsNums <= zu3SoloMaxBets
 	}
-	// 混合组选（非任选）：
-	// - 前中后三/前后三：实测多区位须 solo=true（rule 110/98）
-	// - 前/中/后三等单区：实测 rule=23（2026-07-30）
-	//   ≤3 注须 solo=true（2/3 注 solo=false → 单挑参数错误）
-	//   ≥4 注须 solo=false（4/8 注 solo=true → 单挑参数错误）
+	// 混合组选（非任选）：按总注数（含区位倍乘）判，与中三 rule23 同阈。
+	// 实测 rule=23（2026-07-30）：≤3 注须 solo=true；≥4 注须 solo=false。
+	// 前中后三 rule110：content=123 总注 3 solo=true 过；
+	//   content=123,432,654,786 总注 12 若仍 solo=true →「单挑参数错误」（def-1-1785643738664）；
+	//   同方案 ju3 630 注 solo=false 接单成功。勿再对多区位无条件 solo=true。
 	if mode == "hunhe" {
-		if multiZoneHunheRequiresSoloTrue(meta) {
-			return true
-		}
 		return betsNums > 0 && betsNums <= hunheSoloMaxBets
 	}
-	if mode == "hezhi" && strings.Contains(meta.Label, "组选") && group != "前后二" && group != "前后四" {
-		return false
-	}
-	if mode == "hezhi" && !strings.Contains(meta.Label, "组选") && group != "前后二" && group != "前后四" {
+	// 和值：
+	// - 任选组选和值：solo=false
+	// - 组选和值（中三 rule262 / 前中后三 rule108 等）：实测 2026-07-31
+	//     按总注数（含区位倍乘）判，与混合组选同阈：≤hunheSoloMaxBets(3) → solo=true
+	//       中三 content=1/25/2（1~2 注）solo=true；content=4/6（≥4 注）solo=false
+	//       前中后三 content=1（总注 3）solo=true；content=25（总注 6）solo=false
+	//     旧逻辑 base==1 才 solo，导致 2 注（sum=2/3/24/25）solo=false →「单挑参数错误」。
+	// - 直选和值：仍走末尾默认 solo=true（再经 ResolveSolo 的 guajiSoloMaxBets 钳制）
+	if mode == "hezhi" && group != "前后二" && group != "前后四" {
 		if meta.Group == "任选" || meta.TypeID == "g011" {
 			return false
+		}
+		if isZuxuanHezhiMeta(meta) {
+			return betsNums > 0 && betsNums <= hunheSoloMaxBets
 		}
 	}
 	if mode == "budingwei" {
@@ -853,11 +864,19 @@ func NeedsSoloForRule(meta RuleMeta, wireContent string) bool {
 // ResolveBetsNums 计算第三方 bets_nums；meta 未填 PlayTemplate 时回退定位胆 wire 统计。
 func ResolveBetsNums(meta RuleMeta, wireContent string, amount, amountUnit float64, multiplier int) int {
 	if strings.TrimSpace(meta.PlayTemplate) != "" {
-		if n := CountBetNums(meta, wireContent); n > 0 {
+		n := CountBetNums(meta, wireContent)
+		if n > 0 {
 			return n
 		}
-		// 直选复式豹子/对子：CountBetNums 明确为 0，禁止回退成 1（对齐第三方网页无法下注）
-		if IsFushiBaoziZeroBet(meta, wireContent) {
+		// Count=0：禁止回落成 1。
+		// 直选复式豹子/对子；组选号池不足（前二组选复式单码 content=5 →「投注数字不合规」）。
+		if IsFushiBaoziZeroBet(meta, wireContent) || isZuxuanPoolZeroBet(meta, wireContent) {
+			return 0
+		}
+		mode := InferBetMode(meta)
+		switch mode {
+		case "zuxuan_fs", "zu3", "zu6", "zu24", "zu12", "zu4", "zu120", "zu60", "zu30",
+			"zuxuan_ds", "hunhe", "fushi", "zuhe":
 			return 0
 		}
 	}
@@ -878,6 +897,17 @@ func ResolveBetsNums(meta RuleMeta, wireContent string, amount, amountUnit float
 		}
 	}
 	return 1
+}
+
+// isZuxuanPoolZeroBet 组选号池去重后不足组号最少码数（前二/后二 <2，组六 <3 等）。
+func isZuxuanPoolZeroBet(meta RuleMeta, wireContent string) bool {
+	mode := InferBetMode(meta)
+	switch mode {
+	case "zuxuan_fs", "zu3", "zu6", "zu24", "zu12", "zu4", "zu120", "zu60", "zu30":
+	default:
+		return false
+	}
+	return CountBetNums(meta, wireContent) <= 0
 }
 
 // IsFushiBaoziZeroBet 直选复式各位同一单码（如 7,7,7）时第三方计 0 注且无法下注。
@@ -915,16 +945,24 @@ func ResolveSolo(meta RuleMeta, wireContent string, betsNums int) bool {
 	return NeedsSoloBet(wireContent)
 }
 
-// sscErxingZuxuanForcesSoloFalse 时时彩前二/后二组选（复式与单式）须 solo=false。
+// sscErxingZuxuanForcesSoloFalse 时时彩前二/后二组选须 solo=false。
+// 覆盖：组选复式、组选单式、组选和值。
 // 单式原先只被「二星多注」规则挡住，单注时漏成 solo=true
 // （2026-07-28 实测 rule 43/51 单注 solo=true 拒单、solo=false 接单）。
+// 组选和值：2026-08-01 实测 rule 44 content=1/6 solo=true →「单挑参数错误」，solo=false 接单
+// （def-1-1785567172297；直选和值单注仍可 solo，勿纳入）。
 func sscErxingZuxuanForcesSoloFalse(meta RuleMeta) bool {
 	tpl := strings.TrimSpace(meta.PlayTemplate)
 	if tpl != "" && tpl != "ssc_std" && tpl != "fast_ssc_std" {
 		return false
 	}
-	switch InferBetMode(meta) {
+	mode := InferBetMode(meta)
+	switch mode {
 	case "zuxuan_fs", "zuxuan_ds":
+	case "hezhi":
+		if !isZuxuanHezhiMeta(meta) {
+			return false
+		}
 	default:
 		return false
 	}
@@ -963,17 +1001,6 @@ func segmentBetMultiplier(meta RuleMeta) int {
 	default:
 		return 1
 	}
-}
-
-// multiZoneHunheRequiresSoloTrue 前中后三/前后三混合组选：实测须 solo=true。
-func multiZoneHunheRequiresSoloTrue(meta RuleMeta) bool {
-	g := strings.TrimSpace(meta.Group)
-	if g == "前中后三" || g == "前后三" {
-		return true
-	}
-	text := meta.Group + " " + meta.TypeLabel + " " + meta.Label + " " + meta.TeamLabel + " " + meta.FullName
-	return strings.Contains(text, "前中后三") ||
-		(strings.Contains(text, "前后三") && !strings.Contains(text, "前后二") && !strings.Contains(text, "前后四"))
 }
 
 func applySegmentMultiplier(meta RuleMeta, n int) int {
@@ -1168,7 +1195,7 @@ func countHezhiBetNums(meta RuleMeta, wireContent string, segLen int) int {
 	if len(picks) == 0 {
 		return 1
 	}
-	zuxuan := strings.Contains(meta.Label, "组选")
+	zuxuan := isZuxuanHezhiMeta(meta)
 	total := 0
 	for _, sum := range picks {
 		if zuxuan {
@@ -1181,6 +1208,26 @@ func countHezhiBetNums(meta RuleMeta, wireContent string, segLen int) int {
 		return applySegmentMultiplier(meta, 1)
 	}
 	return applySegmentMultiplier(meta, total)
+}
+
+// isZuxuanHezhiMeta 组选和值（相对直选和值）。InferBetMode 已能从 FullName 识别 hezhi，
+// 但「是否组选」若只看 Label，Label 空时会误走直选计注/solo=true → 单挑参数错误。
+func isZuxuanHezhiMeta(meta RuleMeta) bool {
+	text := meta.Label + meta.FullName + meta.TeamLabel + meta.TypeLabel
+	if strings.Contains(text, "直选和值") {
+		return false
+	}
+	if strings.Contains(text, "组选") {
+		return true
+	}
+	// 方案常只存数字 subId/ruleId、无「组选」文案
+	for _, id := range []string{meta.RuleID, meta.SubID} {
+		switch strings.TrimSpace(id) {
+		case "8", "262", "33", "44", "52", "108", "125", "79", "88", "96":
+			return true
+		}
+	}
+	return false
 }
 
 func countOrderedSpanCombinations(span, positions int) int {
@@ -1885,6 +1932,36 @@ func formatCommaPickDigits(groupContent string) string {
 	return strings.Join(tokens, ",")
 }
 
+// formatSSCZuxuanPoolDigits SSC 组选复式/组三/组六号池：
+// 只保留 0–9 单码，保序去重；多位纯数字串按位拆开（「12」→1,2，「3,5\n5」→3,5）。
+func formatSSCZuxuanPoolDigits(groupContent string) string {
+	tokens := splitPickTokens(groupContent)
+	if len(tokens) == 0 {
+		return strings.TrimSpace(groupContent)
+	}
+	out := make([]string, 0, len(tokens))
+	for _, t := range tokens {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		if isAllDigits(t) {
+			for i := 0; i < len(t); i++ {
+				ch := t[i : i+1]
+				if ch >= "0" && ch <= "9" {
+					out = append(out, ch)
+				}
+			}
+			continue
+		}
+	}
+	uniq := uniqueStringsPreserve(out)
+	if len(uniq) == 0 {
+		return strings.TrimSpace(groupContent)
+	}
+	return strings.Join(uniq, ",")
+}
+
 // formatNaturalIntTokens 逗号分隔整数去前导零（SSC 和值/跨度等；勿用于 11选5 的 01–11）。
 func formatNaturalIntTokens(groupContent string) string {
 	vals := parseIntTokenList(groupContent)
@@ -1898,9 +1975,33 @@ func formatNaturalIntTokens(groupContent string) string {
 	return strings.Join(out, ",")
 }
 
+// formatBaodanSingleDan 组选包胆 wire：仅保留首个 0–9 胆码（去前导零）。
+func formatBaodanSingleDan(groupContent string) string {
+	vals := parseIntTokenList(groupContent)
+	for _, v := range vals {
+		if v >= 0 && v <= 9 {
+			return strconv.Itoa(v)
+		}
+	}
+	for _, t := range splitPickTokens(groupContent) {
+		d := digitsOnly(t)
+		if len(d) == 1 {
+			return d
+		}
+	}
+	return ""
+}
+
 // formatBudingweiContent 不定位选号：逗号分隔；一码最多 2 个号（第三方限制）。
+// SSC：粘连串「123」须拆成单码再截断，否则 wire=123 被拒「投注数字不可超过两位数」。
 func formatBudingweiContent(meta RuleMeta, groupContent string) string {
 	tokens := uniqueStringsPreserve(splitPickTokens(groupContent))
+	if len(tokens) == 0 {
+		return strings.TrimSpace(groupContent)
+	}
+	if !usesPaddedDigits(meta.PlayTemplate) {
+		tokens = expandSSCBudingweiDigitTokens(tokens)
+	}
 	if len(tokens) == 0 {
 		return strings.TrimSpace(groupContent)
 	}
@@ -1908,6 +2009,46 @@ func formatBudingweiContent(meta RuleMeta, groupContent string) string {
 		tokens = tokens[:2]
 	}
 	return strings.Join(tokens, ",")
+}
+
+// expandSSCBudingweiDigitTokens 0–9 号池：01→1；粘连 123→1,2,3（保序去重）。
+func expandSSCBudingweiDigitTokens(tokens []string) []string {
+	out := make([]string, 0, len(tokens)*2)
+	seen := make(map[string]struct{}, len(tokens)*2)
+	add := func(d string) {
+		if d == "" {
+			return
+		}
+		if _, ok := seen[d]; ok {
+			return
+		}
+		seen[d] = struct{}{}
+		out = append(out, d)
+	}
+	for _, raw := range tokens {
+		t := strings.TrimSpace(raw)
+		if t == "" || !isAllDigits(t) {
+			continue
+		}
+		if len(t) == 1 {
+			add(t)
+			continue
+		}
+		// 去掉前导零后若为单个 0–9（如 01→1），作单码；否则按位拆开
+		trimmed := strings.TrimLeft(t, "0")
+		if trimmed == "" {
+			add("0")
+			continue
+		}
+		if len(trimmed) == 1 {
+			add(trimmed)
+			continue
+		}
+		for i := 0; i < len(t); i++ {
+			add(string(t[i]))
+		}
+	}
+	return out
 }
 
 func formatZuheContent(groupContent string) string {
@@ -2009,7 +2150,15 @@ func countSSCHunheBetNums(wireContent string, segLen int) int {
 		seen[key] = struct{}{}
 		n++
 	}
-	return n
+	if n > 0 {
+		return n
+	}
+	// 与 formatSSCZuxuanDanshiDigits 对齐：单码号池按组合计注
+	expanded := expandZuxuanDigitPoolToDanshi(parts, segLen)
+	if expanded == "" {
+		return 0
+	}
+	return countSSCHunheBetNums(expanded, segLen)
 }
 
 func isBaoziDigits(s string) bool {
@@ -2100,15 +2249,28 @@ func sampleBudingweiContent(meta RuleMeta) string {
 }
 
 func budingweiPickCount(meta RuleMeta) int {
-	text := meta.Label + meta.FullName + meta.Group
+	text := meta.Label + meta.FullName + meta.Group + meta.TeamLabel
+	// 先匹配「N码」；避免仅数字 subId 时误判
 	switch {
 	case strings.Contains(text, "三码"):
 		return 3
 	case strings.Contains(text, "二码"):
 		return 2
-	default:
+	case strings.Contains(text, "一码"):
 		return 1
 	}
+	// rules/v2 数字 id（文案缺失时）
+	for _, id := range []string{meta.RuleID, meta.SubID} {
+		switch strings.TrimSpace(id) {
+		case "152": // 五星三码
+			return 3
+		case "114", "116", "118", "147", "149", "151": // 各星二码
+			return 2
+		case "113", "115", "117", "146", "148", "150": // 各星一码
+			return 1
+		}
+	}
+	return 1
 }
 
 func budingweiMinPoolSize(meta RuleMeta) int {
@@ -2138,8 +2300,15 @@ func countBudingweiBetNums(meta RuleMeta, wireContent string) int {
 		return combin(len(parts), need)
 	}
 	if need == 1 {
-		// 一码：选几个号计几注；第三方最多允许 2 个号（超过报「不可超过两位」）
-		n := len(parts)
+		// 一码：选几个号计几注；第三方最多允许 2 个号（超过报「投注数字不可超过两位数」）
+		digits := parts
+		if !usesPaddedDigits(meta.PlayTemplate) {
+			digits = expandSSCBudingweiDigitTokens(parts)
+			if len(digits) == 0 && strings.TrimSpace(wireContent) != "" {
+				digits = expandSSCBudingweiDigitTokens([]string{strings.TrimSpace(wireContent)})
+			}
+		}
+		n := len(digits)
 		if n == 0 {
 			if len(normalizePickDigits(wireContent)) > 0 {
 				return 1
@@ -2174,19 +2343,23 @@ func countZu12BetNums(wireContent string) int {
 
 func countZuxuanFushiBetNums(poolSize, segLen int) int {
 	if poolSize <= 0 {
-		return 1
+		return 0
 	}
 	if segLen == 2 {
+		// C(n,2)；n<2 → 0（勿回落成 1）
+		if poolSize < 2 {
+			return 0
+		}
 		return poolSize * (poolSize - 1) / 2
 	}
 	if segLen == 3 {
 		if poolSize < 2 {
-			return poolSize
+			return 0
 		}
 		return zu3PoolUnits(poolSize) + zu6PoolUnits(poolSize)
 	}
 	if poolSize < 2 {
-		return poolSize
+		return 0
 	}
 	return zu3PoolUnits(poolSize)
 }

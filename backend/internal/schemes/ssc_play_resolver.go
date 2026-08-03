@@ -110,7 +110,40 @@ func resolveSSCPlayRule(typeID, subID, betMode string, playMethod ...string) pla
 	start, length := sscSegmentRange(typeID)
 	rule.SegmentStart = start
 	rule.SegmentLen = length
+	// 组选和值：计注/上限用组选组合数（勿按直选把 1–26 算成 998>900）
+	if rule.BetMode == "hezhi" && (strings.Contains(method, "组选") || isZuxuanHezhiSubID(subID)) {
+		rule.HezhiZuxuan = true
+	}
 	return rule
+}
+
+// isZuxuanHezhiSubID 常见组选和值 guaji rule / sub_id（方案可能只存数字 id、无 playMethodLabel）。
+func isZuxuanHezhiSubID(subID string) bool {
+	switch strings.TrimSpace(subID) {
+	case "8", "262", "33", "44", "52", "108", "125", "79", "88", "96":
+		return true
+	default:
+		return false
+	}
+}
+
+// detectHezhiZuxuan 从方案配置文案/子玩法 id 判定组选和值。
+func detectHezhiZuxuan(cfg map[string]interface{}, rule playRule, playMethod string) bool {
+	if rule.HezhiZuxuan {
+		return true
+	}
+	if strings.ToLower(strings.TrimSpace(rule.BetMode)) != "hezhi" {
+		return false
+	}
+	text := playMethod + " " + stringVal(cfg, "guajiFullName") + " " + stringVal(cfg, "subPlayLabel") +
+		" " + rule.CatalogSubID + " " + rule.SubPlayID
+	if strings.Contains(text, "直选和值") {
+		return false
+	}
+	if strings.Contains(text, "组选") {
+		return true
+	}
+	return isZuxuanHezhiSubID(rule.CatalogSubID) || isZuxuanHezhiSubID(rule.SubPlayID)
 }
 
 func budingweiSegmentRange(subID string) (int, int) {
@@ -282,9 +315,11 @@ func legacySubMode(subID, betMode string) string {
 		return "zhixuan_fs"
 	case betMode == "zu24", betMode == "zu12", betMode == "zu60", betMode == "zu30", betMode == "zu120":
 		return betMode
+	case betMode == "zuxuan_ds", strings.Contains(s, "zuxuan_ds"):
+		return "zuxuan_ds"
 	case strings.Contains(s, "zu3"), strings.Contains(s, "zu6"),
 		strings.Contains(s, "zuxuan"),
-		betMode == "zu3", betMode == "zu6":
+		betMode == "zu3", betMode == "zu6", betMode == "zuxuan_fs":
 		return "zuxuan_fs"
 	case strings.Contains(s, "_zu3"), strings.Contains(s, "_zu6"):
 		return "zuxuan_fs"

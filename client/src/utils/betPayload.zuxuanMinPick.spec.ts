@@ -37,4 +37,19 @@ describe('zuxuanPoolMinPick', () => {
     expect(validateGroupContent(zu6, '1,2').ok).toBe(false)
     expect(validateGroupContent(zu6, '1,2,6').ok).toBe(true)
   })
+
+  it('中三组选包胆：不套组选下限，仅允许单胆', () => {
+    const bd = cfg({
+      betMode: 'baodan',
+      subPlayId: '263',
+      catalogSubId: 'zhong3_zuxuan_bd',
+      playMethodLabel: '中三组选包胆',
+      segmentLen: 3,
+      poolMaxPicks: 1,
+    })
+    expect(zuxuanPoolMinPick(bd)).toBeNull()
+    expect(validateGroupContent(bd, '5').ok).toBe(true)
+    expect(validateGroupContent(bd, '5,6').ok).toBe(false)
+    expect(validateGroupContent(bd, '5,6').message).toMatch(/只能选择一个/)
+  })
 })

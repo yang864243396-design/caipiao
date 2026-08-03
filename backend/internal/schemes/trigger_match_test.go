@@ -50,6 +50,34 @@ func TestTriggerOpenMatchesSSCHezhi(t *testing.T) {
 	}
 }
 
+func TestTriggerOpenMatchesSSCTeshu(t *testing.T) {
+	t.Parallel()
+	// 中三特殊号：开出=豹子/对子/顺子，按区位形态匹配（勿当球号比）
+	rule := playRule{
+		PlayTemplate: "ssc_std", BetMode: "teshu",
+		PlayTypeID: "g002", SubPlayID: "25", CatalogSubID: "25",
+		SegmentStart: 1, SegmentLen: 3,
+	}
+	// 万千百十个：9|8|2|2|0 → 中三 822 对子
+	duizi := []string{"9", "8", "2", "2", "0"}
+	if !triggerOpenMatches(rule, duizi, "对子") {
+		t.Fatal("zhong3 822 should match open 对子")
+	}
+	if triggerOpenMatches(rule, duizi, "豹子") || triggerOpenMatches(rule, duizi, "顺子") {
+		t.Fatal("zhong3 822 must not match 豹子/顺子")
+	}
+	// 中三 123 顺子
+	shunzi := []string{"9", "1", "2", "3", "0"}
+	if !triggerOpenMatches(rule, shunzi, "顺子") {
+		t.Fatal("zhong3 123 should match open 顺子")
+	}
+	// 中三 888 豹子
+	baozi := []string{"9", "8", "8", "8", "0"}
+	if !triggerOpenMatches(rule, baozi, "豹子") {
+		t.Fatal("zhong3 888 should match open 豹子")
+	}
+}
+
 func TestTriggerOpenMatchesPC28(t *testing.T) {
 	rule := playRule{PlayTemplate: "pc28_std", BetMode: "hezhi"}
 	balls := []string{"3", "5", "7"} // sum=15

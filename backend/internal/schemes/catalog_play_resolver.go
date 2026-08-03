@@ -19,7 +19,9 @@ func resolveCatalogPlayRule(cfg map[string]interface{}) (playRule, bool) {
 		if playMethod == "" {
 			playMethod = strings.TrimSpace(stringVal(cfg, "playMethodLabel"))
 		}
-		return resolveSSCPlayRule(typeID, subID, betMode, playMethod), true
+		rule := resolveSSCPlayRule(typeID, subID, betMode, playMethod)
+		rule.HezhiZuxuan = detectHezhiZuxuan(cfg, rule, playMethod)
+		return rule, true
 	}
 	if template == "syxw_std" && typeID != "" && subID != "" {
 		return resolveSYXWPlayRule(typeID, subID, betMode), true

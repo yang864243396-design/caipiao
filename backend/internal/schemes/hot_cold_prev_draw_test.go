@@ -12,6 +12,7 @@ func TestHotColdAdjacentPrevMissing(t *testing.T) {
 	}{
 		{"ready exact", "1014147100158", "1014147100158", false},
 		{"missing adjacent", "1014147100158", "1014147100157", true},
+		{"missing two periods same series", "1014157300214", "1014157300212", true},
 		{"no draws", "1014147100158", "", true},
 		{"empty expected", "", "1014147100157", false},
 		{"family gap not blocking", "1014146800039", "1014146700039", false},

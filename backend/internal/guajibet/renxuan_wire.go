@@ -82,12 +82,29 @@ func parseSSCPositionNames(raw string) []int {
 }
 
 func parseRenxuanPositionIndicesFromTokens(tokens []string, k int) []int {
+	if k <= 0 {
+		k = 2
+	}
 	if len(tokens) >= k && renxuanPartsLookLikePositions(tokens[:k]) {
-		out := make([]int, k)
-		for i := 0; i < k; i++ {
-			out[i], _ = strconv.Atoi(strings.TrimSpace(tokens[i]))
+		// 数字位序：取全部合法位（最多 5），勿截成恰好 k
+		n := len(tokens)
+		if n > sscPositionCount {
+			n = sscPositionCount
 		}
-		return out
+		if !renxuanPartsLookLikePositions(tokens[:n]) {
+			n = k
+		}
+		out := make([]int, 0, n)
+		for i := 0; i < n; i++ {
+			v, err := strconv.Atoi(strings.TrimSpace(tokens[i]))
+			if err != nil || v < 0 || v >= sscPositionCount {
+				break
+			}
+			out = append(out, v)
+		}
+		if len(out) >= k {
+			return dedupeSortedPositions(out)
+		}
 	}
 	var out []int
 	for _, tok := range tokens {
@@ -101,23 +118,43 @@ func parseRenxuanPositionIndicesFromTokens(tokens []string, k int) []int {
 		}
 	}
 	if len(out) >= k {
-		return out[:k]
+		return dedupeSortedPositions(out)
 	}
 	if len(tokens) == 1 {
 		if indices := parseSSCPositionNames(tokens[0]); len(indices) >= k {
-			return indices[:k]
+			return dedupeSortedPositions(indices)
 		}
 	}
 	return nil
 }
 
+func dedupeSortedPositions(indices []int) []int {
+	seen := make(map[int]bool, len(indices))
+	out := make([]int, 0, len(indices))
+	for _, idx := range indices {
+		if idx < 0 || idx >= sscPositionCount || seen[idx] {
+			continue
+		}
+		seen[idx] = true
+		out = append(out, idx)
+	}
+	sort.Ints(out)
+	if len(out) > sscPositionCount {
+		out = out[:sscPositionCount]
+	}
+	return out
+}
+
 func renxuanPositionLabel(indices []int, k int) string {
+	if k <= 0 {
+		k = 2
+	}
 	if len(indices) < k {
 		indices = renxuanDefaultPositionIndices(k)
 	} else {
-		indices = append([]int(nil), indices[:k]...)
+		// 多选位：保留全部（最多 5），供任二/任三单式 C(n,k) 计注
+		indices = dedupeSortedPositions(indices)
 	}
-	sort.Ints(indices)
 	var b strings.Builder
 	for _, idx := range indices {
 		if idx >= 0 && idx < len(sscPositionRunes) {
@@ -161,6 +198,9 @@ func renxuanPartsLookLikePositions(parts []string) bool {
 }
 
 func parseRenxuanPositionPick(groupContent string, k int) (positions []int, picks string) {
+	if k <= 0 {
+		k = 2
+	}
 	groupContent = strings.TrimSpace(groupContent)
 	if groupContent == "" {
 		return renxuanDefaultPositionIndices(k), ""
@@ -171,20 +211,27 @@ func parseRenxuanPositionPick(groupContent string, k int) (positions []int, pick
 			return indices, strings.Join(lines[1:], "\n")
 		}
 		if indices := parseSSCPositionNames(lines[0]); len(indices) >= k {
-			return indices[:k], strings.Join(lines[1:], "\n")
+			return dedupeSortedPositions(indices), strings.Join(lines[1:], "\n")
 		}
 	}
 	parts := splitCommaParts(groupContent)
-	if len(parts) >= k+1 && renxuanPartsLookLikePositions(parts[:k]) {
-		for i := 0; i < k; i++ {
-			n, _ := strconv.Atoi(parts[i])
-			positions = append(positions, n)
+	// 前若干段为数字位序（0–4），其余为号码；允许多于 k 个位
+	if len(parts) >= k+1 {
+		posEnd := 0
+		for posEnd < len(parts) && posEnd < sscPositionCount && renxuanPartsLookLikePositions(parts[:posEnd+1]) {
+			posEnd++
 		}
-		return positions, strings.Join(parts[k:], ",")
+		if posEnd >= k && posEnd < len(parts) {
+			for i := 0; i < posEnd; i++ {
+				n, _ := strconv.Atoi(parts[i])
+				positions = append(positions, n)
+			}
+			return dedupeSortedPositions(positions), strings.Join(parts[posEnd:], ",")
+		}
 	}
 	if pipe := strings.Index(groupContent, "|"); pipe > 0 {
 		if indices := parseSSCPositionNames(groupContent[:pipe]); len(indices) >= k {
-			return indices[:k], groupContent[pipe+1:]
+			return dedupeSortedPositions(indices), groupContent[pipe+1:]
 		}
 	}
 	return renxuanDefaultPositionIndices(k), groupContent
@@ -513,8 +560,25 @@ func countRenxuanZuxuanPickWire(meta RuleMeta, wireContent string, k int) int {
 }
 
 func countRenxuanDanshiWire(wireContent string, k int) int {
-	if _, picks, ok := splitRenxuanPosPipeWire(wireContent); ok {
-		return countRenxuanDanshiPairs(picks, k)
+	if k <= 0 {
+		k = 2
+	}
+	if posLabel, picks, ok := splitRenxuanPosPipeWire(wireContent); ok {
+		tickets := countRenxuanDanshiPairs(picks, k)
+		if tickets <= 0 {
+			return 0
+		}
+		indices := parseSSCPositionNames(posLabel)
+		nPos := len(indices)
+		if nPos < k {
+			// 位名不足时按单组位计（兼容缺省）
+			return tickets
+		}
+		if nPos == k {
+			return tickets
+		}
+		// 多选位：C(n,k)×单式注数
+		return combin(nPos, k) * tickets
 	}
 	return countRenxuanDanshiPairs(wireContent, k)
 }

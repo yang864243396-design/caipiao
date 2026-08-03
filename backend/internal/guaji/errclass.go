@@ -62,12 +62,35 @@ func ClassifyUpstreamError(err error) UpstreamFault {
 		return UpstreamFault{UserMessage: "第三方账号或密码错误", IsTokenInvalid: true}
 	}
 
-	// 已是友好中文文案（重新授权失败等）则原样保留。
+	// 已是友好中文文案：仅授权/登录类标 Token 失效。
+	// 切勿把「接单失败 / 注数为0 / 暂时不可用」一并标成 Token 失效，
+	// 否则 IsRetryableTransportError 会误停投（ErrUpstream 曾因此被 pause）。
 	if !strings.Contains(msg, "guaji ") && !strings.Contains(msg, "body=") {
-		return UpstreamFault{UserMessage: msg, IsTokenInvalid: true}
+		if isTokenInvalidMessage(msg) || isAuthFailureChinese(msg) {
+			return UpstreamFault{UserMessage: msg, IsTokenInvalid: true}
+		}
+		return UpstreamFault{UserMessage: msg, IsTokenInvalid: false}
 	}
 
 	return UpstreamFault{UserMessage: "第三方服务异常，请稍后重试", IsTokenInvalid: false}
+}
+
+// isAuthFailureChinese 本地/网关返回的授权失败中文（无 guaji body 包装）。
+func isAuthFailureChinese(msg string) bool {
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return false
+	}
+	needles := []string{
+		"重新授权", "需要二次验证", "重新绑定授权", "授权已失效",
+		"账号或密码错误", "无启用中的授权",
+	}
+	for _, n := range needles {
+		if strings.Contains(msg, n) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsPeriodClosedError 判断是否为封盘/截止类拒单（方案应继续运行等下期）。
@@ -105,7 +128,7 @@ func IsTransientUpstreamError(err error) bool {
 	return !ClassifyUpstreamError(err).IsTokenInvalid
 }
 
-// IsRetryableTransportError 传输层/网关临时故障：方案 Worker 应保留运行并下 tick 再试，勿立刻停投。
+// IsRetryableTransportError 传输层/网关/上游临时故障：方案 Worker 应保留运行并下 tick 再试，勿立刻停投。
 // 不含业务拒单、封盘、余额不足、Token 失效（那些仍应按原逻辑停投或跳过）。
 func IsRetryableTransportError(err error) bool {
 	if err == nil {
@@ -113,6 +136,9 @@ func IsRetryableTransportError(err error) bool {
 	}
 	if IsPeriodClosedError(err) {
 		return false
+	}
+	if IsBlockFetchError(err) {
+		return true
 	}
 	fault := ClassifyUpstreamError(err)
 	if fault.IsTokenInvalid {
@@ -135,6 +161,34 @@ func IsRetryableTransportError(err error) bool {
 		return true
 	}
 	return false
+}
+
+// CodeBlockFetch 第三方返回「区块获取异常」类临时故障（波场链路抖动，下期/下 tick 可再试）。
+const CodeBlockFetch = 40050
+
+// IsBlockFetchError 区块高度/链路暂不可用导致的拒单（非注单内容错误）。
+func IsBlockFetchError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var api *APIError
+	if errors.As(err, &api) {
+		if api.Code == CodeBlockFetch {
+			return true
+		}
+		if isBlockFetchMessage(api.Message) {
+			return true
+		}
+	}
+	return isBlockFetchMessage(err.Error())
+}
+
+func isBlockFetchMessage(msg string) bool {
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return false
+	}
+	return strings.Contains(msg, "区块获取") || strings.Contains(strings.ToLower(msg), "block fetch")
 }
 
 // IsSafeImmediateRetryError 请求很可能未发出的错误，允许同 tick 内短暂重试 PlaceBet（避免超时类二次下单）。

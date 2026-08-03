@@ -1,12 +1,21 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import SchemeGroupInputPanel from '@/components/schemes/SchemeGroupInputPanel.vue'
+import SchemeGroupPickPanel from '@/components/schemes/SchemeGroupPickPanel.vue'
 import {
   SSC_POSITION_LABELS,
+  bareConfigForRenxuanPicks,
   buildRenxuanPositionContent,
   defaultRenxuanPositions,
+  isRenxuanPositionDanshiConfig,
+  isRenxuanPositionPoolConfig,
   parseRenxuanPositionContent,
   type PlayConfig,
 } from '@/utils/betPayload'
+import {
+  schemeGroupUsesDigitInput,
+  schemeGroupUsesPickPanel,
+} from '@/utils/pickPanelOptions'
 
 const props = defineProps<{
   config: PlayConfig
@@ -23,6 +32,21 @@ const pickCount = computed(() => {
   const k = props.config.renPositionCount ?? 0
   return k >= 2 && k <= 5 ? k : 2
 })
+
+/** 选位上限：万千百十个共 5 位 */
+const maxPositions = 5
+
+const isDanshi = computed(() => isRenxuanPositionDanshiConfig(props.config))
+const isPool = computed(() => isRenxuanPositionPoolConfig(props.config))
+
+/** 剥位后的玩法配置，供号池/和值选号面板使用 */
+const bareConfig = computed(() => bareConfigForRenxuanPicks(props.config))
+const usesDigitInput = computed(
+  () => isPool.value && schemeGroupUsesDigitInput(bareConfig.value),
+)
+const usesPickPanel = computed(
+  () => isPool.value && schemeGroupUsesPickPanel(bareConfig.value),
+)
 
 const digitLen = computed(() =>
   props.config.segmentLen > 0 ? props.config.segmentLen : pickCount.value,
@@ -56,6 +80,8 @@ watch(
       props.config.segmentLen,
       props.config.playTypeId,
       props.config.subPlayId,
+      props.config.betMode,
+      props.config.playMethodLabel,
     ] as const,
   () => {
     syncing = true
@@ -72,29 +98,34 @@ function togglePosition(lab: string) {
   const set = new Set(positions.value)
   if (set.has(lab)) {
     set.delete(lab)
-  } else if (set.size < pickCount.value) {
-    set.add(lab)
-  } else {
-    // 已满：替换最早选中的一位（保持恰好 k 个）
-    const next = [...positions.value.slice(1), lab]
-    positions.value = next
+  } else if (set.size >= maxPositions) {
     return
+  } else {
+    set.add(lab)
   }
   // 按万千百十个顺序展示
   positions.value = SSC_POSITION_LABELS.filter((p) => set.has(p))
 }
 
 const placeholder = computed(() => {
+  const k = pickCount.value
+  if (isPool.value) {
+    return `从万、千、百、十、个中勾选至少 ${k} 个、最多 ${maxPositions} 个位置，再选择/输入号码；所选位置多于 ${k} 个时按组合计注（C(选位数,${k})×号码注数）。`
+  }
   const example = `${'12'.slice(0, digitLen.value).padEnd(digitLen.value, '0')},34`
-  return `从万、千、百、十、个中勾选 ${pickCount.value} 个位置，再输入 ${digitLen.value} 位号码组成一注；所选位置与号码顺序均须与开奖一致。示例：${example}`
+  return `从万、千、百、十、个中勾选至少 ${k} 个、最多 ${maxPositions} 个位置，再输入 ${digitLen.value} 位号码组成一注；所选位置多于 ${k} 个时按组合计注（C(选位数,${k})×号码注数）。所选位置与号码顺序均须与开奖一致。示例：${example}`
 })
 </script>
 
 <template>
   <div class="srd-panel" :class="{ 'is-disabled': disabled }">
     <div class="srd-pos-row">
-      <span class="srd-pos-label">选位（{{ pickCount }}）</span>
-      <div class="srd-chips" role="group" :aria-label="`从万千百十个中选 ${pickCount} 个位置`">
+      <span class="srd-pos-label">选位（{{ positions.length }}/{{ maxPositions }}，至少{{ pickCount }}）</span>
+      <div
+        class="srd-chips"
+        role="group"
+        :aria-label="`从万千百十个中选至少 ${pickCount} 个、最多 ${maxPositions} 个位置`"
+      >
         <button
           v-for="lab in SSC_POSITION_LABELS"
           :key="lab"
@@ -108,7 +139,21 @@ const placeholder = computed(() => {
         </button>
       </div>
     </div>
+    <SchemeGroupInputPanel
+      v-if="usesDigitInput"
+      v-model="picksText"
+      :config="bareConfig"
+      :disabled="disabled"
+      :rows="6"
+    />
+    <SchemeGroupPickPanel
+      v-else-if="usesPickPanel"
+      v-model="picksText"
+      :config="bareConfig"
+      :disabled="disabled"
+    />
     <el-input
+      v-else
       :model-value="picksText"
       type="textarea"
       :rows="6"
@@ -193,23 +238,15 @@ const placeholder = computed(() => {
 .srd-area :deep(.el-textarea__inner) {
   min-height: 9.5rem;
   border: none;
-  border-radius: 0.75rem;
-  background: rgba(242, 244, 246, 0.65);
-  padding: var(--card-pad);
-  font-family: 'Inter', 'Noto Sans SC', sans-serif;
-  font-size: 0.9375rem;
-  line-height: 1.65;
+  background: #f7f9fb;
   box-shadow: none;
-  white-space: pre-wrap;
+  font-family: 'Inter', 'Noto Sans SC', sans-serif;
+  font-size: 0.875rem;
+  line-height: 1.6;
 }
 
-.srd-area :deep(.el-textarea__inner:focus) {
-  box-shadow: 0 0 0 2px rgba(0, 102, 255, 0.18);
-}
-
-.srd-area :deep(.el-textarea__inner::placeholder) {
-  color: #94a3b8;
-  white-space: pre-wrap;
-  word-break: break-word;
+.srd-panel.is-disabled {
+  opacity: 0.85;
+  pointer-events: none;
 }
 </style>

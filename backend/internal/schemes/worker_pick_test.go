@@ -248,6 +248,22 @@ func TestPickRandomDrawPerPosZhixuanDanshi(t *testing.T) {
 	}
 }
 
+func TestIsZuxuanPoolRandom_qian2NumericSubId(t *testing.T) {
+	// 生产方案常存 subId=42 + betMode=zuxuan_fs；须识别为号池随机，勿走按位。
+	cfg := pickTestConfig(t, `{"runTypeId":"random_draw","playTemplate":"ssc_std","playTypeId":"g004","subPlayId":"42","betMode":"zuxuan_fs","randomDraw":{"counts":[2],"strategy":"every"}}`)
+	if !isZuxuanPoolRandom(cfg.Play) {
+		t.Fatalf("前二组选复式(subId=42) should be zuxuan-pool random, rule=%+v", cfg.Play)
+	}
+	dec := pickRandomDraw(cfg, sqlcdb.SchemeInstance{Kind: "custom"})
+	toks := strings.Split(dec.Content, ",")
+	if len(toks) != 2 {
+		t.Fatalf("counts=[2] want 2 个号, got %d: %q", len(toks), dec.Content)
+	}
+	if toks[0] == toks[1] {
+		t.Fatalf("号码池不得重号: %q", dec.Content)
+	}
+}
+
 func TestPickRandomDrawZuxuanPool(t *testing.T) {
 	// 前三组选复式：随机选 K 个号组成号码池（升序、逗号分隔、去重），可被组选评估解析。
 	cfg := pickTestConfig(t, `{"runTypeId":"random_draw","playTypeId":"qian3","subPlayId":"zuxuan_fs","betMode":"zu6","randomDraw":{"counts":[4],"strategy":"every"}}`)
@@ -310,6 +326,27 @@ func TestPickRandomDrawBaodanNotZuxuanPool(t *testing.T) {
 	toks := strings.Split(strings.TrimSpace(dec.Content), ",")
 	if len(toks) != 1 || toks[0] == "" {
 		t.Fatalf("包胆只能抽 1 个胆码, got %q", dec.Content)
+	}
+}
+
+func TestPickRandomDrawZuxuanHezhiNotZuxuanPool(t *testing.T) {
+	// 中三组选和值：文案/catalog 可能含 zuxuan，仍走属性随机；counts=1 合法。
+	cfg := pickTestConfig(t, `{
+		"runTypeId":"random_draw","playTemplate":"ssc_std",
+		"playTypeId":"g002","subPlayId":"262","catalogSubId":"zhong3_zuxuan_hz",
+		"betMode":"hezhi","playMethodLabel":"中三组选和值",
+		"randomDraw":{"counts":[1],"strategy":"every"}
+	}`)
+	if isZuxuanPoolRandom(cfg.Play) {
+		t.Fatalf("组选和值不应走组选号池, rule=%+v", cfg.Play)
+	}
+	if !isAttributeRandom(cfg.Play) {
+		t.Fatalf("组选和值应走属性随机, rule=%+v", cfg.Play)
+	}
+	dec := pickRandomDraw(cfg, sqlcdb.SchemeInstance{Kind: "custom"})
+	toks := splitContentTokens(dec.Content)
+	if len(toks) != 1 {
+		t.Fatalf("组选和值 counts=1 应抽 1 个和值, got %q", dec.Content)
 	}
 }
 
@@ -939,6 +976,12 @@ func TestHotColdWarmDigitPoolFamilies(t *testing.T) {
 			dec := pickHotColdWarmFromDraws(cfg, inst, nil)
 			if strings.TrimSpace(dec.Content) == "" {
 				t.Fatalf("%s 池为空", c.name)
+			}
+			if c.name == "包胆" {
+				toks := splitContentTokens(dec.Content)
+				if len(toks) != 1 {
+					t.Fatalf("包胆冷热须单胆, got %q", dec.Content)
+				}
 			}
 			ev := evaluatePlayHit(cfg.Play, c.balls, dec.Content, cfg.Contrary, cfg.ContraryPlan, cfg.Play.PositionIdx)
 			if ev.BetUnits <= 0 {

@@ -8,12 +8,59 @@ import (
 
 // MaxBetUnitsForScheme 该玩法单组注数上限；0 表示第三方未设上限（或本端尚未定义）。
 //
-// 覆盖直选复式 / 和值 / 跨度 / 尾数 / 直选组合等（对齐前端 betPayload.ts）。
+// 覆盖直选复式/单式 / 和值 / 跨度 / 尾数 / 直选组合等（对齐前端 betPayload.ts）。
 func MaxBetUnitsForScheme(kind string, config []byte) int {
 	if len(config) == 0 {
 		return 0
 	}
 	return maxBetUnitsForPlay(parseSchemeConfig(kind, config, 0, 0).Play)
+}
+
+// isBaodanPlayRule 组选包胆（含中三组选包胆）：每组仅允许 1 个胆码。
+func isBaodanPlayRule(rule playRule) bool {
+	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	if bm == "baodan" {
+		return true
+	}
+	sub := strings.ToLower(rule.SubPlayID + " " + rule.CatalogSubID)
+	return strings.Contains(sub, "baodan") || strings.Contains(sub, "_bd")
+}
+
+// isYimaBudingweiPlayRule 一码不定位：第三方最多 2 个号（超过 →「投注数字不可超过两位数」）。
+func isYimaBudingweiPlayRule(rule playRule) bool {
+	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	sub := strings.ToLower(rule.SubPlayID + " " + rule.CatalogSubID)
+	isBdw := bm == "budingwei" || strings.Contains(sub, "budingwei")
+	if !isBdw {
+		return false
+	}
+	// 二码/三码：need≥2；一码（含目录 id 如 113）need=1
+	return budingweiNeedCount(rule.CatalogSubID) <= 1 && budingweiNeedCount(rule.SubPlayID) <= 1
+}
+
+// budingweiMinPoolForRule 不定位最少选号数；非不定位或一码返回 0。
+// 二码=2；三码=3；五星二/三码=4（对齐 guajibet.budingweiMinPoolSize）。
+func budingweiMinPoolForRule(rule playRule) int {
+	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	sub := strings.ToLower(rule.SubPlayID + " " + rule.CatalogSubID)
+	if bm != "budingwei" && !strings.Contains(sub, "budingwei") {
+		return 0
+	}
+	need := budingweiNeedCount(rule.CatalogSubID)
+	if n := budingweiNeedCount(rule.SubPlayID); n > need {
+		need = n
+	}
+	if need <= 1 {
+		return 0
+	}
+	sid := strings.TrimSpace(rule.CatalogSubID)
+	if sid == "" {
+		sid = strings.TrimSpace(rule.SubPlayID)
+	}
+	if sid == "151" || sid == "152" || strings.Contains(sub, "wuxing") || strings.Contains(sub, "五星") {
+		return 4
+	}
+	return need
 }
 
 // ValidateSchemeBetContent 校验投注内容是否落在该玩法的合法投注空间内。
@@ -32,6 +79,12 @@ func ValidateSchemeBetContent(kind string, config []byte, content string, maxUni
 	if strings.TrimSpace(content) == "" {
 		return []Violation{{Code: ViolationEmptyContent, Detail: "投注内容为空"}}
 	}
+	// 任选选位注数依赖位名前缀（C(选位数,k)×内层）；剥位前先算好
+	renDanshiUnits, renDanshiKnown := 0, false
+	if isRenxuanNeedsPositionRule(rule) {
+		renDanshiUnits = countRenxuanNeedsPositionBetUnits(rule, content)
+		renDanshiKnown = true
+	}
 	content = stripPositionLabelPrefix(rule, content)
 	// 直选单式：按位号池（千\n百\n十）先展开为整注串再校验，与下注链路 normalizeZhixuanDanshiContent 一致。
 	// 否则开某投某/冷热的「1,2\n3,4\n5,6」会被拆成 6 个非法「单式组合」。
@@ -39,6 +92,16 @@ func ValidateSchemeBetContent(kind string, config []byte, content string, maxUni
 
 	var out []Violation
 	out = append(out, validateTokens(u, rule, content)...)
+	// 组选包胆：第三方仅允许单胆（中三组选包胆等）
+	if isBaodanPlayRule(rule) && u.Kind == UniverseTokenList {
+		n := len(dedupStrings(splitContentTokens(content)))
+		if n > 1 {
+			out = append(out, Violation{
+				Code:   ViolationZeroUnits,
+				Detail: "包胆：只能选择一个 0–9 的号码",
+			})
+		}
+	}
 	// 组三/组六号池：保存与审计强制最低选号（组三≥2、组六≥3）
 	if minPick := zuxuanPoolMinPick(rule); minPick >= 2 && u.Kind == UniverseTokenList {
 		n := len(dedupStrings(splitContentTokens(content)))
@@ -58,6 +121,25 @@ func ValidateSchemeBetContent(kind string, config []byte, content string, maxUni
 			})
 		}
 	}
+	// 二码/三码不定位：最少选号（二码第三方「投注数字不能低于两个」）
+	if minPick := budingweiMinPoolForRule(rule); minPick >= 2 && u.Kind == UniverseTokenList {
+		n := len(dedupStrings(splitContentTokens(content)))
+		if n > 0 && n < minPick {
+			detail := fmt.Sprintf("不定位至少选择 %d 个号码", minPick)
+			if minPick == 2 {
+				detail = "投注数字不能低于两个"
+			} else if minPick == 4 {
+				detail = "五星二码不定位：至少选择 4 个号码"
+				if budingweiNeedCount(rule.CatalogSubID) >= 3 || budingweiNeedCount(rule.SubPlayID) >= 3 {
+					detail = "五星三码不定位：至少选择 4 个号码"
+				}
+			}
+			out = append(out, Violation{
+				Code:   ViolationZeroUnits,
+				Detail: detail,
+			})
+		}
+	}
 
 	if isFushiBaoziContent(rule, content) {
 		out = append(out, Violation{
@@ -68,13 +150,17 @@ func ValidateSchemeBetContent(kind string, config []byte, content string, maxUni
 	}
 
 	units, known := countBetUnits(u, rule, content)
+	if renDanshiKnown {
+		units, known = renDanshiUnits, true
+	}
 	switch {
 	case known && units <= 0:
 		out = append(out, Violation{Code: ViolationZeroUnits, Detail: "注数为 0"})
 	case known && maxUnits > 0 && units > maxUnits:
 		out = append(out, Violation{
 			Code:   ViolationUnitsOverLimit,
-			Detail: fmt.Sprintf("注数 %d 超过上限 %d", units, maxUnits),
+			// 与前端 / errMaxBetUnitsExceeded 文案一致，便于弹窗原样展示
+			Detail: errMaxBetUnitsExceeded(maxUnits).Error(),
 		})
 	}
 	return out
@@ -95,6 +181,9 @@ func CountBetUnitsForScheme(kind string, config []byte, content string) (int, bo
 		return 0, false
 	}
 	rule := parseSchemeConfig(kind, config, 0, 0).Play
+	if isRenxuanNeedsPositionRule(rule) {
+		return countRenxuanNeedsPositionBetUnits(rule, content), true
+	}
 	return countBetUnits(u, rule, stripPositionLabelPrefix(rule, content))
 }
 
@@ -217,6 +306,10 @@ func countBetUnits(u PlayUniverse, rule playRule, content string) (int, bool) {
 		return len(parseSegmentTokensForRule(rule, content, u.ComboLen)), true
 
 	case UniversePerPosition:
+		// 任选直选复式：C(5,n) 计注（勿五位乘积误成 72900）
+		if isRenxuanPlayType(rule.PlayTypeID) && isRenxuanZhixuanFushiRule(rule) {
+			return countRenxuanZhixuanFushiBetUnits(rule, content), true
+		}
 		units := 1
 		filled := 0
 		for _, line := range strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n") {
