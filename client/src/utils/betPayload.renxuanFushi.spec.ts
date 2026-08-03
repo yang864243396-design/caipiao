@@ -44,6 +44,6 @@ describe('任二直选复式注数与上限', () => {
   it('883 注可保存', () => {
     const r = validateGroupContent(ren2Fs, content)
     expect(r.ok).toBe(true)
-    expect(r.betUnits).toBe(883)
+    if (r.ok) expect(r.betUnits).toBe(883)
   })
 })

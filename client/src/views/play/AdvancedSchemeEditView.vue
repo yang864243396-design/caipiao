@@ -53,9 +53,7 @@ import {
   YIXING_MAX_PICKS_MSG,
   YIXING_MAX_PICKS_PER_POS,
   isRenxuanNeedsPositionConfig,
-  isRenxuanPositionPoolConfig,
   buildRenxuanPositionContent,
-  defaultRenxuanPositions,
   SSC_POSITION_LABELS,
   playConfigSummary,
   validateGroupContent,
@@ -1324,21 +1322,6 @@ function ensureRenxuanRunPositions(): void {
     return
   }
   renxuanRunPosIdxs.value = defaultRenxuanTriggerPositionIdxs(need)
-}
-
-function toggleRenxuanRunPosition(idx: number): void {
-  if (!schemeUsesRenxuanRunPos.value) return
-  const need = renxuanRunPosNeed.value
-  const set = new Set(renxuanRunPosIdxs.value)
-  if (set.has(idx)) {
-    if (set.size <= need) return
-    set.delete(idx)
-  } else if (set.size >= 5) {
-    return
-  } else {
-    set.add(idx)
-  }
-  renxuanRunPosIdxs.value = [...set].sort((a, b) => a - b)
 }
 
 function renxuanRunPosLabels(): string[] {

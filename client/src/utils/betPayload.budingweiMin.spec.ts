@@ -31,20 +31,22 @@ describe('前三二码不定位最少选号', () => {
   it('仅 1 个号保存失败', () => {
     const r = validateGroupContent(qian3Erma, '5')
     expect(r.ok).toBe(false)
-    expect(r.message).toBe('投注数字不能低于两个')
+    if (!r.ok) expect(r.message).toBe('投注数字不能低于两个')
   })
 
   it('2 个号保存通过且为 1 注', () => {
     const r = validateGroupContent(qian3Erma, '1,2')
     expect(r.ok).toBe(true)
-    expect(r.betUnits).toBe(1)
-    expect(r.normalized).toBe('1,2')
+    if (r.ok) {
+      expect(r.betUnits).toBe(1)
+      expect(r.normalized).toBe('1,2')
+    }
   })
 
   it('3 个号为 C(3,2)=3 注', () => {
     const r = validateGroupContent(qian3Erma, '1,2,3')
     expect(r.ok).toBe(true)
-    expect(r.betUnits).toBe(3)
+    if (r.ok) expect(r.betUnits).toBe(3)
   })
 })
 
@@ -64,14 +66,14 @@ describe('五星二码不定位最少选号', () => {
 
   it('少于 4 个号保存失败', () => {
     expect(validateGroupContent(wuxingErma, '1,2').ok).toBe(false)
-    expect(validateGroupContent(wuxingErma, '1,2,3').message).toBe(
-      '五星二码不定位：至少选择 4 个号码',
-    )
+    const r = validateGroupContent(wuxingErma, '1,2,3')
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.message).toBe('五星二码不定位：至少选择 4 个号码')
   })
 
   it('4 个号为 C(4,2)=6 注', () => {
     const r = validateGroupContent(wuxingErma, '1,2,3,4')
     expect(r.ok).toBe(true)
-    expect(r.betUnits).toBe(6)
+    if (r.ok) expect(r.betUnits).toBe(6)
   })
 })

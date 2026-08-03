@@ -7,7 +7,6 @@ import {
   bareConfigForRenxuanPicks,
   buildRenxuanPositionContent,
   defaultRenxuanPositions,
-  isRenxuanPositionDanshiConfig,
   isRenxuanPositionPoolConfig,
   parseRenxuanPositionContent,
   type PlayConfig,
@@ -36,7 +35,6 @@ const pickCount = computed(() => {
 /** 选位上限：万千百十个共 5 位 */
 const maxPositions = 5
 
-const isDanshi = computed(() => isRenxuanPositionDanshiConfig(props.config))
 const isPool = computed(() => isRenxuanPositionPoolConfig(props.config))
 
 /** 剥位后的玩法配置，供号池/和值选号面板使用 */
