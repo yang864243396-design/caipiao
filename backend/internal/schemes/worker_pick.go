@@ -1056,23 +1056,23 @@ func buildHotColdPickContent(cfg parsedSchemeConfig, draws [][]string) string {
 	}
 	pool := playNumberPool(cfg.Play)
 
-	// 属性家族（大小单双/龙虎/和值等）
+	// 属性家族（大小单双/龙虎/和值等）；任选和值按投注选位计频
 	if isHotColdAttributePlay(cfg.Play) {
 		if !hotColdLineEnabled(hc, 0) {
 			return ""
 		}
-		res := HotColdWarmAttributeTiers(cfg.Play, draws)
+		res := HotColdWarmAttributeTiersForPositions(cfg.Play, draws, hc.PositionIdxs)
 		full := append(append([]string{}, res.Hot...), res.Cold...)
 		picked := pickHotColdByRanks(full, resolveHotColdRanksForOrder(hc, 0, len(full)))
 		return strings.Join(sortHotColdBetTokens(picked), ",")
 	}
-	// 号码整体频次（组选/不定位/包胆）
+	// 号码整体频次（组选/不定位/包胆）；任选组选复式按投注选位合并计频
 	if isHotColdDigitOverall(cfg.Play) {
 		if !hotColdLineEnabled(hc, 0) {
 			return ""
 		}
 		pool = hotColdLockedDigitPool(hc, pool, 0)
-		hot, cold := hotColdWarmTiersOverall(draws, cfg.Play, pool)
+		hot, cold := hotColdWarmTiersOverallForPositions(draws, cfg.Play, pool, hc.PositionIdxs)
 		full := append(append([]string{}, hot...), cold...)
 		ranks := resolveHotColdRanksForOrder(hc, 0, len(full))
 		// 组选包胆第三方仅单胆：多档名次只取最先命中的一码（勿拼成 1,3,5,6,7 →「投注数字不合规」）
@@ -1091,6 +1091,10 @@ func buildHotColdPickContent(cfg parsedSchemeConfig, draws [][]string) string {
 			picked = picked[:2]
 		}
 		return strings.Join(sortHotColdBetTokens(picked), ",")
+	}
+	// 任选·直选单式：按开奖选位（恰好 k 个绝对位）计频取号，再由 applyRenxuanRunPositionWrap 加投注选位前缀
+	if content, ok := buildRenxuanHcwOpenPosPickContent(cfg, draws, pool); ok {
+		return content
 	}
 	// 按位型：pool 非空仅表示该位启用（编辑预览），运行时仍用玩法全号池动态热冷区
 	n := playPositionCount(cfg.Play)
@@ -1114,6 +1118,44 @@ func buildHotColdPickContent(cfg parsedSchemeConfig, draws [][]string) string {
 		return ""
 	}
 	return strings.Join(lines, "\n")
+}
+
+// buildRenxuanHcwOpenPosPickContent 任选直选单式冷热：按 openPositionIdxs（k 个绝对位）取各列冷热号。
+// 返回按位号池（行用 \n 分隔），供后续 expand + 投注选位前缀。
+func buildRenxuanHcwOpenPosPickContent(cfg parsedSchemeConfig, draws [][]string, pool []string) (string, bool) {
+	if !isRenxuanPerPosTriggerPlay(cfg.Play) {
+		return "", false
+	}
+	hc := cfg.HotCold
+	if hc == nil {
+		return "", false
+	}
+	k := cfg.Play.SegmentLen
+	if k <= 0 {
+		k = renPickCount(cfg.Play.CatalogSubID)
+	}
+	if k <= 0 {
+		k = 2
+	}
+	openIdxs := normalizeRenxuanHcwOpenPositionIdxs(hc.OpenPositionIdxs, k)
+	lines := make([]string, len(openIdxs))
+	filled := 0
+	for i, pos := range openIdxs {
+		if !hotColdLineEnabled(hc, i) {
+			continue
+		}
+		hot, _, cold := hotColdWarmTiers(draws, pos, pool)
+		full := append(append([]string{}, hot...), cold...)
+		picked := pickHotColdByRanks(full, resolveHotColdRanksForOrder(hc, i, len(full)))
+		lines[i] = strings.Join(sortHotColdBetTokens(picked), ",")
+		if lines[i] != "" {
+			filled++
+		}
+	}
+	if filled == 0 {
+		return "", true // 已识别该玩法但未选出号
+	}
+	return strings.Join(lines, "\n"), true
 }
 
 // hotColdLockedDigitPool 若配置了号码池则返回池内号码（与玩法宇宙求交）；否则用默认宇宙。
@@ -1403,9 +1445,24 @@ func hotColdPositionIdx(rule playRule, lineIdx int) int {
 
 // hotColdWarmTiersOverall 跨位合并频次后二等分热/冷（组选/不定位/包胆）。
 func hotColdWarmTiersOverall(draws [][]string, rule playRule, pool []string) (hot, cold []string) {
+	return hotColdWarmTiersOverallForPositions(draws, rule, pool, nil)
+}
+
+// hotColdWarmTiersOverallForPositions 同 hotColdWarmTiersOverall；
+// 任选组选复式等带选位玩法按 positionIdxs 合并计频（空则默认前 k 位，如任二万千）。
+func hotColdWarmTiersOverallForPositions(draws [][]string, rule playRule, pool []string, positionIdxs []int) (hot, cold []string) {
 	counts := make(map[string]int, len(pool))
-	positions := playPositionCount(rule)
+	posList := renxuanOverallPositionIdxs(rule, positionIdxs)
 	for _, balls := range draws {
+		if len(posList) > 0 {
+			for _, pos := range posList {
+				if pos >= 0 && pos < len(balls) {
+					counts[strings.TrimSpace(balls[pos])]++
+				}
+			}
+			continue
+		}
+		positions := playPositionCount(rule)
 		for i := 0; i < positions; i++ {
 			pos := hotColdPositionIdx(rule, i)
 			if pos >= 0 && pos < len(balls) {
@@ -1426,6 +1483,24 @@ func hotColdWarmTiersOverall(draws [][]string, rule playRule, pool []string) (ho
 		half = n
 	}
 	return sorted[:half], sorted[half:]
+}
+
+// renxuanOverallPositionIdxs 任选整体号池冷热的投注选位；非任选选位玩法返回 nil。
+func renxuanOverallPositionIdxs(rule playRule, positionIdxs []int) []int {
+	if !isRenxuanNeedsPositionRule(rule) || !isHotColdDigitOverall(rule) {
+		return nil
+	}
+	k := rule.SegmentLen
+	if k <= 0 {
+		k = renPickCount(rule.CatalogSubID)
+	}
+	if k <= 0 {
+		k = renPickCount(rule.SubPlayID)
+	}
+	if k <= 0 {
+		k = 2
+	}
+	return normalizeRenxuanRunPositionIdxs(positionIdxs, k)
 }
 
 // hotColdWarmTiers 按最近 N 期频次排序二等分（热/冷；对齐 v6 第三方，无温档）。
@@ -1487,12 +1562,9 @@ func resolveTriggerBetDecision(cfg parsedSchemeConfig, prevBalls []string, lastD
 
 	direction := nextTriggerDirection(cfg.Trigger.Mode, lastDirection)
 
-	// 任选非直选复式：须先于通用组选路径（否则组选复式会丢选位前缀）
+	// 任选非直选复式：开奖选位单点查映射 + 投注选位前缀（须先于通用组选路径）
 	if isRenxuanNeedsPositionTriggerPlay(cfg.Play) {
-		if isRenxuanPerPosTriggerPlay(cfg.Play) {
-			return pickTriggerBetRenxuanDanshi(cfg, enabled, prevBalls, direction)
-		}
-		return pickTriggerBetRenxuanPool(cfg, enabled, prevBalls, direction)
+		return pickTriggerBetRenxuanNeedsPosition(cfg, enabled, prevBalls, direction)
 	}
 
 	// 组选号池 / 组选单式：开出看区位内任一位球号（前二=万或千），命中后投该行正/反内容
@@ -1526,66 +1598,10 @@ func resolveTriggerBetDecision(cfg parsedSchemeConfig, prevBalls []string, lastD
 	return pickDecision{Content: content, Direction: dir}
 }
 
-// pickTriggerBetRenxuanDanshi 任选单式类开某投某：
-// 对 Trigger.PositionIdxs（恰好 k 个绝对位）各位取上期开奖查映射，按相对序拼号池后展开为单式，
-// 再加位名前缀（如「万,千\n45」）。
-func pickTriggerBetRenxuanDanshi(
-	cfg parsedSchemeConfig,
-	enabled []triggerRow,
-	prevBalls []string,
-	direction string,
-) pickDecision {
-	k := cfg.Play.SegmentLen
-	if k <= 0 {
-		k = renPickCount(cfg.Play.CatalogSubID)
-	}
-	if k <= 0 {
-		k = 2
-	}
-	var idxs []int
-	if cfg.Trigger != nil {
-		idxs = normalizeRenxuanTriggerPositionIdxs(cfg.Trigger.PositionIdxs, k)
-	} else {
-		idxs = defaultRenxuanTriggerPositionIdxs(k)
-	}
-	lines := make([]string, len(idxs))
-	filled := 0
-	outDir := direction
-	for rel, abs := range idxs {
-		if abs < 0 || abs >= len(prevBalls) {
-			return pickDecision{Skip: true}
-		}
-		open := normalizeTriggerToken(strings.TrimSpace(prevBalls[abs]))
-		row, ok := findEnabledTriggerRowByOpen(enabled, open)
-		if !ok {
-			return pickDecision{Skip: true}
-		}
-		content, dir := triggerRowPickContentAt(row, direction, rel, len(idxs))
-		if content == "" {
-			return pickDecision{Skip: true}
-		}
-		lines[rel] = content
-		filled++
-		outDir = dir
-	}
-	if filled == 0 {
-		return pickDecision{Skip: true}
-	}
-	pool := strings.Join(lines, "\n")
-	expanded := pool
-	if exp, ok := expandZhixuanPositionPoolToDanshi(pool, k); ok {
-		expanded = exp
-	}
-	posLine := renxuanPositionNamesCSV(idxs)
-	if strings.TrimSpace(expanded) == "" {
-		return pickDecision{Skip: true}
-	}
-	return pickDecision{Content: posLine + "\n" + expanded, Direction: outDir}
-}
-
-// pickTriggerBetRenxuanPool 任选号池/和值开某投某：
-// 所选绝对位任一位开出命中启用行 → 投该行整段正/反内容，并加位名前缀。
-func pickTriggerBetRenxuanPool(
+// pickTriggerBetRenxuanNeedsPosition 任选开某投某：
+// 开奖选位（单）取上期球号查启用行；直选单式按投注选位列组合号码，号池/和值用整行内容；
+// 票面加投注选位（≥k）前缀。
+func pickTriggerBetRenxuanNeedsPosition(
 	cfg parsedSchemeConfig,
 	enabled []triggerRow,
 	prevBalls []string,
@@ -1601,30 +1617,37 @@ func pickTriggerBetRenxuanPool(
 	if k <= 0 {
 		k = 2
 	}
-	var idxs []int
-	if cfg.Trigger != nil {
-		idxs = normalizeRenxuanTriggerPositionIdxs(cfg.Trigger.PositionIdxs, k)
-	} else {
-		idxs = defaultRenxuanTriggerPositionIdxs(k)
-	}
-	var row *triggerRow
-	for _, abs := range idxs {
-		if abs < 0 || abs >= len(prevBalls) {
-			continue
-		}
-		open := normalizeTriggerToken(strings.TrimSpace(prevBalls[abs]))
-		if r, ok := findEnabledTriggerRowByOpen(enabled, open); ok {
-			rr := r
-			row = &rr
-			break
-		}
-	}
-	if row == nil {
+	openIdx := resolveRenxuanOpenPositionIdx(cfg)
+	if openIdx < 0 || openIdx >= len(prevBalls) {
 		return pickDecision{Skip: true}
 	}
-	content, dir := triggerRowPickContent(*row, direction)
+	var betIdxs []int
+	if cfg.Trigger != nil {
+		betIdxs = normalizeRenxuanRunPositionIdxs(cfg.Trigger.PositionIdxs, k)
+	} else {
+		betIdxs = defaultRenxuanTriggerPositionIdxs(k)
+	}
+	open := normalizeTriggerToken(strings.TrimSpace(prevBalls[openIdx]))
+	row, ok := findEnabledTriggerRowByOpen(enabled, open)
+	if !ok {
+		return pickDecision{Skip: true}
+	}
+	content, dir := triggerRowPickContent(row, direction)
 	if content == "" {
 		return pickDecision{Skip: true}
+	}
+	if isRenxuanPerPosTriggerPlay(cfg.Play) {
+		// 启用区固定 k 列（第一位…第k位），与投注选位个数无关；前缀仍用投注选位
+		parts := splitTriggerFieldParts(content, k)
+		exp, okExp := expandZhixuanPositionPoolToDanshi(strings.Join(parts, "\n"), k)
+		if !okExp {
+			return pickDecision{Skip: true}
+		}
+		content = exp
+	} else if isRenxuanPositionDanshiRule(cfg.Play) {
+		if exp, okExp := expandZhixuanPositionPoolToDanshi(content, k); okExp {
+			content = exp
+		}
 	}
 	if minK := zuxuanPoolMinPick(cfg.Play); minK >= 2 {
 		n := len(uniqueStringTokens(splitContentTokens(content)))
@@ -1632,8 +1655,56 @@ func pickTriggerBetRenxuanPool(
 			return pickDecision{Skip: true}
 		}
 	}
-	posLine := renxuanPositionNamesCSV(idxs)
+	posLine := renxuanPositionNamesCSV(betIdxs)
+	if strings.TrimSpace(content) == "" {
+		return pickDecision{Skip: true}
+	}
 	return pickDecision{Content: posLine + "\n" + content, Direction: dir}
+}
+
+// splitTriggerFieldParts 与前端 triggerFieldParts 对齐：按换行分列，缺列补空；无换行则各位同值。
+func splitTriggerFieldParts(raw string, n int) []string {
+	if n < 1 {
+		n = 1
+	}
+	text := strings.ReplaceAll(raw, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	text = strings.TrimSpace(text)
+	if !strings.Contains(text, "\n") {
+		one := strings.TrimSpace(text)
+		out := make([]string, n)
+		for i := range out {
+			out[i] = one
+		}
+		return out
+	}
+	parts := strings.Split(text, "\n")
+	out := make([]string, n)
+	for i := 0; i < n; i++ {
+		if i < len(parts) {
+			out[i] = strings.TrimSpace(parts[i])
+		}
+	}
+	return out
+}
+
+// pickTriggerBetRenxuanDanshi / pickTriggerBetRenxuanPool 兼容旧测试入口。
+func pickTriggerBetRenxuanDanshi(
+	cfg parsedSchemeConfig,
+	enabled []triggerRow,
+	prevBalls []string,
+	direction string,
+) pickDecision {
+	return pickTriggerBetRenxuanNeedsPosition(cfg, enabled, prevBalls, direction)
+}
+
+func pickTriggerBetRenxuanPool(
+	cfg parsedSchemeConfig,
+	enabled []triggerRow,
+	prevBalls []string,
+	direction string,
+) pickDecision {
+	return pickTriggerBetRenxuanNeedsPosition(cfg, enabled, prevBalls, direction)
 }
 
 func pickTriggerBetPerPosition(

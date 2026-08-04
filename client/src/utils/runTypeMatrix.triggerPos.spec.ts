@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  defaultRenxuanHcwOpenPositionIdxs,
   defaultRenxuanTriggerPositionIdxs,
   isRenxuanZhixuanDanshiTriggerPlay,
   isZhixuanDanshiPerPosPlay,
@@ -34,7 +35,7 @@ describe('supportsAdvTriggerPerPosColumns', () => {
     ).toBe(true)
   })
 
-  it('任选直选单式按选位分列，并显示选位芯片（默认万千）', () => {
+  it('任选直选单式显示选位芯片，并按投注选位分列正反投（默认投注万千）', () => {
     const cfg = {
       betMode: 'danshi',
       playTypeId: 'g011',
@@ -108,5 +109,12 @@ describe('supportsAdvTriggerPerPosColumns', () => {
         segmentLabels: ['千', '百', '十'],
       }),
     ).toBe(true)
+  })
+
+  it('任选冷热开奖选位默认前 k 位（任二万千）', () => {
+    expect(defaultRenxuanHcwOpenPositionIdxs(2)).toEqual([0, 1])
+    expect(defaultRenxuanHcwOpenPositionIdxs(3)).toEqual([0, 1, 2])
+    expect(defaultRenxuanHcwOpenPositionIdxs(4)).toEqual([0, 1, 2, 3])
+    expect(defaultRenxuanTriggerPositionIdxs(3)).toEqual([0, 1, 4])
   })
 })

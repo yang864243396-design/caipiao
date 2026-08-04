@@ -37,6 +37,6 @@ describe('前二组选复式 comma-separated input box', () => {
 
   it('hint tells user to separate digits with commas', () => {
     expect(groupDigitInputHint(qian2ZuxuanFs)).toMatch(/逗号/)
-    expect(groupDigitInputHint(qian2ZuxuanFs)).toMatch(/2/)
+    expect(groupDigitInputHint(qian2ZuxuanFs)).toMatch(/2 个及以上/)
   })
 })

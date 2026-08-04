@@ -154,12 +154,18 @@ export interface SchemeTriggerBet {
   /** always_pos 一直正投 / always_neg 一直反投 / alt_pos_first 前正后反 / alt_neg_first 前反后正 */
   mode: 'always_pos' | 'always_neg' | 'alt_pos_first' | 'alt_neg_first'
   /**
-   * 定位胆投注位（可多选，0=万/冠军 …）。
-   * 统一「一星定位胆」子玩法默认万位，需显式指定。
+   * 投注选位（可多选，0=万/冠军 …）。
+   * 任选非直选复式：≥k ≤5（任二至少 2）；下注内容带这些位名前缀。
+   * 定位胆等：投注位（可多选）。
    */
   positionIdxs?: number[]
   /** @deprecated 兼容旧单值；新配置请用 positionIdxs */
   positionIdx?: number
+  /**
+   * 任选开奖选位（单选，0=万 … 4=个）：上期该位球号查开出映射。
+   * 缺省时兼容旧配置：取 positionIdxs[0] 或万位。
+   */
+  openPositionIdx?: number
 }
 
 export type SchemeRotateStrategy = 'every' | 'keep' | 'after_hit' | 'after_miss'
@@ -194,10 +200,15 @@ export interface SchemeHotColdWarm {
    */
   winRotate?: boolean
   /**
-   * 任选非直选复式：万千百十个选位下标（0=万…4=个），至少 k、最多 5。
+   * 任选非直选复式：投注选位（万千百十个，0=万…4=个），至少 k、最多 5。
    * 出号内容带选位前缀，注数 × C(选位数,k)。
    */
   positionIdxs?: number[]
+  /**
+   * 任选·直选单式冷热出号：开奖选位（恰好 k 个，0=万…4=个），默认前 k 位（任二万/千）。
+   * 下方频次与 ranks 按这些绝对位统计；出票时与 positionIdxs 组合。
+   */
+  openPositionIdxs?: number[]
 }
 
 export interface SchemeRandomDraw {
@@ -352,6 +363,8 @@ export interface HotColdWarmTiersInput {
   numberPoolMax?: number
   segmentLen?: number
   periods?: number
+  /** 任选投注选位（0=万…4=个）；任选和值/尾数按此计频 */
+  positionIdxs?: number[]
 }
 
 export interface HotColdWarmTiersResult {

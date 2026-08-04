@@ -2,7 +2,7 @@ package schemes
 
 import "testing"
 
-func TestMaxBetUnits_ren2ZhixuanHezhiIs100(t *testing.T) {
+func TestMaxBetUnits_ren2ZhixuanHezhiIs900(t *testing.T) {
 	t.Parallel()
 	raw := `{
 		"playTemplate":"ssc_std",
@@ -17,12 +17,12 @@ func TestMaxBetUnits_ren2ZhixuanHezhiIs100(t *testing.T) {
 	if !isRen2ZhixuanHezhiRule(cfg.Play) {
 		t.Fatalf("want ren2 zhixuan hezhi, rule=%+v", cfg.Play)
 	}
-	if got := maxBetUnitsForPlay(cfg.Play); got != 100 {
-		t.Fatalf("max=%d want 100", got)
+	if got := maxBetUnitsForPlay(cfg.Play); got != 900 {
+		t.Fatalf("max=%d want 900", got)
 	}
 }
 
-func TestMaxBetUnits_ren2ZuxuanHezhiNot100(t *testing.T) {
+func TestMaxBetUnits_ren2ZuxuanHezhiNotRen2ZhixuanCap(t *testing.T) {
 	t.Parallel()
 	raw := `{
 		"playTemplate":"ssc_std",

@@ -20,6 +20,8 @@ type HotColdWarmTiersInput struct {
 	NumberPoolMax   int
 	SegmentLen      int
 	Periods         int
+	// PositionIdxs 任选投注选位（0=万…4=个）；任选和值/尾数按此计频。
+	PositionIdxs []int
 }
 
 // HotColdWarmTiers 拉取最近 N 期开奖，按属性选项命中频次分档（热/温/冷）。
@@ -76,7 +78,7 @@ func (s *Service) HotColdWarmTiers(ctx context.Context, in HotColdWarmTiersInput
 	// 龙虎等按 CatalogSubID 解析对比位。数字 guaji id 本身无区位，须合并玩法文案（万千）。
 	rule.CatalogSubID = resolveHotColdCatalogSubID(rule, in)
 	rule = applyHotColdWarmInputOverrides(rule, in)
-	return HotColdWarmAttributeTiers(rule, draws), nil
+	return HotColdWarmAttributeTiersForPositions(rule, draws, in.PositionIdxs), nil
 }
 
 // resolveHotColdCatalogSubID 优先选用能解析出龙虎位对的文案；否则保留 resolve 结果或回退 subId。

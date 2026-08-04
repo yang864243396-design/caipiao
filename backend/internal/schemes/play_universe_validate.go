@@ -85,10 +85,11 @@ func ValidateSchemeBetContent(kind string, config []byte, content string, maxUni
 		renDanshiUnits = countRenxuanNeedsPositionBetUnits(rule, content)
 		renDanshiKnown = true
 	}
-	content = stripPositionLabelPrefix(rule, content)
-	// 直选单式：按位号池（千\n百\n十）先展开为整注串再校验，与下注链路 normalizeZhixuanDanshiContent 一致。
-	// 否则开某投某/冷热的「1,2\n3,4\n5,6」会被拆成 6 个非法「单式组合」。
+	// 先 normalize 再剥位：任选组选单式 Format 会保留/补位名前缀（如「万,个\n12」→「万个|12」）。
+	// 若先剥位再 Format，会丢选位并误补默认「千个|」，把合法「12,34」校验成非法组合。
+	// 直选单式：按位号池（千\n百\n十）先展开为整注串再校验，与下注链路一致。
 	content = normalizeZhixuanDanshiContent(rule, content)
+	content = stripPositionLabelPrefix(rule, content)
 
 	var out []Violation
 	out = append(out, validateTokens(u, rule, content)...)

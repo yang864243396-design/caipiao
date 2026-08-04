@@ -1469,8 +1469,8 @@ export const YIXING_MAX_PICKS_MSG = '每个位置最多只能投注9个号码'
 export const HEZHI_MAX_BET_UNITS = 900
 export const HEZHI_MAX_BET_UNITS_MSG = '投注注数超过最大投注注数:900'
 
-/** 任二直选和值单组上限（第三方 100） */
-export const REN2_ZHIXUAN_HEZHI_MAX_BET_UNITS = 100
+/** 任二直选和值单组上限（第三方 900，对齐任二直选复式） */
+export const REN2_ZHIXUAN_HEZHI_MAX_BET_UNITS = 900
 
 /**
  * 和值/跨度单组最大注数（对齐第三方）：与直选复式同口径（每位 0–9）。
@@ -1478,7 +1478,7 @@ export const REN2_ZHIXUAN_HEZHI_MAX_BET_UNITS = 100
  * 勿用和值号池宽度（前二 0–18→19）代入公式，否则会算成 342。
  */
 export function hezhiKuaduMaxBetUnits(config: PlayConfig): number {
-  // 任二直选和值：第三方上限 100（勿套前二 90 / 任选复式 900）
+  // 任二直选和值：第三方上限 900（勿套前二 90）
   if (isRen2ZhixuanHezhiConfig(config)) return REN2_ZHIXUAN_HEZHI_MAX_BET_UNITS
   const segLen = inferHezhiSegmentLen(config)
   if (segLen <= 1) return HEZHI_MAX_BET_UNITS
@@ -1652,7 +1652,7 @@ export function renxuanZhixuanFushiMaxBetUnits(config: PlayConfig): number {
   return Math.min(fullMinusSame, oneShort)
 }
 
-/** 任选选位类单组上限（任二直选和值=100，其余对齐直选复式） */
+/** 任选选位类单组上限（任二直选和值=900，其余对齐直选复式） */
 export function renxuanNeedsPositionMaxBetUnits(config: PlayConfig): number {
   if (isRen2ZhixuanHezhiConfig(config)) return REN2_ZHIXUAN_HEZHI_MAX_BET_UNITS
   return renxuanZhixuanFushiMaxBetUnits(config)
@@ -2330,17 +2330,27 @@ export function catalogFieldsFromPlayConfig(
 }
 
 export function groupContentPlaceholder(config: PlayConfig): string {
+  // 和值优先：任二直选和值等勿落成组三/组六「N 个及以上」提示
+  if (
+    config.betMode === 'hezhi' ||
+    (/和值/.test(`${config.playMethodLabel ?? ''} ${config.playTypeLabel ?? ''}`) &&
+      !/尾数|跨度|单双|大小/.test(config.playMethodLabel ?? ''))
+  ) {
+    const pool = poolFromConfig(config)
+    if (pool) return `和值：输入 ${pool.min}–${pool.max}，多选用逗号分隔（如 14,15,16）`
+    return '和值：输入和值数字，多选用逗号分隔（前三直选 0–27，前二/任二 0–18，快三 3–18）'
+  }
   {
     const zuxuanText = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''} ${config.betMode ?? ''}`
     if (
       config.betMode === 'zu3' ||
-      (/组三|zu3/i.test(zuxuanText) && !/组选3|组选30|zu30/i.test(zuxuanText))
+      (/组三|zu3/i.test(zuxuanText) && !/组选3|组选30|zu30|和值/i.test(zuxuanText))
     ) {
       return '输入两个及以上0-9的号码，多选用逗号分隔，如1.3.5.7'
     }
     if (
       config.betMode === 'zu6' ||
-      (/组六|zu6/i.test(zuxuanText) && !/组选6|组选60|组选120|zu60|zu120/i.test(zuxuanText))
+      (/组六|zu6/i.test(zuxuanText) && !/组选6|组选60|组选120|zu60|zu120|和值/i.test(zuxuanText))
     ) {
       return '输入三个及以上0-9的号码，多选用逗号分隔，如1.3.5.7'
     }
@@ -2427,11 +2437,6 @@ export function groupContentPlaceholder(config: PlayConfig): string {
   }
   if (config.betMode === 'daxiao' || config.betMode === 'danshuang' || config.betMode === 'dxds') {
     return '大小单双：大、小、单、双，逗号分隔'
-  }
-  if (config.betMode === 'hezhi') {
-    const pool = poolFromConfig(config)
-    if (pool) return `和值：输入 ${pool.min}–${pool.max}，多选用逗号分隔（如 14,15,16）`
-    return '和值：输入和值数字，多选用逗号分隔（前三直选 0–27，前二 0–18，快三 3–18）'
   }
   if (config.betMode === 'kuadu' || /跨度/.test(config.playMethodLabel ?? '')) {
     const pool = poolFromConfig(config)

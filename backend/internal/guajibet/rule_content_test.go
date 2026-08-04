@@ -796,6 +796,30 @@ func TestFormatBetContentForRule_renxuanZuxuanFs(t *testing.T) {
 	}
 }
 
+// def-1-1785736424052：多选位组选复式须 C(选位数,2)×C(号池,2)；
+// 且 pipe 后号池「0,1,…」勿再当位序截断（曾误计 28 并拒「投注注数不正确」）。
+func TestCountBetNums_renxuanZuxuanFsMultiPos(t *testing.T) {
+	seg, _ := json.Marshal(map[string]string{"guajiGroup": "任选", "guajiTeam": "任选二"})
+	meta := ParseRuleMeta("ssc_std", "g011", "77", "任二组选复式", "任选", seg, "77")
+	meta.ForcedBetMode = "zuxuan_fs"
+
+	wire := FormatBetContentForRule(meta, "万,千,百,十,个\n1,2")
+	if wire != "万千百十个|1,2" {
+		t.Fatalf("wire=%q want 万千百十个|1,2", wire)
+	}
+	if n := CountBetNums(meta, wire); n != 10 {
+		t.Fatalf("betsNums=%d want 10 (C(5,2)*C(2,2))", n)
+	}
+
+	wireFull := FormatBetContentForRule(meta, "万,千,百,十,个\n0,1,2,3,4,5,6,7,8,9")
+	if wireFull != "万千百十个|0,1,2,3,4,5,6,7,8,9" {
+		t.Fatalf("wireFull=%q", wireFull)
+	}
+	if n := CountBetNums(meta, wireFull); n != 450 {
+		t.Fatalf("betsNums=%d want 450 (C(5,2)*C(10,2))", n)
+	}
+}
+
 func TestCountBetNums_qian2ZhixuanHezhi(t *testing.T) {
 	meta := ParseRuleMeta("ssc_std", "g004", "40", "直选和值", "前二", nil, "40")
 	got := FormatBetContentForRule(meta, "1,2")

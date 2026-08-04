@@ -495,9 +495,29 @@ func countRenxuanDanshiPairs(wireContent string, k int) int {
 	return 0
 }
 
+func renxuanPosComboMultiplier(posLabel string, k int) int {
+	if k <= 0 {
+		k = 2
+	}
+	indices := parseSSCPositionNames(posLabel)
+	nPos := len(indices)
+	if nPos < k {
+		return 1
+	}
+	mul := combin(nPos, k)
+	if mul <= 0 {
+		return 1
+	}
+	return mul
+}
+
 func countRenxuanHezhiWire(meta RuleMeta, wireContent string, k int) int {
-	if _, picks, ok := splitRenxuanPosPipeWire(wireContent); ok {
-		return countHezhiBetNums(meta, picks, k)
+	if posLabel, picks, ok := splitRenxuanPosPipeWire(wireContent); ok {
+		inner := countHezhiBetNums(meta, picks, k)
+		if inner <= 0 {
+			return 0
+		}
+		return renxuanPosComboMultiplier(posLabel, k) * inner
 	}
 	parts := splitCommaParts(wireContent)
 	if len(parts) == k+1 && renxuanPartsLookLikePositions(parts[:k]) {
@@ -514,17 +534,24 @@ func countRenxuanHezhiWire(meta RuleMeta, wireContent string, k int) int {
 }
 
 func countRenxuanZuxuanPickWire(meta RuleMeta, wireContent string, k int) int {
-	if _, picks, ok := splitRenxuanPosPipeWire(wireContent); ok {
+	if k <= 0 {
+		k = 2
+	}
+	posMul := 1
+	fromPipe := false
+	if posLabel, picks, ok := splitRenxuanPosPipeWire(wireContent); ok {
+		fromPipe = true
 		wireContent = picks
+		posMul = renxuanPosComboMultiplier(posLabel, k)
 	}
 	mode := InferBetMode(meta)
-	countPool := func(n int) int {
+	countPool := func(poolContent string, n int) int {
 		if n <= 0 {
 			return 0
 		}
 		switch mode {
 		case "zu12":
-			return countZu12BetNums(wireContent)
+			return countZu12BetNums(poolContent)
 		case "zu24":
 			return countZuGroupBetNums("zu24", n)
 		case "zu4":
@@ -535,7 +562,7 @@ func countRenxuanZuxuanPickWire(meta RuleMeta, wireContent string, k int) int {
 			}
 			return zu6PoolUnits(n)
 		case "zu3":
-			if !strings.Contains(wireContent, ",") && len(normalizePickDigits(wireContent)) == k {
+			if !strings.Contains(poolContent, ",") && len(normalizePickDigits(poolContent)) == k {
 				return 1
 			}
 			return zu3PoolUnits(n)
@@ -551,12 +578,16 @@ func countRenxuanZuxuanPickWire(meta RuleMeta, wireContent string, k int) int {
 			return combin(n, k)
 		}
 	}
+	// pipe 线已剥位：号池里的 0,1 是号码不是位序，勿再当选位截断
+	if fromPipe {
+		return countPool(wireContent, len(splitPickDigits(wireContent))) * posMul
+	}
 	parts := splitCommaParts(wireContent)
 	if len(parts) <= k || !renxuanPartsLookLikePositions(parts[:k]) {
-		return countPool(len(splitPickDigits(wireContent)))
+		return countPool(wireContent, len(splitPickDigits(wireContent))) * posMul
 	}
-	picks := parts[k:]
-	return countPool(len(splitPickDigits(strings.Join(picks, ","))))
+	picks := strings.Join(parts[k:], ",")
+	return countPool(picks, len(splitPickDigits(picks))) * posMul
 }
 
 func countRenxuanDanshiWire(wireContent string, k int) int {

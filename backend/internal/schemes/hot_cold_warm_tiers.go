@@ -1,6 +1,9 @@
 package schemes
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 // HotColdWarmTiersResult 冷热属性家族分档结果（v6 仅冷/热；Warm 恒为空）。
 //
@@ -18,12 +21,13 @@ type HotColdWarmTiersResult struct {
 
 // HotColdWarmAttributeTiers 对属性/聚合家族（大小单双/龙虎/庄闲/特殊号/和值/跨度）
 // 按"最近 N 期每个选项命中频次"降序二等分为热/冷（对齐 v6，无温档）。
-//
-// 说明：
-//   - 每期对宇宙内每个选项调用 evaluatePlayHit，命中即计数——大小单双一期可同时命中
-//     一个大小档与一个单双档，龙虎一期命中龙/虎/和之一，和值/跨度一期命中唯一值。
-//   - 数字池型（不定位/包胆）与按位型不在此处理（前端按数字整体/按位频次分档）。
 func HotColdWarmAttributeTiers(rule playRule, draws [][]string) HotColdWarmTiersResult {
+	return HotColdWarmAttributeTiersForPositions(rule, draws, nil)
+}
+
+// HotColdWarmAttributeTiersForPositions 同 HotColdWarmAttributeTiers；
+// positionIdxs 供任选和值/尾数按投注选位计频（对齐 evaluateRenxuanHezhi 的 C(选位,k)）。
+func HotColdWarmAttributeTiersForPositions(rule playRule, draws [][]string, positionIdxs []int) HotColdWarmTiersResult {
 	universe := attributeUniverse(rule)
 	if len(universe) == 0 {
 		return HotColdWarmTiersResult{Mode: "unsupported"}
@@ -43,7 +47,8 @@ func HotColdWarmAttributeTiers(rule playRule, draws [][]string) HotColdWarmTiers
 		}
 		any := false
 		for _, opt := range universe {
-			if evaluatePlayHit(rule, balls, opt, false, "", rule.PositionIdx).Hit {
+			content := attributeHitContent(rule, opt, positionIdxs)
+			if evaluatePlayHit(rule, balls, content, false, "", rule.PositionIdx).Hit {
 				counts[opt]++
 				any = true
 			}
@@ -70,4 +75,28 @@ func HotColdWarmAttributeTiers(rule playRule, draws [][]string) HotColdWarmTiers
 		Counts:   counts,
 		Counted:  counted,
 	}
+}
+
+// attributeHitContent 任选和值/尾数计频时带投注选位前缀，使 evaluatePlayHit 按已选位 C(n,k) 判定。
+func attributeHitContent(rule playRule, opt string, positionIdxs []int) string {
+	opt = strings.TrimSpace(opt)
+	if opt == "" || !isRenxuanNeedsPositionRule(rule) {
+		return opt
+	}
+	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	if bm != "hezhi" && bm != "weishu" {
+		return opt
+	}
+	k := rule.SegmentLen
+	if k <= 0 {
+		k = renPickCount(rule.CatalogSubID)
+	}
+	if k <= 0 {
+		k = renPickCount(rule.SubPlayID)
+	}
+	if k <= 0 {
+		k = 2
+	}
+	idxs := normalizeRenxuanRunPositionIdxs(positionIdxs, k)
+	return renxuanPositionNamesCSV(idxs) + "\n" + opt
 }

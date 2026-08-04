@@ -63,7 +63,7 @@ func TestPickTriggerBetRenxuanPool_wrapsPositions(t *testing.T) {
 	if isRenxuanPerPosTriggerPlay(cfg.Play) {
 		t.Fatal("组选复式不应按位分列")
 	}
-	// 万=1 千=9 → 所选位任一位命中开出 1 → 投 0,1,2，带选位前缀
+	// 缺省开奖选位=万；万=1 → 投 0,1,2，带投注选位前缀
 	dec := resolveTriggerBetDecision(cfg, []string{"1", "9", "0", "0", "0"}, "")
 	if dec.Skip {
 		t.Fatal("want pick, got skip")

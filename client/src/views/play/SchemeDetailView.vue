@@ -138,10 +138,16 @@ function asTriggerBet(raw: unknown): SchemeTriggerBet | null {
     if (Number.isInteger(i) && i >= 0) positionIdxs.push(i)
   }
   positionIdxs.sort((a, b) => a - b)
+  let openPositionIdx: number | undefined
+  if (tb.openPositionIdx != null && Number.isFinite(Number(tb.openPositionIdx))) {
+    const oi = Math.trunc(Number(tb.openPositionIdx))
+    if (oi >= 0 && oi < 5) openPositionIdx = oi
+  }
   return {
     rows,
     mode: okMode,
     ...(positionIdxs.length ? { positionIdxs } : {}),
+    ...(openPositionIdx != null ? { openPositionIdx } : {}),
   }
 }
 

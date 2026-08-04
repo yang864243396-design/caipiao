@@ -63,11 +63,14 @@ func TestTriggerBetUsesPosition_renxuanDanshiNotFixedSegment(t *testing.T) {
 		BetMode:      "danshi",
 		SegmentLen:   2,
 	}
-	// 任选走专用路径，不进前三式 isZhixuanDanshiTriggerPlay 段内连续位
+	// 任选走开奖/投注双选位路径，不进前三式 isZhixuanDanshiTriggerPlay 段内连续位
 	if isZhixuanDanshiTriggerPlay(rule) {
 		t.Fatal("任选不应被当成固定区位直选单式分列")
 	}
+	if !isRenxuanNeedsPositionTriggerPlay(rule) {
+		t.Fatal("任选应走 needs-position 开某投某路径")
+	}
 	if !isRenxuanZhixuanDanshiTriggerPlay(rule) {
-		t.Fatal("任选应走 renxuan trigger 选位路径")
+		t.Fatal("任选直选单式应按投注选位分列")
 	}
 }

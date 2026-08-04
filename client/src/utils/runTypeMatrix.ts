@@ -593,7 +593,7 @@ function isAdvTriggerDingweiPlay(config: AdvTriggerPosConfig): boolean {
 }
 
 /**
- * 任选非直选复式：开某投某需勾选恰好 k 个投注位（任二默认万千）；
+ * 任选非直选复式：开某投某需「开奖选位」+「投注选位区」；
  * 一星等仍不单独勾选投注位。
  */
 export function supportsAdvTriggerPositionPicker(config: AdvTriggerPosConfig): boolean {
@@ -635,8 +635,9 @@ export function isRenxuanNeedsPositionTriggerPlay(config: AdvTriggerPosConfig): 
 }
 
 /**
- * 任选单式类开某投某：按所选位分行填正/反投（直选/组选/混合单式）。
- * 号池/和值类仅选位 + 整行映射，不分列。
+ * 任选·直选单式开某投某：启用区按「投注选位区」所选位分列正/反投。
+ * 开奖选位单点查映射行，再取该行各位号码组合出票。
+ * 组选/和值/号池仍整行正反投，不分列。
  */
 export function isRenxuanPerPosTriggerPlay(config: AdvTriggerPosConfig): boolean {
   if (!isRenxuanNeedsPositionTriggerPlay(config)) return false
@@ -647,23 +648,22 @@ export function isRenxuanPerPosTriggerPlay(config: AdvTriggerPosConfig): boolean
     bm === 'hezhi' ||
     bm === 'weishu' ||
     bm === 'zuxuan_fs' ||
+    bm === 'zuxuan_ds' ||
     bm === 'zu3' ||
     bm === 'zu6' ||
     bm === 'zu24' ||
     bm === 'zu12' ||
     bm === 'zu4' ||
-    /组和|直选和值|组选复式|组选24|组选12|组选6|组选4/.test(label)
+    bm === 'hunhe' ||
+    /组和|直选和值|组选|混合|组三|组六/.test(label)
   ) {
     return false
   }
   return (
     bm === 'danshi' ||
     bm === 'zhixuan_ds' ||
-    bm === 'zuxuan_ds' ||
-    bm === 'hunhe' ||
     sub.includes('zhixuan_ds') ||
-    sub.includes('zuxuan_ds') ||
-    /直选单式|组选单式|混合组选|组三单式|组六单式/.test(label) ||
+    /直选单式/.test(label) ||
     config.inputMode === 'danshi'
   )
 }
@@ -680,6 +680,15 @@ export function defaultRenxuanTriggerPositionIdxs(k: number): number[] {
   if (n === 3) return [0, 1, 4]
   if (n === 4) return [0, 1, 2, 3]
   return [0, 1, 2, 3, 4]
+}
+
+/**
+ * 任选·直选单式冷热出号：开奖选位默认前 k 位（任二万千；任三万千百；任四万千百十）。
+ * 与投注选位默认（任三含个位）可不同。
+ */
+export function defaultRenxuanHcwOpenPositionIdxs(k: number): number[] {
+  const n = k >= 2 && k <= 5 ? k : 2
+  return Array.from({ length: n }, (_, i) => i)
 }
 
 /**
@@ -746,6 +755,8 @@ export function isZhixuanDanshiPerPosPlay(config: AdvTriggerPosConfig): boolean 
  * 表格按「万位正投/反投、千位…」分列填写（不展示投注位芯片）。
  */
 export function supportsAdvTriggerPerPosColumns(config: AdvTriggerPosConfig): boolean {
+  // 任选直选单式：按投注选位区分列（配合开奖选位 + 投注选位芯片）
+  if (isRenxuanPerPosTriggerPlay(config)) return true
   // 一星/定位胆五位（或 PK10 十名次）：与前三码同布局，每位旁填预备投注号
   if (isAdvTriggerDingweiPlay(config) && advTriggerPosCount(config) >= 2) return true
   const segLen = Math.max(0, Number(config.segmentLen) || 0)
@@ -765,8 +776,6 @@ export function supportsAdvTriggerPerPosColumns(config: AdvTriggerPosConfig): bo
   }
   // 中三/前三直选单式：千百十（或万千百）三位分列
   if (isZhixuanDanshiPerPosPlay(config)) return true
-  // 任选单式类：按勾选的 k 个绝对位分列（配合选位芯片）
-  if (isRenxuanPerPosTriggerPlay(config)) return true
   return false
 }
 

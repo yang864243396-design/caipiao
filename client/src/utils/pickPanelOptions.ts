@@ -1,5 +1,6 @@
 import type { PlayConfig } from '@/utils/betPayload'
 import {
+  isRenxuanZhixuanFushiPlayConfig,
   isYixingDingweiPlayConfig,
   YIXING_MAX_PICKS_PER_POS,
 } from '@/utils/betPayload'
@@ -30,8 +31,11 @@ export function schemeGroupUsesPickPanel(config: PlayConfig): boolean {
 /** 和值号池（直选/组选）：变长数字，禁止补零连写（组选和值 1–26 勿变成 01–26） */
 function isHezhiPoolConfig(config: PlayConfig): boolean {
   if (config.betMode === 'hezhi') return true
+  const label = `${config.playMethodLabel ?? ''} ${config.playTypeLabel ?? ''} ${config.guajiGroup ?? ''}`
   // PC28 顶线和值：betMode 可能为空，仅按文案识别「和值」本身
-  return config.playTemplate === 'pc28_std' && (config.playMethodLabel ?? '').trim() === '和值'
+  if (config.playTemplate === 'pc28_std' && label.trim() === '和值') return true
+  // 任二直选和值等：目录 label 常为「直选和值」，须优先于组选复式/组六提示
+  return /和值/.test(label) && !/尾数|跨度|单双|大小/.test(label)
 }
 
 /** 和值尾数号池（前三和值尾数等）：0–9，须逗号分隔（勿连写） */
@@ -349,13 +353,13 @@ function buildDigitInputExample(options: string[], segLen: number, commaPool: bo
 function isZu3PoolPlay(config: PlayConfig): boolean {
   if (config.betMode === 'zu3') return true
   const text = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''}`
-  return /组三|zu3/i.test(text) && !/组选3|组选30|zu30/i.test(text)
+  return /组三|zu3/i.test(text) && !/组选3|组选30|zu30|和值/i.test(text)
 }
 
 function isZu6PoolPlay(config: PlayConfig): boolean {
   if (config.betMode === 'zu6') return true
   const text = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''}`
-  return /组六|zu6/i.test(text) && !/组选6|组选60|组选120|zu60|zu120/i.test(text)
+  return /组六|zu6/i.test(text) && !/组选6|组选60|组选120|zu60|zu120|和值/i.test(text)
 }
 
 /** 组选包胆（前三组选包胆等）：单选 0–9 */
@@ -364,28 +368,39 @@ function isBaodanPoolPlay(config: PlayConfig): boolean {
   return /包胆/.test(config.playMethodLabel ?? '')
 }
 
+/** 组选复式最少选号：二星/任二=2，其余=3（任选剥位后 playTypeId 被清空，须看 segmentLen/renPositionCount） */
+function zuxuanFushiMinPickHint(config: PlayConfig): number {
+  const renK = config.renPositionCount ?? 0
+  if (renK === 2) return 2
+  if (renK >= 3 && renK <= 5) return 3
+  // bareConfigForRenxuanPicks 将 segmentLen 置为任 k
+  if (config.segmentLen === 2) return 2
+  const text = `${config.playMethodLabel ?? ''} ${config.playTypeLabel ?? ''} ${config.playTypeId ?? ''} ${config.guajiGroup ?? ''}`
+  if (/前二|后二|任二|任选二|g004|g005|g008|qian2|hou2|ren2/i.test(text)) return 2
+  return 3
+}
+
 /**
  * 数字玩法方案内容录入提示（按玩法动态生成）：多位型逐位对应位名、逗号分隔、每位皆须录入；
  * 单位定宽可连写；和值等变长号池须逗号分隔。
  */
 export function groupDigitInputHint(config: PlayConfig): string {
+  // 和值须最先匹配：避免「直选和值」被组选复式/组六文案抢提示
+  if (isHezhiPoolConfig(config)) {
+    const min = config.numberPoolMin ?? 0
+    const max = config.numberPoolMax ?? 27
+    return `和值：输入 ${min}–${max}，多选用逗号分隔（如 14,15,16）`
+  }
   if (isZu3PoolPlay(config)) {
     return '输入两个及以上 0-9 的号码，多选用逗号分隔，如 1,3,5,7'
   }
   if (isZu6PoolPlay(config)) {
     return '输入三个及以上 0-9 的号码，多选用逗号分隔，如 1,3,5,7'
   }
-  // 前二/后二等组选复式：至少 2 个号；三星组选复式至少 3 个
+  // 前二/后二/任二组选复式：至少 2 个号；三星/任三组选复式至少 3 个
   if (isZuxuanFushiPoolPlay(config)) {
-    const text = `${config.playMethodLabel ?? ''} ${config.playTypeLabel ?? ''} ${config.playTypeId ?? ''}`
-    const min = /前二|后二|g004|g005|g008|qian2|hou2/i.test(text) ? 2 : 3
+    const min = zuxuanFushiMinPickHint(config)
     return `输入 ${min} 个及以上 0-9 的号码，多选用逗号分隔，如 1,3,5,7`
-  }
-  // 直选/组选和值：与 groupContentPlaceholder 一致，逗号分隔；组选池为 1–26
-  if (isHezhiPoolConfig(config)) {
-    const min = config.numberPoolMin ?? 0
-    const max = config.numberPoolMax ?? 27
-    return `和值：输入 ${min}–${max}，多选用逗号分隔（如 14,15,16）`
   }
   // 和值尾数：对齐直选和值提示/分隔方式，号池 0–9
   if (isWeishuPoolConfig(config)) {
@@ -426,6 +441,13 @@ export function groupDigitInputHint(config: PlayConfig): string {
   const range = `${options[0]}-${options[options.length - 1]}`
   const segLen = Math.max(1, config.segmentLen || 1)
   const commaPool = poolUsesCommaSeparatedInput(config)
+  // 任选直选复式：五位面板但只需填满 k 位（任二至少两位，如 01,,,45）
+  if (isRenxuanZhixuanFushiPlayConfig(config) && segLen >= 5) {
+    const pickN = renxuanZhixuanFushiMinFilledHint(config)
+    const cn = pickN === 2 ? '两' : (['零', '一', '二', '三', '四', '五'][pickN] ?? String(pickN))
+    const example = buildRenxuanZhixuanFushiExample(options, pickN)
+    return `请对应万到个，以“，”分隔，输入对应位置的号码，至少选${cn}位输入数字；如：${example}`
+  }
   const example = buildDigitInputExample(options, segLen, commaPool)
   if (segLen <= 1) {
     if (commaPool) {
@@ -443,6 +465,34 @@ export function groupDigitInputHint(config: PlayConfig): string {
   const first = labels[0] ?? '第1位'
   const last = labels[segLen - 1] ?? `第${segLen}位`
   return `请对应${first}到${last}，以“，”分隔，输入对应位置的号码，每一位置皆要输入号码；如：${example}`
+}
+
+/** 任选直选复式至少填满位数（任二=2 / 任三=3 / 任四=4） */
+function renxuanZhixuanFushiMinFilledHint(config: PlayConfig): number {
+  const s = `${config.catalogSubId ?? ''} ${config.subPlayId ?? ''} ${config.playMethodLabel ?? ''} ${config.guajiGroup ?? ''} ${config.playTypeLabel ?? ''}`
+  if (/ren4|任选四|任四/i.test(s)) return 4
+  if (/ren3|任选三|任三/i.test(s)) return 3
+  if (/ren2|任选二|任二/i.test(s)) return 2
+  const sid = Number.parseInt(String(config.catalogSubId ?? config.subPlayId ?? '').trim(), 10)
+  if (Number.isFinite(sid)) {
+    if (sid >= 141 && sid <= 145) return 4
+    if (sid >= 80 && sid <= 88) return 3
+    if (sid >= 74 && sid <= 79) return 2
+  }
+  return 2
+}
+
+/** 任选直选复示例：首尾填号、中间留空（任二对齐产品文案 01,,,45） */
+function buildRenxuanZhixuanFushiExample(options: string[], pickN: number): string {
+  const dig = (i: number) => options[i % Math.max(1, options.length)] ?? String(i % 10)
+  const pair = (a: number, b: number) => `${dig(a)}${dig(b)}`
+  if (pickN <= 2) return `${pair(0, 1)},,,${pair(4, 5)}`
+  // 任三/任四：五位面板，前 (pickN-1) 位 + 个位有号
+  const segs = ['', '', '', '', '']
+  const front = Math.min(4, Math.max(1, pickN - 1))
+  for (let i = 0; i < front; i++) segs[i] = pair(i, i + 1)
+  segs[4] = pair(4, 5)
+  return segs.join(',')
 }
 
 /** 跨段组合玩法（前中后三 / 前后二 / 前后三 / 前后四）：位置非连续，提示用「N 个顺序号码」。 */

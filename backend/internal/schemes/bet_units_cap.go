@@ -14,8 +14,8 @@ const (
 // 任二直选复式第三方上限 900（勿按 SegmentLen=2 套前二公式 → 90）。
 const ren2ZhixuanFushiMaxBetUnits = 900
 
-// 任二直选和值第三方上限 100。
-const ren2ZhixuanHezhiMaxBetUnits = 100
+// 任二直选和值第三方上限 900（对齐任二直选复式/单式，勿套前二 90）。
+const ren2ZhixuanHezhiMaxBetUnits = 900
 
 // maxBetUnitsForPlay 该玩法单组最大注数；0 表示本端尚未定义上限（不拦截）。
 // 按 BetMode / 区位独立取值，供随机出号重抽、真下单与审计共用。
@@ -25,7 +25,7 @@ func maxBetUnitsForPlay(rule playRule) int {
 	if z < 1 {
 		z = 1
 	}
-	// 任二直选和值：第三方上限 100（勿套任二直选复式/单式 900）
+	// 任二直选和值：第三方上限 900（勿套前二 SegmentLen 公式 → 90）
 	if isRen2ZhixuanHezhiRule(rule) {
 		return ren2ZhixuanHezhiMaxBetUnits
 	}
@@ -51,7 +51,7 @@ func maxBetUnitsForPlay(rule playRule) int {
 		}
 		return base * z
 	case "hezhi", "kuadu":
-		// 任选和值勿落到前二 90（任二直选和值=100；其它选位类=任选上限）
+		// 任选和值勿落到前二 90（任二直选和值=900；其它选位类=任选上限）
 		if isRen2ZhixuanHezhiRule(rule) {
 			return ren2ZhixuanHezhiMaxBetUnits
 		}

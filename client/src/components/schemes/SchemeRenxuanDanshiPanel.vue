@@ -8,6 +8,7 @@ import {
   buildRenxuanPositionContent,
   defaultRenxuanPositions,
   isRenxuanPositionPoolConfig,
+  isZuxuanDanshiConfig,
   parseRenxuanPositionContent,
   type PlayConfig,
 } from '@/utils/betPayload'
@@ -64,6 +65,8 @@ function syncFromModel(raw: string) {
 
 function emitContent() {
   if (syncing || props.disabled) return
+  // 选位不足 k 时不落库，避免「千\n12」被 parse 当成整段号码
+  if (positions.value.length < pickCount.value) return
   const next = buildRenxuanPositionContent(positions.value, picksText.value)
   if (next !== props.modelValue) {
     emit('update:modelValue', next)
@@ -95,6 +98,8 @@ function togglePosition(lab: string) {
   if (props.disabled) return
   const set = new Set(positions.value)
   if (set.has(lab)) {
+    // 至少保留 k 个；再点已选位不得取消，否则会发出非法内容被 parse 整段塞进号码框
+    if (set.size <= pickCount.value) return
     set.delete(lab)
   } else if (set.size >= maxPositions) {
     return
@@ -111,7 +116,10 @@ const placeholder = computed(() => {
     return `从万、千、百、十、个中勾选至少 ${k} 个、最多 ${maxPositions} 个位置，再选择/输入号码；所选位置多于 ${k} 个时按组合计注（C(选位数,${k})×号码注数）。`
   }
   const example = `${'12'.slice(0, digitLen.value).padEnd(digitLen.value, '0')},34`
-  return `从万、千、百、十、个中勾选至少 ${k} 个、最多 ${maxPositions} 个位置，再输入 ${digitLen.value} 位号码组成一注；所选位置多于 ${k} 个时按组合计注（C(选位数,${k})×号码注数）。所选位置与号码顺序均须与开奖一致。示例：${example}`
+  if (isZuxuanDanshiConfig(props.config)) {
+    return `从万、千、百、十、个中勾选至少 ${k} 个、最多 ${maxPositions} 个位置，再输入 ${digitLen.value} 位号码组成一注。所选位置与号码须与开奖一致，顺序不限。示例：${example}`
+  }
+  return `从万、千、百、十、个中勾选至少 ${k} 个、最多 ${maxPositions} 个位置，再输入 ${digitLen.value} 位号码组成一注。所选位置与号码顺序均须与开奖一致。示例：${example}`
 })
 </script>
 

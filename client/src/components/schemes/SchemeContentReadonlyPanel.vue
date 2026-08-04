@@ -7,6 +7,7 @@ import SchemeGroupPickPanel from '@/components/schemes/SchemeGroupPickPanel.vue'
 import SchemeRenxuanDanshiPanel from '@/components/schemes/SchemeRenxuanDanshiPanel.vue'
 import type { PlayConfig } from '@/utils/betPayload'
 import {
+  buildRenxuanPositionContent,
   countBetUnits,
   groupContentPlaceholder,
   isRenxuanNeedsPositionConfig,
@@ -21,6 +22,7 @@ import {
   schemeGroupUsesPickPanel,
 } from '@/utils/pickPanelOptions'
 import {
+  defaultRenxuanHcwOpenPositionIdxs,
   defaultRenxuanTriggerPositionIdxs,
   isLonghuPlayConfigLike,
   isPerPosDxdsPlayConfig,
@@ -98,13 +100,87 @@ const isRenxuanTriggerPlay = computed(() =>
 const isRenxuanPerPosTrigger = computed(() =>
   isRenxuanPerPosTriggerPlay(props.playConfig),
 )
+/** 任选·直选单式冷热：开奖选位 + 投注选位 */
+const isRenxuanHcwDualPosPlay = computed(() =>
+  isRenxuanPerPosTriggerPlay(props.playConfig),
+)
+
+const renxuanRunPosNeed = computed(() => {
+  const k =
+    (props.playConfig as { renPositionCount?: number }).renPositionCount ??
+    props.playConfig.segmentLen ??
+    2
+  return k >= 2 && k <= 5 ? k : 2
+})
+
+const hcwOpenPosIdxs = computed(() => {
+  const need = renxuanRunPosNeed.value
+  const raw = props.hotColdWarm?.openPositionIdxs
+  if (Array.isArray(raw) && raw.length) {
+    const cur = raw
+      .map((x) => Math.trunc(Number(x)))
+      .filter((n) => Number.isInteger(n) && n >= 0 && n < 5)
+      .filter((n, i, arr) => arr.indexOf(n) === i)
+      .sort((a, b) => a - b)
+    if (cur.length === need) return cur
+    if (cur.length > need) return cur.slice(0, need)
+  }
+  return defaultRenxuanHcwOpenPositionIdxs(need)
+})
+
+const hcwBetPosIdxs = computed(() => {
+  const need = renxuanRunPosNeed.value
+  const raw = props.hotColdWarm?.positionIdxs
+  if (Array.isArray(raw) && raw.length) {
+    const cur = raw
+      .map((x) => Math.trunc(Number(x)))
+      .filter((n) => Number.isInteger(n) && n >= 0 && n < 5)
+      .filter((n, i, arr) => arr.indexOf(n) === i)
+      .sort((a, b) => a - b)
+    if (cur.length >= need && cur.length <= 5) return cur
+  }
+  return defaultRenxuanTriggerPositionIdxs(need)
+})
+
+/** 随机出号任选投注选位（与编辑页 renxuanRunPosIdxs / randomDraw.positionIdxs 对齐） */
+const rdBetPosIdxs = computed(() => {
+  const need = renxuanRunPosNeed.value
+  const raw = props.randomDraw?.positionIdxs
+  if (Array.isArray(raw) && raw.length) {
+    const cur = raw
+      .map((x) => Math.trunc(Number(x)))
+      .filter((n) => Number.isInteger(n) && n >= 0 && n < 5)
+      .filter((n, i, arr) => arr.indexOf(n) === i)
+      .sort((a, b) => a - b)
+    if (cur.length >= need && cur.length <= 5) return cur
+  }
+  return defaultRenxuanTriggerPositionIdxs(need)
+})
+
+function wrapRdRenxuanContent(picks: string): string {
+  if (!isRenxuanNeedsPositionConfig(props.playConfig)) return picks
+  const labels = rdBetPosIdxs.value.map((i) => SSC_POSITION_LABELS[i] ?? String(i))
+  return buildRenxuanPositionContent(labels, picks)
+}
+
+const hcwOpenPosHint = computed(() => {
+  const need = renxuanRunPosNeed.value
+  const open = hcwOpenPosIdxs.value.map((i) => SSC_POSITION_LABELS[i] ?? String(i)).join('/') || '所选开奖位'
+  return `开奖选位须选 ${need} 个（当前${open}），下方显示这些位的历史开奖频次。`
+})
+
+const hcwBetPosHint = computed(() => {
+  const need = renxuanRunPosNeed.value
+  const bet = hcwBetPosIdxs.value.map((i) => SSC_POSITION_LABELS[i] ?? String(i)).join('/') || '所选投注位'
+  return `投注选位至少选 ${need} 个（当前${bet}），取开奖选位频次号码组合出票。`
+})
 
 const triggerRenPosNeed = computed(() => {
   const k = props.playConfig.renPositionCount ?? props.playConfig.segmentLen ?? 2
   return k >= 2 && k <= 5 ? k : 2
 })
 
-/** 任选直选单式显示选位芯片；一星等仍按位分列 */
+/** 任选显示开奖/投注双选位；一星等仍按位分列 */
 const showTriggerPositionPicker = computed(() => {
   if (props.runTypeId !== 'adv_trigger_bet') return false
   return supportsAdvTriggerPositionPicker(props.playConfig)
@@ -121,24 +197,45 @@ const triggerPickerLabels = computed(() => {
   return positionLabels.value
 })
 
+/** 任选投注选位区绝对位名（出票前缀） */
+const triggerBetPositionLabels = computed(() => {
+  if (!isRenxuanTriggerPlay.value) return [] as string[]
+  return triggerPositionIdxs.value.map((i) => SSC_POSITION_LABELS[i] ?? `第${i + 1}位`)
+})
+
+/** 启用分列：直选单式固定第1…k位；其它任选用投注绝对位 */
 const triggerColumnLabels = computed(() => {
+  if (isRenxuanPerPosTrigger.value) {
+    return Array.from({ length: triggerRenPosNeed.value }, (_, i) => `第${i + 1}位`)
+  }
   if (isRenxuanTriggerPlay.value) {
-    return triggerPositionIdxs.value.map((i) => SSC_POSITION_LABELS[i] ?? `第${i + 1}位`)
+    return triggerBetPositionLabels.value
   }
   return positionLabels.value
+})
+
+const triggerOpenPositionIdx = computed(() => {
+  const tb = props.triggerBet
+  if (tb?.openPositionIdx != null && Number.isFinite(Number(tb.openPositionIdx))) {
+    const oi = Math.trunc(Number(tb.openPositionIdx))
+    if (oi >= 0 && oi < 5) return oi
+  }
+  const bet = triggerPositionIdxs.value
+  return bet.length ? (bet[0] ?? 0) : 0
+})
+
+const TRIGGER_OPEN_POS_HINT = '开奖选位：上期该位球号查开出映射行。'
+
+const triggerBetPosHint = computed(() => {
+  const need = triggerRenPosNeed.value
+  const bet = triggerBetPositionLabels.value.join('/') || '所选投注位'
+  return `投注选位至少选 ${need} 个（当前${bet}），取该行各位号码组合出票。`
 })
 
 const triggerSegmentOpenTip = computed(() => {
   if (props.runTypeId !== 'adv_trigger_bet') return ''
   const cfg = props.playConfig
-  if (isRenxuanTriggerPlay.value) {
-    const need = triggerRenPosNeed.value
-    const picked = triggerColumnLabels.value.join('/') || '所选位'
-    if (isRenxuanPerPosTrigger.value) {
-      return `先勾选恰好 ${need} 个位置（默认万/千）；启用区按 ${picked} 分行填写正/反投。开出：所选各位球号分别查映射；下注带选位前缀。`
-    }
-    return `先勾选恰好 ${need} 个位置（默认万/千）；正/反投填号池或和值号码。开出：按所选位判定命中；下注带选位前缀。`
-  }
+  if (isRenxuanTriggerPlay.value) return ''
   const labels = (cfg.segmentLabels ?? []).filter(Boolean)
   const posHint =
     labels.length >= 2 ? labels.join('/') : cfg.segmentLen >= 2 ? `前 ${cfg.segmentLen} 位` : ''
@@ -185,8 +282,9 @@ const triggerPositionIdxs = computed(() => {
       const idxs = [...tb.positionIdxs]
         .map((x) => Number(x))
         .filter((i) => Number.isInteger(i) && i >= 0 && i < max)
+        .filter((i, idx, arr) => arr.indexOf(i) === idx)
         .sort((a, b) => a - b)
-      if (idxs.length === need) return idxs
+      if (idxs.length >= need && idxs.length <= 5) return idxs
     }
     return defaultRenxuanTriggerPositionIdxs(need)
   }
@@ -241,7 +339,13 @@ const hcwDigitOverall = computed(() => {
   const bm = String(cfg.betMode ?? '').toLowerCase()
   // 混合组选：与直选复式同按位（千/百/十），勿因文案含「组选」进单档号码池
   if (bm === 'hunhe') return false
-  if (['zu3', 'zu6', 'zu24', 'zu12', 'zu60', 'zu30', 'zu120', 'budingwei', 'baodan'].includes(bm)) return true
+  if (
+    ['zu3', 'zu6', 'zu24', 'zu12', 'zu60', 'zu30', 'zu120', 'budingwei', 'baodan', 'zuxuan_fs', 'zuxuan_ds'].includes(
+      bm,
+    )
+  ) {
+    return true
+  }
   const sub = `${String(cfg.subPlayId ?? '')}`.toLowerCase()
   if (/zuxuan_fs|zu3|zu6|zu24|zu12|zu60|zu30|zu120|budingwei|baodan/.test(sub)) return true
   const label = String(cfg.playMethodLabel ?? '')
@@ -256,9 +360,12 @@ const hcwAttribute = computed(() => {
 
 const hcwSingleGroup = computed(() => hcwDigitOverall.value || hcwAttribute.value)
 
-/** 按位展示档数：以玩法位数与 ranks 为准 */
+/** 按位展示档数：任选直选单式=开奖选位数；其余以玩法位数与 ranks 为准 */
 const hcwPosCount = computed(() => {
   if (hcwSingleGroup.value) return 1
+  if (isRenxuanHcwDualPosPlay.value) {
+    return Math.max(2, hcwOpenPosIdxs.value.length || renxuanRunPosNeed.value)
+  }
   const fromRanks = (props.hotColdWarm?.ranks ?? []).length
   return Math.max(1, positionCount.value, fromRanks)
 })
@@ -402,6 +509,9 @@ const hcwFallbackOptions = computed(() =>
 const hcwGroupLabels = computed(() => {
   if (hcwAttribute.value) return ['选项池']
   if (hcwDigitOverall.value) return ['号码池']
+  if (isRenxuanHcwDualPosPlay.value) {
+    return hcwOpenPosIdxs.value.map((i) => SSC_POSITION_LABELS[i] ?? String(i))
+  }
   return Array.from(
     { length: hcwPosCount.value },
     (_, i) => positionLabels.value[i] ?? POSITION_FALLBACK[i] ?? `第 ${i + 1} 位`,
@@ -464,6 +574,7 @@ async function loadHcwAttrStats(seq: number): Promise<void> {
     return
   }
   // 不传 segmentLen：单档 UI 常为 1，覆盖后跨度/和值计频会错位
+  // 任选和值/尾数：带投注选位，按已选位历史和值计频
   const res = await fetchHotColdWarmTiers({
     lotteryCode: code,
     playTypeId: cfg.playTypeId,
@@ -475,6 +586,9 @@ async function loadHcwAttrStats(seq: number): Promise<void> {
     numberPoolMin: cfg.numberPoolMin,
     numberPoolMax: cfg.numberPoolMax,
     periods: hcwTotalPeriods.value,
+    ...(isRenxuanNeedsPositionConfig(cfg)
+      ? { positionIdxs: [...hcwBetPosIdxs.value] }
+      : {}),
   })
   if (seq !== hcwLoadSeq) return
   if (res.mode !== 'attribute' || !Array.isArray(res.universe) || res.universe.length === 0) {
@@ -512,14 +626,40 @@ async function loadHcwStats(): Promise<void> {
     const res = await fetchGameDraws(code, undefined, hcwTotalPeriods.value)
     if (seq !== hcwLoadSeq) return
     const items = Array.isArray(res?.items) ? res.items : []
-    const segLen = positionCount.value
     const pool = numberPoolTokens.value
+    const openIdxs = isRenxuanHcwDualPosPlay.value ? [...hcwOpenPosIdxs.value] : []
+    // 任选组选复式等整体号池：按投注选位合并计频
+    const betIdxs =
+      hcwDigitOverall.value && isRenxuanNeedsPositionConfig(props.playConfig)
+        ? hcwBetPosIdxs.value.filter((i) => Number.isInteger(i) && i >= 0 && i < 5)
+        : []
+    const segLen = openIdxs.length > 0 ? openIdxs.length : positionCount.value
     const dims = hcwDigitOverall.value ? 1 : segLen
     const freq: Array<Record<string, number>> = Array.from({ length: dims }, () => ({}))
     let counted = 0
     for (const it of items) {
       const balls = Array.isArray(it?.balls) ? it.balls : []
       if (!balls.length) continue
+      if (openIdxs.length > 0) {
+        for (let p = 0; p < openIdxs.length; p++) {
+          const tk = normalizePoolToken(String(balls[openIdxs[p]!] ?? ''))
+          if (tk) {
+            freq[p]![tk] = (freq[p]![tk] ?? 0) + 1
+            counted += 1
+          }
+        }
+        continue
+      }
+      if (betIdxs.length > 0) {
+        for (const ballIdx of betIdxs) {
+          const tk = normalizePoolToken(String(balls[ballIdx] ?? ''))
+          if (tk) {
+            freq[0]![tk] = (freq[0]![tk] ?? 0) + 1
+            counted += 1
+          }
+        }
+        continue
+      }
       const offset = hcwPositionOffset(balls.length)
       for (let p = 0; p < segLen; p++) {
         const tk = normalizePoolToken(String(balls[offset + p] ?? ''))
@@ -637,6 +777,7 @@ watch(
     () => props.runTypeId,
     () => props.lotteryCode,
     () => props.hotColdWarm?.totalPeriods,
+    () => props.hotColdWarm?.positionIdxs?.join(','),
     () => props.playConfig.betMode,
     () => props.playConfig.subPlayId,
     () => props.playConfig.catalogSubId,
@@ -757,23 +898,43 @@ const rdSingleCountMin = computed(() => {
 })
 
 const rdEstimatedUnits = computed(() => {
-  if (rdWholeTicket.value) return Math.min(200, Math.max(1, rdCounts.value[0] ?? 1))
+  if (rdWholeTicket.value) {
+    const n = Math.min(200, Math.max(1, rdCounts.value[0] ?? 1))
+    if (isRenxuanNeedsPositionConfig(props.playConfig)) {
+      const seg = Math.max(1, props.playConfig.segmentLen || renxuanRunPosNeed.value)
+      const sample = Array.from({ length: n }, (_, i) =>
+        String(i).padStart(seg, '0').slice(-seg),
+      ).join(',')
+      return countBetUnits(props.playConfig, wrapRdRenxuanContent(sample))
+    }
+    return n
+  }
   if (rdZuxuanPool.value) {
     const pool = [...numberPoolTokens.value]
     const k = Math.min(
       pool.length,
       Math.max(rdSingleCountMin.value, rdCounts.value[0] ?? rdSingleCountMin.value),
     )
-    return countBetUnits(props.playConfig, pool.slice(0, k).join(','))
+    return countBetUnits(props.playConfig, wrapRdRenxuanContent(pool.slice(0, k).join(',')))
   }
-  if (rdAttribute.value) return Math.max(1, rdCounts.value[0] ?? 1)
+  if (rdAttribute.value) {
+    const k = Math.max(1, rdCounts.value[0] ?? 1)
+    const uni = [...numberPoolTokens.value]
+    const picks = (uni.length ? uni : Array.from({ length: k }, (_, i) => String(i)))
+      .slice(0, k)
+      .join(',')
+    if (isRenxuanNeedsPositionConfig(props.playConfig) && picks) {
+      return countBetUnits(props.playConfig, wrapRdRenxuanContent(picks))
+    }
+    return k
+  }
   const n = positionCount.value
   if (n <= 0) return 0
   const lines = Array.from({ length: n }, (_, i) => {
     const count = Math.min(10, Math.max(1, rdCounts.value[i] ?? 1))
     return Array.from({ length: count }, (_, j) => String(j % 10)).join(',')
   })
-  return countBetUnits(props.playConfig, lines.join('\n'))
+  return countBetUnits(props.playConfig, wrapRdRenxuanContent(lines.join('\n')))
 })
 
 function groupBetUnits(content: string): number {
@@ -882,12 +1043,62 @@ function formatGroupContent(content: string): string {
     <!-- 高级开某投某 -->
     <div v-else-if="runTypeId === 'adv_trigger_bet'" class="scr-content-card scr-panel">
       <p v-if="triggerSegmentOpenTip" class="scr-run-tip">{{ triggerSegmentOpenTip }}</p>
-      <div v-if="showTriggerPositionPicker" class="scr-field">
-        <span class="scr-lbl">选位</span>
+      <div
+        v-if="showTriggerPositionPicker && isRenxuanTriggerPlay"
+        class="scr-field scr-trig-pos-field"
+      >
+        <span class="scr-lbl scr-lbl--with-help">
+          <span>开奖选位</span>
+          <el-popover
+            placement="bottom"
+            :width="280"
+            trigger="click"
+            :content="TRIGGER_OPEN_POS_HINT"
+            popper-class="scr-help-popper"
+          >
+            <template #reference>
+              <button type="button" class="scr-help-btn" aria-label="开奖选位说明" @click.stop>
+                <span class="scr-ms scr-ms--help" aria-hidden="true">help</span>
+              </button>
+            </template>
+          </el-popover>
+        </span>
         <div
           class="scr-trig-pos-chips"
           role="group"
-          aria-label="投注位"
+          aria-label="开奖选位"
+          :style="{ '--scr-trig-pos-n': String(triggerPickerLabels.length || 5) }"
+        >
+          <span
+            v-for="(label, idx) in triggerPickerLabels"
+            :key="`open-${idx}`"
+            class="scr-trig-pos-chip"
+            :class="{ 'is-on': triggerOpenPositionIdx === idx }"
+          >{{ label }}</span>
+        </div>
+      </div>
+      <div v-if="showTriggerPositionPicker" class="scr-field scr-trig-pos-field">
+        <span class="scr-lbl" :class="{ 'scr-lbl--with-help': isRenxuanTriggerPlay }">
+          <span>{{ isRenxuanTriggerPlay ? '投注选位' : '选位' }}</span>
+          <el-popover
+            v-if="isRenxuanTriggerPlay"
+            placement="bottom"
+            :width="280"
+            trigger="click"
+            :content="triggerBetPosHint"
+            popper-class="scr-help-popper"
+          >
+            <template #reference>
+              <button type="button" class="scr-help-btn" aria-label="投注选位说明" @click.stop>
+                <span class="scr-ms scr-ms--help" aria-hidden="true">help</span>
+              </button>
+            </template>
+          </el-popover>
+        </span>
+        <div
+          class="scr-trig-pos-chips"
+          role="group"
+          aria-label="投注选位"
           :style="{ '--scr-trig-pos-n': String(triggerPickerLabels.length || 5) }"
         >
           <span
@@ -970,6 +1181,75 @@ function formatGroupContent(content: string): string {
 
     <!-- 冷热出号（与新建页同布局，只读） -->
     <div v-else-if="runTypeId === 'hot_cold_warm'" class="scr-content-card scr-panel">
+      <div
+        v-if="isRenxuanHcwDualPosPlay"
+        class="scr-field scr-trig-pos-field"
+      >
+        <span class="scr-lbl scr-lbl--with-help">
+          <span>开奖选位</span>
+          <el-popover
+            placement="bottom"
+            :width="280"
+            trigger="click"
+            :content="hcwOpenPosHint"
+            popper-class="scr-help-popper"
+          >
+            <template #reference>
+              <button type="button" class="scr-help-btn" aria-label="开奖选位说明" @click.stop>
+                <span class="scr-ms scr-ms--help" aria-hidden="true">help</span>
+              </button>
+            </template>
+          </el-popover>
+        </span>
+        <div
+          class="scr-trig-pos-chips"
+          role="group"
+          aria-label="开奖选位"
+          style="--scr-trig-pos-n: 5"
+        >
+          <span
+            v-for="(label, idx) in SSC_POSITION_LABELS"
+            :key="`hcw-open-${idx}`"
+            class="scr-trig-pos-chip"
+            :class="{ 'is-on': hcwOpenPosIdxs.includes(idx) }"
+          >{{ label }}</span>
+        </div>
+      </div>
+      <div
+        v-if="isRenxuanHcwDualPosPlay || schemeUsesRenxuanDanshi"
+        class="scr-field scr-trig-pos-field"
+      >
+        <span class="scr-lbl" :class="{ 'scr-lbl--with-help': isRenxuanHcwDualPosPlay }">
+          <span>投注选位</span>
+          <el-popover
+            v-if="isRenxuanHcwDualPosPlay"
+            placement="bottom"
+            :width="280"
+            trigger="click"
+            :content="hcwBetPosHint"
+            popper-class="scr-help-popper"
+          >
+            <template #reference>
+              <button type="button" class="scr-help-btn" aria-label="投注选位说明" @click.stop>
+                <span class="scr-ms scr-ms--help" aria-hidden="true">help</span>
+              </button>
+            </template>
+          </el-popover>
+        </span>
+        <div
+          class="scr-trig-pos-chips"
+          role="group"
+          aria-label="投注选位"
+          style="--scr-trig-pos-n: 5"
+        >
+          <span
+            v-for="(label, idx) in SSC_POSITION_LABELS"
+            :key="`hcw-bet-${idx}`"
+            class="scr-trig-pos-chip"
+            :class="{ 'is-on': hcwBetPosIdxs.includes(idx) }"
+          >{{ label }}</span>
+        </div>
+      </div>
       <div class="scr-hcw-bar scr-hcw-bar--top">
         <div class="scr-hcw-ctrl">
           <span class="scr-hcw-lbl">总期数</span>
@@ -1067,6 +1347,25 @@ function formatGroupContent(content: string): string {
 
     <!-- 随机出号（与新建页同布局，只读） -->
     <div v-else-if="runTypeId === 'random_draw'" class="scr-content-card scr-panel">
+      <div
+        v-if="schemeUsesRenxuanDanshi"
+        class="scr-field scr-trig-pos-field"
+      >
+        <span class="scr-lbl">投注选位</span>
+        <div
+          class="scr-trig-pos-chips"
+          role="group"
+          aria-label="投注选位"
+          style="--scr-trig-pos-n: 5"
+        >
+          <span
+            v-for="(label, idx) in SSC_POSITION_LABELS"
+            :key="`rd-bet-${idx}`"
+            class="scr-trig-pos-chip"
+            :class="{ 'is-on': rdBetPosIdxs.includes(idx) }"
+          >{{ label }}</span>
+        </div>
+      </div>
       <template v-if="rdSingleCountMode">
         <div class="scr-rd-row">
           <span class="scr-rd-pos">{{ rdSingleCountLabel }}</span>
@@ -1255,6 +1554,47 @@ function formatGroupContent(content: string): string {
   line-height: 1.3;
 }
 
+.scr-lbl--with-help {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  width: 100%;
+  min-width: 0;
+}
+
+.scr-help-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 0.95rem;
+  height: 0.95rem;
+  margin: 0 0 0 -0.05rem;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+}
+
+.scr-help-btn:hover,
+.scr-help-btn:focus-visible {
+  color: var(--scr-primary);
+}
+
+.scr-help-btn:focus-visible {
+  outline: 2px solid rgba(0, 80, 203, 0.35);
+  outline-offset: 1px;
+}
+
+.scr-ms--help {
+  font-family: 'Material Symbols Outlined', sans-serif;
+  font-size: 0.95rem;
+  line-height: 1;
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
+}
+
 .scr-radio-wrap {
   display: flex;
   flex-wrap: wrap;
@@ -1276,24 +1616,28 @@ function formatGroupContent(content: string): string {
   align-items: center;
 }
 
+.scr-trig-pos-field + .scr-trig-pos-field {
+  margin-top: -0.35rem;
+}
+
 .scr-trig-pos-chips {
   --scr-trig-pos-n: 5;
   display: grid;
   grid-template-columns: repeat(var(--scr-trig-pos-n), minmax(0, 1fr));
-  gap: 0.35rem;
+  gap: 0.25rem;
   width: 100%;
   min-width: 0;
-  padding: 0.25rem;
-  border-radius: 0.65rem;
+  padding: 0.15rem;
+  border-radius: 0.5rem;
   background: rgba(242, 244, 246, 0.85);
 }
 
 .scr-trig-pos-chip {
   display: grid;
   place-items: center;
-  height: 2rem;
-  border-radius: 0.5rem;
-  font-size: 0.8125rem;
+  height: 1.55rem;
+  border-radius: 0.4rem;
+  font-size: 0.75rem;
   font-weight: 700;
   color: var(--scr-on-variant);
   background: transparent;
@@ -1321,7 +1665,7 @@ function formatGroupContent(content: string): string {
   display: flex;
   flex-direction: column;
   gap: 0.28rem;
-  padding: 0.35rem 0;
+  padding: 0.28rem 0 0.08rem;
 }
 
 .scr-trig-block + .scr-trig-block {
@@ -1829,4 +2173,22 @@ function formatGroupContent(content: string): string {
   word-break: break-all;
 }
 
+</style>
+
+<style>
+/* popover 挂到 body，需非 scoped */
+.scr-help-popper.el-popper {
+  max-width: min(16.5rem, calc(100vw - 2rem));
+  padding: 0.65rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1.55;
+  color: #334155;
+  border: none;
+  border-radius: 0.65rem;
+  box-shadow: 0 12px 36px rgba(25, 28, 30, 0.12);
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
 </style>

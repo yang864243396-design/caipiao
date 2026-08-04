@@ -6,7 +6,7 @@ import (
 )
 
 // def-1-1785720432375：定码任二直选和值，满选 0–18=100 注，勿套前二上限 90。
-func TestDef1785720432375_ren2HezhiMax100(t *testing.T) {
+func TestDef1785720432375_ren2HezhiMax900(t *testing.T) {
 	t.Parallel()
 	raw := `{
 		"subId":"76","typeId":"g011","betMode":"hezhi","runTypeId":"fixed_rotate",
@@ -22,11 +22,14 @@ func TestDef1785720432375_ren2HezhiMax100(t *testing.T) {
 	if !isRen2ZhixuanHezhiRule(cfg.Play) {
 		t.Fatalf("want ren2 zhixuan hezhi, rule=%+v", cfg.Play)
 	}
-	if max := maxBetUnitsForPlay(cfg.Play); max != 100 {
-		t.Fatalf("max=%d want 100; rule=%+v", max, cfg.Play)
+	if max := maxBetUnitsForPlay(cfg.Play); max != 900 {
+		t.Fatalf("max=%d want 900; rule=%+v", max, cfg.Play)
 	}
 	units := countPlayWireBetUnits(cfg.Play, content)
 	if units != 100 {
 		t.Fatalf("units=%d want 100 content=%q", units, content)
+	}
+	if contentExceedsBetUnitsMax(cfg.Play, content) {
+		t.Fatalf("100 注不应超过上限 900")
 	}
 }

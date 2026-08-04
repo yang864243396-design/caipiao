@@ -94,6 +94,7 @@ type hotColdWarmTiersRequest struct {
 	NumberPoolMax   int    `json:"numberPoolMax"`
 	SegmentLen      int    `json:"segmentLen"`
 	Periods         int    `json:"periods"`
+	PositionIdxs    []int  `json:"positionIdxs"`
 }
 
 // HotColdWarmTiers 冷热属性家族分档：按最近 N 期选项命中频次返回热/冷（温档为空）。
@@ -123,6 +124,7 @@ func (h *Handler) HotColdWarmTiers(w http.ResponseWriter, r *http.Request) {
 		NumberPoolMax:   req.NumberPoolMax,
 		SegmentLen:      req.SegmentLen,
 		Periods:         req.Periods,
+		PositionIdxs:    req.PositionIdxs,
 	})
 	if err != nil {
 		h.handleSchemeErr(w, err)
