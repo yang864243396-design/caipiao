@@ -72,8 +72,8 @@ const isRunning = computed(() => schemeStatus.value === 'running')
 const schemeName = ref('')
 const lotteryLabel = ref('')
 const betMultiplierKind = ref('')
-const queryMultiplier = String(route.query.multiplier ?? '')
-const multCoeff = ref(queryMultiplier)
+/** 与云端列表方案卡片一致：实例倍数（由列表 query.multiplier 带入） */
+const queryMultiplier = computed(() => String(route.query.multiplier ?? '').trim())
 const betUnit = ref('')
 const runTypeId = ref<RunTypeId>('fixed_rotate')
 const runTypeLabel = computed(() => RUN_TYPE_LABELS[runTypeId.value])
@@ -255,12 +255,8 @@ const schemeFundsDisplay = computed(() => {
   return String(Number(total.toFixed(3)))
 })
 
-/** 倍数系数：优先配置 multCoeff，否则回退列表实例倍数 */
-const multCoeffDisplay = computed(() => {
-  const cfg = (multCoeff.value || '').trim()
-  if (cfg) return cfg
-  return queryMultiplier || '—'
-})
+/** 倍数系数：显示列表方案卡片中的实例倍数（非 config.multCoeff） */
+const multCoeffDisplay = computed(() => queryMultiplier.value || '—')
 
 async function applyOptionLabels(code: string): Promise<void> {
   if (!code) return
@@ -396,11 +392,6 @@ async function load(): Promise<void> {
     endTime.value = times.end
     stopLoss.value = cfg.stopLoss != null ? asString(cfg.stopLoss) : ''
     takeProfit.value = cfg.takeProfit != null ? asString(cfg.takeProfit) : ''
-    if (cfg.multCoeff != null && asString(cfg.multCoeff) !== '') {
-      multCoeff.value = asString(cfg.multCoeff)
-    } else {
-      multCoeff.value = ''
-    }
     betUnit.value = betUnitFromSchemeConfig(cfg)
     const bm = (cfg.betMultiplier ?? {}) as Record<string, unknown>
     betMultiplierKind.value = asString(bm.kind)
@@ -418,7 +409,7 @@ function runtimeQuery(): Record<string, string> {
   const q: Record<string, string> = {}
   if (turnover.value) q.turnover = turnover.value
   if (sessionPnl.value) q.sessionPnl = sessionPnl.value
-  if (queryMultiplier) q.multiplier = queryMultiplier
+  if (queryMultiplier.value) q.multiplier = queryMultiplier.value
   if (schemeStatus.value) q.status = schemeStatus.value
   return q
 }
