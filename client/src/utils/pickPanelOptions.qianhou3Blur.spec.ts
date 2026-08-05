@@ -11,24 +11,25 @@ import {
 } from './pickPanelOptions'
 
 describe('前后三直选单式失焦校验', () => {
-  const typeNode = {
-    typeId: 'g012',
-    label: '前后三',
-    sortOrder: 12,
-    enabled: true,
-  } as PlayTypeNode
-  const subNode = {
+  const subNode: SubPlayNode = {
     subId: '90',
     label: '直选单式',
     sortOrder: 2,
-    enabled: true,
+    betMode: 'danshi',
+    outboundPlayCode: 'ssc_std:qianhou3:qh3_zhixuan_ds',
     segmentRule: {
       guajiGroup: '前后三',
       guajiTeam: '前后三直选',
       guajiFullName: '前后三直选单式',
       guajiRuleId: '90',
     },
-  } as SubPlayNode
+  }
+  const typeNode: PlayTypeNode = {
+    typeId: 'g012',
+    label: '前后三',
+    sortOrder: 12,
+    subPlays: [subNode],
+  }
 
   const cfg = resolvePlayConfigFromTree('ssc_std', typeNode, subNode)
 

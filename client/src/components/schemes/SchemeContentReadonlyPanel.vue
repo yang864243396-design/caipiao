@@ -874,7 +874,6 @@ watch(
 )
 
 const schemeUsesPickPanel = computed(() => schemeGroupUsesPickPanel(props.playConfig))
-const schemeUsesDigitInput = computed(() => schemeGroupUsesDigitInput(props.playConfig))
 const schemeUsesTextInputPanel = computed(() => schemeGroupUsesTextInputPanel(props.playConfig))
 const schemeUsesRenxuanDanshi = computed(() => isRenxuanNeedsPositionConfig(props.playConfig))
 const groupInputPlaceholder = computed(() => groupContentPlaceholder(props.playConfig))
