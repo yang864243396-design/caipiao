@@ -1456,8 +1456,25 @@ func countRenxuanPoolBetNums(meta RuleMeta, wireContent string) int {
 	}
 	mode := InferBetMode(meta)
 	switch mode {
-	case "danshi", "zuxuan_ds", "hunhe":
+	case "hunhe":
+		// 混合组选：排除豹子、形态去重后再 × C(选位数,k)
+		return countRenxuanZuxuanDanshiWire(wireContent, k)
+	case "danshi":
+		if isZu3DanshiMeta(meta) {
+			return countRenxuanZu3DanshiWire(wireContent, k)
+		}
+		if isZu6DanshiMeta(meta) {
+			return countRenxuanZu6DanshiWire(wireContent, k)
+		}
 		return countRenxuanDanshiWire(wireContent, k)
+	case "zuxuan_ds":
+		if isZu3DanshiMeta(meta) {
+			return countRenxuanZu3DanshiWire(wireContent, k)
+		}
+		if isZu6DanshiMeta(meta) {
+			return countRenxuanZu6DanshiWire(wireContent, k)
+		}
+		return countRenxuanZuxuanDanshiWire(wireContent, k)
 	case "hezhi", "weishu":
 		if n := countRenxuanHezhiWire(meta, wireContent, k); n > 0 {
 			return n
@@ -2330,15 +2347,29 @@ func countBudingweiBetNums(meta RuleMeta, wireContent string) int {
 	return combin(len(picks), need)
 }
 
+// countZu12BetNums 组选12：对每个二重 d，C(|单号\{d}|, 2) 求和。
+// 跨区重叠原样保留；仅组合该二重时排除同码（23,123→2；2,123→1；1,12→0）。
 func countZu12BetNums(wireContent string) int {
 	parts := splitCommaParts(wireContent)
-	n := 0
-	for _, p := range parts {
-		if len(normalizePickDigits(p)) >= 2 {
-			n++
-		}
+	if len(parts) != 2 {
+		return 0
 	}
-	return n
+	a := uniqueDigitRun(normalizePickDigits(parts[0]))
+	b := uniqueDigitRun(normalizePickDigits(parts[1]))
+	if len(a) < 1 || len(b) < 2 {
+		return 0
+	}
+	total := 0
+	for i := 0; i < len(a); i++ {
+		n := 0
+		for j := 0; j < len(b); j++ {
+			if b[j] != a[i] {
+				n++
+			}
+		}
+		total += combin(n, 2)
+	}
+	return total
 }
 
 func countZuxuanFushiBetNums(poolSize, segLen int) int {

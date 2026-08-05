@@ -90,6 +90,20 @@ func TestValidateSchemeBetContent_zu3Zu6MinPick(t *testing.T) {
 	}
 }
 
+func TestValidateSchemeBetContent_ren4Zu24MinPick(t *testing.T) {
+	t.Parallel()
+	raw := []byte(`{
+		"playTemplate":"ssc_std","playTypeId":"g011","subPlayId":"143","catalogSubId":"143",
+		"betMode":"zu24","playMethodLabel":"任四组选24","renPositionCount":4,"segmentLen":1
+	}`)
+	if vs := ValidateSchemeBetContent("custom", raw, "万,千,百,十\n1,2,3", 0); !hasDetail(vs, "组选24至少选择 4 个号码") {
+		t.Fatalf("ren4 zu24 3 digits: %+v", vs)
+	}
+	if vs := ValidateSchemeBetContent("custom", raw, "万,千,百,十\n1,3,5,7", 0); len(vs) > 0 {
+		t.Fatalf("ren4 zu24 4 digits should pass: %+v", vs)
+	}
+}
+
 func TestValidateSchemeBetContent_baodanSingleDan(t *testing.T) {
 	t.Parallel()
 	// 中三组选包胆：单胆合法；勿误报「号码池至少选择 3 个」；多胆拒。

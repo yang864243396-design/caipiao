@@ -66,7 +66,9 @@ type hotColdWarmCfg struct {
 	PickTypes []string `json:"pickTypes"`
 	// PositionIdxs 任选投注选位（万千百十个，≥k ≤5）；出号时加位名前缀。
 	PositionIdxs []int `json:"positionIdxs,omitempty"`
-	// OpenPositionIdxs 任选·直选单式冷热：开奖选位（恰好 k 个），按这些绝对位计频取号。
+	// OpenPositionIdxs 任选·直选单式 / 任选·混合组选冷热：开奖选位恰好 k 个。
+	// 任选·组选12 冷热按投注选位（PositionIdxs）合并计频，不再使用本字段。
+	// 组选12 时 Ranks[0]=二重号名次、Ranks[1]=单号名次，共用投注选位合并频次取号。
 	OpenPositionIdxs []int `json:"openPositionIdxs,omitempty"`
 	// FaultCount 已废弃（兼容旧 JSON）；运行时忽略。
 	FaultCount int `json:"faultCount"`
@@ -492,6 +494,14 @@ func isRenxuanZhixuanDanshiTriggerPlay(rule playRule) bool {
 	return isRenxuanPerPosTriggerPlay(rule)
 }
 
+// isRenxuanHcwOpenPosPlay 任选冷热开奖选位：直选单式，或混合组选（开某投某仍整注，冷热按 openPositionIdxs）。
+func isRenxuanHcwOpenPosPlay(rule playRule) bool {
+	if isRenxuanPerPosTriggerPlay(rule) {
+		return true
+	}
+	return isRenxuanNeedsPositionRule(rule) && isHunhePlayRule(rule)
+}
+
 // defaultRenxuanTriggerPositionIdxs 任选默认投注选位：任二万千；任三万千个；任四万千百十。
 func defaultRenxuanTriggerPositionIdxs(k int) []int {
 	if k <= 2 {
@@ -780,16 +790,29 @@ func resolveRandomDraw(cfg map[string]interface{}, rule playRule) *randomDrawCfg
 	if maxN < 1 {
 		maxN = 1
 	}
+	zu12 := isZu12PlayRule(rule)
 	if counts, ok := raw["counts"].([]interface{}); ok {
-		for _, item := range counts {
+		for i, item := range counts {
 			n := toInt(item, 1)
-			if n < 1 {
-				n = 1
+			minN := 1
+			if zu12 && i == 1 {
+				minN = 2 // 单号至少 2
+			}
+			if n < minN {
+				n = minN
 			}
 			if n > maxN {
 				n = maxN
 			}
 			out.Counts = append(out.Counts, n)
+		}
+	}
+	// 组选12：旧配置仅 [K] 时补默认单号个数 2
+	if zu12 {
+		if len(out.Counts) == 0 {
+			out.Counts = []int{1, 2}
+		} else if len(out.Counts) == 1 {
+			out.Counts = []int{out.Counts[0], 2}
 		}
 	}
 	if arr, ok := raw["positionIdxs"].([]interface{}); ok {

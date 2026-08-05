@@ -282,6 +282,88 @@ func formatPaddedPickDigits(template, groupContent string) string {
 	return strings.Join(parts, ",")
 }
 
+// isZu3Digits 组三形态：两同号 + 一异号（112）；不含豹子/组六。
+func isZu3Digits(s string) bool {
+	if len(s) != 3 {
+		return false
+	}
+	counts := map[byte]int{}
+	for i := 0; i < 3; i++ {
+		counts[s[i]]++
+	}
+	if len(counts) != 2 {
+		return false
+	}
+	for _, c := range counts {
+		if c != 1 && c != 2 {
+			return false
+		}
+	}
+	return true
+}
+
+// formatSSCZu3DanshiDigits 组三单式：仅保留组三形态整注，形态去重；不把单码号池展成组六组合。
+func formatSSCZu3DanshiDigits(groupContent string) string {
+	parts := splitCommaParts(groupContent)
+	if len(parts) == 0 {
+		digits := digitsOnly(groupContent)
+		if isZu3Digits(digits) {
+			return digits
+		}
+		return ""
+	}
+	seen := make(map[string]struct{}, len(parts))
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		d := digitsOnly(p)
+		if !isZu3Digits(d) {
+			continue
+		}
+		key := sortDigitRunes(d)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, d)
+	}
+	return strings.Join(out, ",")
+}
+
+// isZu6Digits 组六形态：三位互不相同（012）；不含豹子/组三。
+func isZu6Digits(s string) bool {
+	if len(s) != 3 {
+		return false
+	}
+	return s[0] != s[1] && s[0] != s[2] && s[1] != s[2]
+}
+
+// formatSSCZu6DanshiDigits 组六单式：仅保留组六形态整注，形态去重。
+func formatSSCZu6DanshiDigits(groupContent string) string {
+	parts := splitCommaParts(groupContent)
+	if len(parts) == 0 {
+		digits := digitsOnly(groupContent)
+		if isZu6Digits(digits) {
+			return digits
+		}
+		return ""
+	}
+	seen := make(map[string]struct{}, len(parts))
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		d := digitsOnly(p)
+		if !isZu6Digits(d) {
+			continue
+		}
+		key := sortDigitRunes(d)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, d)
+	}
+	return strings.Join(out, ",")
+}
+
 // formatSSCZuxuanDanshiDigits 组选单式：N 位一注、逗号分隔；排除对子/豹子，形态去重保序。
 // 若内容是「单码号池」（冷热整体频次 / 误按位出号如 "5,6"、"5\n6"），按 C(n,k) 展成整注。
 func formatSSCZuxuanDanshiDigits(segLen int, groupContent string) string {

@@ -333,6 +333,20 @@ async function load(): Promise<void> {
             if ((s === 'hot' || s === 'cold') && !pickTypes.includes(s)) pickTypes.push(s)
           }
         }
+        const positionIdxs = Array.isArray(h.positionIdxs)
+          ? h.positionIdxs
+              .map((x) => Math.trunc(Number(x)))
+              .filter((n) => Number.isInteger(n) && n >= 0 && n < 5)
+              .filter((n, i, arr) => arr.indexOf(n) === i)
+              .sort((a, b) => a - b)
+          : undefined
+        const openPositionIdxs = Array.isArray(h.openPositionIdxs)
+          ? h.openPositionIdxs
+              .map((x) => Math.trunc(Number(x)))
+              .filter((n) => Number.isInteger(n) && n >= 0 && n < 5)
+              .filter((n, i, arr) => arr.indexOf(n) === i)
+              .sort((a, b) => a - b)
+          : undefined
         hotColdWarm.value = {
           totalPeriods: Math.max(1, Math.trunc(Number(h.totalPeriods) || 20)),
           ranks,
@@ -340,6 +354,8 @@ async function load(): Promise<void> {
           strategy,
           pickTypes: pickTypes.length ? pickTypes : undefined,
           winRotate: strategy === 'after_hit',
+          positionIdxs: positionIdxs?.length ? positionIdxs : undefined,
+          openPositionIdxs: openPositionIdxs?.length ? openPositionIdxs : undefined,
         }
       } else {
         hotColdWarm.value = null
@@ -352,11 +368,19 @@ async function load(): Promise<void> {
         const st = asString(r.strategy)
         const strategy: SchemeRandomDraw['strategy'] =
           st === 'keep' || st === 'after_hit' || st === 'after_miss' ? st : 'every'
+        const positionIdxs = Array.isArray(r.positionIdxs)
+          ? r.positionIdxs
+              .map((x) => Math.trunc(Number(x)))
+              .filter((n) => Number.isInteger(n) && n >= 0 && n < 5)
+              .filter((n, i, arr) => arr.indexOf(n) === i)
+              .sort((a, b) => a - b)
+          : undefined
         randomDraw.value = {
           counts: Array.isArray(r.counts)
             ? r.counts.map((n) => Math.max(1, Math.trunc(Number(n) || 1)))
             : [],
           strategy,
+          positionIdxs: positionIdxs?.length ? positionIdxs : undefined,
         }
       } else {
         randomDraw.value = null

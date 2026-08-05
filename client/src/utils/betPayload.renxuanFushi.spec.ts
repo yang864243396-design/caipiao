@@ -31,6 +31,22 @@ const content = [
   '1,2,3,4,5,6,7,8,9',
 ].join('\n')
 
+const ren3Fs = {
+  ...ren2Fs,
+  subPlayId: '80',
+  catalogSubId: '80',
+  segmentLen: 3,
+  playMethodLabel: '任三直选复式',
+} as PlayConfig
+
+const full5x10 = [
+  '0,1,2,3,4,5,6,7,8,9',
+  '0,1,2,3,4,5,6,7,8,9',
+  '0,1,2,3,4,5,6,7,8,9',
+  '0,1,2,3,4,5,6,7,8,9',
+  '0,1,2,3,4,5,6,7,8,9',
+].join('\n')
+
 describe('任二直选复式注数与上限', () => {
   it('上限为 900（非前二 90）', () => {
     expect(renxuanZhixuanFushiMaxBetUnits(ren2Fs)).toBe(900)
@@ -45,5 +61,19 @@ describe('任二直选复式注数与上限', () => {
     const r = validateGroupContent(ren2Fs, content)
     expect(r.ok).toBe(true)
     if (r.ok) expect(r.betUnits).toBe(883)
+  })
+})
+
+describe('任三直选复式注数与上限', () => {
+  it('上限为 9000（前三 900×C(5,3)，非 900）', () => {
+    expect(renxuanZhixuanFushiMaxBetUnits(ren3Fs)).toBe(9000)
+    expect(zhixuanFushiMaxBetUnits(ren3Fs)).toBe(9000)
+  })
+
+  it('五位满号 C(5,3)×1000=10000，超过 9000', () => {
+    expect(countBetUnits(ren3Fs, full5x10)).toBe(10000)
+    const r = validateGroupContent(ren3Fs, full5x10)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.message).toContain('9000')
   })
 })

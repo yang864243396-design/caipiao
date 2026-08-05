@@ -255,9 +255,10 @@ func pickFixedNumber(cfg parsedSchemeConfig) pickDecision {
 
 func pickRandomDraw(cfg parsedSchemeConfig, inst sqlcdb.SchemeInstance) pickDecision {
 	if cur := strings.TrimSpace(inst.CurrentPick); cur != "" && !isRandomOverMaxSkipMarker(cur) {
-		// 缓存号若已超该玩法注数上限，丢弃并重抽（真下单前兜底）。
+		// 缓存号若已超上限 / 不合规（豹子等），丢弃并重抽。
 		cur = applyRenxuanRunPositionWrap(cfg, cur)
-		if !contentExceedsBetUnitsMax(cfg.Play, cur) {
+		cur = sanitizeRandomDrawContent(cfg.Play, cur)
+		if randomDrawContentAcceptable(cfg.Play, cur) && !contentExceedsBetUnitsMax(cfg.Play, cur) {
 			return pickDecision{Content: cur}
 		}
 	}
@@ -286,11 +287,25 @@ func applyRenxuanRunPositionWrap(cfg parsedSchemeConfig, picks string) string {
 	if k <= 0 {
 		k = 2
 	}
-	// 单式类：冷热/随机若产出按位号池（4\n5），先展开再加选位前缀
+	// 单式类：冷热/随机按位号池（含已带选位前缀的「万千个\n1,2\n3,4\n5,6」）先展成整注
 	if isRenxuanPositionDanshiRule(cfg.Play) {
-		if _, _, ok := parseRenxuanPosPicksContent(picks, k); !ok {
-			if exp, ok := expandZhixuanPositionPoolToDanshi(picks, k); ok && strings.TrimSpace(exp) != "" {
-				picks = exp
+		if posLabel, body, ok := parseRenxuanPosPicksContent(picks, k); ok {
+			if exp, expOK := expandZhixuanPositionPoolToDanshi(body, k); expOK && strings.TrimSpace(exp) != "" {
+				body = exp
+				if isHunhePlayRule(cfg.Play) {
+					body = filterHunheBetTickets(body, k)
+				}
+				if strings.TrimSpace(body) == "" {
+					return ""
+				}
+				return posLabel + "\n" + body
+			}
+			return picks
+		}
+		if exp, ok := expandZhixuanPositionPoolToDanshi(picks, k); ok && strings.TrimSpace(exp) != "" {
+			picks = exp
+			if isHunhePlayRule(cfg.Play) {
+				picks = filterHunheBetTickets(picks, k)
 			}
 		}
 	}
@@ -298,6 +313,7 @@ func applyRenxuanRunPositionWrap(cfg parsedSchemeConfig, picks string) string {
 }
 
 // randomDrawContentUnderMax 生成随机内容；有玩法上限时重抽，并逐步收缩选号规模直至可下单。
+// 同时剔除豹子等不合规票，保证通过 validateGroupContent 且注数>0。
 func randomDrawContentUnderMax(cfg parsedSchemeConfig) string {
 	max := maxBetUnitsForPlay(cfg.Play)
 	const (
@@ -307,12 +323,19 @@ func randomDrawContentUnderMax(cfg parsedSchemeConfig) string {
 	var last string
 	for scale := 0; scale <= maxScale; scale++ {
 		for attempt := 0; attempt < maxAttempts; attempt++ {
-			last = applyRenxuanRunPositionWrap(cfg, generateRandomDrawContent(cfg, scale))
+			last = sanitizeRandomDrawContent(
+				cfg.Play,
+				applyRenxuanRunPositionWrap(cfg, generateRandomDrawContent(cfg, scale)),
+			)
+			if !randomDrawContentAcceptable(cfg.Play, last) {
+				continue
+			}
 			if max <= 0 {
 				return last
 			}
 			n := countPlayWireBetUnits(cfg.Play, last)
-			if n > 0 && n <= max {
+			// 属性玩法等 count 可能恒为 0：validate 已过则放行；能算出注数时须 ≤max
+			if n <= 0 || n <= max {
 				return last
 			}
 		}
@@ -322,18 +345,137 @@ func randomDrawContentUnderMax(cfg parsedSchemeConfig) string {
 	if bm == "kuadu" || bm == "hezhi" {
 		k := randomDrawCountAt(cfg, 0, 0)
 		if fallback := greedyAttributeContentUnderMax(cfg.Play, k, max); fallback != "" {
-			return applyRenxuanRunPositionWrap(cfg, fallback)
+			out := sanitizeRandomDrawContent(cfg.Play, applyRenxuanRunPositionWrap(cfg, fallback))
+			if randomDrawContentAcceptable(cfg.Play, out) {
+				return out
+			}
 		}
 		// 再降到 1 个选项，保证可下单
 		if fallback := greedyAttributeContentUnderMax(cfg.Play, 1, max); fallback != "" {
-			return applyRenxuanRunPositionWrap(cfg, fallback)
+			out := sanitizeRandomDrawContent(cfg.Play, applyRenxuanRunPositionWrap(cfg, fallback))
+			if randomDrawContentAcceptable(cfg.Play, out) {
+				return out
+			}
 		}
 	}
-	// 绝不返回超限内容（避免 worker 回落到 schemeGroups 满选）
+	// 绝不返回超限/不合规内容（避免 worker 回落到 schemeGroups 满选）
+	if !randomDrawContentAcceptable(cfg.Play, last) {
+		return ""
+	}
 	if max > 0 && countPlayWireBetUnits(cfg.Play, last) > max {
 		return ""
 	}
 	return last
+}
+
+// isSoloBaoziRestrictedRule 直选单式/复式/混合：随机不得产出仅豹子或夹带豹子废票。
+func isSoloBaoziRestrictedRule(rule playRule) bool {
+	if isHunhePlayRule(rule) {
+		return true
+	}
+	if isZuxuanDanshiPlayRule(rule) || isZu3DanshiPlayRule(rule) || isZu6DanshiPlayRule(rule) {
+		return false
+	}
+	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	if bm == "fushi" || bm == "zhixuan_fs" || bm == "zuhe" {
+		return true
+	}
+	if isZhixuanDanshiTriggerPlay(rule) {
+		return true
+	}
+	return bm == "danshi" || bm == "zhixuan_ds"
+}
+
+// sanitizeRandomDrawContent 去掉随机结果中不合规票（豹子等）；全废则返回空串以便重抽。
+func sanitizeRandomDrawContent(rule playRule, content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	if isFushiBaoziContent(rule, content) {
+		return ""
+	}
+	normalized := normalizeZhixuanDanshiContent(rule, content)
+	if isHunhePlayRule(rule) {
+		if strings.TrimSpace(normalized) == "" {
+			return ""
+		}
+		return normalized
+	}
+	if !isSoloBaoziRestrictedRule(rule) {
+		return content
+	}
+	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	// 复式/组合：保持按位号池；仅拦截全豹子
+	if bm == "fushi" || bm == "zhixuan_fs" || bm == "zuhe" {
+		if isFushiBaoziContent(rule, content) {
+			return ""
+		}
+		return content
+	}
+	// 直选单式：展开后剔除豹子票
+	seg := rule.SegmentLen
+	if seg <= 0 {
+		seg = playPositionCount(rule)
+	}
+	tokens := parseNumberTokens(normalized, seg)
+	if len(tokens) == 0 {
+		if isZhixuanDanshiAllBaozi(rule, normalized) || isZhixuanDanshiAllBaozi(rule, content) {
+			return ""
+		}
+		return content
+	}
+	out := make([]string, 0, len(tokens))
+	for _, t := range tokens {
+		if isBaoziToken(t) {
+			continue
+		}
+		out = append(out, t)
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	return strings.Join(out, ",")
+}
+
+func isZhixuanDanshiAllBaozi(rule playRule, content string) bool {
+	seg := rule.SegmentLen
+	if seg <= 0 {
+		seg = playPositionCount(rule)
+	}
+	if seg < 2 {
+		return false
+	}
+	normalized := normalizeZhixuanDanshiContent(rule, content)
+	tokens := parseNumberTokens(normalized, seg)
+	if len(tokens) == 0 {
+		return false
+	}
+	for _, t := range tokens {
+		if !isBaoziToken(t) {
+			return false
+		}
+	}
+	return true
+}
+
+// randomDrawContentAcceptable 随机结果须通过玩法校验，且非豹子废票。
+// 注数上限在 UnderMax 环路用 countPlayWireBetUnits 另判（属性玩法常算不出注数）。
+func randomDrawContentAcceptable(rule playRule, content string) bool {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return false
+	}
+	if isFushiBaoziContent(rule, content) {
+		return false
+	}
+	if isSoloBaoziRestrictedRule(rule) && isZhixuanDanshiAllBaozi(rule, content) {
+		return false
+	}
+	if err := validateGroupContent(rule, content); err != nil {
+		return false
+	}
+	return true
 }
 
 // generateRandomDrawContent scale>0 时按档收缩选号个数（每位/每档至少 1）。
@@ -346,6 +488,20 @@ func generateRandomDrawContent(cfg parsedSchemeConfig, scale int) string {
 		n := randomDrawCountAt(cfg, 0, 1)
 		n = shrinkCount(n, scale, 1)
 		return randomWholeTickets(cfg.Play, n)
+	}
+	// 组选12：counts=[二重个数, 单号个数] →「二重,单号」
+	if isZu12PlayRule(cfg.Play) {
+		d := randomDrawCountAt(cfg, 0, 1)
+		s := randomDrawCountAt(cfg, 1, 2)
+		d = shrinkCount(d, scale, 1)
+		s = shrinkCount(s, scale, 2)
+		if d > 10 {
+			d = 10
+		}
+		if s > 10 {
+			s = 10
+		}
+		return randomZu12DualPool(d, s)
 	}
 	// 组选号池
 	if isZuxuanPoolRandom(cfg.Play) {
@@ -376,7 +532,9 @@ func generateRandomDrawContent(cfg parsedSchemeConfig, scale int) string {
 		count := shrinkCount(randomDrawCountAt(cfg, i, 1), scale, 1)
 		lines = append(lines, randomDigits(cfg.Play, count))
 	}
-	return normalizeZhixuanDanshiContent(cfg.Play, strings.Join(lines, "\n"))
+	raw := strings.Join(lines, "\n")
+	// 直选单式展开后可能夹带豹子；sanitize 在 UnderMax 环路统一处理
+	return normalizeZhixuanDanshiContent(cfg.Play, raw)
 }
 
 func randomDrawCountAt(cfg parsedSchemeConfig, idx, defaultN int) int {
@@ -474,6 +632,10 @@ func isAttributeRandom(rule playRule) bool {
 func randomDrawCountMax(rule playRule) int {
 	if isWholeTicketRandom(rule) {
 		return 200
+	}
+	// 组选12：二重/单号选码个数上限均为 10
+	if isZu12PlayRule(rule) {
+		return 10
 	}
 	if isZuxuanPoolRandom(rule) {
 		n := len(playNumberPool(rule))
@@ -772,7 +934,7 @@ func isZuxuanPoolRandom(rule playRule) bool {
 }
 
 // zuxuanPoolMinPick 组选号池随机最少选几个号。
-// 组三最少 2（n*(n-1) 注）；组六最少 3；勿用 SegmentLen 把组三抬成 3。
+// 组三最少 2（n*(n-1) 注）；三星组六最少 3；四星/任四组选6 最少 2（C(n,2)）。
 // 包胆/和值/跨度等非组选号池玩法返回 0（勿因中三 SegmentLen=3 误报「号码池至少选择 3 个」）。
 func zuxuanPoolMinPick(rule playRule) int {
 	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
@@ -784,15 +946,25 @@ func zuxuanPoolMinPick(rule playRule) int {
 	case "zu3":
 		return 2
 	case "zu6":
+		// 四星/任四组选6：C(n,2) 至少 2 码（区别于三星组六 ≥3）
+		if isSixingZu6PlayRule(rule) {
+			return 2
+		}
 		return 3
 	case "zuxuan_fs":
 		// 前二/后二 C(n,2)、三星组选复式（组三+组六）均至少 2 码
 		return 2
-	case "zu24", "zu12", "zu60", "zu30", "zu120":
+	case "zu24":
+		// 四星/任四组选24：号池至少 4 码（任选 SegmentLen 常为 1，勿用位长回落成 3）
+		return 4
+	case "zu12":
+		// 组选12 为双区「二重,单号」（≥1 + ≥2），不走扁选最少 4 码
+		return 0
+	case "zu60", "zu30", "zu120":
 		if n := playPositionCount(rule); n >= 2 {
 			return n
 		}
-		return 3
+		return 5
 	}
 	// catalog 标明包胆/和值等：即使位长=3 也不套用组选号池下限
 	if strings.Contains(sub, "baodan") || strings.Contains(sub, "_bd") ||
@@ -803,7 +975,10 @@ func zuxuanPoolMinPick(rule playRule) int {
 	if strings.Contains(sub, "zu3") && !strings.Contains(sub, "zu30") {
 		return 2
 	}
-	if strings.Contains(sub, "zu6") {
+	if strings.Contains(sub, "zu6") || strings.Contains(rule.CatalogSubID, "组选6") {
+		if isSixingZu6PlayRule(rule) {
+			return 2
+		}
 		return 3
 	}
 	// 未识别为组三/组六/组选N 时不加硬下限（避免包胆/未知玩法被 SegmentLen 抬成 ≥2/≥3）
@@ -833,6 +1008,71 @@ func randomZuxuanPool(rule playRule, k int) string {
 	return strings.Join(out, ",")
 }
 
+// randomZu12DualPool 组选12 随机双区：二重 wantD 个、单号 wantS 个，拼成「二重,单号」。
+// 单号优先取非二重码，不够再重叠；重抽直至注数 ≥1。
+func randomZu12DualPool(wantD, wantS int) string {
+	if wantD < 1 {
+		wantD = 1
+	}
+	if wantD > 10 {
+		wantD = 10
+	}
+	if wantS < 2 {
+		wantS = 2
+	}
+	if wantS > 10 {
+		wantS = 10
+	}
+	pool := []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
+	const fallback = "12,34"
+	for guard := 0; guard < 80; guard++ {
+		perm := rand.Perm(len(pool))
+		doubles := make([]string, 0, wantD)
+		for i := 0; i < wantD && i < len(perm); i++ {
+			doubles = append(doubles, pool[perm[i]])
+		}
+		if len(doubles) < wantD {
+			continue
+		}
+		doubleSet := map[string]bool{}
+		for _, d := range doubles {
+			doubleSet[d] = true
+		}
+		singles := make([]string, 0, wantS)
+		for i := wantD; i < len(perm) && len(singles) < wantS; i++ {
+			singles = append(singles, pool[perm[i]])
+		}
+		// 不够则与二重重叠补足
+		rest := rand.Perm(len(doubles))
+		for _, ri := range rest {
+			if len(singles) >= wantS {
+				break
+			}
+			d := doubles[ri]
+			if doubleSet[d] {
+				found := false
+				for _, s := range singles {
+					if s == d {
+						found = true
+						break
+					}
+				}
+				if !found {
+					singles = append(singles, d)
+				}
+			}
+		}
+		if len(singles) < wantS {
+			continue
+		}
+		content := strings.Join(doubles, "") + "," + strings.Join(singles, "")
+		if countZu12DualZoneBetUnits(content) > 0 {
+			return content
+		}
+	}
+	return fallback
+}
+
 // randomWholeTickets 随机抽 n 个完整组合（每位随机取一个号拼成一注），去重。
 // 组选单式（zuxuan_ds）内位号升序归一，按组合去重；直选单式保留位序。
 // 内容格式与 evaluateZhixuanDanshi 兼容：逗号分隔的定长 token。
@@ -858,6 +1098,8 @@ func randomWholeTickets(rule playRule, n int) string {
 	isHunhe := bm == "hunhe"
 	// 组选单式 / 混合组选单式：位号升序归一（按组合去重）；混合额外排除豹子（全同号）。
 	isZuxuan := isHunhe || bm == "zuxuan_ds" || sub == "zuxuan_ds"
+	// 直选单式同样排除豹子（与方案「禁止单独豹子」及第三方拒单一致）
+	skipBaozi := isHunhe || isZuxuan || isSoloBaoziRestrictedRule(rule)
 	seen := make(map[string]struct{}, n)
 	out := make([]string, 0, n)
 	for attempts := 0; len(out) < n && attempts < n*100+100; attempts++ {
@@ -872,8 +1114,7 @@ func randomWholeTickets(rule playRule, n int) string {
 			key = strings.Join(sorted, "")
 			digits = sorted
 		}
-		if (isHunhe || isZuxuan) && allSameTokens(digits) {
-			// 混合/组选单式排除豹子（二星即对子；第三方计 0 注）
+		if skipBaozi && allSameTokens(digits) {
 			continue
 		}
 		if _, dup := seen[key]; dup {
@@ -1066,6 +1307,10 @@ func buildHotColdPickContent(cfg parsedSchemeConfig, draws [][]string) string {
 		picked := pickHotColdByRanks(full, resolveHotColdRanksForOrder(hc, 0, len(full)))
 		return strings.Join(sortHotColdBetTokens(picked), ",")
 	}
+	// 任选·组选12：投注选位合并计频 → 二重号/单号双区（勿走扁选整体池）
+	if content, ok := buildRenxuanZu12HcwPickContent(cfg, draws, pool); ok {
+		return content
+	}
 	// 号码整体频次（组选/不定位/包胆）；任选组选复式按投注选位合并计频
 	if isHotColdDigitOverall(cfg.Play) {
 		if !hotColdLineEnabled(hc, 0) {
@@ -1092,7 +1337,7 @@ func buildHotColdPickContent(cfg parsedSchemeConfig, draws [][]string) string {
 		}
 		return strings.Join(sortHotColdBetTokens(picked), ",")
 	}
-	// 任选·直选单式：按开奖选位（恰好 k 个绝对位）计频取号，再由 applyRenxuanRunPositionWrap 加投注选位前缀
+	// 任选·直选单式 / 任选·混合组选：按开奖选位（恰好 k 个绝对位）计频取号，再加投注选位前缀
 	if content, ok := buildRenxuanHcwOpenPosPickContent(cfg, draws, pool); ok {
 		return content
 	}
@@ -1120,10 +1365,39 @@ func buildHotColdPickContent(cfg parsedSchemeConfig, draws [][]string) string {
 	return strings.Join(lines, "\n")
 }
 
-// buildRenxuanHcwOpenPosPickContent 任选直选单式冷热：按 openPositionIdxs（k 个绝对位）取各列冷热号。
+// buildRenxuanZu12HcwPickContent 任选组选12 冷热：按投注选位合并计频（与任四组选6 同口径），
+// ranks[0]→二重号、ranks[1]→单号，拼成「二重,单号」。凑不足合法双区时返回空串（ok=true），由 Skip 跳过当期。
+func buildRenxuanZu12HcwPickContent(cfg parsedSchemeConfig, draws [][]string, pool []string) (string, bool) {
+	if !isRenxuanNeedsPositionRule(cfg.Play) || !isZu12PlayRule(cfg.Play) {
+		return "", false
+	}
+	hc := cfg.HotCold
+	if hc == nil {
+		return "", false
+	}
+	hot, cold := hotColdWarmTiersOverallForPositions(draws, cfg.Play, pool, hc.PositionIdxs)
+	full := append(append([]string{}, hot...), cold...)
+	if len(full) == 0 {
+		return "", true
+	}
+	doublesTok := pickHotColdByRanks(full, resolveHotColdRanksForOrder(hc, 0, len(full)))
+	singlesTok := pickHotColdByRanks(full, resolveHotColdRanksForOrder(hc, 1, len(full)))
+	doubles := uniqueDigitRunSchemes(strings.Join(doublesTok, ""))
+	singles := uniqueDigitRunSchemes(strings.Join(singlesTok, ""))
+	if len(doubles) < 1 || len(singles) < 2 {
+		return "", true
+	}
+	content := doubles + "," + singles
+	if countZu12DualZoneBetUnits(content) <= 0 {
+		return "", true
+	}
+	return content, true
+}
+
+// buildRenxuanHcwOpenPosPickContent 任选直选单式/混合组选冷热：按 openPositionIdxs（k 个绝对位）取各列冷热号。
 // 返回按位号池（行用 \n 分隔），供后续 expand + 投注选位前缀。
 func buildRenxuanHcwOpenPosPickContent(cfg parsedSchemeConfig, draws [][]string, pool []string) (string, bool) {
-	if !isRenxuanPerPosTriggerPlay(cfg.Play) {
+	if !isRenxuanHcwOpenPosPlay(cfg.Play) {
 		return "", false
 	}
 	hc := cfg.HotCold

@@ -243,8 +243,24 @@ func formatRenxuanBetContent(meta RuleMeta, mode, groupContent string) string {
 	switch mode {
 	case "hezhi", "weishu":
 		return formatRenxuanPosPipeWire(groupContent, k, formatRenxuanHezhiPicks(groupContent, k))
-	case "danshi", "zuxuan_ds":
+	case "danshi":
+		// ForcedBetMode=danshi 时仍可能是组三/组六单式（按 label/ruleId 识别）
+		if isZu3DanshiMeta(meta) {
+			return formatRenxuanPosPipeWire(groupContent, k, formatRenxuanZu3DanshiPicksOnly(groupContent, k))
+		}
+		if isZu6DanshiMeta(meta) {
+			return formatRenxuanPosPipeWire(groupContent, k, formatRenxuanZu6DanshiPicksOnly(groupContent, k))
+		}
 		return formatRenxuanPosPipeWire(groupContent, k, formatRenxuanDanshiPicksOnly(groupContent, k))
+	case "zuxuan_ds":
+		// 组三单式：仅两同+一异；组六单式：三位互异；普通组选单式：整注或单码号池 C(n,k)
+		if isZu3DanshiMeta(meta) {
+			return formatRenxuanPosPipeWire(groupContent, k, formatRenxuanZu3DanshiPicksOnly(groupContent, k))
+		}
+		if isZu6DanshiMeta(meta) {
+			return formatRenxuanPosPipeWire(groupContent, k, formatRenxuanZu6DanshiPicksOnly(groupContent, k))
+		}
+		return formatRenxuanPosPipeWire(groupContent, k, formatRenxuanZuxuanDanshiPicksOnly(groupContent, k))
 	case "fushi":
 		if strings.Contains(label, "直选") {
 			// 任二/任三/任四直选复式均须五位逗号定位 wire（任二 flat「0,1」会报投注内容格式错误）
@@ -257,8 +273,8 @@ func formatRenxuanBetContent(meta RuleMeta, mode, groupContent string) string {
 	case "zuxuan_fs", "zu3", "zu6":
 		return formatRenxuanPosPipeWire(groupContent, k, formatRenxuanZuxuanPicksOnly(groupContent, k, mode))
 	case "hunhe":
-		// 混合组选是单式形态（112 / 012,345），勿走号池补码（会把 112 补成 112,2）
-		return formatRenxuanPosPipeWire(groupContent, k, formatRenxuanDanshiPicksOnly(groupContent, k))
+		// 混合组选：三位整注、排除豹子、形态去重（顺序不限）；勿走号池补码
+		return formatRenxuanPosPipeWire(groupContent, k, formatRenxuanHunhePicksOnly(groupContent, k))
 	case "zu24":
 		return formatRenxuanPosPipeWire(groupContent, k, formatRenxuanZuxuanPicksOnly(groupContent, k, mode))
 	case "zu12", "zu4":
@@ -415,6 +431,87 @@ func formatRenxuanDanshiPicksOnly(groupContent string, k int) string {
 		return wire
 	}
 	return formatRenxuanDanshiPairs(groupContent, k)
+}
+
+// formatRenxuanZuxuanDanshiPicksOnly 任选组选单式：对齐 formatSSCZuxuanDanshiDigits（号池→组合整注）。
+func formatRenxuanZuxuanDanshiPicksOnly(groupContent string, k int) string {
+	if k <= 0 {
+		k = 2
+	}
+	_, picks := parseRenxuanPositionPick(groupContent, k)
+	src := strings.TrimSpace(picks)
+	if src == "" {
+		src = strings.TrimSpace(groupContent)
+	}
+	if wire := formatSSCZuxuanDanshiDigits(k, src); wire != "" {
+		return wire
+	}
+	// 无合法整注/号池时保持空串，由上层 Skip / 校验拦截（勿回落直选切段误吞号池）
+	return ""
+}
+
+// isZu3DanshiMeta 任三组三单式（rule 84 / 组三单式）。
+func isZu3DanshiMeta(meta RuleMeta) bool {
+	text := strings.ToLower(meta.Label + " " + meta.FullName + " " + meta.SubID + " " + meta.Group)
+	if strings.Contains(text, "zu30") || strings.Contains(text, "组选30") {
+		return false
+	}
+	if strings.TrimSpace(meta.SubID) == "84" || strings.Contains(text, "zu3_ds") || strings.Contains(text, "ren3_zu3_ds") {
+		return true
+	}
+	return strings.Contains(meta.Label+meta.FullName, "组三") && strings.Contains(meta.Label+meta.FullName, "单式")
+}
+
+// isZu6DanshiMeta 任三组六单式（rule 86 / 组六单式）。
+func isZu6DanshiMeta(meta RuleMeta) bool {
+	text := strings.ToLower(meta.Label + " " + meta.FullName + " " + meta.SubID + " " + meta.Group)
+	if strings.Contains(text, "组选6") || strings.Contains(text, "组选60") || strings.Contains(text, "组选120") ||
+		strings.Contains(text, "zu60") || strings.Contains(text, "zu120") {
+		return false
+	}
+	if strings.TrimSpace(meta.SubID) == "86" || strings.Contains(text, "zu6_ds") || strings.Contains(text, "ren3_zu6_ds") {
+		return true
+	}
+	return strings.Contains(meta.Label+meta.FullName, "组六") && strings.Contains(meta.Label+meta.FullName, "单式")
+}
+
+// formatRenxuanZu3DanshiPicksOnly 任选组三单式：仅组三形态整注。
+func formatRenxuanZu3DanshiPicksOnly(groupContent string, k int) string {
+	if k <= 0 {
+		k = 3
+	}
+	_, picks := parseRenxuanPositionPick(groupContent, k)
+	src := strings.TrimSpace(picks)
+	if src == "" {
+		src = strings.TrimSpace(groupContent)
+	}
+	return formatSSCZu3DanshiDigits(src)
+}
+
+// formatRenxuanZu6DanshiPicksOnly 任选组六单式：仅组六形态整注（三位互异）。
+func formatRenxuanZu6DanshiPicksOnly(groupContent string, k int) string {
+	if k <= 0 {
+		k = 3
+	}
+	_, picks := parseRenxuanPositionPick(groupContent, k)
+	src := strings.TrimSpace(picks)
+	if src == "" {
+		src = strings.TrimSpace(groupContent)
+	}
+	return formatSSCZu6DanshiDigits(src)
+}
+
+// formatRenxuanHunhePicksOnly 任选混合组选：排除豹子，按组选形态去重。
+func formatRenxuanHunhePicksOnly(groupContent string, k int) string {
+	if k <= 0 {
+		k = 3
+	}
+	_, picks := parseRenxuanPositionPick(groupContent, k)
+	src := strings.TrimSpace(picks)
+	if src == "" {
+		src = strings.TrimSpace(groupContent)
+	}
+	return formatSSCZuxuanDanshiDigits(k, src)
 }
 
 func formatRenxuanZuxuanPicksOnly(groupContent string, k int, mode string) string {
@@ -614,6 +711,65 @@ func countRenxuanDanshiWire(wireContent string, k int) int {
 	return countRenxuanDanshiPairs(wireContent, k)
 }
 
+// countRenxuanZuxuanDanshiWire 组选单式：整注或单码号池展成组合后再按位乘 C(n,k)。
+func countRenxuanZuxuanDanshiWire(wireContent string, k int) int {
+	return countRenxuanZuxuanDanshiWireFiltered(wireContent, k, "")
+}
+
+// countRenxuanZu3DanshiWire 组三单式：仅组三形态整注 × C(选位数,k)。
+func countRenxuanZu3DanshiWire(wireContent string, k int) int {
+	return countRenxuanZuxuanDanshiWireFiltered(wireContent, k, "zu3")
+}
+
+// countRenxuanZu6DanshiWire 组六单式：仅组六形态整注 × C(选位数,k)。
+func countRenxuanZu6DanshiWire(wireContent string, k int) int {
+	return countRenxuanZuxuanDanshiWireFiltered(wireContent, k, "zu6")
+}
+
+func countRenxuanZuxuanDanshiWireFiltered(wireContent string, k int, filter string) int {
+	if k <= 0 {
+		k = 2
+	}
+	expand := func(src string) string {
+		switch filter {
+		case "zu3":
+			return formatSSCZu3DanshiDigits(src)
+		case "zu6":
+			return formatSSCZu6DanshiDigits(src)
+		default:
+			return formatSSCZuxuanDanshiDigits(k, src)
+		}
+	}
+	if posLabel, picks, ok := splitRenxuanPosPipeWire(wireContent); ok {
+		exp := expand(picks)
+		if exp == "" {
+			return 0
+		}
+		return countRenxuanDanshiWire(posLabel+"|"+exp, k)
+	}
+	idxs, picks := parseRenxuanPositionPick(wireContent, k)
+	src := strings.TrimSpace(picks)
+	if src == "" {
+		src = strings.TrimSpace(wireContent)
+	}
+	exp := expand(src)
+	if exp == "" {
+		return 0
+	}
+	tickets := countRenxuanDanshiPairs(exp, k)
+	if tickets <= 0 {
+		return 0
+	}
+	nPos := len(idxs)
+	if nPos < k {
+		return tickets
+	}
+	if nPos == k {
+		return tickets
+	}
+	return combin(nPos, k) * tickets
+}
+
 func countRenxuanPoolBetNumsFlat(meta RuleMeta, wireContent string, k int) int {
 	n := len(splitPickDigits(wireContent))
 	if n < k {
@@ -626,32 +782,88 @@ func renxuanNeedsSoloTrue(meta RuleMeta, mode string, betsNums int) bool {
 	if !isRenxuanMeta(meta) || meta.PlayTemplate == "syxw_std" {
 		return false
 	}
-	k := renxuanSegmentLen(meta)
 	switch mode {
 	case "zu3":
 		return betsNums == 1 || betsNums == 2
-	case "zu6", "hunhe":
-		return betsNums == 1
-	case "zuxuan_ds":
-		return betsNums == 1 && k >= 3
-	case "danshi":
-		// 与同组直选复式一致：单注即须 solo=true。原先多了 k>=4，
-		// 任二/任三漏成 solo=false（2026-07-28 实测 rule 75/81 拒单）。
-		return betsNums == 1
-	case "fushi":
-		// 任二/任三/任四直选复式：单注须 solo=true（实测 rule74/80，solo=false → 单挑参数错误）
-		return betsNums == 1
-	case "hezhi", "weishu":
-		if betsNums != 1 {
+	case "zu6":
+		// 任四组选6：与四星/前后四组选6 一致，任意注数 solo=false。
+		// 单注 solo=true →「单挑参数错误」（g013/g014 probe；def-1-1785898019073）。
+		// 任三组六仍：仅 1 注 solo=true。
+		if renxuanSegmentLen(meta) >= 4 {
 			return false
 		}
-		if strings.Contains(meta.Label, "组选") {
-			return k >= 3
+		return betsNums == 1
+	case "hunhe":
+		// 任三混合组选：与单区混合组选同阈 ≤hunheSoloMaxBets(3)。
+		// def-1-1785836661744：万千个|183,838 → 2 注 solo=false → 单挑参数错误；
+		// 同内容 solo=true 可过（≤3）；≥4 注须 solo=false。
+		return betsNums > 0 && betsNums <= hunheSoloMaxBets
+	case "zuxuan_ds":
+		// 任三组三单式：与三星组三同阈 zu3SoloMaxBets(6)。
+		// def-1-1785829274113：万千百个|223 → 4 注 solo=false 拒；
+		//   万千百十个|445 → 10 注 solo=true 拒（五位全选 C(5,3)）；
+		//   90 注 solo=false 可过。
+		if isZu3DanshiMeta(meta) {
+			return betsNums > 0 && betsNums <= zu3SoloMaxBets
 		}
-		return true
+		// 任三组六单式：与三星组六同阈 ≤zu6SoloMaxBets(3)
+		if isZu6DanshiMeta(meta) {
+			return betsNums > 0 && betsNums <= zu6SoloMaxBets
+		}
+		// 其它组选单式：有注即须 solo=true，再由 ResolveSolo 按 guajiSoloMaxBets 钳制。
+		return betsNums > 0
+	case "danshi":
+		if isZu3DanshiMeta(meta) {
+			return betsNums > 0 && betsNums <= zu3SoloMaxBets
+		}
+		if isZu6DanshiMeta(meta) {
+			return betsNums > 0 && betsNums <= zu6SoloMaxBets
+		}
+		// 与同组直选复式一致：有注即须 solo=true，再由 ResolveSolo 按 guajiSoloMaxBets 钳制。
+		// 单注实测 rule75/81（2026-07-28）；多选位扩注同理：
+		// def-1-1785825380160 万千百个|345 → C(4,3)=4 注 solo=false → 单挑参数错误，
+		// 同方案 35 注 solo=false 可过（>guajiSoloMaxBets）。
+		return betsNums > 0
+	case "fushi":
+		// 任二/任三/任四直选复式：有注即须 solo=true，再由 ResolveSolo 按 guajiSoloMaxBets 钳制。
+		// 实测 rule80 content=1,1,1,1,2 bets=10 solo=false → 单挑参数错误（def-1-1785814730739）；
+		// 同实例 56 注 solo=false 可过（>guajiSoloMaxBets）。
+		return betsNums > 0
+	case "hezhi", "weishu":
+		// 组选和值（方案常只存数字 subId，须 isZuxuanHezhiMeta）：
+		// - 任二 rule79：任意注数 solo=false（同前二组选和值）
+		// - 任三 rule88 / 任四 rule96：与中三组选和值同阈 ≤hunheSoloMaxBets(3)
+		//   实测 def-1-1785839664877：万千个|1（1注）/ 万千个|3（2注）solo=false → 单挑参数错误，须 solo=true
+		if isZuxuanHezhiMeta(meta) {
+			if renxuanErxingZuxuanHezhi(meta) {
+				return false
+			}
+			return betsNums > 0 && betsNums <= hunheSoloMaxBets
+		}
+		// 直选和值：有注即须 solo=true，再由 ResolveSolo 按 guajiSoloMaxBets 钳制。
+		// def-1-1785827226818：万千百个|1 → 12 注 solo=false → 单挑参数错误；
+		// 同方案满选和值 1000 注 solo=false 可过（>guajiSoloMaxBets）。
+		return betsNums > 0
 	default:
 		return false
 	}
+}
+
+// renxuanErxingZuxuanHezhi 任二组选和值（rule79）：任意注数须 solo=false。
+func renxuanErxingZuxuanHezhi(meta RuleMeta) bool {
+	for _, id := range []string{meta.RuleID, meta.SubID} {
+		if strings.TrimSpace(id) == "79" {
+			return true
+		}
+	}
+	text := meta.Label + meta.FullName + meta.TeamLabel
+	if strings.Contains(text, "任二") && strings.Contains(text, "组选和值") {
+		return true
+	}
+	if strings.Contains(text, "任选二") && strings.Contains(text, "组选和值") {
+		return true
+	}
+	return false
 }
 
 func isSingleTokenTextDxds(meta RuleMeta) bool {

@@ -205,8 +205,10 @@ export interface SchemeHotColdWarm {
    */
   positionIdxs?: number[]
   /**
-   * 任选·直选单式冷热出号：开奖选位（恰好 k 个，0=万…4=个），默认前 k 位（任二万/千）。
+   * 任选·直选单式 / 任选·混合组选冷热：开奖选位恰好 k 个（0=万…4=个）。
    * 下方频次与 ranks 按这些绝对位统计；出票时与 positionIdxs 组合。
+   * 任选·组选12 冷热按 positionIdxs 合并计频，不再使用本字段
+   * （ranks[0]=二重号名次、ranks[1]=单号名次）。
    */
   openPositionIdxs?: number[]
 }

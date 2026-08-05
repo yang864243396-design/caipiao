@@ -5,6 +5,7 @@ import {
   hezhiKuaduMaxBetUnits,
   maxHezhiKuaduRandomCount,
   REN2_ZHIXUAN_HEZHI_MAX_BET_UNITS,
+  renxuanZhixuanFushiMaxBetUnits,
   validateGroupContent,
   type PlayConfig,
 } from './betPayload'
@@ -80,6 +81,35 @@ describe('和值最大注数', () => {
     )
     expect(over.ok).toBe(false)
     if (!over.ok) expect(over.message).toBe('投注注数超过最大投注注数:900')
+  })
+
+  it('任三直选和值上限 9000（勿套前三 900）', () => {
+    const ren3 = {
+      playTemplate: 'ssc_std',
+      playTypeId: 'g011',
+      playTypeLabel: '任选',
+      guajiGroup: '任选',
+      subPlayId: '82',
+      catalogSubId: '82',
+      betMode: 'hezhi',
+      segmentLen: 1,
+      segmentLabels: ['选号'],
+      inputMode: 'pool',
+      playMethodLabel: '任三直选和值',
+      renPositionCount: 3,
+      numberPoolMin: 0,
+      numberPoolMax: 27,
+    } as PlayConfig
+    expect(renxuanZhixuanFushiMaxBetUnits(ren3)).toBe(9000)
+    expect(hezhiKuaduMaxBetUnits(ren3)).toBe(9000)
+    // 三选位满选 0–27：内层注数通常 >900，但总注 ≤9000 时应通过（旧逻辑误报 900）
+    const full = Array.from({ length: 28 }, (_, i) => String(i)).join(',')
+    const r = validateGroupContent(ren3, `万,千,个\n${full}`)
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.betUnits).toBeGreaterThan(900)
+      expect(r.betUnits).toBeLessThanOrEqual(9000)
+    }
   })
 
   it('前二满选 0–18 拦截', () => {

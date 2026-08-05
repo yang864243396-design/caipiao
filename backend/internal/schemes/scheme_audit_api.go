@@ -225,6 +225,8 @@ func validateZuxuanPoolMinPick(rule playRule, hcw *hotColdWarmCfg) []Violation {
 	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
 	sub := strings.ToLower(rule.SubPlayID + " " + rule.CatalogSubID)
 	switch {
+	case isSixingZu6PlayRule(rule):
+		label = "组选6"
 	case bm == "zu6" || (strings.Contains(sub, "zu6") && !strings.Contains(sub, "zu60") && !strings.Contains(sub, "zu120")):
 		label = "组六"
 	case bm == "zu3" || (strings.Contains(sub, "zu3") && !strings.Contains(sub, "zu30")):
@@ -283,6 +285,10 @@ func validateAdvTriggerBetConfig(kind string, config []byte, cfg parsedSchemeCon
 			c := strings.TrimSpace(cell.raw)
 			if c == "" {
 				continue
+			}
+			// 任选开某投某：格子无位名前缀，校验前补投注选位（与前端 / 出票 wrap 一致）
+			if isRenxuanNeedsPositionRule(cfg.Play) && cfg.Trigger != nil {
+				c = wrapRenxuanNeedsPositionContent(cfg.Play, c, cfg.Trigger.PositionIdxs)
 			}
 			for _, v := range ValidateSchemeBetContent(kind, config, c, 0) {
 				out = append(out, Violation{

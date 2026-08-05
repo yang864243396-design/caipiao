@@ -45,3 +45,39 @@ func TestRen2ZhixuanFushiUnitsAndMax(t *testing.T) {
 		t.Fatalf("wire units=%d want 883", u)
 	}
 }
+
+func TestRen3ZhixuanFushiMaxIs9000(t *testing.T) {
+	raw := []byte(`{
+		"runTypeId":"fixed_rotate","playTemplate":"ssc_std",
+		"playTypeId":"g011","subPlayId":"80","betMode":"fushi",
+		"playMethodLabel":"任三直选复式","playTypeLabel":"任选",
+		"guajiGroup":"任选","schemeGroups":["x"]
+	}`)
+	cfg := parseSchemeConfig("custom", raw, 0, 0)
+	if got := maxBetUnitsForPlay(cfg.Play); got != 9000 {
+		t.Fatalf("任三直选复式 max=%d want 9000（前三900×C(5,3)）", got)
+	}
+
+	full := strings.Join([]string{
+		"0,1,2,3,4,5,6,7,8,9",
+		"0,1,2,3,4,5,6,7,8,9",
+		"0,1,2,3,4,5,6,7,8,9",
+		"0,1,2,3,4,5,6,7,8,9",
+		"0,1,2,3,4,5,6,7,8,9",
+	}, "\n")
+	units := countRenxuanZhixuanFushiBetUnits(cfg.Play, full)
+	if units != 10000 {
+		t.Fatalf("units=%d want 10000 (C(5,3)×1000)", units)
+	}
+	vs := ValidateSchemeBetContent("custom", raw, full, 0)
+	found := false
+	for _, v := range vs {
+		if strings.Contains(v.Detail, "9000") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("10000 应报超过 9000, got %+v", vs)
+	}
+}

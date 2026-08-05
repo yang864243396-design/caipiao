@@ -40,20 +40,36 @@ import {
   catalogFieldsFromPlayConfig,
   countBetUnits,
   expandZhixuanPositionPoolToDanshi,
+  expandZhixuanPoolToDanshiWithoutBaozi,
   groupContentPlaceholder,
+  isBaoziDigitTicket,
   isHunhePlayConfig,
   isYixingDingweiPlayConfig,
   isMaxBetUnitsExceededMessage,
+  isSchemeSoloBaoziContent,
+  isSoloBaoziRestrictedPlay,
   isSscDanshiLikeConfig,
+  isZu3DanshiConfig,
+  isZu3DigitTicket,
+  isZu6DanshiConfig,
+  isZu6DigitTicket,
   isZuxuanDanshiConfig,
   isZhixuanFushiPlayConfig,
+  randomZu3DanshiTickets,
+  randomZu6DanshiTickets,
+  ZU3_DANSHI_FORM_COUNT,
+  ZU6_DANSHI_FORM_COUNT,
   isZhixuanPositionPoolContent,
   normalizeHunheGroupContent,
+  normalizeZuxuanDanshiContent,
   WEISHU_MAX_BET_UNITS,
   YIXING_MAX_PICKS_MSG,
   YIXING_MAX_PICKS_PER_POS,
   isRenxuanNeedsPositionConfig,
+  isRenxuanPositionDanshiConfig,
   buildRenxuanPositionContent,
+  normalizeZu3DanshiContent,
+  normalizeZu6DanshiContent,
   SSC_POSITION_LABELS,
   playConfigSummary,
   validateGroupContent,
@@ -66,6 +82,10 @@ import {
   zuxuanPoolMinPickMessage,
   budingweiMinPicks,
   budingweiMinPicksMessage,
+  isZu12PlayConfig,
+  randomZu12DualContent,
+  parseZu12Zones,
+  uniqueDigitsFromRun,
 } from '@/utils/betPayload'
 import { defaultPlaySelection, formatSubPlayLabel } from '@/utils/playConfig'
 import { normalizeSchemeTimePairFromConfig, schemeTimeRangeError } from '@/utils/schemeDateTime'
@@ -73,11 +93,13 @@ import { usePublicLotteries } from '@/composables/usePublicLotteries'
 import { usePlayTreeConfig } from '@/composables/usePlayTreeConfig'
 import { longhuPickOptionsForConfig } from '@/utils/longhuPickOptions'
 import {
+  commitSchemeGroupContentOnBlur,
   digitOptionsForConfig,
   poolMaxPicksForConfig,
   schemeGroupContentToInputBox,
   schemeGroupUsesDigitInput,
   schemeGroupUsesPickPanel,
+  schemeGroupUsesTextInputPanel,
   textPickOptionsForConfig,
 } from '@/utils/pickPanelOptions'
 import {
@@ -91,6 +113,8 @@ import {
   isZhixuanDanshiPerPosPlay,
   isRenxuanNeedsPositionTriggerPlay,
   isRenxuanPerPosTriggerPlay,
+  isRenxuanHcwOpenPosPlay,
+  isRenxuanHcwZu12Play,
   defaultRenxuanTriggerPositionIdxs,
   defaultRenxuanHcwOpenPositionIdxs,
   supportsAdvTriggerPerPosColumns,
@@ -183,6 +207,8 @@ const playModeSummary = computed(() => playConfigSummary(schemePlayConfig.value)
 const schemeUsesPickPanel = computed(() => schemeGroupUsesPickPanel(schemePlayConfig.value))
 /** 数字玩法方案内容改用输入框录入（对齐第三方，不点选） */
 const schemeUsesDigitInput = computed(() => schemeGroupUsesDigitInput(schemePlayConfig.value))
+/** 复式数字框或非任选单式整注框（带失焦校验） */
+const schemeUsesTextInputPanel = computed(() => schemeGroupUsesTextInputPanel(schemePlayConfig.value))
 /** 任选非直选复式：定码/固定/局数等走选位壳（单式票面或号池/和值） */
 const schemeUsesRenxuanDanshi = computed(() => isRenxuanNeedsPositionConfig(schemePlayConfig.value))
 
@@ -613,10 +639,35 @@ function removeJushuRow(idx: number): void {
   jushuList.value.splice(idx, 1)
 }
 
+/** 裸 textarea 失焦：按当前玩法规则规范化（与 SchemeGroupInputPanel 同源） */
+function commitSchemeGroupAt(idx: number): void {
+  const cur = schemeGroups.value[idx] ?? ''
+  const next = commitSchemeGroupContentOnBlur(cur, schemePlayConfig.value)
+  if (next !== cur) schemeGroups.value[idx] = next
+}
+
+function commitJushuFormContent(): void {
+  const cur = jushuForm.value.content ?? ''
+  const next = commitSchemeGroupContentOnBlur(cur, schemePlayConfig.value)
+  if (next !== cur) jushuForm.value.content = next
+}
+
 /** 局数列表展示：按录入框原版（压缩）格式，不把引擎换行渲染成多行 */
 function formatJushuContentDisplay(content: string): string {
   const raw = String(content ?? '').replace(/\r/g, '')
   if (!raw.trim()) return ''
+  // 任选带位名前缀（万,个\n0）：勿走号池压缩，否则「万,个」被剥掉只剩号码
+  if (schemeUsesRenxuanDanshi.value) {
+    if (raw.includes('\n') || raw.includes('|')) {
+      return raw
+        .replace(/\|/g, '\n')
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .join(', ')
+    }
+    return raw.trim()
+  }
   if (schemeUsesDigitInput.value) {
     const box = schemeGroupContentToInputBox(raw, schemePlayConfig.value)
     if (box) return box
@@ -1078,18 +1129,33 @@ function applyTriggerBetFromConfig(raw: unknown): void {
 }
 
 /**
- * 组选单式等：正/反投为整注（前二每注 2 位，如 12,13），不是单位数号池。
- * 与按位分列的直选单式互斥。
+ * 组选/组三/组六/任选混合组选等：正/反投为整注（前二每注 2 位，如 12,13；组三如 112；混合如 012,345），不是单位数号池。
+ * 与按位分列的直选单式/中三混合组选互斥。
  */
 const isTriggerWholeTicketBet = computed(() => {
   if (runTypeId.value !== 'adv_trigger_bet') return false
   if (showTriggerPerPosColumns.value) return false
   if (isTriggerTextPlay.value) return false
-  return isZuxuanDanshiConfig(schemePlayConfig.value)
+  const cfg = schemePlayConfig.value
+  // 任三组三/组六单式 betMode 可能为 danshi，不落 isZuxuanDanshiConfig，须单独认
+  // 任选混合组选：一行正/反投，每注 3 位逗号分隔
+  return (
+    isZuxuanDanshiConfig(cfg) ||
+    isZu3DanshiConfig(cfg) ||
+    isZu6DanshiConfig(cfg) ||
+    isHunhePlayConfig(cfg)
+  )
 })
 
-/** 整注位数：前二组选单式=2，前三=3 */
+/** 整注位数：前二组选单式=2，前三/组三/组六/混合组选=3 */
 const triggerWholeTicketLen = computed(() => {
+  if (
+    isZu3DanshiConfig(schemePlayConfig.value) ||
+    isZu6DanshiConfig(schemePlayConfig.value) ||
+    isHunhePlayConfig(schemePlayConfig.value)
+  ) {
+    return 3
+  }
   const n = Math.trunc(Number(schemePlayConfig.value.segmentLen) || 0)
   return n >= 2 && n <= 5 ? n : 2
 })
@@ -1104,8 +1170,12 @@ const isTriggerSinglePickBet = computed(() => {
 
 /** 随机出号个数上限 = 正/反投号池大小（至少 1） */
 const triggerRandomMax = computed(() => {
-  // 组选单式整注：随机「注数」上限（前二形态约 C(10,2)=45）
+  // 组选/组三/组六/混合整注：随机「注数」上限（前二≈45；组三 90；组六 120；混合 165）
   if (isTriggerWholeTicketBet.value) {
+    if (isZu3DanshiConfig(schemePlayConfig.value)) return ZU3_DANSHI_FORM_COUNT
+    if (isZu6DanshiConfig(schemePlayConfig.value)) return ZU6_DANSHI_FORM_COUNT
+    // 混合组选形态：组六 120 + 组三 45 = 165（不含豹子）
+    if (isHunhePlayConfig(schemePlayConfig.value)) return 165
     const len = triggerWholeTicketLen.value
     if (len === 2) return 45
     return 90
@@ -1149,10 +1219,16 @@ function randomTriggerMultiValue(count: number, poolSrc?: string[]): string {
   return pool.slice(0, n).join(',')
 }
 
-/** 组选单式：随机 count 注定长整注（前二=2 位，排除对子；形态去重） */
+/** 组选/组三/组六单式：随机 count 注定长整注（形态去重） */
 function randomTriggerWholeTickets(count: number): string {
-  const len = triggerWholeTicketLen.value
   const want = Math.min(triggerRandomMax.value, Math.max(1, Math.trunc(count) || 1))
+  if (isZu3DanshiConfig(schemePlayConfig.value)) {
+    return randomZu3DanshiTickets(want, triggerRandomMax.value)
+  }
+  if (isZu6DanshiConfig(schemePlayConfig.value)) {
+    return randomZu6DanshiTickets(want, triggerRandomMax.value)
+  }
+  const len = triggerWholeTicketLen.value
   const out: string[] = []
   const seen = new Set<string>()
   let guard = 0
@@ -1176,10 +1252,15 @@ function randomFillTrigger(): void {
   const posN = triggerPerPosColumnCount()
   // 按位大小单双：正/反投从大/小/单/双抽，勿用开出球号池
   const betPool = triggerPerPosTextBet.value ? [...triggerBetOptions.value] : undefined
+  const zu12 = isZu12PlayConfig(schemePlayConfig.value)
   for (const row of triggerRows.value) {
     if (showTriggerPerPosColumns.value) {
       row.pos = Array.from({ length: posN }, () => randomTriggerMultiValue(count, betPool)).join('\n')
       row.neg = Array.from({ length: posN }, () => randomTriggerMultiValue(count, betPool)).join('\n')
+    } else if (zu12) {
+      // 双区随机：保证至少能凑出 1 注（单号区至少 2 个非二重码）
+      row.pos = randomZu12DualContent(count)
+      row.neg = randomZu12DualContent(count)
     } else if (isTriggerWholeTicketBet.value) {
       row.pos = randomTriggerWholeTickets(count)
       row.neg = randomTriggerWholeTickets(count)
@@ -1189,9 +1270,11 @@ function randomFillTrigger(): void {
     }
   }
   ElMessage.success(
-    isTriggerWholeTicketBet.value
-      ? `已随机填充正投 / 反投（每格 ${count} 注，每注 ${triggerWholeTicketLen.value} 位）`
-      : `已随机填充正投 / 反投号码（每格 ${count} 个号）`,
+    zu12
+      ? `已随机填充正投 / 反投（二重号 + 单号，每格至少 1 注）`
+      : isTriggerWholeTicketBet.value
+        ? `已随机填充正投 / 反投（每格 ${count} 注，每注 ${triggerWholeTicketLen.value} 位）`
+        : `已随机填充正投 / 反投号码（每格 ${count} 个号）`,
   )
 }
 
@@ -1219,12 +1302,18 @@ function sanitizeOneTriggerToken(raw: string): string {
   return normalizePoolToken(digits) || normalizePoolToken(p) || ''
 }
 
-/** 组选单式整注：须恰好 segmentLen 位数字，排除对子/豹子 */
+/** 组选/组三/组六单式整注：须恰好 segmentLen 位数字；组三两同+一异；组六三位互异 */
 function sanitizeOneTriggerWholeTicket(raw: string): string {
   const digits = String(raw ?? '').replace(/\D/g, '')
   const len = triggerWholeTicketLen.value
   if (digits.length !== len) return ''
   if (![...digits].every((ch) => ch >= '0' && ch <= '9')) return ''
+  if (isZu3DanshiConfig(schemePlayConfig.value)) {
+    return isZu3DigitTicket(digits) ? digits : ''
+  }
+  if (isZu6DanshiConfig(schemePlayConfig.value)) {
+    return isZu6DigitTicket(digits) ? digits : ''
+  }
   // 各位不全相同（前二 11 无效；前三 111 无效）
   if ([...digits].every((c) => c === digits[0])) return ''
   return digits
@@ -1244,6 +1333,18 @@ function sanitizeTriggerBetContent(v: string): string {
   // 含换行时按位规范化（勿用逗号切碎把「4\\n5」粘成 45）
   if (raw.includes('\n') || raw.includes('\r')) {
     return sanitizeTriggerPerPosField(raw)
+  }
+  // 组选12：保留「二重,单号」双区，勿把 12 / 3234 当单位数 token 清掉
+  if (isZu12PlayConfig(schemePlayConfig.value)) {
+    const zones = parseZu12Zones(raw)
+    if (zones) return zones.normalized
+    const parts = raw.split(',')
+    if (parts.length === 2) {
+      const a = uniqueDigitsFromRun(parts[0] ?? '').join('')
+      const b = uniqueDigitsFromRun(parts[1] ?? '').join('')
+      if (a || b) return `${a},${b}`
+    }
+    return uniqueDigitsFromRun(raw).join('')
   }
   if (isTriggerWholeTicketBet.value) {
     const parts = raw.split(',').map((s) => s.trim()).filter(Boolean)
@@ -1283,6 +1384,44 @@ function triggerTextTokens(v: string): string[] {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
+}
+
+/** 组选12 开某投某：是否用「位置=二重号/单号」双行录入 */
+const isTriggerZu12DualInput = computed(() => isZu12PlayConfig(schemePlayConfig.value))
+
+/** 位置列：二重号 / 单号（与按位分列同形） */
+const TRIGGER_ZU12_ZONE_LABELS = ['二重号', '单号'] as const
+
+const triggerZu12ZonePlaceholders = ['如 12', '如 3234'] as const
+
+/** 读取双区某一段（0=二重，1=单号）；无逗号时整段视为二重 */
+function getZu12TriggerZone(raw: string, zone: 0 | 1): string {
+  const text = String(raw ?? '').replace(/，/g, ',')
+  if (!text) return ''
+  const idx = text.indexOf(',')
+  if (idx < 0) return zone === 0 ? text : ''
+  return zone === 0 ? text.slice(0, idx) : text.slice(idx + 1)
+}
+
+/** 写入双区某一段，始终拼成「二重,单号」供落库/出站 */
+function setZu12TriggerZone(
+  row: SchemeTriggerRow,
+  field: 'pos' | 'neg',
+  zone: 0 | 1,
+  value: string,
+): void {
+  const digits = String(value ?? '').replace(/\D/g, '')
+  const a = zone === 0 ? digits : getZu12TriggerZone(row[field], 0).replace(/\D/g, '')
+  const b = zone === 1 ? digits : getZu12TriggerZone(row[field], 1).replace(/\D/g, '')
+  if (!a && !b) {
+    row[field] = ''
+    return
+  }
+  row[field] = `${a},${b}`
+}
+
+function commitZu12TriggerField(row: SchemeTriggerRow, field: 'pos' | 'neg'): void {
+  row[field] = sanitizeTriggerBetContent(row[field])
 }
 
 function setTriggerTextField(row: SchemeTriggerRow, field: 'pos' | 'neg', vals: string[]): void {
@@ -1337,8 +1476,15 @@ const triggerInputPlaceholder = computed(() => {
   if (bm === 'hezhi' && isPc28PlayLine()) {
     return '如 1,2,15'
   }
-  // 组选单式：每注 N 位，逗号分隔多注
+  // 组选12：双行录入时用分区 placeholder，见 triggerZu12*Placeholder
+  if (isZu12PlayConfig(schemePlayConfig.value)) {
+    return '二重 / 单号'
+  }
+  // 组选/组三/混合：每注 N 位，逗号分隔多注
   if (isTriggerWholeTicketBet.value) {
+    if (isZu3DanshiConfig(schemePlayConfig.value)) return '如 112,223（两同+一异）'
+    if (isZu6DanshiConfig(schemePlayConfig.value)) return '如 012,345（三位互异）'
+    if (isHunhePlayConfig(schemePlayConfig.value)) return '如 012,345（每注3位，不含豹子）'
     const n = triggerWholeTicketLen.value
     if (n === 2) return '如 12,13（每注2位）'
     if (n === 3) return '如 123,135（每注3位）'
@@ -1362,10 +1508,16 @@ const hcwOpenPosIdxs = ref<number[]>([])
 
 const schemeUsesRenxuanRunPos = computed(() => isRenxuanNeedsPositionConfig(schemePlayConfig.value))
 
-/** 任二/三/四直选单式冷热：双选位区（开奖恰好 k + 投注 ≥k） */
+/** 任选直选单式 / 任选混合组选冷热：双选位区（开奖恰好 k + 投注 ≥k） */
 const isRenxuanHcwDualPosPlay = computed(() =>
-  isRenxuanPerPosTriggerPlay(schemePlayConfig.value),
+  isRenxuanHcwOpenPosPlay(schemePlayConfig.value),
 )
+
+/** 任选·组选12 冷热：投注选位合并计频 + 二重号/单号双池 */
+const isRenxuanHcwZu12 = computed(() => isRenxuanHcwZu12Play(schemePlayConfig.value))
+
+/** 直选单式/混合组选冷热需要独立开奖选位；组选12 按投注选位计频 */
+const showHcwOpenPosition = computed(() => isRenxuanHcwDualPosPlay.value)
 
 const renxuanRunPosNeed = computed(() => {
   const k =
@@ -1390,8 +1542,16 @@ function ensureRenxuanRunPositions(): void {
     .filter((i) => Number.isInteger(i) && i >= 0 && i < 5)
     .filter((i, idx, arr) => arr.indexOf(i) === idx)
     .sort((a, b) => a - b)
-  const next =
-    cur.length >= need && cur.length <= 5 ? cur : defaultRenxuanTriggerPositionIdxs(need)
+  // 已有合法选位（2…5）一律保留：玩法元数据异步回填时 need 可能瞬时变成 5，
+  // 若此时用「cur.length >= need」会把万千误扩成万千百十个。
+  let next: number[]
+  if (cur.length === 0) {
+    next = defaultRenxuanTriggerPositionIdxs(need)
+  } else if (cur.length > 5) {
+    next = cur.slice(0, 5)
+  } else {
+    next = cur
+  }
   if (!sameIntIdxs(renxuanRunPosIdxs.value, next)) {
     renxuanRunPosIdxs.value = next
   }
@@ -1406,10 +1566,8 @@ function sanitizeHcwOpenPosIdxs(raw: number[]): number[] {
 }
 
 /**
- * 规范化开奖选位：
- * - 空数组 → 填默认前 k 位（仅初始/换玩法）
- * - 多于 k → 截断
- * - 1…k-1 个 → 原样保留（用户改选中，禁止补万位）
+ * 规范化开奖选位（仅直选单式冷热）：
+ * 空→默认前 k；多于 k→截断；1…k-1 原样保留。
  */
 function ensureHcwOpenPositions(): void {
   if (!isRenxuanHcwDualPosPlay.value) return
@@ -1432,7 +1590,7 @@ function blurTrigPosChip(ev?: Event): void {
 }
 
 function toggleHcwOpenPosition(idx: number, ev?: Event): void {
-  if (!isRenxuanHcwDualPosPlay.value) return
+  if (!showHcwOpenPosition.value) return
   if (!Number.isInteger(idx) || idx < 0 || idx >= 5) return
   const need = renxuanRunPosNeed.value
   const cur = sanitizeHcwOpenPosIdxs(hcwOpenPosIdxs.value)
@@ -1472,10 +1630,10 @@ function toggleHcwBetPosition(idx: number, ev?: Event): void {
   }
   renxuanRunPosIdxs.value = cur.sort((a, b) => a - b)
   blurTrigPosChip(ev)
-  // 任选和值/尾数/组选复式：选项池频次随投注选位重算
+  // 任选和值/尾数/组选复式/组选12：频次随投注选位重算
   if (
     runTypeId.value === 'hot_cold_warm' &&
-    (hcwAttribute.value || hcwDigitOverall.value)
+    (hcwAttribute.value || hcwDigitOverall.value || isRenxuanHcwZu12.value)
   ) {
     scheduleHcwStats(true)
   }
@@ -1490,9 +1648,33 @@ function renxuanRunPosLabels(): string[] {
   return renxuanRunPosLabelsComputed.value
 }
 
+/**
+ * 任选冷热/随机：按位号池（如 1,2\\n3,4\\n5,6）先展成整注再加选位前缀，
+ * 与后端 applyRenxuanRunPositionWrap 一致；混合/组三/组六再按形态过滤。
+ */
 function wrapRenxuanRunContent(picks: string): string {
   if (!schemeUsesRenxuanRunPos.value) return picks
-  return buildRenxuanPositionContent(renxuanRunPosLabels(), picks)
+  let body = String(picks ?? '').replace(/\r/g, '')
+  const cfg = schemePlayConfig.value
+  if (isRenxuanPositionDanshiConfig(cfg)) {
+    const digitLen =
+      cfg.segmentLen > 0 ? cfg.segmentLen : renxuanRunPosNeed.value
+    if (digitLen > 1 && isZhixuanPositionPoolContent(body, digitLen)) {
+      const expanded = expandZhixuanPositionPoolToDanshi(body, digitLen)
+      if (expanded) {
+        if (isHunhePlayConfig(cfg)) {
+          body = normalizeHunheGroupContent(expanded, digitLen) || expanded
+        } else if (isZu3DanshiConfig(cfg)) {
+          body = normalizeZu3DanshiContent(expanded, digitLen) || expanded
+        } else if (isZu6DanshiConfig(cfg)) {
+          body = normalizeZu6DanshiContent(expanded, digitLen) || expanded
+        } else {
+          body = expanded
+        }
+      }
+    }
+  }
+  return buildRenxuanPositionContent(renxuanRunPosLabels(), body)
 }
 
 const hcwOpenPosLabels = computed(() =>
@@ -1510,6 +1692,9 @@ const hcwOpenPosHint = computed(() => {
 const hcwBetPosHint = computed(() => {
   const need = renxuanRunPosNeed.value
   const bet = renxuanRunPosLabelsComputed.value.join('/') || '所选投注位'
+  if (isRenxuanHcwZu12.value) {
+    return `投注选位至少选 ${need} 个（当前${bet}），下方二重号/单号池按所选位合并历史开奖频次更新；二重≥1、单号≥2，凑不足 1 注则跳过当期。`
+  }
   return `投注选位至少选 ${need} 个（当前${bet}），取开奖选位频次号码组合出票。`
 })
 
@@ -1538,12 +1723,16 @@ interface HcwTier {
 const hcwTiers = ref<HcwTier[]>([])
 /** 每位/单档：选项 → 最近统计命中次数 */
 const hcwFreq = ref<Array<Record<string, number>>>([])
+/** 统计成功代数：开奖选位切换后强制双池格子重挂，避免第二池 DOM 残留旧频次 */
+const hcwStatsGen = ref(0)
 
 /**
  * 号码整体频次模式（组三/组六/组选复式/不定位/包胆）：单档选号池（跨位合并频次），
  * 区别于按位型（每位一档）。混合组选与直选复式同按位（千/百/十）。
  */
 const hcwDigitOverall = computed(() => {
+  // 任选组选12：二重/单号双池，勿走单档「号码池」
+  if (isRenxuanHcwZu12.value) return false
   const cfg = schemePlayConfig.value as { betMode?: string; subPlayId?: string; playMethodLabel?: string }
   const bm = String(cfg.betMode ?? '').toLowerCase()
   if (bm === 'hunhe') return false
@@ -1642,8 +1831,9 @@ function ensureHcwPools(): void {
   clampHcwRanksToCap()
 }
 
-/** 冷热分档行数：任选直选单式=当前开奖选位数；属性/整体=1；其它=玩法位数 */
+/** 冷热分档行数：组选12=二重+单号；直选单式=开奖选位数；属性/整体=1；其它=玩法位数 */
 function hcwDimCount(): number {
+  if (isRenxuanHcwZu12.value) return 2
   if (hcwSingleGroup.value) return 1
   if (isRenxuanHcwDualPosPlay.value) {
     const n = hcwOpenPosIdxs.value.filter((i) => Number.isInteger(i) && i >= 0 && i < 5).length
@@ -1652,13 +1842,22 @@ function hcwDimCount(): number {
   return positionCount.value
 }
 
-/** 冷热分档分组：属性=单档「选项池」；号码整体频次=单档「号码池」；任选直选单式=开奖选位名；按位=每位一档 */
+/** 冷热分档分组：属性=选项池；整体=号码池；组选12=二重/单号；直选单式=开奖选位名；按位=每位一档 */
 const hcwGroupLabels = computed(() => {
   if (hcwAttribute.value) return ['选项池']
+  if (isRenxuanHcwZu12.value) return ['二重号', '单号']
   if (hcwDigitOverall.value) return ['号码池']
   if (isRenxuanHcwDualPosPlay.value) return hcwOpenPosLabels.value
   return positionLabels.value
 })
+
+/** 组选12 冷热：拼双区「二重,单号」供计注/占位 */
+function hcwZu12DualPicks(): string {
+  const doubles = uniqueDigitsFromRun((hcwPools.value[0] ?? []).join('')).join('')
+  const singles = uniqueDigitsFromRun((hcwPools.value[1] ?? []).join('')).join('')
+  if (!doubles && !singles) return ''
+  return `${doubles},${singles}`
+}
 
 /** 无统计时的兜底可选项：属性优先本地宇宙（豹子/对子/顺子），再回退服务端回填 */
 const hcwFallbackOptions = computed(() => {
@@ -1761,13 +1960,18 @@ let lastHcwStatsKey = ''
 
 function hcwStatsKey(): string {
   const cfg = schemePlayConfig.value
-  const family = hcwAttribute.value ? 'attr' : hcwDigitOverall.value ? 'overall' : 'pos'
-  const openKey = isRenxuanHcwDualPosPlay.value
-    ? hcwOpenPosIdxs.value.join(',')
-    : ''
-  // 任选和值/尾数/组选复式：频次随投注选位变化
+  const family = hcwAttribute.value
+    ? 'attr'
+    : isRenxuanHcwZu12.value
+      ? 'zu12'
+      : hcwDigitOverall.value
+        ? 'overall'
+        : 'pos'
+  const openKey = showHcwOpenPosition.value ? hcwOpenPosIdxs.value.join(',') : ''
+  // 任选和值/尾数/组选复式/组选12：频次随投注选位变化
   const betPosKey =
-    schemeUsesRenxuanRunPos.value && (hcwAttribute.value || hcwDigitOverall.value)
+    schemeUsesRenxuanRunPos.value &&
+    (hcwAttribute.value || hcwDigitOverall.value || isRenxuanHcwZu12.value)
       ? renxuanRunPosIdxs.value.join(',')
       : ''
   return [
@@ -1859,6 +2063,7 @@ async function loadHcwAttrStats(seq: number): Promise<void> {
   ]
   hcwFreq.value = [counts]
   hcwStatsReady.value = true
+  hcwStatsGen.value += 1
   refreshHcwEstimatePools()
 }
 
@@ -1874,6 +2079,46 @@ async function loadHcwStats(): Promise<void> {
     if (seq !== hcwLoadSeq) return
     const items = Array.isArray(res?.items) ? res.items : []
     const pool = numberPoolTokens.value
+    // 任选组选12：按投注选位合并计频，二重/单号两池共用同一排序
+    if (isRenxuanHcwZu12.value) {
+      const betIdxs = renxuanRunPosIdxs.value.filter((i) => Number.isInteger(i) && i >= 0 && i < 5)
+      const counts: Record<string, number> = {}
+      let counted = 0
+      for (const it of items) {
+        const balls = Array.isArray(it?.balls) ? it.balls : []
+        if (!balls.length) continue
+        for (const ballIdx of betIdxs) {
+          const tk = normalizePoolToken(String(balls[ballIdx] ?? ''))
+          if (tk) {
+            counts[tk] = (counts[tk] ?? 0) + 1
+            counted += 1
+          }
+        }
+      }
+      if (!counted) {
+        if (hcwStatsReady.value && hcwFreq.value.length) return
+        hcwStatsReady.value = false
+        hcwFreq.value = []
+        return
+      }
+      const half = Math.ceil(pool.length / 2)
+      const sorted = [...pool].sort((a, b) => {
+        const diff = (counts[b] ?? 0) - (counts[a] ?? 0)
+        return diff !== 0 ? diff : Number(a) - Number(b)
+      })
+      // 二重/单号两池必须各持独立分档与频次对象，避免共享引用导致只刷新第一池
+      const mkTier = (): HcwTier => ({
+        hot: sorted.slice(0, half),
+        warm: [],
+        cold: sorted.slice(half),
+      })
+      hcwTiers.value = [mkTier(), mkTier()]
+      hcwFreq.value = [{ ...counts }, { ...counts }]
+      hcwStatsReady.value = true
+      hcwStatsGen.value += 1
+      refreshHcwEstimatePools()
+      return
+    }
     // 任选直选单式：按当前开奖选位绝对下标计频（勿 ensure 补默认万位）
     const openIdxs = isRenxuanHcwDualPosPlay.value
       ? hcwOpenPosIdxs.value.filter((i) => Number.isInteger(i) && i >= 0 && i < 5)
@@ -1942,6 +2187,7 @@ async function loadHcwStats(): Promise<void> {
     })
     hcwFreq.value = freq.map((counts) => ({ ...counts }))
     hcwStatsReady.value = true
+    hcwStatsGen.value += 1
     refreshHcwEstimatePools()
   } catch {
     if (seq !== hcwLoadSeq) return
@@ -2013,22 +2259,22 @@ function refreshHcwEstimatePools(): void {
   synthesizeHcwRanksFromLegacy()
   clampHcwRanksToCap()
   const n = Math.max(hcwGroupLabels.value.length, hcwRanks.value.length, 1)
+  // 整表替换：下标赋值时第二池预览偶发不触发视图更新（组选12 二重/单号）
+  const nextPools: string[][] = Array.from({ length: n }, () => [])
   for (let pi = 0; pi < n; pi++) {
     const ranks = hcwRanks.value[pi] ?? []
-    if (!ranks.length) {
-      hcwPools.value[pi] = []
-      continue
-    }
+    if (!ranks.length) continue
     const ordered = hcwOrderedTokens(pi)
     const picked: string[] = []
     for (const r of ranks) {
       if (r >= 0 && r < ordered.length) picked.push(ordered[r]!)
     }
     const cap = hcwPosPickCap()
-    hcwPools.value[pi] = sortHcwTokens(
+    nextPools[pi] = sortHcwTokens(
       cap != null && picked.length > cap ? picked.slice(0, cap) : picked,
     )
   }
+  hcwPools.value = nextPools
 }
 
 /** token 相等：数字按数值比较（兼容 '07'/'7'），属性文字按字符串比较 */
@@ -2207,9 +2453,16 @@ function hcwDisplayCells(pos: number): Array<{ token: string; count: number | nu
   }))
 }
 
-const hcwCellsByPos = computed(() =>
-  hcwGroupLabels.value.map((_, pi) => hcwDisplayCells(pi)),
-)
+const hcwCellsByPos = computed(() => {
+  // 显式依赖：选位/频次/分档，保证二重与单号两池同时重算
+  void hcwStatsGen.value
+  void hcwOpenPosIdxs.value
+  void renxuanRunPosIdxs.value
+  void hcwFreq.value
+  void hcwTiers.value
+  void hcwStatsReady.value
+  return hcwGroupLabels.value.map((_, pi) => hcwDisplayCells(pi))
+})
 
 /** 预估注数：与随机出号一致，走 countBetUnits（位积/组合×段长/任选 C(n,k)） */
 const hcwEstimatedUnits = computed(() => {
@@ -2218,6 +2471,8 @@ const hcwEstimatedUnits = computed(() => {
   let picks = ''
   if (hcwAttribute.value) {
     picks = (hcwPools.value[0] ?? []).filter((t) => t.trim() !== '').join(',')
+  } else if (isRenxuanHcwZu12.value) {
+    picks = hcwZu12DualPicks()
   } else if (hcwDigitOverall.value) {
     picks = (hcwPools.value[0] ?? []).join(',')
   } else {
@@ -2243,34 +2498,47 @@ const RD_STRATEGY_OPTIONS = [
   { label: '挂后换', value: 'after_miss' },
 ] as const
 
-function ensureRdCounts(): void {
-  const n = positionCount.value
-  while (rdCounts.value.length < n) rdCounts.value.push(1)
-  if (rdCounts.value.length === 0) rdCounts.value.push(1)
-}
-
-/** 组选单式：整注随机（仅需注数 rdCounts[0]）。直选单式/混合组选：千/百/十按位产号。 */
+/** 组选单式/任选混合组选：整注随机（仅需注数 rdCounts[0]）。直选单式/中三混合组选：千/百/十按位产号。 */
 const rdWholeTicket = computed(() => {
   // 直选单式（段长≥2）：千/百/十…各位配数量，与直选复式同布局
   if (isZhixuanDanshiPerPosPlay(schemePlayConfig.value)) return false
   const cfg = schemePlayConfig.value as { betMode?: string; subPlayId?: string; playMethodLabel?: string }
   const bm = String(cfg.betMode ?? '').toLowerCase()
   const sub = String(cfg.subPlayId ?? '').toLowerCase()
-  // 混合组选：与直选复式同按位（千/百/十），勿走整注「注数」
-  if (bm === 'hunhe') return false
+  const label = String(cfg.playMethodLabel ?? '')
+  // 中三/前三混合组选按位；任选混合组选整注（如 012,345）
+  if (bm === 'hunhe' || label.includes('混合')) {
+    return isRenxuanNeedsPositionConfig(schemePlayConfig.value)
+  }
   if (['danshi', 'zhixuan_ds', 'zuxuan_ds'].includes(bm)) return true
   if (['zhixuan_ds', 'zuxuan_ds'].includes(sub)) return true
-  const label = String(cfg.playMethodLabel ?? '')
-  if (label.includes('混合')) return false
   return label.includes('单式')
 })
 
 /** 单式整注随机的本地预览注单 */
 const rdWholePreview = ref<string[]>([])
 
+/** 组选12 随机：二重号/单号两个选码个数（勿走扁选「选码个数」） */
+const isRdZu12Dual = computed(() => isZu12PlayConfig(schemePlayConfig.value) && !rdWholeTicket.value)
+
+function ensureRdCounts(): void {
+  // 组选12：counts=[二重个数, 单号个数]
+  if (isRdZu12Dual.value) {
+    const d = Math.min(10, Math.max(1, Math.trunc(Number(rdCounts.value[0]) || 1)))
+    const s = Math.min(10, Math.max(2, Math.trunc(Number(rdCounts.value[1]) || 2)))
+    if (rdCounts.value.length !== 2 || rdCounts.value[0] !== d || rdCounts.value[1] !== s) {
+      rdCounts.value = [d, s]
+    }
+    return
+  }
+  const n = positionCount.value
+  while (rdCounts.value.length < n) rdCounts.value.push(1)
+  if (rdCounts.value.length === 0) rdCounts.value.push(1)
+}
+
 /** 组三/组六/组选N/组选复式：号码池随机（选 K 个号），非按位、非整注。包胆/和值属属性单选，勿因文案含「组选」误入。 */
 const rdZuxuanPool = computed(() => {
-  if (rdWholeTicket.value) return false
+  if (rdWholeTicket.value || isRdZu12Dual.value) return false
   const cfg = schemePlayConfig.value as { betMode?: string; subPlayId?: string; catalogSubId?: string; playMethodLabel?: string }
   const bm = String(cfg.betMode ?? '').toLowerCase()
   const label = String(cfg.playMethodLabel ?? '')
@@ -2288,7 +2556,7 @@ const rdZuxuanPool = computed(() => {
 
 /** 属性/聚合家族（大小单双/龙虎/特殊号/庄闲/和值/跨度/不定位/包胆）：从选项宇宙随机抽 K 个 */
 const rdAttribute = computed(() => {
-  if (rdWholeTicket.value || rdZuxuanPool.value) return false
+  if (rdWholeTicket.value || rdZuxuanPool.value || isRdZu12Dual.value) return false
   // 前二/后二/前三/后三大小单双：按位（十/个…），不走单档「选项个数」
   if (isPerPosDxdsPlayConfig(schemePlayConfig.value)) return false
   const bm = String(schemePlayConfig.value.betMode ?? '').toLowerCase()
@@ -2296,7 +2564,9 @@ const rdAttribute = computed(() => {
 })
 
 /** 随机出号是否用"单一数量输入"（单式注数 / 组选选码个数 / 属性选项个数） */
-const rdSingleCountMode = computed(() => rdWholeTicket.value || rdZuxuanPool.value || rdAttribute.value)
+const rdSingleCountMode = computed(
+  () => !isRdZu12Dual.value && (rdWholeTicket.value || rdZuxuanPool.value || rdAttribute.value),
+)
 const rdSingleCountLabel = computed(() => {
   if (rdWholeTicket.value) return '注数'
   if (rdZuxuanPool.value) return '选码个数'
@@ -2347,8 +2617,8 @@ const rdSingleCountMax = computed(() => {
 const rdSingleCountMin = computed(() => {
   if (rdWholeTicket.value) return 1
   if (rdZuxuanPool.value) {
-    // 组三≥2、组六≥3（与冷热/定码保存校验一致）；其它组选号池仍按位长兜底
-    return zuxuanPoolMinPick(schemePlayConfig.value) ?? Math.max(2, positionCount.value)
+    // 组三≥2、组六≥3；其它组选号池默认 ≥2（勿用 segmentLen/positionCount，任选回退五位会把下限抬成 5）
+    return zuxuanPoolMinPick(schemePlayConfig.value) ?? 2
   }
   // 二码不定位≥2、三码≥3、五星二/三码≥4（第三方「投注数字不能低于两个」）
   if (rdAttribute.value) {
@@ -2358,14 +2628,23 @@ const rdSingleCountMin = computed(() => {
   return 1
 })
 
-/** 玩法切换后把选项个数钳到当前宇宙上限（避免特殊号仍显示 >3） */
+/** 玩法切换后把选项个数钳到当前宇宙上下限（避免特殊号仍显示 >3） */
 watch(
-  [rdSingleCountMax, rdSingleCountMin, rdSingleCountMode],
-  ([max, min, single]) => {
+  [rdSingleCountMax, rdSingleCountMin, rdSingleCountMode, isRdZu12Dual],
+  ([max, min, single, zu12]) => {
+    if (zu12) {
+      ensureRdCounts()
+      return
+    }
     if (!single) return
     const cur = Math.trunc(Number(rdCounts.value[0]) || 0)
-    const next = Math.min(max, Math.max(min, cur || min))
-    if (cur !== next) rdCounts.value = [next, ...rdCounts.value.slice(1)]
+    if (cur <= 0) {
+      rdCounts.value = [min, ...rdCounts.value.slice(1)]
+      return
+    }
+    // 低于 min 才抬；高于 max 才压。勿在 cur=0 时用 min 覆盖已灌入前的空档误伤后续赋值。
+    if (cur < min) rdCounts.value = [min, ...rdCounts.value.slice(1)]
+    else if (cur > max) rdCounts.value = [max, ...rdCounts.value.slice(1)]
   },
 )
 
@@ -2390,8 +2669,11 @@ watch(
     }
     if (runTypeId.value === 'hot_cold_warm') {
       ensureRenxuanRunPositions()
-      // 仅空选时填默认；已有选位（含改选中少于 k）一律保留
-      if (sanitizeHcwOpenPosIdxs(hcwOpenPosIdxs.value).length === 0) {
+      // 直选单式冷热：开奖选位为空时填默认前 k 位
+      if (
+        isRenxuanHcwDualPosPlay.value &&
+        sanitizeHcwOpenPosIdxs(hcwOpenPosIdxs.value).length === 0
+      ) {
         ensureHcwOpenPositions()
       }
       ensureHcwPools()
@@ -2452,11 +2734,12 @@ function applyRandomDrawFromConfig(raw: unknown): void {
   if (!raw || typeof raw !== 'object') return
   const c = raw as Record<string, unknown>
   if (Array.isArray(c.counts) && c.counts.length) {
-    const max = rdSingleCountMax.value
-    const min = rdSingleCountMin.value
-    rdCounts.value = c.counts.map((n) =>
-      Math.min(max, Math.max(min, Math.trunc(Number(n)) || min)),
-    )
+    // 灌入时只保底 ≥1，勿用尚未稳定的 max 把已存选码个数夹小（详情 5 / 编辑变 2）
+    rdCounts.value = c.counts.map((n) => Math.max(1, Math.trunc(Number(n)) || 1))
+    // 组选12：旧配置仅 [K] 时补默认单号个数 2
+    if (isZu12PlayConfig(schemePlayConfig.value) && rdCounts.value.length < 2) {
+      rdCounts.value = [rdCounts.value[0] ?? 1, 2]
+    }
   }
   const s = String(c.strategy ?? '')
   if (s === 'every' || s === 'keep' || s === 'after_hit' || s === 'after_miss') rdStrategy.value = s
@@ -2488,19 +2771,65 @@ const rdPerPosMax = computed(() => {
 function generateRdPreview(): void {
   ensureRdCounts()
   if (rdWholeTicket.value) {
+    const n = Math.min(200, Math.max(1, rdCounts.value[0] ?? 1))
+    // 组三单式：须两同+一异（勿生成 012/111）
+    if (isZu3DanshiConfig(schemePlayConfig.value)) {
+      const raw = randomZu3DanshiTickets(n, Math.min(n, ZU3_DANSHI_FORM_COUNT))
+      rdWholePreview.value = raw ? raw.split(',') : []
+      rdPreview.value = []
+      return
+    }
+    // 组六单式：须三位互异（勿生成 112/111）
+    if (isZu6DanshiConfig(schemePlayConfig.value)) {
+      const raw = randomZu6DanshiTickets(n, Math.min(n, ZU6_DANSHI_FORM_COUNT))
+      rdWholePreview.value = raw ? raw.split(',') : []
+      rdPreview.value = []
+      return
+    }
+    // 混合组选：3 位整注，排除豹子，按组选形态去重
+    if (isHunhePlayConfig(schemePlayConfig.value)) {
+      const want = Math.min(n, 165)
+      const out: string[] = []
+      const seen = new Set<string>()
+      let guard = 0
+      while (out.length < want && guard++ < 3000) {
+        let t = ''
+        for (let i = 0; i < 3; i++) t += String(Math.floor(Math.random() * 10))
+        if ([...t].every((c) => c === t[0])) continue
+        const key = [...t].sort().join('')
+        if (seen.has(key)) continue
+        seen.add(key)
+        out.push(t)
+      }
+      rdWholePreview.value = out
+      rdPreview.value = []
+      return
+    }
     const pool = [...numberPoolTokens.value]
     const positions = positionCount.value
-    const n = Math.min(200, Math.max(1, rdCounts.value[0] ?? 1))
+    const skipBaozi = isSoloBaoziRestrictedPlay(schemePlayConfig.value)
     const seen = new Set<string>()
     const out: string[] = []
     for (let a = 0; out.length < n && a < n * 100 + 100; a++) {
       const digits = Array.from({ length: positions }, () => pool[Math.floor(Math.random() * pool.length)] ?? '0')
       const key = digits.join('')
+      if (skipBaozi && isBaoziDigitTicket(key)) continue
       if (seen.has(key)) continue
       seen.add(key)
       out.push(key)
     }
     rdWholePreview.value = out
+    rdPreview.value = []
+    return
+  }
+  if (isRdZu12Dual.value) {
+    ensureRdCounts()
+    const d = rdCounts.value[0] ?? 1
+    const s = rdCounts.value[1] ?? 2
+    const raw = randomZu12DualContent(d, s)
+    const zones = parseZu12Zones(raw)
+    // 预览拆成两段：index0=二重号、index1=单号，各一枚 tag
+    rdWholePreview.value = zones ? [zones.doubles.join(''), zones.singles.join('')] : []
     rdPreview.value = []
     return
   }
@@ -2540,26 +2869,55 @@ function generateRdPreview(): void {
     return
   }
   // 按位玩法（一星/前三/前二/五星复式 / 后二大小单双等）：按位预览
+  // 直选单式/复式：避免抽成仅豹子（各位同一单码），必要时重抽
   const perPosMax = rdPerPosMax.value
   const perPosDxds = isPerPosDxdsPlayConfig(schemePlayConfig.value)
   const textOpts = perPosDxds ? textPickOptionsForConfig(schemePlayConfig.value) : []
   const attrUniverse = perPosDxds ? rdAttributeUniverse() : []
-  const pools = Array.from({ length: positionCount.value }, (_, i) => {
+  const cfg = schemePlayConfig.value
+  const seg = cfg.segmentLen > 0 ? cfg.segmentLen : positionCount.value
+  const guardBaozi =
+    !perPosDxds &&
+    isSoloBaoziRestrictedPlay(cfg) &&
+    (isZhixuanDanshiPerPosPlay(cfg) || isZhixuanFushiPlayConfig(cfg))
+  for (let attempt = 0; attempt < 48; attempt++) {
+    const pools = Array.from({ length: positionCount.value }, (_, i) => {
+      const source = perPosDxds
+        ? [...(textOpts.length ? textOpts : attrUniverse)]
+        : [...numberPoolTokens.value]
+      const pool = shuffleInPlace(source)
+      const count = Math.min(perPosMax, Math.max(1, rdCounts.value[i] ?? 1), pool.length)
+      const picks = pool.slice(0, count)
+      if (perPosDxds && textOpts.length) {
+        const order = new Map(textOpts.map((t, oi) => [t, oi]))
+        picks.sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0))
+      } else {
+        picks.sort((a, b) => Number(a) - Number(b) || a.localeCompare(b))
+      }
+      return picks
+    })
+    const poolContent = pools.map((row) => row.join(',')).join('\n')
+    if (guardBaozi && isSchemeSoloBaoziContent(cfg, poolContent)) {
+      continue
+    }
+    if (guardBaozi && isZhixuanDanshiPerPosPlay(cfg) && seg > 1) {
+      const ok = expandZhixuanPoolToDanshiWithoutBaozi(poolContent, seg)
+      if (!ok) continue
+    }
+    rdPreview.value = pools
+    rdWholePreview.value = []
+    return
+  }
+  // 兜底：仍写入最后一轮（保存时还会再滤豹子）
+  const fallback = Array.from({ length: positionCount.value }, (_, i) => {
     const source = perPosDxds
       ? [...(textOpts.length ? textOpts : attrUniverse)]
       : [...numberPoolTokens.value]
     const pool = shuffleInPlace(source)
     const count = Math.min(perPosMax, Math.max(1, rdCounts.value[i] ?? 1), pool.length)
-    const picks = pool.slice(0, count)
-    if (perPosDxds && textOpts.length) {
-      const order = new Map(textOpts.map((t, oi) => [t, oi]))
-      picks.sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0))
-    } else {
-      picks.sort((a, b) => Number(a) - Number(b) || a.localeCompare(b))
-    }
-    return picks
+    return pool.slice(0, count).sort((a, b) => Number(a) - Number(b) || a.localeCompare(b))
   })
-  rdPreview.value = pools
+  rdPreview.value = fallback
   rdWholePreview.value = []
 }
 
@@ -2568,51 +2926,83 @@ interface RdPreviewTag {
   /** 展示文案 */
   label: string
   kind: 'whole' | 'pos'
-  /** 按位：位下标；整注/号池：条目下标 */
+  /** 按位：位下标；整注/号池：条目下标；组选12：0=二重号 1=单号 */
   index: number
   /** 按位：该 tag 对应的单个号码（关闭时只删这一号） */
   digit?: string
+}
+
+/** 组选12 预览两段拼回「二重,单号」；缺段则空串 */
+function rdZu12PreviewWire(): string {
+  const doubles = String(rdWholePreview.value[0] ?? '').replace(/[,，\s]/g, '')
+  const singles = String(rdWholePreview.value[1] ?? '').replace(/[,，\s]/g, '')
+  if (!doubles && !singles) return ''
+  return `${doubles},${singles}`
 }
 
 /**
  * 预览 tag：
  * - 按位玩法（中三/前三直选复式、一星、大小单双等）：每位一枚 tag，位内号码合并
  *   （中三 → 3 枚；勿把「百位 1,2」拆成两枚数字 tag）
+ * - 组选12：二重号 / 单号各一枚 tag
  * - 单式整注 / 组选号池：一注或号池条目一枚
  */
 const rdPreviewTags = computed<RdPreviewTag[]>(() => {
-  // 按位模式：只用 rdPreview，禁止整注笛卡尔残留盖住按位 tag
-  if (!rdSingleCountMode.value) {
-    const rows = rdPreview.value
-    if (!rows.length) return []
+  if (isRdZu12Dual.value) {
+    const labels = ['二重号', '单号'] as const
     const out: RdPreviewTag[] = []
-    rows.forEach((row, index) => {
-      if (!row?.length) return
-      const posName = positionLabels.value[index] ?? ''
-      const body = row.join('\u2009')
+    for (let i = 0; i < 2; i++) {
+      const run = String(rdWholePreview.value[i] ?? '').replace(/[,，\s]/g, '')
+      if (!run) continue
       out.push({
-        key: `p-${index}-${row.join(',')}`,
-        label: posName ? `${posName} ${body}` : body,
-        kind: 'pos' as const,
-        index,
-        // 不设 digit：关闭时清空该整位
+        key: `zu12-${i}-${run}`,
+        label: `${labels[i]} ${[...run].join('\u2009')}`,
+        kind: 'whole',
+        index: i,
       })
-    })
+    }
     return out
   }
-  if (!rdWholePreview.value.length) return []
-  return rdWholePreview.value.map((ticket, index) => ({
-    key: `w-${index}-${ticket}`,
-    label: ticket.includes(',')
-      ? ticket.split(/[,，]/).filter(Boolean).join('\u2009')
-      : ticket,
-    kind: 'whole' as const,
-    index,
-  }))
+  // 单式整注 / 组选号池：整注预览
+  if (rdSingleCountMode.value) {
+    if (!rdWholePreview.value.length) return []
+    return rdWholePreview.value.map((ticket, index) => ({
+      key: `w-${index}-${ticket}`,
+      label: ticket.includes(',')
+        ? ticket.split(/[,，]/).filter(Boolean).join('\u2009')
+        : ticket,
+      kind: 'whole' as const,
+      index,
+    }))
+  }
+  // 按位模式：只用 rdPreview，禁止整注笛卡尔残留盖住按位 tag
+  const rows = rdPreview.value
+  if (!rows.length) return []
+  const out: RdPreviewTag[] = []
+  rows.forEach((row, index) => {
+    if (!row?.length) return
+    const posName = positionLabels.value[index] ?? ''
+    const body = row.join('\u2009')
+    out.push({
+      key: `p-${index}-${row.join(',')}`,
+      label: posName ? `${posName} ${body}` : body,
+      kind: 'pos' as const,
+      index,
+      // 不设 digit：关闭时清空该整位
+    })
+  })
+  return out
 })
 
 function removeRdPreviewTag(tag: RdPreviewTag): void {
   if (tag.kind === 'whole') {
+    if (isRdZu12Dual.value) {
+      // 清空对应区，保留另一区（长度固定 2，避免下标错位）
+      const next = [rdWholePreview.value[0] ?? '', rdWholePreview.value[1] ?? '']
+      next[tag.index] = ''
+      rdWholePreview.value = next[0] || next[1] ? next : []
+      return
+    }
     rdWholePreview.value = rdWholePreview.value.filter((_, i) => i !== tag.index)
     return
   }
@@ -2647,6 +3037,13 @@ const rdEstimatedUnits = computed(() => {
       return countBetUnits(schemePlayConfig.value, wrapRenxuanRunContent(sample))
     }
     return n
+  }
+  // 组选12：二重/单号双区预览计注
+  if (isRdZu12Dual.value) {
+    const sample =
+      rdZu12PreviewWire() ||
+      randomZu12DualContent(rdCounts.value[0] ?? 1, rdCounts.value[1] ?? 2)
+    return countBetUnits(schemePlayConfig.value, wrapRenxuanRunContent(sample))
   }
   // 组选号码池随机：按选中号码池走 countBetUnits（组选口径）
   if (rdZuxuanPool.value) {
@@ -3077,20 +3474,25 @@ function runTypeDraftFields(): Partial<UpdateSchemeInput> {
       if (schemeUsesRenxuanRunPos.value) {
         hotColdWarm.positionIdxs = [...renxuanRunPosIdxs.value]
       }
-      if (isRenxuanHcwDualPosPlay.value) {
+      if (showHcwOpenPosition.value) {
         hotColdWarm.openPositionIdxs = sanitizeHcwOpenPosIdxs(hcwOpenPosIdxs.value)
       }
       return { hotColdWarm }
     }
     case 'random_draw': {
-      // 单式=注数 / 组选=选码个数 → counts=[K]；按位型 → 每位号码/选项数量
+      // 单式=注数 / 组选=选码个数 → counts=[K]；组选12 → [二重,单号]；按位型 → 每位号码/选项数量
       ensureRenxuanRunPositions()
       const perPosMax = rdPerPosMax.value
-      const counts = rdSingleCountMode.value
-        ? [Math.min(rdSingleCountMax.value, Math.max(rdSingleCountMin.value, rdCounts.value[0] ?? rdSingleCountMin.value))]
-        : Array.from({ length: positionCount.value }, (_, i) =>
-            Math.min(perPosMax, Math.max(1, rdCounts.value[i] ?? 1)),
-          )
+      const counts = isRdZu12Dual.value
+        ? [
+            Math.min(10, Math.max(1, Math.trunc(Number(rdCounts.value[0]) || 1))),
+            Math.min(10, Math.max(2, Math.trunc(Number(rdCounts.value[1]) || 2))),
+          ]
+        : rdSingleCountMode.value
+          ? [Math.min(rdSingleCountMax.value, Math.max(rdSingleCountMin.value, rdCounts.value[0] ?? rdSingleCountMin.value))]
+          : Array.from({ length: positionCount.value }, (_, i) =>
+              Math.min(perPosMax, Math.max(1, rdCounts.value[i] ?? 1)),
+            )
       const randomDraw: SchemeRandomDraw = { counts, strategy: rdStrategy.value }
       if (schemeUsesRenxuanRunPos.value) {
         randomDraw.positionIdxs = [...renxuanRunPosIdxs.value]
@@ -3543,11 +3945,15 @@ async function onSaveCloud() {
         return
       }
     }
-    // 组三/组六号池下限；组选单式整注合法性（每注 N 位、不含对子）
+    // 组三/组六号池下限；组选/组三单式整注合法性（每注 N 位、组三须两同+一异）
     {
       const minPick = zuxuanPoolMinPick(schemePlayConfig.value)
       const needValidate =
-        minPick != null || isZuxuanDanshiConfig(schemePlayConfig.value)
+        minPick != null ||
+        isZuxuanDanshiConfig(schemePlayConfig.value) ||
+        isZu3DanshiConfig(schemePlayConfig.value) ||
+        isZu6DanshiConfig(schemePlayConfig.value) ||
+        isHunhePlayConfig(schemePlayConfig.value)
       if (needValidate) {
         for (const r of triggerRows.value) {
           if (!r.enabled) continue
@@ -3557,7 +3963,18 @@ async function onSaveCloud() {
           ] as const) {
             const cell = String(raw ?? '').trim()
             if (!cell) continue
-            const check = validateGroupContent(schemePlayConfig.value, cell)
+            // 任选开某投某：正/反投格子无位名前缀，校验前补投注选位（与下方统一校验一致）
+            let toCheck = cell
+            if (isRenxuanTriggerPlay.value) {
+              toCheck = showTriggerPerPosColumns.value
+                ? renxuanTriggerPoolToGroupContent(cell)
+                : buildRenxuanPositionContent(triggerBetPositionLabels.value, cell)
+            }
+            if (!toCheck.trim()) {
+              await warn(`开出 ${r.open} 的${name}：选号无效`)
+              return
+            }
+            const check = validateGroupContent(schemePlayConfig.value, toCheck)
             if (!check.ok) {
               await warn(`开出 ${r.open} 的${name}：${check.message}`)
               return
@@ -3593,7 +4010,25 @@ async function onSaveCloud() {
   } else if (rt === 'hot_cold_warm') {
     ensureHcwPools()
     ensureRenxuanRunPositions()
-    if (isRenxuanHcwDualPosPlay.value) {
+    if (isRenxuanHcwZu12.value) {
+      const doublesN = (hcwRanks.value[0] ?? []).length
+      const singlesN = (hcwRanks.value[1] ?? []).length
+      if (doublesN < 1) {
+        await warn('二重号至少选择 1 个')
+        return
+      }
+      if (singlesN < 2) {
+        await warn('单号至少选择 2 个')
+        return
+      }
+      const dual = hcwZu12DualPicks()
+      const check = validateGroupContent(schemePlayConfig.value, wrapRenxuanRunContent(dual))
+      if (!check.ok) {
+        await warn(check.message)
+        return
+      }
+      schemeGroups.value = [wrapRenxuanRunContent(dual)]
+    } else if (isRenxuanHcwDualPosPlay.value) {
       const need = renxuanRunPosNeed.value
       const openN = sanitizeHcwOpenPosIdxs(hcwOpenPosIdxs.value).length
       if (openN !== need) {
@@ -3603,7 +4038,8 @@ async function onSaveCloud() {
     }
     // 组三/组六冷热：号码池最少选号（组三≥2、组六≥3），与定码校验一致
     // 二码不定位≥2（第三方「投注数字不能低于两个」）
-    if (hcwDigitOverall.value) {
+    // 组选单式：至少 segLen 个单码，保存时两两组合为整注
+    if (!isRenxuanHcwZu12.value && hcwDigitOverall.value) {
       const pickN = (hcwRanks.value[0] ?? []).length
       const zuxuanMin = zuxuanPoolMinPick(schemePlayConfig.value)
       if (zuxuanMin != null && pickN < zuxuanMin) {
@@ -3615,37 +4051,74 @@ async function onSaveCloud() {
         await warn(budingweiMinPicksMessage(schemePlayConfig.value))
         return
       }
+      if (isZuxuanDanshiConfig(schemePlayConfig.value)) {
+        const need =
+          schemePlayConfig.value.segmentLen >= 2
+            ? schemePlayConfig.value.segmentLen
+            : (schemePlayConfig.value.renPositionCount ?? 2)
+        if (pickN < need) {
+          await warn(`组选单式冷热：请至少勾选 ${need} 个名次（号码将自动组合为投注整注）`)
+          return
+        }
+      }
     }
     // schemeGroups 仅占位：直选单式勿塞按位号池（会被校验成「N 个单式组合不合法」）。
     // 真正出号看 hotColdWarm；这里写一注合法样例即可。
-    const seg = schemePlayConfig.value.segmentLen
-    if (
-      !hcwSingleGroup.value &&
-      isSscDanshiLikeConfig(schemePlayConfig.value) &&
-      seg > 1
-    ) {
-      const sample = Array.from({ length: positionCount.value }, (_, i) => {
-        const d = (hcwPools.value[i] ?? [])[0]
-        return d != null && d !== '' ? String(d) : '0'
-      }).join('')
-      schemeGroups.value = [sample || '0'.repeat(Math.max(1, seg))]
-    } else {
-      // 复式/定位胆等：按位玩法存成单组多行（万\n千\n百）
-      schemeGroups.value = hcwSingleGroup.value
-        ? [(hcwPools.value[0] ?? []).join(',')]
-        : [
-            Array.from({ length: positionCount.value }, (_, i) => (hcwPools.value[i] ?? []).join(',')).join(
-              '\n',
-            ),
-          ]
-    }
-    if (schemeUsesRenxuanRunPos.value && schemeGroups.value[0]) {
-      schemeGroups.value = [wrapRenxuanRunContent(schemeGroups.value[0])]
+    if (!isRenxuanHcwZu12.value) {
+      const seg = schemePlayConfig.value.segmentLen
+      if (
+        !hcwSingleGroup.value &&
+        isSscDanshiLikeConfig(schemePlayConfig.value) &&
+        seg > 1
+      ) {
+        const sample = Array.from({ length: positionCount.value }, (_, i) => {
+          const d = (hcwPools.value[i] ?? [])[0]
+          return d != null && d !== '' ? String(d) : '0'
+        }).join('')
+        schemeGroups.value = [sample || '0'.repeat(Math.max(1, seg))]
+      } else if (hcwDigitOverall.value && isZuxuanDanshiConfig(schemePlayConfig.value)) {
+        // 组选单式冷热：预览号池（如 1,2,3）→ 两两组合整注（12,13,23），供保存校验与样例
+        const pool = (hcwPools.value[0] ?? []).join(',')
+        const digitLen =
+          seg >= 2 ? seg : (schemePlayConfig.value.renPositionCount ?? 2)
+        const expanded = normalizeZuxuanDanshiContent(pool, digitLen)
+        if (!expanded) {
+          await warn(`组选单式冷热：请至少勾选 ${digitLen} 个名次（号码将自动组合为投注整注）`)
+          return
+        }
+        schemeGroups.value = [expanded]
+      } else {
+        // 复式/定位胆等：按位玩法存成单组多行（万\n千\n百）
+        schemeGroups.value = hcwSingleGroup.value
+          ? [(hcwPools.value[0] ?? []).join(',')]
+          : [
+              Array.from({ length: positionCount.value }, (_, i) => (hcwPools.value[i] ?? []).join(',')).join(
+                '\n',
+              ),
+            ]
+      }
+      if (schemeUsesRenxuanRunPos.value && schemeGroups.value[0]) {
+        schemeGroups.value = [wrapRenxuanRunContent(schemeGroups.value[0])]
+      }
     }
   } else if (rt === 'random_draw') {
     ensureRdCounts()
     ensureRenxuanRunPositions()
-    if (rdSingleCountMode.value) {
+    if (isRdZu12Dual.value) {
+      const d = Math.trunc(Number(rdCounts.value[0]) || 0)
+      const s = Math.trunc(Number(rdCounts.value[1]) || 0)
+      if (d < 1 || d > 10) {
+        await warn('二重号选码个数须为 1–10')
+        return
+      }
+      if (s < 2 || s > 10) {
+        await warn('单号选码个数须为 2–10')
+        return
+      }
+      if (!rdZu12PreviewWire()) generateRdPreview()
+      const sample = rdZu12PreviewWire() || randomZu12DualContent(d, s)
+      schemeGroups.value = [schemeUsesRenxuanRunPos.value ? wrapRenxuanRunContent(sample) : sample]
+    } else if (rdSingleCountMode.value) {
       if (!rdWholePreview.value.length) generateRdPreview()
       let sample = rdWholePreview.value.join(',') || '0'
       // 和值/跨度随机样例偶发超限：占位改为组合更小的可行集，真实下注仍由引擎按 counts 重抽
@@ -3679,16 +4152,18 @@ async function onSaveCloud() {
         }
         return Array.from({ length: count }, (_, j) => String(j % 10)).join(',')
       }).join('\n')
-      // 直选单式：占位写成展开后的整注样例，避免保存校验把按位号池当非法单式
+      // 直选单式：占位写成展开后的整注样例，避免保存校验把按位号池当非法单式；剔除豹子
       const seg = schemePlayConfig.value.segmentLen
       if (
         isZhixuanDanshiPerPosPlay(schemePlayConfig.value) &&
         seg > 1 &&
         isZhixuanPositionPoolContent(poolContent, seg)
       ) {
-        schemeGroups.value = [
-          expandZhixuanPositionPoolToDanshi(poolContent, seg) || poolContent,
-        ]
+        const expanded =
+          expandZhixuanPoolToDanshiWithoutBaozi(poolContent, seg) ||
+          expandZhixuanPositionPoolToDanshi(poolContent, seg) ||
+          poolContent
+        schemeGroups.value = [expanded]
       } else {
         schemeGroups.value = [poolContent]
       }
@@ -3785,8 +4260,8 @@ async function onSaveCloud() {
   }
 
   // 直选单式 / 直选复式 / 混合组选：不得「单独只有」111/222/333 等豹子号（含冷热/局数等入口）
-  // 高级开某投某 + 混合组选：映射按位保存，下注时再排除豹子；排除后无号则本期跳过，此处不拦保存。
-  if (!(rt === 'adv_trigger_bet' && isHunhePlayConfig(schemePlayConfig.value))) {
+  // 高级开某投某 + 中三/前三混合组选：按位保存，下注时再排除豹子；任选混合组选已是整注，须拦豹子。
+  if (!(rt === 'adv_trigger_bet' && isHunhePlayConfig(schemePlayConfig.value) && showTriggerPerPosColumns.value)) {
     const baoziContents =
       rt === 'adv_fixed_rotate'
         ? jushuList.value.map((r) => r.content)
@@ -4402,7 +4877,7 @@ function onTimeDialogOpened() {
                 :config="schemePlayConfig"
               />
               <SchemeGroupInputPanel
-                v-else-if="schemeUsesDigitInput"
+                v-else-if="schemeUsesTextInputPanel"
                 v-model="schemeGroups[idx]"
                 :config="schemePlayConfig"
               />
@@ -4419,6 +4894,7 @@ function onTimeDialogOpened() {
                 resize="none"
                 class="scf-area"
                 :placeholder="groupInputPlaceholder"
+                @blur="commitSchemeGroupAt(idx)"
               />
             </div>
           </div>
@@ -4586,12 +5062,15 @@ function onTimeDialogOpened() {
           </div>
           <div
             class="scf-trig-grid scf-trig-grid--head"
-            :class="{ 'scf-trig-grid--posrow': showTriggerPerPosColumns }"
+            :class="{
+              'scf-trig-grid--posrow': showTriggerPerPosColumns || isTriggerZu12DualInput,
+              'scf-trig-grid--zu12-head': isTriggerZu12DualInput,
+            }"
             aria-hidden="true"
           >
             <span>启用</span>
             <span>开出</span>
-            <template v-if="showTriggerPerPosColumns">
+            <template v-if="showTriggerPerPosColumns || isTriggerZu12DualInput">
               <span>位置</span>
             </template>
             <span>正投</span>
@@ -4674,6 +5153,51 @@ function onTimeDialogOpened() {
               </div>
             </div>
           </template>
+          <template v-else-if="isTriggerZu12DualInput">
+            <div
+              v-for="row in triggerRows"
+              :key="row.open"
+              class="scf-trig-block scf-trig-block--zu12"
+              :class="{ 'is-off': !row.enabled }"
+            >
+              <div
+                v-for="(zLabel, zIdx) in TRIGGER_ZU12_ZONE_LABELS"
+                :key="`trig-zu12-${row.open}-${zIdx}`"
+                class="scf-trig-grid scf-trig-grid--posrow"
+              >
+                <el-switch
+                  v-if="zIdx === 0"
+                  v-model="row.enabled"
+                  size="small"
+                  :aria-label="`启用开出 ${row.open} 的映射`"
+                />
+                <span v-else class="scf-trig-cell-placeholder" aria-hidden="true" />
+                <span v-if="zIdx === 0" class="scf-trig-open">{{ row.open }}</span>
+                <span v-else class="scf-trig-cell-placeholder" aria-hidden="true" />
+                <span class="scf-trig-pos-name">{{ zLabel }}</span>
+                <el-input
+                  :model-value="getZu12TriggerZone(row.pos, zIdx as 0 | 1)"
+                  size="small"
+                  :placeholder="triggerZu12ZonePlaceholders[zIdx]"
+                  inputmode="numeric"
+                  :disabled="!row.enabled"
+                  :aria-label="`正投${zLabel}（开出 ${row.open}）`"
+                  @update:model-value="(v: string | number) => setZu12TriggerZone(row, 'pos', zIdx as 0 | 1, String(v ?? ''))"
+                  @change="commitZu12TriggerField(row, 'pos')"
+                />
+                <el-input
+                  :model-value="getZu12TriggerZone(row.neg, zIdx as 0 | 1)"
+                  size="small"
+                  :placeholder="triggerZu12ZonePlaceholders[zIdx]"
+                  inputmode="numeric"
+                  :disabled="!row.enabled"
+                  :aria-label="`反投${zLabel}（开出 ${row.open}）`"
+                  @update:model-value="(v: string | number) => setZu12TriggerZone(row, 'neg', zIdx as 0 | 1, String(v ?? ''))"
+                  @change="commitZu12TriggerField(row, 'neg')"
+                />
+              </div>
+            </div>
+          </template>
           <template v-else>
             <div
               v-for="row in triggerRows"
@@ -4744,7 +5268,7 @@ function onTimeDialogOpened() {
         <!-- 5. 冷热出号（v6 仅冷/热） -->
         <div v-else-if="runTypeId === 'hot_cold_warm'" class="scf-content-card scf-panel">
           <div
-            v-if="isRenxuanHcwDualPosPlay"
+            v-if="showHcwOpenPosition"
             class="scf-field scf-panel-field scf-trig-pos-field"
           >
             <span class="scf-lbl scf-lbl--with-help">
@@ -4781,13 +5305,16 @@ function onTimeDialogOpened() {
             </div>
           </div>
           <div
-            v-if="isRenxuanHcwDualPosPlay || schemeUsesRenxuanRunPos"
+            v-if="showHcwOpenPosition || schemeUsesRenxuanRunPos"
             class="scf-field scf-panel-field scf-trig-pos-field"
           >
-            <span class="scf-lbl" :class="{ 'scf-lbl--with-help': isRenxuanHcwDualPosPlay }">
+            <span
+              class="scf-lbl"
+              :class="{ 'scf-lbl--with-help': showHcwOpenPosition || isRenxuanHcwZu12 }"
+            >
               <span>投注选位</span>
               <el-popover
-                v-if="isRenxuanHcwDualPosPlay"
+                v-if="showHcwOpenPosition || isRenxuanHcwZu12"
                 placement="bottom"
                 :width="280"
                 trigger="click"
@@ -4875,7 +5402,11 @@ function onTimeDialogOpened() {
             </el-radio-group>
             <span class="scf-hcw-units">总计：{{ hcwEstimatedUnits }} 注</span>
           </div>
-          <div v-for="(label, pi) in hcwGroupLabels" :key="pi" class="scf-hcw-pos">
+          <div
+            v-for="(label, pi) in hcwGroupLabels"
+            :key="`hcw-${pi}-${isRenxuanHcwZu12 ? renxuanRunPosIdxs.join('_') : hcwOpenPosIdxs.join('_')}-${hcwStatsGen}`"
+            class="scf-hcw-pos"
+          >
             <div class="scf-hcw-pos-head">
               <p class="scf-hcw-pos-name">{{ label }}</p>
               <div class="scf-hcw-quick" role="group" :aria-label="`${label}快捷选号`">
@@ -4919,7 +5450,7 @@ function onTimeDialogOpened() {
             >
               <button
                 v-for="cell in hcwCellsByPos[pi]"
-                :key="cell.token"
+                :key="`${cell.token}-${cell.count}-${cell.tier}-${hcwStatsGen}`"
                 type="button"
                 class="scf-hcw-cell"
                 :class="{
@@ -4960,8 +5491,19 @@ function onTimeDialogOpened() {
               >{{ label }}</button>
             </div>
           </div>
+          <!-- 组选12：二重号 + 单号两个选码个数 -->
+          <div v-if="isRdZu12Dual" class="scf-rd-pos-grid">
+            <div class="scf-rd-row">
+              <span class="scf-rd-pos">二重号</span>
+              <el-input-number v-model="rdCounts[0]" :min="1" :max="10" size="small" />
+            </div>
+            <div class="scf-rd-row">
+              <span class="scf-rd-pos">单号</span>
+              <el-input-number v-model="rdCounts[1]" :min="2" :max="10" size="small" />
+            </div>
+          </div>
           <!-- 单式整注随机 / 组选号码池随机：仅需单一数量 -->
-          <template v-if="rdSingleCountMode">
+          <template v-else-if="rdSingleCountMode">
             <div class="scf-rd-row">
               <span class="scf-rd-pos">{{ rdSingleCountLabel }}</span>
               <el-input-number v-model="rdCounts[0]" :min="rdSingleCountMin" :max="rdSingleCountMax" size="small" />
@@ -5144,7 +5686,7 @@ function onTimeDialogOpened() {
             :config="schemePlayConfig"
           />
           <SchemeGroupInputPanel
-            v-else-if="schemeUsesDigitInput"
+            v-else-if="schemeUsesTextInputPanel"
             v-model="jushuForm.content"
             :config="schemePlayConfig"
           />
@@ -5161,6 +5703,7 @@ function onTimeDialogOpened() {
             resize="none"
             class="scf-area"
             :placeholder="groupInputPlaceholder"
+            @blur="commitJushuFormContent"
           />
         </div>
         <div class="scf-grid2">
@@ -6322,6 +6865,12 @@ function onTimeDialogOpened() {
 .scf-trig-grid--posrow {
   grid-template-columns: 2.1rem 1.75rem 2.4rem 1fr 1fr;
   gap: 0.35rem 0.28rem;
+}
+
+/* 组选12：位置列放「二重号/单号」，略加宽 */
+.scf-trig-block--zu12 .scf-trig-grid--posrow,
+.scf-trig-grid--zu12-head {
+  grid-template-columns: 2.1rem 1.75rem 3rem 1fr 1fr;
 }
 
 .scf-trig-block {

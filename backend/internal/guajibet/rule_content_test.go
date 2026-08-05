@@ -497,8 +497,9 @@ func TestCountBetNums_renxuanRen2(t *testing.T) {
 	if n := CountBetNums(meta, "1,2,3,4,5"); n != 10 {
 		t.Fatalf("ren2 betsNums=%d want 10", n)
 	}
-	if NeedsSoloForRule(meta, "1,2,3,4,5") {
-		t.Fatal("任二直选复式多注不应 solo")
+	// ≤guajiSoloMaxBets：NeedsSolo true，ResolveSolo true
+	if !NeedsSoloForRule(meta, "1,2,3,4,5") || !ResolveSolo(meta, "1,2,3,4,5", 10) {
+		t.Fatal("任二直选复式 10 注须 solo=true")
 	}
 	// 单注（两位各 1 码 → C 位组合后 1 注）须 solo=true
 	if !NeedsSoloForRule(meta, "1,,,,2") && !NeedsSoloForRule(meta, "0,1") {
@@ -507,6 +508,57 @@ func TestCountBetNums_renxuanRen2(t *testing.T) {
 		if CountBetNums(meta, wire) == 1 && !NeedsSoloForRule(meta, wire) {
 			t.Fatalf("任二直选复式单注应 solo, wire=%q", wire)
 		}
+	}
+}
+
+// def-1-1785825380160：任三直选单式选 4 位 × 1 票 → C(4,3)=4 注；
+// 实测 solo=false → 单挑参数错误；同方案 35 注 solo=false 可过。
+func TestResolveSolo_ren3ZhixuanDanshiByBets(t *testing.T) {
+	seg, _ := json.Marshal(map[string]string{
+		"guajiGroup": "任选", "guajiTeam": "任选三", "guajiFullName": "任三直选单式",
+	})
+	meta := ParseRuleMeta("ssc_std", "g011", "81", "任三直选单式", "任选", seg, "81")
+	wire4 := FormatBetContentForRule(meta, "万,千,百,个\n345")
+	if n := CountBetNums(meta, wire4); n != 4 {
+		t.Fatalf("bets=%d want 4 wire=%q", n, wire4)
+	}
+	if !ResolveSolo(meta, wire4, 4) {
+		t.Fatal("任三直选单式 4 注须 solo=true（实测 solo=false→单挑参数错误）")
+	}
+	if !ResolveSolo(meta, "万千个|123", 1) {
+		t.Fatal("任三直选单式单注须 solo=true")
+	}
+	if ResolveSolo(meta, "万千个|000,001", 35) {
+		t.Fatal("任三直选单式 35 注须 solo=false（>guajiSoloMaxBets）")
+	}
+}
+
+// def-1-1785814730739 ju3：任三直选复式 content=1,1,1,1,2 → 10 注；
+// 实测 solo=false → 40000 单挑参数错误；同方案 56 注 solo=false 可过。
+func TestResolveSolo_ren3ZhixuanFushiByBets(t *testing.T) {
+	seg, _ := json.Marshal(map[string]string{
+		"guajiGroup": "任选", "guajiTeam": "任选三", "guajiFullName": "任三直选复式",
+	})
+	meta := ParseRuleMeta("ssc_std", "g011", "80", "任三直选复式", "任选", seg, "80")
+	wire10 := FormatBetContentForRule(meta, "1\n1\n1\n1\n2")
+	if wire10 != "1,1,1,1,2" {
+		t.Fatalf("wire=%q want 1,1,1,1,2", wire10)
+	}
+	if n := CountBetNums(meta, wire10); n != 10 {
+		t.Fatalf("bets=%d want 10", n)
+	}
+	if !ResolveSolo(meta, wire10, 10) {
+		t.Fatal("任三直选复式 10 注须 solo=true（实测 solo=false→单挑参数错误）")
+	}
+	wire56 := FormatBetContentForRule(meta, "3,4,5\n5,4,3\n2,1\n\n")
+	if n := CountBetNums(meta, wire56); n != 56 {
+		t.Fatalf("bets=%d want 56", n)
+	}
+	if ResolveSolo(meta, wire56, 56) {
+		t.Fatal("任三直选复式 56 注须 solo=false（>guajiSoloMaxBets）")
+	}
+	if !ResolveSolo(meta, "1,2,,,3", 1) {
+		t.Fatal("任三直选复式单注须 solo=true")
 	}
 }
 
@@ -1044,8 +1096,12 @@ func TestFormatBetContentForRule_renxuanHezhi(t *testing.T) {
 	if n := CountBetNums(meta, got); n != 5 {
 		t.Fatalf("betsNums=%d want 5", n)
 	}
-	if NeedsSoloForRule(meta, got) {
-		t.Fatal("任二直选和值多注不应 solo")
+	// 直选和值 ≤guajiSoloMaxBets 须 solo=true（ResolveSolo 再钳制）
+	if !NeedsSoloForRule(meta, got) {
+		t.Fatal("任二直选和值多注（≤单挑上限）应 solo")
+	}
+	if !ResolveSolo(meta, got, 5) {
+		t.Fatal("任二直选和值 5 注 ResolveSolo 应 true")
 	}
 	wireMin := FormatBetContentForRule(meta, SampleGroupContent(meta))
 	if gotMin := wireMin; gotMin != "千个|0" {
@@ -1056,6 +1112,130 @@ func TestFormatBetContentForRule_renxuanHezhi(t *testing.T) {
 	}
 	if !NeedsSoloForRule(meta, wireMin) {
 		t.Fatal("任二直选和值单注应 solo")
+	}
+}
+
+// def-1-1785827226818：任三直选和值选 4 位 × 和值 1 → C(4,3)×3=12 注；
+// 实测 solo=false → 单挑参数错误；满选 1000 注 solo=false 可过。
+func TestResolveSolo_ren3ZhixuanHezhiByBets(t *testing.T) {
+	seg, _ := json.Marshal(map[string]string{
+		"guajiGroup": "任选", "guajiTeam": "任选三", "guajiFullName": "任三直选和值",
+	})
+	meta := ParseRuleMeta("ssc_std", "g011", "82", "任三直选和值", "任选", seg, "82")
+	wire12 := FormatBetContentForRule(meta, "万,千,百,个\n1")
+	if n := CountBetNums(meta, wire12); n != 12 {
+		t.Fatalf("bets=%d want 12 wire=%q", n, wire12)
+	}
+	if !ResolveSolo(meta, wire12, 12) {
+		t.Fatal("任三直选和值 12 注应 solo=true")
+	}
+	wire17 := FormatBetContentForRule(meta, "万,千,个\n2,3,27")
+	if n := CountBetNums(meta, wire17); n != 17 {
+		t.Fatalf("bets=%d want 17 wire=%q", n, wire17)
+	}
+	if !ResolveSolo(meta, wire17, 17) {
+		t.Fatal("任三直选和值 17 注应 solo=true")
+	}
+	if ResolveSolo(meta, wire12, 1000) {
+		t.Fatal("任三直选和值超过单挑上限应 solo=false")
+	}
+}
+
+// def-1-1785839664877：任三组选和值（rule88）按总注数判单挑（≤3 true / ≥4 false）。
+// 实测：万千个|1（1注）、万千个|3（2注）solo=false → 单挑参数错误。
+func TestResolveSolo_ren3ZuxuanHezhiByBets(t *testing.T) {
+	meta := ParseRuleMeta("ssc_std", "g011", "88", "", "", nil, "88")
+	meta.ForcedBetMode = "hezhi"
+	if !isZuxuanHezhiMeta(meta) {
+		t.Fatal("rule 88 空文案仍须识别为组选和值")
+	}
+	cases := []struct {
+		content string
+		wantN   int
+		solo    bool
+	}{
+		{"万,千,个\n1", 1, true},
+		{"万,千,个\n3", 2, true},
+		{"万,千,个\n1,2", 3, true},
+		{"万,千,个\n1,2,3,4", 9, false},
+		{"万,千,百,个\n2", 8, false},
+	}
+	for _, c := range cases {
+		wire := FormatBetContentForRule(meta, c.content)
+		n := CountBetNums(meta, wire)
+		if n != c.wantN {
+			t.Fatalf("%q bets=%d want %d wire=%q", c.content, n, c.wantN, wire)
+		}
+		if got := ResolveSolo(meta, wire, n); got != c.solo {
+			t.Fatalf("%q bets=%d ResolveSolo=%v want %v", c.content, n, got, c.solo)
+		}
+	}
+}
+
+// def-1-1785898019073：任四组选6 任意注数须 solo=false（与四星组选6 一致）。
+// 单注（万千百十|1,2 → C(2,2)=1）若 solo=true →「单挑参数错误」。
+func TestResolveSolo_ren4Zu6AlwaysFalse(t *testing.T) {
+	seg, _ := json.Marshal(map[string]string{
+		"guajiGroup": "任选", "guajiTeam": "任选四", "guajiFullName": "任选四组选6",
+	})
+	meta := ParseRuleMeta("ssc_std", "g011", "145", "组选6", "任选", seg, "145")
+	meta.ForcedBetMode = "zu6"
+	wire1 := FormatBetContentForRule(meta, "万,千,百,十\n1,2")
+	if n := CountBetNums(meta, wire1); n != 1 {
+		t.Fatalf("1-bet sample bets=%d want 1 wire=%q", n, wire1)
+	}
+	if NeedsSoloForRule(meta, wire1) || ResolveSolo(meta, wire1, 1) {
+		t.Fatalf("任四组选6 单注须 solo=false, wire=%q", wire1)
+	}
+	wire3 := FormatBetContentForRule(meta, "万,千,百,十\n1,2,3")
+	if n := CountBetNums(meta, wire3); n != 3 {
+		t.Fatalf("3-bet sample bets=%d want 3 wire=%q", n, wire3)
+	}
+	if ResolveSolo(meta, wire3, 3) {
+		t.Fatal("任四组选6 3 注须 solo=false")
+	}
+	// 任三组六仍：1 注 solo=true（勿回归）
+	seg3, _ := json.Marshal(map[string]string{
+		"guajiGroup": "任选", "guajiTeam": "任选三", "guajiFullName": "任三组六复式",
+	})
+	meta3 := ParseRuleMeta("ssc_std", "g011", "85", "组六复式", "任选", seg3, "85")
+	meta3.ForcedBetMode = "zu6"
+	wireZu6 := FormatBetContentForRule(meta3, "万,千,百\n1,2,3")
+	if n := CountBetNums(meta3, wireZu6); n != 1 {
+		t.Fatalf("任三组六 1 注 bets=%d want 1 wire=%q", n, wireZu6)
+	}
+	if !ResolveSolo(meta3, wireZu6, 1) {
+		t.Fatal("任三组六 1 注仍须 solo=true")
+	}
+}
+
+// def-1-1785829274113：任三组三单式按 zu3SoloMaxBets(6) 判单挑（非 guajiSoloMaxBets=18）。
+// 实测：4 注 solo=false 拒；10 注(五位 C(5,3)) solo=true 拒；90 注 solo=false 过。
+func TestResolveSolo_ren3Zu3DanshiByBets(t *testing.T) {
+	seg, _ := json.Marshal(map[string]string{
+		"guajiGroup": "任选", "guajiTeam": "任选三", "guajiFullName": "任三组三单式",
+	})
+	meta := ParseRuleMeta("ssc_std", "g011", "84", "组三单式", "任选", seg, "84")
+	meta.ForcedBetMode = "zuxuan_ds"
+	wire4 := FormatBetContentForRule(meta, "万,千,百,个\n223")
+	if n := CountBetNums(meta, wire4); n != 4 {
+		t.Fatalf("bets=%d want 4 wire=%q", n, wire4)
+	}
+	if !ResolveSolo(meta, wire4, 4) {
+		t.Fatal("任三组三单式 4 注应 solo=true")
+	}
+	if !ResolveSolo(meta, FormatBetContentForRule(meta, "万,千,个\n112"), 1) {
+		t.Fatal("任三组三单式 1 注应 solo=true")
+	}
+	wire10 := FormatBetContentForRule(meta, "万,千,百,十,个\n445")
+	if n := CountBetNums(meta, wire10); n != 10 {
+		t.Fatalf("bets=%d want 10 wire=%q", n, wire10)
+	}
+	if ResolveSolo(meta, wire10, 10) {
+		t.Fatal("任三组三单式 10 注应 solo=false（>zu3SoloMaxBets）")
+	}
+	if ResolveSolo(meta, wire4, 90) {
+		t.Fatal("任三组三单式超过单挑上限应 solo=false")
 	}
 }
 

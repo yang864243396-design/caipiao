@@ -683,12 +683,37 @@ export function defaultRenxuanTriggerPositionIdxs(k: number): number[] {
 }
 
 /**
- * 任选·直选单式冷热出号：开奖选位默认前 k 位（任二万千；任三万千百；任四万千百十）。
- * 与投注选位默认（任三含个位）可不同。
+ * 任选冷热开奖选位默认前 k 位（任二万千；任三万千百；任四万千百十）。
+ * 用于直选单式 / 混合组选；与投注选位默认（任三含个位）可不同。
  */
 export function defaultRenxuanHcwOpenPositionIdxs(k: number): number[] {
   const n = k >= 2 && k <= 5 ? k : 2
   return Array.from({ length: n }, (_, i) => i)
+}
+
+/**
+ * 任选冷热「开奖选位」：须恰好 k 个，下方频次按这些绝对位分列。
+ * - 任选直选单式（与开某投某按位分列同一集合）
+ * - 任选混合组选（开某投某仍整注一行，但冷热与直选单式同开奖选位口径）
+ */
+export function isRenxuanHcwOpenPosPlay(config: AdvTriggerPosConfig): boolean {
+  if (isRenxuanPerPosTriggerPlay(config)) return true
+  if (!isRenxuanNeedsPositionTriggerPlay(config)) return false
+  const bm = String(config.betMode ?? '').toLowerCase()
+  if (bm === 'hunhe') return true
+  const label = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''}`
+  return /混合组选|混合/.test(label) && !/组合/.test(label)
+}
+
+/**
+ * 任选·组选12 冷热：投注选位合并计频 + 二重号/单号双池（与任四组选6 同口径，无独立开奖选位）。
+ */
+export function isRenxuanHcwZu12Play(config: AdvTriggerPosConfig): boolean {
+  if (!isRenxuanNeedsPositionTriggerPlay(config)) return false
+  const bm = String(config.betMode ?? '').toLowerCase()
+  if (bm === 'zu12') return true
+  const text = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''}`
+  return /组选12|zu12/i.test(text) && !/组选120|zu120/i.test(text)
 }
 
 /**
@@ -771,7 +796,9 @@ export function supportsAdvTriggerPerPosColumns(config: AdvTriggerPosConfig): bo
   if (bm === 'fushi' || bm === 'zhixuan_fs' || bm === 'zuhe') return true
   if (sub === 'zhixuan_fs' || sub.includes('zhixuan_fs') || label.includes('直选复式')) return true
   // 中三/前三混合组选：与直选复式同布局（千/百/十按位填正反投）
+  // 任选混合组选：整注一行正投/反投（如 012,345），勿按位拆分
   if (bm === 'hunhe' || label.includes('混合组选') || (label.includes('混合') && !label.includes('组合'))) {
+    if (isRenxuanNeedsPositionTriggerPlay(config)) return false
     return true
   }
   // 中三/前三直选单式：千百十（或万千百）三位分列

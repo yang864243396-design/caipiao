@@ -49,6 +49,18 @@ export function isZuxuanDanshiConfig(config: PlayConfig): boolean {
   return false
 }
 
+/** 组三单式（含任三组三单式；不含组选30 等） */
+export function isZu3DanshiConfig(config: PlayConfig): boolean {
+  const text = `${config.betMode ?? ''} ${config.subPlayId ?? ''} ${config.catalogSubId ?? ''} ${config.playMethodLabel ?? ''} ${config.playTypeLabel ?? ''}`
+  if (/组选3|组选30|zu30/i.test(text)) return false
+  if (config.betMode === 'zu3' && (config.inputMode === 'danshi' || /单式|_ds/i.test(text))) return true
+  if (/组三单式|zu3_ds|ren\d_zu3_ds/i.test(text)) return true
+  // 数字 rule：任三组三单式 84
+  const sid = Number.parseInt(String(config.catalogSubId ?? config.subPlayId ?? '').trim(), 10)
+  if (sid === 84) return true
+  return /组三|zu3/i.test(text) && /单式|danshi|_ds/i.test(text)
+}
+
 /**
  * 是否按「单式号码串」计注（须保序去重）。
  * 目录 subId 常为数字（如 g004/39），不能只认 zhixuan_ds；
@@ -133,6 +145,26 @@ export function expandZhixuanPositionPoolToDanshi(content: string, segmentLen: n
   return uniquePreserveOrder(cur).join(',')
 }
 
+/** 直选单式展开结果剔除豹子票（随机出号 / 占位样例用） */
+export function filterBaoziFromDanshiTickets(raw: string, segmentLen: number): string {
+  const seg = segmentLen > 0 ? segmentLen : 0
+  return dedupeDanshiTokens(raw, seg)
+    .filter((t) => !isBaoziDigitTicket(t))
+    .join(',')
+}
+
+/**
+ * 按位号池展开为直选单式并剔除豹子；若配置禁止单独豹子且结果为空则返回空串。
+ */
+export function expandZhixuanPoolToDanshiWithoutBaozi(
+  content: string,
+  segmentLen: number,
+): string {
+  const expanded = expandZhixuanPositionPoolToDanshi(content, segmentLen)
+  if (!expanded) return ''
+  return filterBaoziFromDanshiTickets(expanded, segmentLen)
+}
+
 /** 直选单式 / 直选复式 / 混合组选：禁止「仅豹子号」时的统一提示 */
 export const SOLO_BAOZI_FORBIDDEN_MSG =
   '当前方案不允许单独下注 111、222、333等类似的豹子号'
@@ -146,6 +178,150 @@ export function isBaoziDigitTicket(token: string): boolean {
   if (t.length < 2 || !/^\d+$/.test(t)) return false
   const head = t[0]!
   return [...t].every((c) => c === head)
+}
+
+/** 组三形态：恰好两同号 + 一异号（如 112 / 121；不含 111、012） */
+export function isZu3DigitTicket(token: string): boolean {
+  const t = String(token ?? '').trim()
+  if (t.length !== 3 || !/^\d{3}$/.test(t)) return false
+  const counts = new Map<string, number>()
+  for (const c of t) counts.set(c, (counts.get(c) ?? 0) + 1)
+  if (counts.size !== 2) return false
+  return [...counts.values()].every((n) => n === 1 || n === 2)
+}
+
+/** 组三单式整注归一：仅保留组三形态，按形态去重保序 */
+export function normalizeZu3DanshiContent(raw: string, segmentLen = 3): string {
+  const expect = segmentLen > 0 ? segmentLen : 3
+  const parts = String(raw ?? '')
+    .split(/[,，\s\n]+/)
+    .map((t) => t.trim())
+    .filter(Boolean)
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const t of parts) {
+    if (!/^\d+$/.test(t) || t.length !== expect) continue
+    if (expect === 3 ? !isZu3DigitTicket(t) : false) continue
+    if (expect !== 3) {
+      // 非三星暂按组选单式口径（不应走到任三组三）
+      if (isBaoziDigitTicket(t)) continue
+    }
+    const key = [...t].sort().join('')
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(t)
+  }
+  return out.join(',')
+}
+
+export const ZU3_DANSHI_PATTERN_MSG =
+  '组三单式：每注须为两个相同号码和一个不同号码（如 112），不含豹子与组六'
+
+/** 组六单式（含任三组六单式；不含组选6/60 等） */
+export function isZu6DanshiConfig(config: PlayConfig): boolean {
+  const text = `${config.betMode ?? ''} ${config.subPlayId ?? ''} ${config.catalogSubId ?? ''} ${config.playMethodLabel ?? ''} ${config.playTypeLabel ?? ''}`
+  if (/组选6|组选60|组选120|zu60|zu120/i.test(text)) return false
+  if (config.betMode === 'zu6' && (config.inputMode === 'danshi' || /单式|_ds/i.test(text))) return true
+  if (/组六单式|zu6_ds|ren\d_zu6_ds/i.test(text)) return true
+  // 数字 rule：任三组六单式 86
+  const sid = Number.parseInt(String(config.catalogSubId ?? config.subPlayId ?? '').trim(), 10)
+  if (sid === 86) return true
+  return /组六|zu6/i.test(text) && /单式|danshi|_ds/i.test(text)
+}
+
+/** 组六形态：三位互不相同（如 012；不含 111、112） */
+export function isZu6DigitTicket(token: string): boolean {
+  const t = String(token ?? '').trim()
+  if (t.length !== 3 || !/^\d{3}$/.test(t)) return false
+  return new Set([...t]).size === 3
+}
+
+/** 组六单式整注归一：仅保留组六形态，按形态去重保序 */
+export function normalizeZu6DanshiContent(raw: string, segmentLen = 3): string {
+  const expect = segmentLen > 0 ? segmentLen : 3
+  const parts = String(raw ?? '')
+    .split(/[,，\s\n]+/)
+    .map((t) => t.trim())
+    .filter(Boolean)
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const t of parts) {
+    if (!/^\d+$/.test(t) || t.length !== expect) continue
+    if (expect === 3 ? !isZu6DigitTicket(t) : false) continue
+    if (expect !== 3 && isBaoziDigitTicket(t)) continue
+    const key = [...t].sort().join('')
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(t)
+  }
+  return out.join(',')
+}
+
+export const ZU6_DANSHI_PATTERN_MSG =
+  '组六单式：每注须为三个各不相同的号码（如 012），不含豹子与组三'
+
+export const HUNHE_DANSHI_PATTERN_MSG =
+  '混合组选：每注须为三个号码且不含豹子；组选形态相同只计 1 注（如 123 与 321），顺序不限'
+
+/** 组六形态全集大小：C(10,3)=120 */
+export const ZU6_DANSHI_FORM_COUNT = 120
+
+/**
+ * 随机生成 count 注组六单式整注（三位互异、形态去重，如 012）。
+ */
+export function randomZu6DanshiTickets(count: number, max = ZU6_DANSHI_FORM_COUNT): string {
+  const want = Math.min(max, Math.max(1, Math.trunc(count) || 1))
+  const out: string[] = []
+  const seen = new Set<string>()
+  let guard = 0
+  while (out.length < want && guard++ < 3000) {
+    const pool = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[pool[i], pool[j]] = [pool[j]!, pool[i]!]
+    }
+    const digits = pool.slice(0, 3).map(String)
+    for (let i = digits.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[digits[i], digits[j]] = [digits[j]!, digits[i]!]
+    }
+    const t = digits.join('')
+    const key = [...t].sort().join('')
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(t)
+  }
+  return out.join(',')
+}
+
+/** 组三形态全集大小：C(10,2)×2（选对子号与异号） */
+export const ZU3_DANSHI_FORM_COUNT = 90
+
+/**
+ * 随机生成 count 注组三单式整注（形态去重，如 112）。
+ * 供开某投某「全部随机」/ 随机出号预览共用。
+ */
+export function randomZu3DanshiTickets(count: number, max = ZU3_DANSHI_FORM_COUNT): string {
+  const want = Math.min(max, Math.max(1, Math.trunc(count) || 1))
+  const out: string[] = []
+  const seen = new Set<string>()
+  let guard = 0
+  while (out.length < want && guard++ < 2000) {
+    const pair = Math.floor(Math.random() * 10)
+    let single = Math.floor(Math.random() * 10)
+    if (single === pair) continue
+    const digits = [String(pair), String(pair), String(single)]
+    for (let i = digits.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[digits[i], digits[j]] = [digits[j]!, digits[i]!]
+    }
+    const t = digits.join('')
+    const key = [...t].sort().join('')
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(t)
+  }
+  return out.join(',')
 }
 
 /** 直选复式（前二/前三/… 同类） */
@@ -361,15 +537,49 @@ export function isRenxuanPositionPoolConfig(config: PlayConfig): boolean {
 /** 任选选位内容：剥位后交给原玩法计注/选号面板（避免和值/号池分支误吃位名前缀） */
 export function bareConfigForRenxuanPicks(config: PlayConfig): PlayConfig {
   const k = config.renPositionCount ?? renPickCountFromConfig(config)
-  return {
+  const bm = (config.betMode ?? '').trim()
+  const label = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''}`
+  // 和值/跨度/尾数：内层按任 k 位计组合；号池组选（组选24 等）须保持 segmentLen=1，勿当成按位录入
+  const hezhiLike =
+    bm === 'hezhi' ||
+    bm === 'kuadu' ||
+    bm === 'weishu' ||
+    (/和值|跨度|尾数/.test(label) && !/单式|复式/.test(label))
+  const poolZuxuan =
+    config.inputMode === 'pool' ||
+    ['zu24', 'zu12', 'zu4', 'zu3', 'zu6', 'zuxuan_fs', 'baodan'].includes(bm) ||
+    /组选24|组选12|组选6|组选4|组选复式|组三|组六|包胆/i.test(label)
+  let segmentLen = config.segmentLen
+  if (hezhiLike && k >= 2 && k <= 5) {
+    segmentLen = k
+  } else if (poolZuxuan) {
+    segmentLen = 1
+  } else if (k >= 2 && k <= 5) {
+    segmentLen = k
+  }
+  const bare: PlayConfig = {
     ...config,
     renPositionCount: undefined,
     playTypeId: '',
     guajiGroup: '',
     playTypeLabel: '',
-    // 号池 UI 常把 segmentLen 置 1；内层组选/和值须按任 k 计注
-    segmentLen: k >= 2 && k <= 5 ? k : config.segmentLen,
+    segmentLen,
   }
+  // 剥位会清掉 renPositionCount/playTypeId；目录常把任四组选6 标成「组六」，
+  // 若不保留识别信号，内层会按三星组六要求 ≥3 码并误报「组六至少选择 3 个号码」。
+  if (isSixingZu6PlayConfig(config)) {
+    const method = String(bare.playMethodLabel ?? '')
+    if (!/组选6/i.test(method)) {
+      bare.playMethodLabel = method ? `${method}组选6` : '组选6'
+    }
+    const sid = String(bare.catalogSubId ?? '').trim()
+    if (!sid || !/^\d+$/.test(sid)) {
+      const fromSub = String(config.catalogSubId ?? config.subPlayId ?? '').trim()
+      if (/^(132|136|139|145)$/.test(fromSub)) bare.catalogSubId = fromSub
+      else if (!sid) bare.catalogSubId = '145'
+    }
+  }
+  return bare
 }
 
 function countRenxuanNeedsPositionUnits(config: PlayConfig, content: string): number {
@@ -381,9 +591,35 @@ function countRenxuanNeedsPositionUnits(config: PlayConfig, content: string): nu
 
   if (isRenxuanPositionDanshiConfig(config)) {
     const digitLen = config.segmentLen > 0 ? config.segmentLen : k
-    const tickets = isZuxuanDanshiConfig(config)
-      ? dedupeZuxuanDanshiTokens(picks, digitLen).length
-      : dedupeDanshiTokens(picks, digitLen).length
+    let picksBody = picks
+    if (digitLen > 1 && isZhixuanPositionPoolContent(picksBody, digitLen)) {
+      picksBody = expandZhixuanPositionPoolToDanshi(picksBody, digitLen)
+      if (!picksBody) return 0
+    }
+    let tickets = 0
+    if (isZu3DanshiConfig(config)) {
+      tickets = normalizeZu3DanshiContent(picksBody, digitLen)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean).length
+    } else if (isZu6DanshiConfig(config)) {
+      tickets = normalizeZu6DanshiContent(picksBody, digitLen)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean).length
+    } else if (isHunhePlayConfig(config)) {
+      tickets = normalizeHunheGroupContent(picksBody, digitLen)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean).length
+    } else if (isZuxuanDanshiConfig(config)) {
+      tickets = normalizeZuxuanDanshiContent(picksBody, digitLen)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean).length
+    } else {
+      tickets = dedupeDanshiTokens(picksBody, digitLen).length
+    }
     if (!tickets) return 0
     return mul * tickets
   }
@@ -480,6 +716,53 @@ export function dedupeZuxuanDanshiTokens(raw: string, segmentLen: number): strin
     out.push(t)
   }
   return out
+}
+
+/**
+ * 单码号池展成组选单式整注（升序组合、不含对子/豹子）。
+ * 对齐后端 guajibet.expandZuxuanDigitPoolToDanshi：如 1,2,3 → 12,13,23。
+ */
+export function expandZuxuanDigitPoolToDanshi(raw: string, segmentLen: number): string {
+  const expect = segmentLen > 0 ? segmentLen : 2
+  const parts = String(raw ?? '')
+    .replace(/，/g, ',')
+    .split(/[,，\s\n]+/)
+    .map((t) => t.trim())
+    .filter(Boolean)
+  const digits: string[] = []
+  const seen = new Set<string>()
+  for (const p of parts) {
+    const d = p.replace(/\D/g, '')
+    if (d.length !== 1) return ''
+    if (seen.has(d)) continue
+    seen.add(d)
+    digits.push(d)
+  }
+  if (digits.length < expect) return ''
+  digits.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+  const combos: string[] = []
+  const walk = (start: number, cur: string[]) => {
+    if (cur.length === expect) {
+      const ticket = cur.join('')
+      if (![...ticket].every((c) => c === ticket[0])) combos.push(ticket)
+      return
+    }
+    for (let i = start; i < digits.length; i++) {
+      walk(i + 1, [...cur, digits[i]!])
+    }
+  }
+  walk(0, [])
+  return combos.join(',')
+}
+
+/**
+ * 组选单式内容归一：已有整注则形态去重；否则单码号池按 C(n,k) 展成整注。
+ */
+export function normalizeZuxuanDanshiContent(raw: string, segmentLen: number): string {
+  const expect = segmentLen > 0 ? segmentLen : 2
+  const tickets = dedupeZuxuanDanshiTokens(raw, expect)
+  if (tickets.length) return tickets.join(',')
+  return expandZuxuanDigitPoolToDanshi(raw, expect)
 }
 
 /** 与后端 schemes/play_api.go BetPayload 对齐 */
@@ -924,6 +1207,12 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
     return countRenxuanNeedsPositionUnits(config, content)
   }
 
+  // 组选12 双区（非任选剥位路径）；任选剥位后内层 bare 也会走到此
+  if (isZu12PlayConfig(config)) {
+    const n = countZu12BetUnits(content)
+    return n > 0 ? applySegmentBetMultiplier(config, n) : 0
+  }
+
   if (config.betMode === 'hezhi' || (config.playTemplate === 'pc28_std' && config.playMethodLabel?.trim() === '和值')) {
     const pool = poolFromConfig(config) ?? { min: 0, max: 27 }
     const tokens = parsePickTokens(content, pool)
@@ -1053,12 +1342,13 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
   }
 
   if (isSscDanshiLikeConfig(config)) {
-    // 组选单式：排除对子/豹子 + 形态去重（11,12,22,13 → 2；12,21 → 1）
+    // 组选单式：整注形态去重，或单码号池 C(n,k)（1,2,3 → 3）
     if (isZuxuanDanshiConfig(config)) {
-      return applySegmentBetMultiplier(
-        config,
-        dedupeZuxuanDanshiTokens(content, config.segmentLen).length,
-      )
+      const n = normalizeZuxuanDanshiContent(content, config.segmentLen)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean).length
+      return applySegmentBetMultiplier(config, n)
     }
     // 冷热出号按位号池：按直选复式位积计注（万4,5×千3,5×百2,5 = 8）
     const seg = config.segmentLen > 0 ? config.segmentLen : 0
@@ -1160,6 +1450,29 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
     return applySegmentBetMultiplier(config, pool.length ** config.segmentLen)
   }
 
+  // 组选24/12/4：对齐 guajibet countZuGroupBetNums（号池 UI segmentLen=1）
+  {
+    const bm = (config.betMode ?? '').trim()
+    const zuxuanN = `${config.betMode ?? ''} ${config.subPlayId ?? ''} ${config.catalogSubId ?? ''} ${config.playMethodLabel ?? ''}`
+    const n = new Set(pool).size
+    if (bm === 'zu24' || /组选24|zu24/i.test(zuxuanN)) {
+      return n < 4 ? 0 : applySegmentBetMultiplier(config, comboCount(n, 4))
+    }
+    if (bm === 'zu12' || (/组选12|zu12/i.test(zuxuanN) && !/组选120|zu120/i.test(zuxuanN))) {
+      // 双区「二重,单号」：C(m,1)×C(n,2)；扁选号池不再按 C(n,2)*2 估算
+      const dual = countZu12BetUnits(content)
+      return dual > 0 ? applySegmentBetMultiplier(config, dual) : 0
+    }
+    if (bm === 'zu4' || (/组选4|zu4/i.test(zuxuanN) && !/组选24|zu24|组选12|zu12/i.test(zuxuanN))) {
+      return n === 2 ? applySegmentBetMultiplier(config, 1) : 0
+    }
+    // 四星/任四组选6：C(n,2)（须在三星组六 C(n,3) 之前）
+    if (isSixingZu6PlayConfig(config)) {
+      if (n < 2) return 0
+      return applySegmentBetMultiplier(config, (n * (n - 1)) / 2)
+    }
+  }
+
   // 组选号池：二星 C(n,2)；三星组三/组六/通用组选复式（对齐 guajibet countZuxuanFushiBetNums）
   // 注意：号池 UI 会把 segmentLen 置 1，计注不能再依赖 segmentLen===3。
   const zuxuanText = `${config.betMode ?? ''} ${config.subPlayId} ${config.catalogSubId ?? ''} ${config.playMethodLabel ?? ''}`
@@ -1168,10 +1481,15 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
     config.betMode === 'zu3' ||
     config.betMode === 'zu6' ||
     config.betMode === 'zuxuan_fs' ||
-    /组三|组六|组选复式/.test(zuxuanText)
+    /组三|组六|组选复式|组选6/.test(zuxuanText)
   if (isZuFsLike) {
     const n = new Set(pool).size
     const starLen = zuxuanStarLen(config)
+    // 四星/任四组选6：C(n,2)
+    if (isSixingZu6PlayConfig(config)) {
+      if (n < 2) return 0
+      return applySegmentBetMultiplier(config, (n * (n - 1)) / 2)
+    }
     const isZu6Only =
       config.betMode === 'zu6' ||
       (/组六|zu6/i.test(zuxuanText) && !/组选6|组选60|组选120|zu60|zu120/i.test(zuxuanText))
@@ -1202,13 +1520,24 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
 
 /**
  * 组选号池最少选号数（对齐后端 zuxuanPoolMinPick）。
- * 组三 ≥2；组六 ≥3；其它组选号池玩法返回 null（由各自规则处理）。
+ * 组三 ≥2；三星组六 ≥3；四星/任四组选6 ≥2；组选24 ≥4；组选12 双区另验。
  */
 export function zuxuanPoolMinPick(config: PlayConfig): number | null {
   const text = `${config.betMode ?? ''} ${config.subPlayId ?? ''} ${config.catalogSubId ?? ''} ${config.playMethodLabel ?? ''}`
   // 包胆每组仅 1 胆，勿套组三/组六下限
   if (config.betMode === 'baodan' || /包胆|baodan|_bd\b/i.test(text)) {
     return null
+  }
+  // 组选12：二重≥1 + 单号≥2，见 validateZu12Content
+  if (config.betMode === 'zu12' || /组选12|zu12/i.test(text)) {
+    return null
+  }
+  if (config.betMode === 'zu24' || /组选24|zu24/i.test(text)) {
+    return 4
+  }
+  // 四星/任四组选6：C(n,2) 至少 2 码（区别于三星组六 ≥3）
+  if (isSixingZu6PlayConfig(config)) {
+    return 2
   }
   if (
     config.betMode === 'zu6' ||
@@ -1225,11 +1554,17 @@ export function zuxuanPoolMinPick(config: PlayConfig): number | null {
   return null
 }
 
-/** 组三/组六号池不足时的保存提示 */
+/** 组选号池不足时的保存提示 */
 export function zuxuanPoolMinPickMessage(config: PlayConfig): string {
   const min = zuxuanPoolMinPick(config)
   if (min == null) return '选号无效'
-  const text = `${config.betMode ?? ''} ${config.playMethodLabel ?? ''}`
+  const text = `${config.betMode ?? ''} ${config.playMethodLabel ?? ''} ${config.subPlayId ?? ''} ${config.catalogSubId ?? ''}`
+  if (config.betMode === 'zu24' || /组选24|zu24/i.test(text)) {
+    return `组选24至少选择 ${min} 个号码`
+  }
+  if (isSixingZu6PlayConfig(config)) {
+    return `组选6至少选择 ${min} 个号码`
+  }
   if (
     config.betMode === 'zu6' ||
     (/组六|zu6/i.test(text) && !/组选6|组选60|组选120|zu60|zu120/i.test(text))
@@ -1237,6 +1572,172 @@ export function zuxuanPoolMinPickMessage(config: PlayConfig): string {
     return `组六至少选择 ${min} 个号码`
   }
   return `组三至少选择 ${min} 个号码`
+}
+
+/**
+ * 四星/任四「组选6」：号池 C(n,2)、至少 2 码。
+ * 区别于三星「组六」复式 C(n,3)、至少 3 码。
+ * 注意：目录短名常为「组六」，须结合任四/四星区位或规则 id 识别，勿仅靠「组选6」文案。
+ */
+export function isSixingZu6PlayConfig(config: PlayConfig): boolean {
+  if (isZu6DanshiConfig(config)) return false
+  const method = String(config.playMethodLabel ?? '')
+  const sidRaw = String(config.catalogSubId ?? config.subPlayId ?? '').trim()
+  // catalog 可能是「组选6 145」合并串，取出数字 id
+  const sid =
+    /^\d+$/.test(sidRaw)
+      ? sidRaw
+      : (sidRaw.match(/(?:^|[\s|,/])(132|136|139|145)(?:$|[\s|,/])/)?.[1] ?? sidRaw)
+  const text = `${method} ${sidRaw} ${config.betMode ?? ''}`
+  if (/组选60|组选120|zu60|zu120/i.test(text)) return false
+  // 文案明确「组选6」
+  if (/组选6/i.test(method)) return true
+  // 规则 id：四星组选6=132/136；前后四组选6=139；任四组选6=145
+  if (['132', '136', '139', '145'].includes(sid)) return true
+  const bm = (config.betMode ?? '').trim()
+  const isZu6 =
+    bm === 'zu6' ||
+    (/zu6/i.test(text) && !/组六/i.test(method)) ||
+    // 目录短名「组六」在任四/四星语境下即组选6
+    (/组六/i.test(method) && !/组六单式/i.test(method))
+  if (!isZu6 && !/组选6|zu6/i.test(text)) return false
+  // 任四选位 / 四星区位
+  const renK = config.renPositionCount ?? renPickCountFromConfig(config)
+  if (renK >= 4) return true
+  const loc = `${config.playTypeLabel ?? ''} ${config.playTypeId ?? ''} ${config.guajiGroup ?? ''}`
+  if (/四星|前后四|qian4|hou4|g013|g014/i.test(loc)) return true
+  // 任选 + 组六/zu6：任四规则段（勿把任三组六 80–88 算进来）
+  if (/任选|renxuan|g011/i.test(loc) && (/组六|组选6|zu6/i.test(text) || bm === 'zu6')) {
+    const n = Number.parseInt(sid, 10)
+    if (Number.isFinite(n) && n >= 141 && n <= 145) return true
+  }
+  return false
+}
+
+/** 组选12：双区「二重号池,单号池」（如 12,3234） */
+export function isZu12PlayConfig(config: PlayConfig): boolean {
+  const bm = (config.betMode ?? '').trim()
+  if (bm === 'zu12') return true
+  const text = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''}`
+  return /组选12|zu12/i.test(text) && !/组选120|zu120/i.test(text)
+}
+
+/** 从连写/逗号串提取 0–9 数字（去重保序） */
+export function uniqueDigitsFromRun(raw: string): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const ch of String(raw ?? '')) {
+    if (ch < '0' || ch > '9' || seen.has(ch)) continue
+    seen.add(ch)
+    out.push(ch)
+  }
+  return out
+}
+
+export type Zu12Zones = {
+  doubles: string[]
+  /** 单号区区内去重（允许与二重区有交集；出站/落库原样保留） */
+  singles: string[]
+  normalized: string
+}
+
+/**
+ * 解析组选12 双区内容。须恰好一段逗号分隔：二重号,单号。
+ * 二重 ≥1、单号区 ≥2（各位 0–9，区内去重保序；跨区重叠码保留）。
+ */
+export function parseZu12Zones(raw: string): Zu12Zones | null {
+  const text = String(raw ?? '')
+    .replace(/，/g, ',')
+    .trim()
+  if (!text) return null
+  const parts = text.split(',')
+  if (parts.length !== 2) return null
+  const doubles = uniqueDigitsFromRun(parts[0] ?? '')
+  const singles = uniqueDigitsFromRun(parts[1] ?? '')
+  if (doubles.length < 1 || singles.length < 2) return null
+  return {
+    doubles,
+    singles,
+    // 区内去重即可；跨区重叠原样保留（如 23,123），交给第三方按双区计注
+    normalized: `${doubles.join('')},${singles.join('')}`,
+  }
+}
+
+export const ZU12_FORMAT_MSG =
+  '组选12：从0-9中输入1个及以上二重号码、2个及以上单号，两区用逗号分隔，如：12,3234'
+
+export const ZU12_OVERLAP_MSG =
+  '组选12：每个二重号须能与单号区凑成至少 1 注（选该二重时单号区去掉该码后仍≥2；如 23,123 计 2 注，1,12 为 0 注）'
+
+/** C(n,2)；n<2 → 0（勿用 comboCount：其对 n<k 会回落成 n） */
+function combo2(n: number): number {
+  if (n < 2) return 0
+  return (n * (n - 1)) / 2
+}
+
+/**
+ * 组选12 注数：对每个二重 d，C(|单号\{d}|, 2) 求和。
+ * 跨区重叠时不整区剔除；仅在组合该二重时排除同码（23,123→2；2,123→1；1,12→0）。
+ */
+export function countZu12BetUnits(raw: string): number {
+  const zones = parseZu12Zones(raw)
+  if (!zones) return 0
+  let total = 0
+  for (const d of zones.doubles) {
+    total += combo2(zones.singles.filter((s) => s !== d).length)
+  }
+  return total
+}
+
+/**
+ * 组选12 随机双区内容。
+ * @param doublesCount 二重号个数（1–10）
+ * @param singlesCount 单号个数（2–10）；缺省 2
+ * 保证总注数 ≥1（必要时重抽；跨区可重叠）。
+ */
+export function randomZu12DualContent(doublesCount = 1, singlesCount = 2): string {
+  const shuffle = <T,>(arr: T[]): T[] => {
+    const a = [...arr]
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[a[i], a[j]] = [a[j]!, a[i]!]
+    }
+    return a
+  }
+  const fallback = '12,34'
+  const wantD = Math.min(10, Math.max(1, Math.trunc(doublesCount) || 1))
+  const wantS = Math.min(10, Math.max(2, Math.trunc(singlesCount) || 2))
+  for (let guard = 0; guard < 80; guard++) {
+    const pool = shuffle(Array.from({ length: 10 }, (_, i) => String(i)))
+    // 先取二重；单号优先用剩余码，不够再与二重重叠
+    const doubles = pool.slice(0, wantD)
+    const outside = pool.slice(wantD)
+    const singles: string[] = []
+    for (const d of outside) {
+      if (singles.length >= wantS) break
+      singles.push(d)
+    }
+    for (const d of shuffle([...doubles])) {
+      if (singles.length >= wantS) break
+      if (!singles.includes(d)) singles.push(d)
+    }
+    if (doubles.length < wantD || singles.length < wantS) continue
+    const raw = `${doubles.join('')},${singles.join('')}`
+    const zones = parseZu12Zones(raw)
+    if (zones && countZu12BetUnits(zones.normalized) > 0) return zones.normalized
+  }
+  return fallback
+}
+
+export function validateZu12Content(raw: string): GroupContentValidation {
+  const zones = parseZu12Zones(raw)
+  if (!zones) return { ok: false, message: ZU12_FORMAT_MSG }
+  const betUnits = countZu12BetUnits(raw)
+  if (betUnits <= 0) {
+    const overlapped = zones.singles.some((d) => zones.doubles.includes(d))
+    return { ok: false, message: overlapped ? ZU12_OVERLAP_MSG : ZU12_FORMAT_MSG }
+  }
+  return { ok: true, normalized: zones.normalized, betUnits }
 }
 
 /** 组选星数：二星组选=2，组三/组六/三星组选复式=3（不受号池 UI 的 segmentLen=1 影响） */
@@ -1480,6 +1981,10 @@ export const REN2_ZHIXUAN_HEZHI_MAX_BET_UNITS = 900
 export function hezhiKuaduMaxBetUnits(config: PlayConfig): number {
   // 任二直选和值：第三方上限 900（勿套前二 90）
   if (isRen2ZhixuanHezhiConfig(config)) return REN2_ZHIXUAN_HEZHI_MAX_BET_UNITS
+  // 任三/任四直选和值：与任选直选复式同口径（9000 / 45000）；含剥位后的 bareConfig
+  if (isRenxuanZhixuanHezhiConfig(config)) {
+    return renxuanZhixuanFushiMaxBetUnits(config)
+  }
   const segLen = inferHezhiSegmentLen(config)
   if (segLen <= 1) return HEZHI_MAX_BET_UNITS
   const size = 10
@@ -1620,8 +2125,8 @@ export function zhixuanFushiMaxBetUnits(config: PlayConfig): number {
   return base * Math.max(1, m)
 }
 
-/** 任选·任二直选和值（不含组选和值；catalog 76） */
-export function isRen2ZhixuanHezhiConfig(config: PlayConfig): boolean {
+/** 任选·直选和值（不含组选和值；含剥位后的 bareConfig，靠文案/ruleId 识别） */
+function isRenxuanZhixuanHezhiConfig(config: PlayConfig): boolean {
   const label = `${config.playMethodLabel ?? ''}`
   if (/组选/.test(label)) return false
   const bm = String(config.betMode ?? '').toLowerCase()
@@ -1629,27 +2134,41 @@ export function isRen2ZhixuanHezhiConfig(config: PlayConfig): boolean {
     bm === 'hezhi' || /直选和值/.test(label) || (/和值/.test(label) && !/尾数|跨度/.test(label))
   if (!isHezhi) return false
   const k = config.renPositionCount ?? renPickCountFromConfig(config)
-  if (k !== 2) return false
+  if (k < 2 || k > 5) return false
   const sid = Number.parseInt(String(config.catalogSubId ?? config.subPlayId ?? '').trim(), 10)
-  // 79=任二组选和值，勿误判
-  if (Number.isFinite(sid) && sid === 79) return false
+  // 组选和值：79 任二 / 85 任三 / 145 任四，勿误判
+  if (Number.isFinite(sid) && (sid === 79 || sid === 85 || sid === 145)) return false
   return (
     isSscRenxuanConfig(config) ||
-    /任二|g011|renxuan/i.test(`${config.playTypeId ?? ''} ${config.guajiGroup ?? ''} ${label}`) ||
-    sid === 76
+    /任[二三四]|任选|g011|renxuan/i.test(
+      `${config.playTypeId ?? ''} ${config.guajiGroup ?? ''} ${label}`,
+    ) ||
+    (Number.isFinite(sid) && ((sid >= 74 && sid <= 88) || (sid >= 141 && sid <= 144)))
   )
 }
 
-/** 任选直选复式单组上限：任二第三方 900；任三/任四按选码位数套直选公式 */
+/** 任选·任二直选和值（不含组选和值；catalog 76） */
+export function isRen2ZhixuanHezhiConfig(config: PlayConfig): boolean {
+  if (!isRenxuanZhixuanHezhiConfig(config)) return false
+  const k = config.renPositionCount ?? renPickCountFromConfig(config)
+  return k === 2
+}
+
+/**
+ * 任选直选复式单组上限：同星直选上限 × C(5,k)
+ * 任二 90×10=900；任三 900×10=9000；任四 9000×5=45000（对齐第三方）。
+ */
 export function renxuanZhixuanFushiMaxBetUnits(config: PlayConfig): number {
   const n = renPickCountFromConfig(config)
-  if (n <= 2) return 900
-  const pool = poolFromConfig(config)
-  const size = pool ? pool.max - pool.min + 1 : 10
-  if (size <= 1 || n <= 1) return 900
-  const fullMinusSame = Math.pow(size, n) - size
-  const oneShort = (size - 1) * Math.pow(size, n - 1)
-  return Math.min(fullMinusSame, oneShort)
+  const k = n >= 2 && n <= 5 ? n : 2
+  // 同星直选上限按位号 0–9；勿用和值号池（0–27）否则任三会被抬飞或误算
+  const size = 10
+  if (k <= 1) return 900
+  const fullMinusSame = Math.pow(size, k) - size
+  const oneShort = (size - 1) * Math.pow(size, k - 1)
+  const base = Math.min(fullMinusSame, oneShort)
+  const mul = comboCount(5, k)
+  return mul > 0 ? base * mul : base
 }
 
 /** 任选选位类单组上限（任二直选和值=900，其余对齐直选复式） */
@@ -1751,13 +2270,32 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
   const content = raw.trim()
   if (!content) return { ok: false, message: '方案内容不能为空' }
 
-  // 组三/组六号池：保存时强制最低选号数（冷热出号与定码共用）
+  // 组选12 双区：须在任选剥位 / 通用号池校验之前拦截（「12,34」不是扁选 0-9 号池）
+  if (isZu12PlayConfig(config) && !isRenxuanNeedsPositionConfig(config)) {
+    const zu12 = validateZu12Content(content)
+    if (!zu12.ok) return zu12
+    return {
+      ok: true,
+      normalized: zu12.normalized,
+      betUnits: applySegmentBetMultiplier(config, zu12.betUnits),
+    }
+  }
+
+  // 组三/组六/组选24 号池：保存时强制最低选号数（冷热出号与定码共用）
+  // 任选带位名前缀时先剥位再数码（万,千,百,十\n1,2,3）
   const zuxuanMin = zuxuanPoolMinPick(config)
-  if (zuxuanMin != null && !content.includes('\n')) {
-    const digits = [...new Set(parsePickTokens(content))]
-    if (isValidDigitPoolLine(content) || digits.length > 0) {
-      if (digits.length < zuxuanMin) {
-        return { ok: false, message: zuxuanPoolMinPickMessage(config) }
+  if (zuxuanMin != null) {
+    let poolLine = content
+    if (isRenxuanNeedsPositionConfig(config)) {
+      const k = config.renPositionCount ?? renPickCountFromConfig(config)
+      poolLine = parseRenxuanPositionContent(content, k).picks
+    }
+    if (poolLine && !poolLine.includes('\n')) {
+      const digits = [...new Set(parsePickTokens(poolLine))]
+      if (isValidDigitPoolLine(poolLine) || digits.length > 0) {
+        if (digits.length < zuxuanMin) {
+          return { ok: false, message: zuxuanPoolMinPickMessage(config) }
+        }
       }
     }
   }
@@ -1822,20 +2360,72 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
 
     if (isRenxuanPositionDanshiConfig(config)) {
       const digitLen = config.segmentLen > 0 ? config.segmentLen : k
-      const parts = picks.split(/[,，\s\n]+/).map((s) => s.trim()).filter(Boolean)
-      for (const p of parts) {
-        if (!/^\d+$/.test(p)) return { ok: false, message: '号码存在非数字内容' }
-        if (p.length !== digitLen) {
-          return { ok: false, message: `每注须为 ${digitLen} 位数字，请用逗号分隔` }
-        }
+      // 冷热按位号池（1,2\n3,4\n5,6）先展成整注，再按单式形态校验（对齐后端）
+      let picksBody = picks
+      if (digitLen > 1 && isZhixuanPositionPoolContent(picksBody, digitLen)) {
+        picksBody = expandZhixuanPositionPoolToDanshi(picksBody, digitLen)
+        if (!picksBody) return { ok: false, message: '选号无效' }
       }
-      const uniq = isZuxuanDanshiConfig(config)
-        ? dedupeZuxuanDanshiTokens(picks, digitLen)
-        : dedupeDanshiTokens(picks, digitLen)
-      if (!uniq.length) return { ok: false, message: '选号无效' }
+      let body = picksBody
+      if (isZu3DanshiConfig(config)) {
+        const parts = picksBody.split(/[,，\s\n]+/).map((s) => s.trim()).filter(Boolean)
+        for (const p of parts) {
+          if (!/^\d+$/.test(p)) return { ok: false, message: '号码存在非数字内容' }
+          if (p.length !== digitLen) {
+            return { ok: false, message: `每注须为 ${digitLen} 位数字，请用逗号分隔` }
+          }
+        }
+        body = normalizeZu3DanshiContent(picksBody, digitLen)
+        if (!body) return { ok: false, message: ZU3_DANSHI_PATTERN_MSG }
+      } else if (isZu6DanshiConfig(config)) {
+        const parts = picksBody.split(/[,，\s\n]+/).map((s) => s.trim()).filter(Boolean)
+        for (const p of parts) {
+          if (!/^\d+$/.test(p)) return { ok: false, message: '号码存在非数字内容' }
+          if (p.length !== digitLen) {
+            return { ok: false, message: `每注须为 ${digitLen} 位数字，请用逗号分隔` }
+          }
+        }
+        body = normalizeZu6DanshiContent(picksBody, digitLen)
+        if (!body) return { ok: false, message: ZU6_DANSHI_PATTERN_MSG }
+      } else if (isHunhePlayConfig(config)) {
+        const parts = picksBody.split(/[,，\s\n]+/).map((s) => s.trim()).filter(Boolean)
+        for (const p of parts) {
+          if (!/^\d+$/.test(p)) return { ok: false, message: '号码存在非数字内容' }
+          if (p.length !== digitLen) {
+            return { ok: false, message: `每注须为 ${digitLen} 位数字，请用逗号分隔` }
+          }
+        }
+        body = normalizeHunheGroupContent(picksBody, digitLen)
+        if (!body) return { ok: false, message: HUNHE_DANSHI_PATTERN_MSG }
+      } else if (isZuxuanDanshiConfig(config)) {
+        // 单码号池（1,2,3）→ 两两组合整注（12,13,23）；已有整注则形态去重
+        body = normalizeZuxuanDanshiContent(picksBody, digitLen)
+        if (!body) {
+          return {
+            ok: false,
+            message: `请从号码池至少选 ${digitLen} 个不同号码（将自动组合为组选单式）`,
+          }
+        }
+      } else {
+        const parts = picksBody.split(/[,，\s\n]+/).map((s) => s.trim()).filter(Boolean)
+        for (const p of parts) {
+          if (!/^\d+$/.test(p)) return { ok: false, message: '号码存在非数字内容' }
+          if (p.length !== digitLen) {
+            return { ok: false, message: `每注须为 ${digitLen} 位数字，请用逗号分隔` }
+          }
+        }
+        body = dedupeDanshiTokens(picksBody, digitLen).join(',')
+        if (!body) return { ok: false, message: '选号无效' }
+      }
+      const uniq = body.split(',').map((s) => s.trim()).filter(Boolean)
       const normalized = buildRenxuanPositionContent(positions, uniq.join(','))
       const betUnits = mul * uniq.length
-      if (!isZuxuanDanshiConfig(config)) {
+      if (
+        !isZuxuanDanshiConfig(config) &&
+        !isZu3DanshiConfig(config) &&
+        !isZu6DanshiConfig(config) &&
+        !isHunhePlayConfig(config)
+      ) {
         const maxDanshi = zhixuanDanshiMaxBetUnits(config)
         if (maxDanshi > 0 && betUnits > maxDanshi) {
           return { ok: false, message: `投注注数超过最大投注注数:${maxDanshi}` }
@@ -1864,6 +2454,58 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
     if (seg > 1 && isZhixuanPositionPoolContent(danshiRaw, seg)) {
       danshiRaw = expandZhixuanPositionPoolToDanshi(danshiRaw, seg)
     }
+    if (isZu3DanshiConfig(config)) {
+      const parts = danshiRaw.split(/[,，\s\n]+/).map((s) => s.trim()).filter(Boolean)
+      for (const p of parts) {
+        if (!/^\d+$/.test(p)) return { ok: false, message: '存在非数字内容' }
+        if (config.segmentLen > 0 && p.length !== config.segmentLen) {
+          return { ok: false, message: `每注须为 ${config.segmentLen} 位数字，请用逗号分隔` }
+        }
+      }
+      const uniq = normalizeZu3DanshiContent(danshiRaw, config.segmentLen || 3)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+      if (!uniq.length) return { ok: false, message: ZU3_DANSHI_PATTERN_MSG }
+      return {
+        ok: true,
+        normalized: uniq.join(','),
+        betUnits: applySegmentBetMultiplier(config, uniq.length),
+      }
+    }
+    if (isZu6DanshiConfig(config)) {
+      const parts = danshiRaw.split(/[,，\s\n]+/).map((s) => s.trim()).filter(Boolean)
+      for (const p of parts) {
+        if (!/^\d+$/.test(p)) return { ok: false, message: '存在非数字内容' }
+        if (config.segmentLen > 0 && p.length !== config.segmentLen) {
+          return { ok: false, message: `每注须为 ${config.segmentLen} 位数字，请用逗号分隔` }
+        }
+      }
+      const uniq = normalizeZu6DanshiContent(danshiRaw, config.segmentLen || 3)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+      if (!uniq.length) return { ok: false, message: ZU6_DANSHI_PATTERN_MSG }
+      return {
+        ok: true,
+        normalized: uniq.join(','),
+        betUnits: applySegmentBetMultiplier(config, uniq.length),
+      }
+    }
+    if (isZuxuanDanshiConfig(config)) {
+      const uniq = normalizeZuxuanDanshiContent(danshiRaw, config.segmentLen)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+      if (!uniq.length) {
+        return {
+          ok: false,
+          message: `请从号码池至少选 ${config.segmentLen} 个不同号码（将自动组合为组选单式），或直接填整注如 12,13`,
+        }
+      }
+      // 前中后三/前后二三四等跨段玩法按段倍乘（前中后三×3），与后端 evaluateMultiZone、第三方一致
+      return { ok: true, normalized: uniq.join(','), betUnits: applySegmentBetMultiplier(config, uniq.length) }
+    }
     const parts = danshiRaw.split(/[,，\s\n]+/).map((s) => s.trim()).filter(Boolean)
     if (!parts.length) {
       return { ok: false, message: `直选单式须为 ${config.segmentLen} 位数字，每注用逗号分隔` }
@@ -1873,17 +2515,6 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
       if (config.segmentLen > 0 && p.length !== config.segmentLen) {
         return { ok: false, message: `每注须为 ${config.segmentLen} 位数字，请用逗号分隔` }
       }
-    }
-    if (isZuxuanDanshiConfig(config)) {
-      const uniq = dedupeZuxuanDanshiTokens(danshiRaw, config.segmentLen)
-      if (!uniq.length) {
-        return {
-          ok: false,
-          message: `组选单式须为 ${config.segmentLen} 位且各位不全相同（不含对子/豹子），组选形态相同只计 1 注`,
-        }
-      }
-      // 前中后三/前后二三四等跨段玩法按段倍乘（前中后三×3），与后端 evaluateMultiZone、第三方一致
-      return { ok: true, normalized: uniq.join(','), betUnits: applySegmentBetMultiplier(config, uniq.length) }
     }
     const uniq = dedupeDanshiTokens(danshiRaw, config.segmentLen)
     if (uniq.length && uniq.every(isBaoziDigitTicket)) {
@@ -2199,7 +2830,15 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
       }
       return { ok: true, normalized: content, betUnits }
     }
-    return { ok: true, normalized: content, betUnits: betUnits || 1 }
+    // 组选24/12 等：注数为 0 时勿用 ||1 放行（如 3 码 C(3,4)=0）
+    if (betUnits <= 0) {
+      const minMsg = zuxuanPoolMinPickMessage(config)
+      return {
+        ok: false,
+        message: minMsg !== '选号无效' ? minMsg : '选号无效',
+      }
+    }
+    return { ok: true, normalized: content, betUnits }
   }
 
   // 无子玩法时勿放行任意文本（跨度等已在上方校验）
@@ -2342,15 +2981,22 @@ export function groupContentPlaceholder(config: PlayConfig): string {
   }
   {
     const zuxuanText = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''} ${config.betMode ?? ''}`
+    // 组三/组六复式号池提示；单式走下方任选选位/组选单式文案
     if (
-      config.betMode === 'zu3' ||
-      (/组三|zu3/i.test(zuxuanText) && !/组选3|组选30|zu30|和值/i.test(zuxuanText))
+      !isZu3DanshiConfig(config) &&
+      !/单式|_ds/i.test(zuxuanText) &&
+      (config.betMode === 'zu3' ||
+        (/组三|zu3/i.test(zuxuanText) && !/组选3|组选30|zu30|和值/i.test(zuxuanText)))
     ) {
       return '输入两个及以上0-9的号码，多选用逗号分隔，如1.3.5.7'
     }
+    // 四星/任四组选6 走下方选位文案或「两个及以上」；此处仅三星组六
     if (
-      config.betMode === 'zu6' ||
-      (/组六|zu6/i.test(zuxuanText) && !/组选6|组选60|组选120|zu60|zu120|和值/i.test(zuxuanText))
+      !isZu6DanshiConfig(config) &&
+      !isSixingZu6PlayConfig(config) &&
+      !/单式|_ds/i.test(zuxuanText) &&
+      (config.betMode === 'zu6' ||
+        (/组六|zu6/i.test(zuxuanText) && !/组选6|组选60|组选120|zu60|zu120|和值/i.test(zuxuanText)))
     ) {
       return '输入三个及以上0-9的号码，多选用逗号分隔，如1.3.5.7'
     }
@@ -2404,6 +3050,15 @@ export function groupContentPlaceholder(config: PlayConfig): string {
   }
   if (isRenxuanPositionDanshiConfig(config)) {
     const k = config.renPositionCount ?? 2
+    if (isZu3DanshiConfig(config)) {
+      return `从万、千、百、十、个中勾选至少 ${k} 个、最多 5 个位置，再输入两个号相同号码和一个不同号码组成一注。所选位置与号码须与开奖一致，顺序不限。示例：112,223`
+    }
+    if (isZu6DanshiConfig(config)) {
+      return `从万、千、百、十、个中勾选至少 ${k} 个、最多 5 个位置，再输入三个各不相同的3个号码组成一注。所选位置与号码须与开奖一致，顺序不限。示例：012,345`
+    }
+    if (isHunhePlayConfig(config)) {
+      return `从万、千、百、十、个中勾选至少 ${k} 个、最多 5 个位置，再输入三个号码组成一注，所选${k}个位置的开奖号码与输入号码一致，顺序不限。示例：012,345`
+    }
     const n = config.segmentLen > 0 ? config.segmentLen : k
     return `先勾选至少 ${k} 个、最多 5 个位置，再输入 ${n} 位号码（逗号分隔）；多选位按组合计注，如：千,百,个↵12,34`
   }
@@ -2428,9 +3083,16 @@ export function groupContentPlaceholder(config: PlayConfig): string {
     return `每注 ${n} 位数字，多注用逗号分隔；重复号码只计 1 注（如 ${eg} 计 ${n === 2 ? 3 : 2} 注）`
   }
   if (config.subPlayId === 'zhixuan_fs' && config.inputMode === 'multiline') {
-    const labels = config.segmentLabels.join('、')
-    const poolHint = poolRangeHint(config)
-    return `直选复式：按位分行输入，共 ${config.segmentLen} 行（${labels}），每位用逗号分隔；不含豹子/对子（各位同一单码）${poolHint}`
+    // 与 groupDigitInputHint 对齐（数字录入框主路径）；此处供裸 textarea 等兜底
+    const labels = config.segmentLabels ?? []
+    const fmt = (lab: string) => (/^[万千百十个]$/.test(lab.trim()) ? `${lab.trim()}位` : lab.trim())
+    const first = fmt(labels[0] ?? '第1位')
+    const last = fmt(labels[config.segmentLen - 1] ?? `第${config.segmentLen}位`)
+    const eg = Array.from({ length: config.segmentLen }, (_, i) => {
+      const n = (i % 4) + 2
+      return Array.from({ length: n }, (_, k) => String((i + k) % 10)).join('')
+    }).join(',')
+    return `请对应${first}到${last}，以“，”分隔，输入对应位置的号码，每一位置皆要输入号码；如：${eg}`
   }
   if (isLonghuPlayConfig(config)) {
     return `龙虎：${longhuPickHint(config)}，逗号分隔`
@@ -2453,6 +3115,36 @@ export function groupContentPlaceholder(config: PlayConfig): string {
   if (config.betMode === 'hunhe') {
     const digitLen = hunheDigitLenFromConfig(config)
     return `混合组选：每注 ${digitLen} 位，不含豹子；组选形态相同只计 1 注（如 123,321 计 1 注）`
+  }
+  // 任四组选24：选位 + 号池至少 4 码
+  if (
+    isRenxuanNeedsPositionConfig(config) &&
+    (config.betMode === 'zu24' || /组选24|zu24/i.test(`${config.playMethodLabel ?? ''} ${config.subPlayId ?? ''}`))
+  ) {
+    const k = config.renPositionCount ?? renPickCountFromConfig(config)
+    const need = k >= 2 && k <= 5 ? k : 4
+    return `从万、千、百、十、个中勾选至少 ${need} 个，再输入4个及以上0-9的号码，多选用逗号分隔，如：1,3,5,7`
+  }
+  // 任四组选12：选位 + 二重/单号双区
+  if (isRenxuanNeedsPositionConfig(config) && isZu12PlayConfig(config)) {
+    const k = config.renPositionCount ?? renPickCountFromConfig(config)
+    const need = k >= 2 && k <= 5 ? k : 4
+    return `从万、千、百、十、个中勾选至少 ${need} 个，再从0-9中，输入1个及以上的二重号码，2个及以上的单号，两个位置由逗号分隔，如：12,3234`
+  }
+  // 任四组选6：选位 + 至少 2 码（C(n,2)）
+  if (isRenxuanNeedsPositionConfig(config) && isSixingZu6PlayConfig(config)) {
+    const k = config.renPositionCount ?? renPickCountFromConfig(config)
+    const need = k >= 2 && k <= 5 ? k : 4
+    return `从万、千、百、十、个中勾选至少 ${need} 个、最多 5 个位置，再输入两个及以上的0-9的号码，多选用逗号分隔，如1,2`
+  }
+  if (config.betMode === 'zu24' || /组选24|zu24/i.test(config.playMethodLabel ?? '')) {
+    return '输入4个及以上0-9的号码，多选用逗号分隔，如：1,3,5,7'
+  }
+  if (isZu12PlayConfig(config)) {
+    return '从0-9中，输入1个及以上的二重号码，2个及以上的单号，两个位置由逗号分隔，如：12,3234'
+  }
+  if (isSixingZu6PlayConfig(config)) {
+    return '输入两个及以上的0-9的号码，多选用逗号分隔，如1,2'
   }
   if (config.betMode === 'teshu') {
     return '特殊号：豹子、对子、顺子（PC28 另含极大/极小），多选各计 1 注'

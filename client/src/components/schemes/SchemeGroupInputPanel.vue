@@ -1,21 +1,20 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type { PlayConfig } from '@/utils/betPayload'
+import { groupContentPlaceholder, isHunhePlayConfig, isSscDanshiLikeConfig } from '@/utils/betPayload'
 import {
+  commitSchemeGroupContentOnBlur,
   groupDigitInputHint,
   schemeGroupContentHasDigits,
   schemeGroupContentToInputBox,
   schemeGroupInputBoxToContent,
+  schemeGroupUsesDanshiTextInput,
 } from '@/utils/pickPanelOptions'
 
 /**
- * 数字玩法方案内容输入面板（对齐第三方）：单个输入框，不点选、不分位框。
- *
- * 录入格式：逗号分隔各位（万,千,百,十,个…），每位号码连写；如「123,34,56,78,56」表示
- * 万位取 1/2/3、千位取 3/4、…。单位型玩法（定位胆/号池）直接连写号码「123」即可。
- *
- * 内部按号池 token 宽度拆分（0-9 按 1 位、11选5 等按 2 位补零），并与引擎所需的
- * 「每位一行、逗号分隔」内容格式双向转换（显示压缩、存储按位换行）。
+ * 方案内容文本输入面板：
+ * - 复式/号池：逗号分隔各位，显示压缩、存储按位换行
+ * - 直选/组选/混合单式：整注逗号分隔，失焦按位长过滤非法票
  */
 const props = withDefaults(
   defineProps<{
@@ -25,6 +24,8 @@ const props = withDefaults(
     disabled?: boolean
     /** 文本行数（紧凑场景可缩小） */
     rows?: number
+    /** 覆盖默认按玩法生成的 placeholder（如任选选位面板） */
+    placeholder?: string
   }>(),
   { rows: 6 },
 )
@@ -36,12 +37,25 @@ const emit = defineEmits<{
 const raw = ref('')
 const rowCount = computed(() => Math.max(2, Math.trunc(props.rows || 6)))
 
+/** 整注单式/混合：不做按位 box↔content */
+const isTicketTextMode = computed(
+  () =>
+    schemeGroupUsesDanshiTextInput(props.config) ||
+    props.config.inputMode === 'danshi' ||
+    isSscDanshiLikeConfig(props.config) ||
+    isHunhePlayConfig(props.config),
+)
+
 function boxToContent(box: string): string {
-  return schemeGroupInputBoxToContent(box, props.config)
+  const src = String(box ?? '').replace(/\r/g, '')
+  if (isTicketTextMode.value) return src
+  return schemeGroupInputBoxToContent(src, props.config)
 }
 
 function contentToBox(content: string): string {
-  return schemeGroupContentToInputBox(content, props.config)
+  const src = String(content ?? '').replace(/\r/g, '')
+  if (isTicketTextMode.value) return src
+  return schemeGroupContentToInputBox(src, props.config)
 }
 
 function syncFromModel(content: string): void {
@@ -61,7 +75,7 @@ function onInput(value: string): void {
 
 function onBlur(): void {
   if (props.disabled) return
-  const content = boxToContent(raw.value)
+  const content = commitSchemeGroupContentOnBlur(raw.value, props.config)
   raw.value = contentToBox(content)
   emit('update:modelValue', content)
 }
@@ -76,6 +90,7 @@ watch(
       props.config.numberPoolMin,
       props.config.numberPoolMax,
       props.config.segmentLen,
+      props.config.playMethodLabel,
     ] as const,
   () => syncFromModel(props.modelValue),
   { immediate: true },
@@ -90,7 +105,12 @@ watch(
   },
 )
 
-const poolHint = computed(() => groupDigitInputHint(props.config))
+const poolHint = computed(() => {
+  const override = String(props.placeholder ?? '').trim()
+  if (override) return override
+  if (isTicketTextMode.value) return groupContentPlaceholder(props.config)
+  return groupDigitInputHint(props.config)
+})
 </script>
 
 <template>

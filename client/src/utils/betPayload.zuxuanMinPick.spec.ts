@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  isSixingZu6PlayConfig,
   validateGroupContent,
   zuxuanPoolMinPick,
   zuxuanPoolMinPickMessage,
@@ -36,6 +37,22 @@ describe('zuxuanPoolMinPick', () => {
     expect(validateGroupContent(zu3, '1,2').ok).toBe(true)
     expect(validateGroupContent(zu6, '1,2').ok).toBe(false)
     expect(validateGroupContent(zu6, '1,2,6').ok).toBe(true)
+  })
+
+  it('四星/任四组选6：最少 2 码（区别于三星组六）', () => {
+    const sixing = cfg({
+      betMode: 'zu6',
+      subPlayId: '145',
+      catalogSubId: '145',
+      playMethodLabel: '任选四组选6',
+      playTypeId: 'g011',
+      renPositionCount: 4,
+    })
+    expect(isSixingZu6PlayConfig(sixing)).toBe(true)
+    expect(zuxuanPoolMinPick(sixing)).toBe(2)
+    expect(zuxuanPoolMinPickMessage(sixing)).toBe('组选6至少选择 2 个号码')
+    expect(validateGroupContent(sixing, '万,千,百,十\n1,2').ok).toBe(true)
+    expect(validateGroupContent(sixing, '万,千,百,十\n1').ok).toBe(false)
   })
 
   it('中三组选包胆：不套组选下限，仅允许单胆', () => {

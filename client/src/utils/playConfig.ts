@@ -113,12 +113,19 @@ function isDingweiFivePositionScheme(
   return raw.includes('定位胆') || raw.includes('定胆') || raw === '一星'
 }
 
+/** 任选 k：legacy ren2/3/4_* 前缀，或 rules/v2 数字 ruleId（对齐 guajibet.renxuanSegmentLen）。未知返回 0 以便文案回退。 */
 function renPickCount(subId: string): number {
-  const s = subId.toLowerCase()
+  const s = String(subId ?? '').toLowerCase().trim()
   if (s.startsWith('ren4')) return 4
   if (s.startsWith('ren3')) return 3
   if (s.startsWith('ren2')) return 2
-  return 2
+  const id = Number.parseInt(s, 10)
+  if (Number.isFinite(id)) {
+    if (id >= 141 && id <= 145) return 4
+    if (id >= 80 && id <= 88) return 3
+    if (id >= 74 && id <= 79) return 2
+  }
+  return 0
 }
 
 /** rules/v2 大小单双数字 rule id → 区位（后二=十/个） */
@@ -393,21 +400,22 @@ function legacySubMode(subId: string, betMode: string): string {
   if (s.includes('zhixuan_ds') || betMode === 'danshi' || betMode === 'zuxuan_ds') {
     return betMode === 'zuxuan_ds' ? 'zuxuan_ds' : 'zhixuan_ds'
   }
-  if (s.includes('zhixuan_fs') || betMode === 'fushi') return 'zhixuan_fs'
-  if (betMode === 'zuxuan_fs') return 'zuxuan_fs'
-  if (['zu24', 'zu12', 'zu60', 'zu30', 'zu120', 'zu20', 'zu10', 'zu5', 'zu4'].includes(betMode)) {
-    return betMode
-  }
+  // 任三组三复式等 seed betMode=fushi：须先按 subId 识别组选，勿被 fushi→zhixuan_fs 抢先
   if (
     s.includes('zu3') ||
     s.includes('zu6') ||
     s.includes('zuxuan') ||
     betMode === 'zu3' ||
-    betMode === 'zu6'
+    betMode === 'zu6' ||
+    betMode === 'zuxuan_fs'
   ) {
     return 'zuxuan_fs'
   }
   if (s.includes('_zu3') || s.includes('_zu6')) return 'zuxuan_fs'
+  if (s.includes('zhixuan_fs') || betMode === 'fushi') return 'zhixuan_fs'
+  if (['zu24', 'zu12', 'zu60', 'zu30', 'zu120', 'zu20', 'zu10', 'zu5', 'zu4'].includes(betMode)) {
+    return betMode
+  }
   if (betMode === 'dingwei' || s.startsWith('dingwei_')) return 'dingwei'
   if (
     [
@@ -553,7 +561,7 @@ export function resolvePlayConfigFromCatalogIds(
     segmentLen = 3
     segmentLabels = ['万', '百', '个']
   } else if (typeId === 'renxuan') {
-    const k = renPickCount(subId)
+    const k = renPickCount(subId) || 2
     if (
       betMode === 'danshi' ||
       betMode === 'zuxuan_ds' ||
@@ -568,6 +576,49 @@ export function resolvePlayConfigFromCatalogIds(
         segmentLabels: ['选号'],
         inputMode: 'danshi',
         betMode: betMode || 'danshi',
+        renPositionCount: k,
+        guajiGroup: '任选',
+      }
+    }
+    // 组三/组六/组选复式/和值等：单档号池，勿回退成五位直选（否则详情选码 min=5 误显）
+    const renPoolRuleId = Number.parseInt(String(subId).trim(), 10)
+    // 任二：76和值/77组选复式/79组选和值；任三：82和值/83组三/85组六/88组选和值；任四组选类 142–145
+    const renPoolByRuleId =
+      Number.isFinite(renPoolRuleId) &&
+      ([76, 77, 79, 82, 83, 85, 88].includes(renPoolRuleId) ||
+        (renPoolRuleId >= 142 && renPoolRuleId <= 145))
+    const poolLike =
+      renPoolByRuleId ||
+      betMode === 'zu3' ||
+      betMode === 'zu6' ||
+      betMode === 'zuxuan_fs' ||
+      betMode === 'hezhi' ||
+      betMode === 'kuadu' ||
+      betMode === 'weishu' ||
+      subPlayId === 'zuxuan_fs' ||
+      /zu3|zu6|zuxuan|hezhi|kuadu|和值|组三|组六|组选/.test(`${subId} ${betMode}`)
+    if (poolLike) {
+      const inferredPoolBet =
+        betMode ||
+        (renPoolRuleId === 83 || /zu3/i.test(subId)
+          ? 'zu3'
+          : renPoolRuleId === 85 || /zu6/i.test(subId)
+            ? 'zu6'
+            : renPoolRuleId === 76 ||
+                renPoolRuleId === 79 ||
+                renPoolRuleId === 82 ||
+                renPoolRuleId === 88 ||
+                betMode === 'hezhi'
+              ? 'hezhi'
+              : 'zuxuan_fs')
+      return {
+        playTypeId: typeId,
+        subPlayId,
+        catalogSubId: subId,
+        segmentLen: 1,
+        segmentLabels: ['选号'],
+        inputMode: 'pool',
+        betMode: inferredPoolBet,
         renPositionCount: k,
         guajiGroup: '任选',
       }

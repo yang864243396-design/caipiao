@@ -40,7 +40,8 @@ func formatWuxingZuWire(mode, groupContent string) string {
 	}
 }
 
-// formatZu12Wire 四星/前后四组选12：双区「二重号池,单号池」，如 12,34。
+// formatZu12Wire 四星/前后四组选12：双区「二重号池,单号池」，如 12,34 / 1,234 / 23,123。
+// 二重 ≥1、单号区 ≥2（各位 0–9 连写；区内去重保序；跨区重叠原样出站，勿剔除）。
 func formatZu12Wire(groupContent string) string {
 	groupContent = strings.TrimSpace(groupContent)
 	if groupContent == "" {
@@ -48,17 +49,45 @@ func formatZu12Wire(groupContent string) string {
 	}
 	parts := splitCommaParts(groupContent)
 	if len(parts) == 2 {
-		a := normalizePickDigits(parts[0])
-		b := normalizePickDigits(parts[1])
-		if len(a) >= 2 && len(b) >= 2 {
+		a := uniqueDigitRun(normalizePickDigits(parts[0]))
+		b := uniqueDigitRun(normalizePickDigits(parts[1]))
+		if len(a) >= 1 && len(b) >= 2 {
 			return a + "," + b
 		}
 	}
 	digits := splitPickDigits(groupContent)
 	if len(digits) >= 4 {
-		return strings.Join(digits[:2], "") + "," + strings.Join(digits[2:4], "")
+		// 扁选兼容：前 2 码二重、后 2 码单号（历史口径 1,2,3,4 → 12,34）
+		a := uniqueDigitRun(strings.Join(digits[:2], ""))
+		b := uniqueDigitRun(strings.Join(digits[2:4], ""))
+		if len(a) >= 1 && len(b) >= 2 {
+			return a + "," + b
+		}
+	}
+	if len(digits) >= 3 {
+		// 扁选：首码作二重，其余作单号
+		a := uniqueDigitRun(digits[0])
+		b := uniqueDigitRun(strings.Join(digits[1:], ""))
+		if len(a) >= 1 && len(b) >= 2 {
+			return a + "," + b
+		}
 	}
 	return "12,34"
+}
+
+// uniqueDigitRun 从数字串提取 0–9，去重保序。
+func uniqueDigitRun(s string) string {
+	seen := make(map[byte]bool, 10)
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < '0' || c > '9' || seen[c] {
+			continue
+		}
+		seen[c] = true
+		b.WriteByte(c)
+	}
+	return b.String()
 }
 
 // formatZu4Wire 四星/前后四组选4：双区「三重号,单号」，如 1,2。

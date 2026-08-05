@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   defaultRenxuanHcwOpenPositionIdxs,
   defaultRenxuanTriggerPositionIdxs,
+  isRenxuanHcwOpenPosPlay,
+  isRenxuanPerPosTriggerPlay,
   isRenxuanZhixuanDanshiTriggerPlay,
   isZhixuanDanshiPerPosPlay,
   supportsAdvTriggerPerPosColumns,
@@ -109,6 +111,37 @@ describe('supportsAdvTriggerPerPosColumns', () => {
         segmentLabels: ['千', '百', '十'],
       }),
     ).toBe(true)
+  })
+
+  it('任三混合组选开某投某：一行正/反投整注，不按位分列', () => {
+    const cfg = {
+      betMode: 'hunhe',
+      playTypeId: 'g011',
+      playMethodLabel: '任三混合组选',
+      playTypeLabel: '任选',
+      guajiGroup: '任选',
+      inputMode: 'danshi' as const,
+      segmentLen: 3,
+      segmentLabels: ['选号'],
+    }
+    expect(supportsAdvTriggerPositionPicker(cfg)).toBe(true)
+    expect(supportsAdvTriggerPerPosColumns(cfg)).toBe(false)
+    expect(isRenxuanPerPosTriggerPlay(cfg)).toBe(false)
+    // 冷热仍启用开奖选位（须选 3），与任三直选单式同口径
+    expect(isRenxuanHcwOpenPosPlay(cfg)).toBe(true)
+  })
+
+  it('中三混合组选冷热不走任选开奖选位', () => {
+    expect(
+      isRenxuanHcwOpenPosPlay({
+        betMode: 'hunhe',
+        playTypeId: 'g002',
+        subPlayId: '23',
+        playMethodLabel: '混合组选',
+        playTypeLabel: '中三',
+        segmentLen: 3,
+      }),
+    ).toBe(false)
   })
 
   it('任选冷热开奖选位默认前 k 位（任二万千）', () => {

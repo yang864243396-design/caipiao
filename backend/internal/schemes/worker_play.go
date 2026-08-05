@@ -422,9 +422,12 @@ func normalizeZhixuanDanshiContent(rule playRule, content string) string {
 	if isHotColdAttributePlay(rule) {
 		return content
 	}
-	// 复式/组选复式按位内容勿展成单式票（混合组选虽按位填表，下注前须展成整注）
+	// 复式/组选复式/组选号池按位内容勿展成单式票（混合组选虽按位填表，下注前须展成整注）
+	// 任四组选24 等 SegmentLen=任 k（常为 4）：「1,2,3,4」是号池不是四位按位，勿 reshape→1234。
 	if bm == "fushi" || bm == "zhixuan_fs" || sub == "zhixuan_fs" ||
-		bm == "zuxuan_fs" || sub == "zuxuan_fs" || bm == "zuhe" {
+		bm == "zuxuan_fs" || sub == "zuxuan_fs" || bm == "zuhe" ||
+		bm == "zu24" || bm == "zu12" || bm == "zu4" || bm == "zu3" || bm == "zu6" ||
+		bm == "zu60" || bm == "zu30" || bm == "zu120" || bm == "baodan" || bm == "budingwei" {
 		return content
 	}
 	isDanshi := bm == "danshi" || bm == "zhixuan_ds" || sub == "zhixuan_ds" || strings.HasSuffix(sub, "_ds")
@@ -492,7 +495,7 @@ func isHunhePlayRule(rule playRule) bool {
 	return strings.Contains(sub, "hunhe") || strings.Contains(sub, "混合")
 }
 
-// shouldSkipZeroBetUnits 0 注时本期 Skip（不停方案）：混合排除豹子后空票、组三/组六号池不足最少选号。
+// shouldSkipZeroBetUnits 0 注时本期 Skip（不停方案）：混合排除豹子后空票、组三/组六号池不足最少选号、组选12 双区凑不出注。
 func shouldSkipZeroBetUnits(rule playRule) bool {
 	if isHunhePlayRule(rule) {
 		return true
@@ -500,6 +503,10 @@ func shouldSkipZeroBetUnits(rule playRule) bool {
 	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
 	if bm == "zuxuan_ds" {
 		// 对子被滤空或号池不足：跳过本期，勿停方案报「注数为0」
+		return true
+	}
+	// 组选12：当期二重/单号凑不足 1 注 → Skip（不停方案）
+	if isZu12PlayRule(rule) {
 		return true
 	}
 	return zuxuanPoolMinPick(rule) >= 2
@@ -768,17 +775,77 @@ func zuxuanPoolUnits(pool []string, segLen int) int {
 		}
 		return n*(n-1) + n*(n-1)*(n-2)/6
 	}
-	if segLen == 4 && n >= 4 {
+	if segLen == 4 {
+		// 四星/任四组选6：C(n,2)；n=2→1 注（勿要求 pool≥4）
+		if n < 2 {
+			return 0
+		}
 		return n * (n - 1) / 2
 	}
 	return n
+}
+
+// isSixingZu6PlayRule 四星/任四「组选6」：号池 C(n,2)、至少 2 码。
+// 区别于三星「组六」复式 C(n,3)、至少 3 码。
+func isSixingZu6PlayRule(rule playRule) bool {
+	if isZu6DanshiPlayRule(rule) {
+		return false
+	}
+	text := rule.SubPlayID + " " + rule.CatalogSubID + " " + rule.BetMode + " " + rule.PlayTypeID
+	lower := strings.ToLower(text)
+	if strings.Contains(text, "组选60") || strings.Contains(text, "组选120") ||
+		strings.Contains(lower, "zu60") || strings.Contains(lower, "zu120") {
+		return false
+	}
+	if strings.Contains(text, "组选6") {
+		return true
+	}
+	for _, raw := range []string{rule.SubPlayID, rule.CatalogSubID} {
+		for _, tok := range strings.FieldsFunc(raw, func(r rune) bool {
+			return r == '|' || r == '/' || r == ' ' || r == ',' || r == '，'
+		}) {
+			switch strings.TrimSpace(tok) {
+			case "132", "136", "139", "145":
+				return true
+			}
+		}
+	}
+	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	// 目录短名常为「组六」：在任四/四星语境下即组选6（区别于三星组六）
+	isZu6 := bm == "zu6" ||
+		(strings.Contains(lower, "zu6") && !strings.Contains(text, "组六")) ||
+		(strings.Contains(text, "组六") && !strings.Contains(text, "组六单式"))
+	if !isZu6 {
+		return false
+	}
+	if rule.SegmentLen >= 4 {
+		return true
+	}
+	if renPickCount(rule.CatalogSubID) >= 4 || renPickCount(rule.SubPlayID) >= 4 {
+		return true
+	}
+	tid := strings.ToLower(strings.TrimSpace(rule.PlayTypeID))
+	return tid == "g013" || tid == "g014" || tid == "sixing" || tid == "hou4" || tid == "qian4"
+}
+
+// sixingZu6PoolUnits 四星/任四组选6：C(n,2)。
+func sixingZu6PoolUnits(pool []string) int {
+	n := len(pool)
+	if n < 2 {
+		return 0
+	}
+	return n * (n - 1) / 2
 }
 
 // zuxuanPoolUnitsForRule 按 betMode/catalog 区分组三、组六与通用组选复式。
 func zuxuanPoolUnitsForRule(rule playRule, pool []string) int {
 	mode := strings.ToLower(strings.TrimSpace(rule.BetMode))
 	cat := strings.ToLower(rule.CatalogSubID + " " + rule.SubPlayID)
-	if mode == "zu6" || (strings.Contains(cat, "zu6") && !strings.Contains(cat, "zu60") && !strings.Contains(cat, "zu120")) {
+	if mode == "zu6" || (strings.Contains(cat, "zu6") && !strings.Contains(cat, "zu60") && !strings.Contains(cat, "zu120")) ||
+		strings.Contains(rule.CatalogSubID, "组选6") {
+		if isSixingZu6PlayRule(rule) {
+			return sixingZu6PoolUnits(pool)
+		}
 		return zu6PoolUnits(pool)
 	}
 	if mode == "zu3" || strings.Contains(cat, "zu3") {

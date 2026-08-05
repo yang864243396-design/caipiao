@@ -158,7 +158,7 @@ func isRen2ZhixuanHezhiRule(rule playRule) bool {
 }
 
 // renxuanZhixuanFushiMaxBetUnits 任选直选复式单组上限。
-// 任二实测 900；任三/任四按选码位数套直选公式（任三→900、任四→9000）。
+// 对齐第三方：同星直选上限 × C(5,k)（任二 90×10=900，任三 900×10=9000，任四 9000×5=45000）。
 func renxuanZhixuanFushiMaxBetUnits(rule playRule) int {
 	n := rule.SegmentLen
 	if n <= 0 {
@@ -167,15 +167,23 @@ func renxuanZhixuanFushiMaxBetUnits(rule playRule) int {
 	if n <= 0 {
 		n = renPickCount(rule.SubPlayID)
 	}
-	if n <= 2 {
-		return ren2ZhixuanFushiMaxBetUnits
+	if n <= 0 || n > 5 {
+		n = 2
 	}
 	tmp := rule
 	tmp.SegmentLen = n
-	if base := zhixuanSegmentMaxBetUnits(tmp); base > 0 {
+	base := zhixuanSegmentMaxBetUnits(tmp)
+	if base <= 0 {
+		if n <= 2 {
+			return ren2ZhixuanFushiMaxBetUnits
+		}
+		return 0
+	}
+	mul := combinInt(5, n)
+	if mul <= 0 {
 		return base
 	}
-	return ren2ZhixuanFushiMaxBetUnits
+	return base * mul
 }
 
 // playZoneMultiplier 多区位玩法注数倍乘（前中后三×3、前后三/二/四×2）。
@@ -246,7 +254,10 @@ func countPlayWireBetUnits(rule playRule, content string) int {
 			// 整注逗号串
 			base = len(splitContentTokens(content))
 		}
-	case "zuxuan_fs", "zu3", "zu6", "zu24", "zu12", "zu4", "zu120", "zu60", "zu30":
+	case "zu12":
+		// 双区「二重,单号」：C(m,1)×C(n,2)
+		base = countZu12DualZoneBetUnits(content)
+	case "zuxuan_fs", "zu3", "zu6", "zu24", "zu4", "zu120", "zu60", "zu30":
 		// 与 evaluateZuxuanFushi / guajibet C(n,k) 对齐，供上限与金额同步
 		pool := uniqueStringTokens(parseDigitTokens(content))
 		base = zuxuanPoolUnitsForRule(rule, pool)
@@ -274,7 +285,19 @@ func countRenxuanNeedsPositionBetUnits(rule playRule, content string) int {
 	posLabel, picks, ok := parseRenxuanPosPicksContent(content, k)
 	if !ok {
 		if isRenxuanPositionDanshiRule(rule) {
-			tickets := len(renxuanDanshiTokens(content, k))
+			tickets := 0
+			switch {
+			case isZu3DanshiPlayRule(rule):
+				tickets = len(filterZu3DanshiTokens(content, k))
+			case isZu6DanshiPlayRule(rule):
+				tickets = len(filterZu6DanshiTokens(content, k))
+			case isHunhePlayRule(rule):
+				tickets = countHunhePickUnits(content, k)
+			case isZuxuanDanshiPlayRule(rule):
+				tickets = countZuxuanDanshiPickUnits(content, k)
+			default:
+				tickets = len(renxuanDanshiTokens(content, k))
+			}
 			if tickets <= 0 {
 				return 0
 			}
@@ -316,12 +339,190 @@ func countRenxuanInnerBetUnits(rule playRule, picks string) int {
 		k = 2
 	}
 	if isRenxuanPositionDanshiRule(rule) {
-		return len(renxuanDanshiTokens(picks, k))
+		switch {
+		case isZu3DanshiPlayRule(rule):
+			return len(filterZu3DanshiTokens(picks, k))
+		case isZu6DanshiPlayRule(rule):
+			return len(filterZu6DanshiTokens(picks, k))
+		case isHunhePlayRule(rule):
+			return countHunhePickUnits(picks, k)
+		case isZuxuanDanshiPlayRule(rule):
+			return countZuxuanDanshiPickUnits(picks, k)
+		default:
+			return len(renxuanDanshiTokens(picks, k))
+		}
 	}
 	// 临时去掉任选标记，避免 countPlayWireBetUnits 再走选位分支
 	tmp := rule
 	tmp.PlayTypeID = "ssc_inner"
 	return countPlayWireBetUnits(tmp, picks)
+}
+
+// isZuxuanDanshiPlayRule 组选单式（含任选组选单式）。
+func isZuxuanDanshiPlayRule(rule playRule) bool {
+	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	if bm == "zuxuan_ds" {
+		return true
+	}
+	sub := strings.ToLower(rule.SubPlayID + " " + rule.CatalogSubID)
+	return strings.Contains(sub, "zuxuan_ds") || strings.Contains(sub, "组选单式")
+}
+
+// isZu3DanshiPlayRule 组三单式（含任三组三单式 rule 84；不含组选30）。
+func isZu3DanshiPlayRule(rule playRule) bool {
+	sub := strings.ToLower(strings.TrimSpace(rule.SubPlayID + " " + rule.CatalogSubID))
+	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	if strings.Contains(sub, "zu30") || strings.Contains(sub, "组选30") {
+		return false
+	}
+	sid := strings.TrimSpace(rule.SubPlayID)
+	if sid == "" {
+		sid = strings.TrimSpace(rule.CatalogSubID)
+	}
+	if sid == "84" || strings.Contains(sub, "zu3_ds") || strings.Contains(sub, "ren3_zu3_ds") ||
+		strings.Contains(sub, "组三单式") {
+		return true
+	}
+	hasZu3 := bm == "zu3" || strings.Contains(sub, "zu3") || strings.Contains(sub, "组三")
+	hasDanshi := bm == "danshi" || bm == "zuxuan_ds" || strings.Contains(sub, "单式") || strings.Contains(sub, "_ds")
+	return hasZu3 && hasDanshi
+}
+
+// isZu6DanshiPlayRule 组六单式（含任三组六单式 rule 86；不含组选6/60/120）。
+func isZu6DanshiPlayRule(rule playRule) bool {
+	sub := strings.ToLower(strings.TrimSpace(rule.SubPlayID + " " + rule.CatalogSubID))
+	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	if strings.Contains(sub, "组选6") || strings.Contains(sub, "组选60") || strings.Contains(sub, "组选120") ||
+		strings.Contains(sub, "zu60") || strings.Contains(sub, "zu120") {
+		return false
+	}
+	sid := strings.TrimSpace(rule.SubPlayID)
+	if sid == "" {
+		sid = strings.TrimSpace(rule.CatalogSubID)
+	}
+	if sid == "86" || strings.Contains(sub, "zu6_ds") || strings.Contains(sub, "ren3_zu6_ds") ||
+		strings.Contains(sub, "组六单式") {
+		return true
+	}
+	hasZu6 := bm == "zu6" || strings.Contains(sub, "zu6") || strings.Contains(sub, "组六")
+	hasDanshi := bm == "danshi" || bm == "zuxuan_ds" || strings.Contains(sub, "单式") || strings.Contains(sub, "_ds")
+	return hasZu6 && hasDanshi
+}
+
+// filterZu3DanshiTokens 仅保留组三形态整注，按形态去重保序。
+func filterZu3DanshiTokens(picks string, n int) []string {
+	if n <= 0 {
+		n = 3
+	}
+	tokens := renxuanDanshiTokens(picks, n)
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(tokens))
+	for _, tok := range tokens {
+		if !isZu3DigitString(tok) {
+			continue
+		}
+		key := sortDigitString(tok)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, tok)
+	}
+	return out
+}
+
+// countHunhePickUnits 混合组选内层注数：排除豹子，按组选形态去重。
+func countHunhePickUnits(picks string, n int) int {
+	if n <= 0 {
+		n = 3
+	}
+	filtered := filterHunheBetTickets(picks, n)
+	if strings.TrimSpace(filtered) == "" {
+		return 0
+	}
+	return len(strings.Split(filtered, ","))
+}
+
+// filterZu6DanshiTokens 仅保留组六形态整注（三位互异），按形态去重保序。
+func filterZu6DanshiTokens(picks string, n int) []string {
+	if n <= 0 {
+		n = 3
+	}
+	tokens := renxuanDanshiTokens(picks, n)
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(tokens))
+	for _, tok := range tokens {
+		if !isZu6DigitString(tok) {
+			continue
+		}
+		key := sortDigitString(tok)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, tok)
+	}
+	return out
+}
+
+// countZuxuanDanshiPickUnits 组选单式内层注数：整注形态去重，或单码号池 C(n,segLen)。
+func countZuxuanDanshiPickUnits(picks string, segLen int) int {
+	if segLen <= 0 {
+		segLen = 2
+	}
+	raw := strings.NewReplacer("，", ",", "\n", ",", " ", ",").Replace(strings.TrimSpace(picks))
+	parts := strings.Split(raw, ",")
+	singles := make([]string, 0, len(parts))
+	seenSingle := map[string]struct{}{}
+	tickets := make([]string, 0, len(parts))
+	seenTicket := map[string]struct{}{}
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		digits := make([]rune, 0, len(p))
+		for _, r := range p {
+			if r >= '0' && r <= '9' {
+				digits = append(digits, r)
+			}
+		}
+		d := string(digits)
+		if len(d) == 1 {
+			if _, ok := seenSingle[d]; ok {
+				continue
+			}
+			seenSingle[d] = struct{}{}
+			singles = append(singles, d)
+			continue
+		}
+		if len(d) != segLen {
+			continue
+		}
+		baozi := true
+		for i := 1; i < len(d); i++ {
+			if d[i] != d[0] {
+				baozi = false
+				break
+			}
+		}
+		if baozi {
+			continue
+		}
+		key := sortDigitString(d)
+		if _, ok := seenTicket[key]; ok {
+			continue
+		}
+		seenTicket[key] = struct{}{}
+		tickets = append(tickets, d)
+	}
+	if len(tickets) > 0 {
+		return len(tickets)
+	}
+	if len(singles) < segLen {
+		return 0
+	}
+	return combinInt(len(singles), segLen)
 }
 
 // countRenxuanZhixuanDanshiBetUnits 兼容旧名 → 选位计注。

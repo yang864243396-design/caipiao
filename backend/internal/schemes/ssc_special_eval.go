@@ -636,10 +636,12 @@ func evaluateRenxuanRaw(rule playRule, balls []string, content string) betEvalua
 		return evaluateRenxuanWeishu(balls, content, n)
 	}
 
-	isZu3 := mode == "zu3" || strings.Contains(sub, "组三") || strings.Contains(sub, "zu3")
-	isZu6 := mode == "zu6" || strings.Contains(sub, "组六") || strings.Contains(sub, "zu6")
+	isZu3 := mode == "zu3" || strings.Contains(sub, "组三") || strings.Contains(sub, "zu3") ||
+		isZu3DanshiPlayRule(rule)
+	isZu6 := mode == "zu6" || strings.Contains(sub, "组六") || strings.Contains(sub, "zu6") ||
+		isZu6DanshiPlayRule(rule)
 	isHunhe := mode == "hunhe" || strings.Contains(sub, "混合")
-	isZuxuanDanshi := mode == "zuxuan_ds" || isHunhe ||
+	isZuxuanDanshi := mode == "zuxuan_ds" || isHunhe || isZu3DanshiPlayRule(rule) || isZu6DanshiPlayRule(rule) ||
 		(strings.Contains(sub, "单式") && (isZu3 || isZu6 || strings.Contains(sub, "组选") || strings.Contains(sub, "zuxuan")))
 	isZhixuanDanshi := mode == "danshi" || mode == "zhixuan_ds" ||
 		(strings.Contains(sub, "单式") && !isZuxuanDanshi && !strings.Contains(sub, "组"))
@@ -853,7 +855,8 @@ func evaluateRenxuanZuxuanDanshi(balls []string, posLabel, picks string, n int, 
 			break
 		}
 	}
-	if units <= 0 {
+	// 组三/组六单式：无合法形态票时注数须为 0（勿抬成 1）
+	if units <= 0 && !forceZu3 && !forceZu6 {
 		units = 1
 	}
 	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(n, 0)}

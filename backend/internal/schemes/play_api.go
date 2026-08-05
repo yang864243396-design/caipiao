@@ -101,8 +101,18 @@ func validateGroupContent(rule playRule, content string) error {
 	content = normalizeZhixuanDanshiContent(rule, content)
 	// 任选选位类：位名+号码，上限/注数走任选口径（任二=900，C(n,k)×内层）
 	if isRenxuanNeedsPositionRule(rule) {
+		units := countRenxuanNeedsPositionBetUnits(rule, content)
+		if isZu3DanshiPlayRule(rule) && units <= 0 {
+			return fmt.Errorf("组三单式：每注须为两个相同号码和一个不同号码（如 112），不含豹子与组六")
+		}
+		if isZu6DanshiPlayRule(rule) && units <= 0 {
+			return fmt.Errorf("组六单式：每注须为三个各不相同的号码（如 012），不含豹子与组三")
+		}
+		if isHunhePlayRule(rule) && units <= 0 {
+			return fmt.Errorf("混合组选：每注须为三个号码且不含豹子；组选形态相同只计 1 注，顺序不限")
+		}
 		if max := maxBetUnitsForPlay(rule); max > 0 {
-			if units := countRenxuanNeedsPositionBetUnits(rule, content); units > max {
+			if units > max {
 				return errMaxBetUnitsExceeded(max)
 			}
 		}

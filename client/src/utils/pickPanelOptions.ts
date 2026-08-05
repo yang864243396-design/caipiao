@@ -1,9 +1,41 @@
 import type { PlayConfig } from '@/utils/betPayload'
 import {
+  dedupeDanshiTokens,
+  hunheDigitLenFromConfig,
+  isHunhePlayConfig,
+  isRenxuanNeedsPositionConfig,
   isRenxuanZhixuanFushiPlayConfig,
+  isSixingZu6PlayConfig,
+  isSscDanshiLikeConfig,
   isYixingDingweiPlayConfig,
+  isZu3DanshiConfig,
+  isZu6DanshiConfig,
+  isZuxuanDanshiConfig,
+  normalizeZu6DanshiContent,
+  normalizeZu3DanshiContent,
+  normalizeHunheGroupContent,
+  normalizeZuxuanDanshiContent,
+  parseZu12Zones,
+  uniqueDigitsFromRun,
   YIXING_MAX_PICKS_PER_POS,
 } from '@/utils/betPayload'
+
+/** 组选12 双区规范化：合法则去重保序；半截输入尽量保留「二重,单号」形态 */
+function normalizeZu12DigitContent(raw: string): string {
+  const text = String(raw ?? '')
+    .replace(/，/g, ',')
+    .trim()
+  if (!text) return ''
+  const zones = parseZu12Zones(text)
+  if (zones) return zones.normalized
+  const parts = text.split(',')
+  if (parts.length === 2) {
+    const a = uniqueDigitsFromRun(parts[0] ?? '').join('')
+    const b = uniqueDigitsFromRun(parts[1] ?? '').join('')
+    if (a || b) return `${a},${b}`
+  }
+  return uniqueDigitsFromRun(text).join('')
+}
 import {
   isLonghuPlayConfigLike,
   isPc28ModeConfigLike,
@@ -65,6 +97,22 @@ function isZuxuanFushiPoolPlay(config: PlayConfig): boolean {
   if (config.betMode === 'zuxuan_fs') return true
   const text = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''}`
   return /组选复式|zuxuan_fs/i.test(text)
+}
+
+/** 组选24 号池：至少 4 码，逗号分隔 */
+function isZu24PoolPlay(config: PlayConfig): boolean {
+  const bm = (config.betMode ?? '').trim()
+  if (bm === 'zu24') return true
+  const text = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''}`
+  return /组选24|zu24/i.test(text)
+}
+
+/** 组选12：双区「二重,单号」（如 12,3234），非扁选逗号号池 */
+function isZu12PoolPlay(config: PlayConfig): boolean {
+  const bm = (config.betMode ?? '').trim()
+  if (bm === 'zu12') return true
+  const text = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''}`
+  return /组选12|zu12/i.test(text) && !/组选120|zu120/i.test(text)
 }
 
 /** 投注/方案面板：按玩法号池生成可选号码 */
@@ -142,6 +190,8 @@ export function useCompactPickChips(config: PlayConfig): boolean {
 export function schemeGroupUsesDigitInput(config: PlayConfig): boolean {
   if (!schemeGroupUsesPickPanel(config)) return false
   if (config.inputMode === 'danshi') return false
+  // 直选/组选/混合单式整注：走文本失焦面板，勿当复式按位号池
+  if (isSscDanshiLikeConfig(config) || isHunhePlayConfig(config)) return false
   if (
     config.inputMode === 'lhc_num' ||
     config.inputMode === 'lhc_zodiac' ||
@@ -152,6 +202,22 @@ export function schemeGroupUsesDigitInput(config: PlayConfig): boolean {
   }
   if (textPickOptionsForConfig(config).length > 0) return false
   return true
+}
+
+/**
+ * 非任选的直选/组选/混合单式：用 SchemeGroupInputPanel 做整注文本 + 失焦校验。
+ * （裸 el-input 的 blur 在定码分组场景偶发不触发；任选另走 SchemeRenxuanDanshiPanel）
+ */
+export function schemeGroupUsesDanshiTextInput(config: PlayConfig): boolean {
+  if (isRenxuanNeedsPositionConfig(config)) return false
+  if ((config.numberPoolMax ?? 9) > 9) return false
+  if (config.inputMode === 'danshi') return true
+  return isSscDanshiLikeConfig(config) || isHunhePlayConfig(config)
+}
+
+/** 方案内容走 SchemeGroupInputPanel（复式数字框或单式整注失焦框） */
+export function schemeGroupUsesTextInputPanel(config: PlayConfig): boolean {
+  return schemeGroupUsesDigitInput(config) || schemeGroupUsesDanshiTextInput(config)
 }
 
 /**
@@ -166,8 +232,17 @@ export function poolUsesCommaSeparatedInput(config: PlayConfig): boolean {
   if (isKuaduPoolConfig(config)) return true
   // 不定位（前三一码等）：每个数字用逗号分隔（如 1,2），勿连写成 12
   if (isBudingweiPoolConfig(config)) return true
-  // 组选复式 / 组三 / 组六：号池多选须逗号分隔（如 0,1,2），勿连写成 012
-  if (isZuxuanFushiPoolPlay(config) || isZu3PoolPlay(config) || isZu6PoolPlay(config)) return true
+  // 组选复式 / 组三 / 组六 / 组选24：号池多选须逗号分隔（如 0,1,2），勿连写成 012
+  // 组选12 为双区连写（12,34），勿按扁选逗号号池拆码
+  if (
+    isZuxuanFushiPoolPlay(config) ||
+    isZu3PoolPlay(config) ||
+    isZu6PoolPlay(config) ||
+    isSixingZu6PoolPlay(config) ||
+    isZu24PoolPlay(config)
+  ) {
+    return true
+  }
   const options = digitOptionsForConfig(config)
   if (options.length < 2) return false
   const widths = new Set(options.map((o) => o.length))
@@ -240,13 +315,18 @@ function parseDigitSegmentTokens(seg: string, config: PlayConfig): string[] {
 export function schemeGroupInputBoxToContent(box: string, config: PlayConfig): string {
   const segLen = Math.max(1, config.segmentLen || 1)
   const cap = poolMaxPicksForConfig(config)
+  // 组选12：保留「二重,单号」双区（12,3234），勿拆成扁选号池
+  if (isZu12PoolPlay(config)) {
+    return normalizeZu12DigitContent(box)
+  }
   // 号池型（组选复式/组三/组六/和值等）：单行逗号多选，勿按 segmentLen 拆成按位
   if (
     segLen <= 1 ||
     config.inputMode === 'pool' ||
     isZuxuanFushiPoolPlay(config) ||
     isZu3PoolPlay(config) ||
-    isZu6PoolPlay(config)
+    isZu6PoolPlay(config) ||
+    isSixingZu6PoolPlay(config)
   ) {
     let toks = parseDigitSegmentTokens(box, config)
     if (cap != null && cap > 0) toks = toks.slice(0, cap)
@@ -274,19 +354,24 @@ export function schemeGroupContentToInputBox(content: string, config: PlayConfig
   // 无有效号码时保持空串，避免 '' → ',,,,' 盖住 placeholder
   if (c.replace(/[\s,，]/g, '') === '') return ''
   const segLen = Math.max(1, config.segmentLen || 1)
+  if (isZu12PoolPlay(config)) {
+    return normalizeZu12DigitContent(c)
+  }
   if (
     segLen <= 1 ||
     config.inputMode === 'pool' ||
     isZuxuanFushiPoolPlay(config) ||
     isZu3PoolPlay(config) ||
-    isZu6PoolPlay(config)
+    isZu6PoolPlay(config) ||
+    isSixingZu6PoolPlay(config)
   ) {
     // 和值/跨度/组选复式/组三等：显示时保留逗号；粘连串先按号池解析再拼回（039 → 0,3,9）
     if (
       poolUsesCommaSeparatedInput(config) ||
       isZuxuanFushiPoolPlay(config) ||
       isZu3PoolPlay(config) ||
-      isZu6PoolPlay(config)
+      isZu6PoolPlay(config) ||
+      isSixingZu6PoolPlay(config)
     ) {
       const toks = parseDigitSegmentTokens(c.replace(/\n/g, ','), config)
       return toks.join(',')
@@ -326,6 +411,62 @@ export function normalizeSchemeGroupDigitContent(content: string, config: PlayCo
   return schemeGroupInputBoxToContent(schemeGroupContentToInputBox(content, config), config)
 }
 
+/**
+ * 方案内容文本框失焦时统一规范化（不弹保存级错误）。
+ * - 数字录入（复式/号池等）：box↔content 往返
+ * - 单式/组选单式/混合组选：按位长过滤并去重；结果为空则保留原文（避免半截输入被清空）
+ * - 仅逗号/空白 → 空串
+ */
+export function commitSchemeGroupContentOnBlur(raw: string, config: PlayConfig): string {
+  const src = String(raw ?? '').replace(/\r/g, '')
+  if (!schemeGroupContentHasDigits(src)) return ''
+
+  // 数字录入玩法（前三直选复式等）：与 SchemeGroupInputPanel 既有失焦一致
+  if (schemeGroupUsesDigitInput(config)) {
+    return normalizeSchemeGroupDigitContent(src, config)
+  }
+
+  const bm = String(config.betMode ?? '').trim()
+  if (bm === 'hunhe' || (typeof config.playMethodLabel === 'string' && config.playMethodLabel.includes('混合组选'))) {
+    const digitLen = hunheDigitLenFromConfig(config)
+    const seg = digitLen > 0 ? digitLen : 3
+    const next = normalizeHunheGroupContent(src, seg)
+    if (next) return next
+    // 无一合法（豹子/超长等）→ 只留半截碎片
+    return keepIncompleteDigitFragments(src, seg)
+  }
+  if (isZu3DanshiConfig(config)) {
+    const seg = config.segmentLen > 0 ? config.segmentLen : 3
+    const next = normalizeZu3DanshiContent(src, seg)
+    if (next) return next
+    // 无一合法形态：剔除 ≥N 位的完整/超长废票，仅保留半截碎片（如 01）
+    return keepIncompleteDigitFragments(src, seg)
+  }
+  if (isZu6DanshiConfig(config)) {
+    const seg = config.segmentLen > 0 ? config.segmentLen : 3
+    const next = normalizeZu6DanshiContent(src, seg)
+    if (next) return next
+    // 无一合法形态：剔除 ≥N 位的完整/超长废票（如 1234,6548），仅保留半截碎片
+    return keepIncompleteDigitFragments(src, seg)
+  }
+  if (isZuxuanDanshiConfig(config)) {
+    const seg = config.segmentLen > 0 ? config.segmentLen : 2
+    const next = normalizeZuxuanDanshiContent(src, seg)
+    return next || src
+  }
+  if (isSscDanshiLikeConfig(config) || config.inputMode === 'danshi') {
+    const seg = config.segmentLen > 0 ? config.segmentLen : 0
+    const toks = dedupeDanshiTokens(src, seg)
+    if (toks.length) return toks.join(',')
+    // 无一合法整注：剔除 ≥N 位废票，仅保留半截（与组六/混合失焦同口径）
+    return keepIncompleteDigitFragments(src, seg)
+  }
+
+  // 其它落到文本框的玩法：尽量按数字录入规则整形
+  const next = normalizeSchemeGroupDigitContent(src, config)
+  return schemeGroupContentHasDigits(next) ? next : src
+}
+
 /** 方案内容是否有有效号码（勿对绝对位用 trim，避免弄丢前导空行） */
 export function schemeGroupContentHasDigits(content: string): boolean {
   return String(content ?? '').replace(/[\s,，]/g, '') !== ''
@@ -351,15 +492,40 @@ function buildDigitInputExample(options: string[], segLen: number, commaPool: bo
 
 /** 组三 / 组六号池玩法（前三组三、前三组六等） */
 function isZu3PoolPlay(config: PlayConfig): boolean {
+  // 组三单式走整注文本框，勿当号池
+  if (isZu3DanshiConfig(config)) return false
   if (config.betMode === 'zu3') return true
   const text = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''}`
-  return /组三|zu3/i.test(text) && !/组选3|组选30|zu30|和值/i.test(text)
+  return /组三|zu3/i.test(text) && !/组选3|组选30|zu30|和值|单式|_ds/i.test(text)
 }
 
 function isZu6PoolPlay(config: PlayConfig): boolean {
+  // 组六单式走整注文本框，勿当号池（否则失焦会把 012 拆成 0,1,2）
+  if (isZu6DanshiConfig(config)) return false
+  // 四星/任四组选6 另走 isSixingZu6PoolPlay（C(n,2)），勿当三星组六
+  if (isSixingZu6PlayConfig(config)) return false
   if (config.betMode === 'zu6') return true
   const text = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''}`
-  return /组六|zu6/i.test(text) && !/组选6|组选60|组选120|zu60|zu120|和值/i.test(text)
+  return /组六|zu6/i.test(text) && !/组选6|组选60|组选120|zu60|zu120|和值|单式|_ds/i.test(text)
+}
+
+/** 四星/任四组选6 号池（至少 2 码，C(n,2)） */
+function isSixingZu6PoolPlay(config: PlayConfig): boolean {
+  return isSixingZu6PlayConfig(config)
+}
+
+/**
+ * 失焦时：合法票已滤空后，只保留长度 < segmentLen 的半截数字碎片。
+ * ≥N 位的完整/超长废票（如 112、1234）一律丢掉，避免「1234,6548」失焦原样不动。
+ */
+function keepIncompleteDigitFragments(raw: string, segmentLen: number): string {
+  if (segmentLen <= 0) return String(raw ?? '').trim()
+  const parts = String(raw ?? '')
+    .split(/[,，\s\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+  const incomplete = parts.filter((t) => /^\d+$/.test(t) && t.length < segmentLen)
+  return incomplete.join(',')
 }
 
 /** 组选包胆（前三组选包胆等）：单选 0–9 */
@@ -394,8 +560,20 @@ export function groupDigitInputHint(config: PlayConfig): string {
   if (isZu3PoolPlay(config)) {
     return '输入两个及以上 0-9 的号码，多选用逗号分隔，如 1,3,5,7'
   }
+  // 四星/任四组选6：至少 2 码（区别于三星组六 ≥3）
+  if (isSixingZu6PoolPlay(config)) {
+    return '输入两个及以上的0-9的号码，多选用逗号分隔，如1,2'
+  }
   if (isZu6PoolPlay(config)) {
     return '输入三个及以上 0-9 的号码，多选用逗号分隔，如 1,3,5,7'
+  }
+  // 组选12：二重/单号双区
+  if (isZu12PoolPlay(config)) {
+    return '从0-9中，输入1个及以上的二重号码，2个及以上的单号，两个位置由逗号分隔，如：12,3234'
+  }
+  // 组选24：至少 4 码（任四剥位后亦走此提示）
+  if (isZu24PoolPlay(config)) {
+    return '输入4个及以上0-9的号码，多选用逗号分隔，如：1,3,5,7'
   }
   // 前二/后二/任二组选复式：至少 2 个号；三星/任三组选复式至少 3 个
   if (isZuxuanFushiPoolPlay(config)) {
@@ -446,7 +624,7 @@ export function groupDigitInputHint(config: PlayConfig): string {
     const pickN = renxuanZhixuanFushiMinFilledHint(config)
     const cn = pickN === 2 ? '两' : (['零', '一', '二', '三', '四', '五'][pickN] ?? String(pickN))
     const example = buildRenxuanZhixuanFushiExample(options, pickN)
-    return `请对应万到个，以“，”分隔，输入对应位置的号码，至少选${cn}位输入数字；如：${example}`
+    return `请对应万位到个位，以“，”分隔，输入对应位置的号码，至少选${cn}位输入数字；如：${example}`
   }
   const example = buildDigitInputExample(options, segLen, commaPool)
   if (segLen <= 1) {
@@ -462,9 +640,17 @@ export function groupDigitInputHint(config: PlayConfig): string {
     return `请对应${cnCount}个顺序号码，以“，”分隔，输入对应位置的号码，每一位置皆要输入号码；如：${example}`
   }
   const labels = config.segmentLabels ?? []
-  const first = labels[0] ?? '第1位'
-  const last = labels[segLen - 1] ?? `第${segLen}位`
+  const first = formatHintPosLabel(labels[0] ?? '第1位')
+  const last = formatHintPosLabel(labels[segLen - 1] ?? `第${segLen}位`)
   return `请对应${first}到${last}，以“，”分隔，输入对应位置的号码，每一位置皆要输入号码；如：${example}`
+}
+
+/** 万/千/百/十/个 → 万位…，已有「位」后缀则原样 */
+function formatHintPosLabel(lab: string): string {
+  const t = String(lab ?? '').trim()
+  if (!t) return t
+  if (/^[万千百十个]$/.test(t)) return `${t}位`
+  return t
 }
 
 /** 任选直选复式至少填满位数（任二=2 / 任三=3 / 任四=4） */

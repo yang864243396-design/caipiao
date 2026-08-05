@@ -78,6 +78,19 @@ func TestFormatZu12Zu4_flatDigits(t *testing.T) {
 	if n := CountBetNums(meta12, wire12); n != 2 {
 		t.Fatalf("zu12 bets=%d want 2", n)
 	}
+	// 跨区重叠原样出站；按二重分别计注
+	if got := FormatBetContentForRule(meta12, "2,123"); got != "2,123" {
+		t.Fatalf("zu12 2,123→wire=%q want 2,123", got)
+	}
+	if n := CountBetNums(meta12, "2,123"); n != 1 {
+		t.Fatalf("zu12 2,123 bets=%d want 1", n)
+	}
+	if got := FormatBetContentForRule(meta12, "23,123"); got != "23,123" {
+		t.Fatalf("zu12 23,123→wire=%q want 23,123", got)
+	}
+	if n := CountBetNums(meta12, "23,123"); n != 2 {
+		t.Fatalf("zu12 23,123 bets=%d want 2", n)
+	}
 
 	meta4 := ParseRuleMeta("ssc_std", "g013", "133", "组选4", "四星", nil, "133")
 	wire4 := FormatBetContentForRule(meta4, "1,2,3,4")

@@ -92,6 +92,24 @@ func ValidateSchemeBetContent(kind string, config []byte, content string, maxUni
 	content = stripPositionLabelPrefix(rule, content)
 
 	var out []Violation
+	// 组选12：双区「二重,单号」，勿走扁选 TokenList（「12」「34」会被当成越界）
+	if isZu12PlayRule(rule) {
+		out = append(out, validateZu12DualZone(content)...)
+		units := countZu12DualZoneBetUnits(content)
+		if renDanshiKnown {
+			units = renDanshiUnits
+		}
+		if len(out) == 0 && units <= 0 {
+			out = append(out, Violation{Code: ViolationZeroUnits, Detail: zu12FormatDetail})
+		}
+		if maxUnits > 0 && units > maxUnits {
+			out = append(out, Violation{
+				Code:   ViolationUnitsOverLimit,
+				Detail: errMaxBetUnitsExceeded(maxUnits).Error(),
+			})
+		}
+		return out
+	}
 	out = append(out, validateTokens(u, rule, content)...)
 	// 组选包胆：第三方仅允许单胆（中三组选包胆等）
 	if isBaodanPlayRule(rule) && u.Kind == UniverseTokenList {
@@ -103,7 +121,7 @@ func ValidateSchemeBetContent(kind string, config []byte, content string, maxUni
 			})
 		}
 	}
-	// 组三/组六号池：保存与审计强制最低选号（组三≥2、组六≥3）
+	// 组三/组六/组选6 号池：保存与审计强制最低选号（组三≥2、三星组六≥3、四星/任四组选6≥2）
 	if minPick := zuxuanPoolMinPick(rule); minPick >= 2 && u.Kind == UniverseTokenList {
 		n := len(dedupStrings(splitContentTokens(content)))
 		if n > 0 && n < minPick {
@@ -111,6 +129,10 @@ func ValidateSchemeBetContent(kind string, config []byte, content string, maxUni
 			bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
 			sub := strings.ToLower(rule.SubPlayID + " " + rule.CatalogSubID)
 			switch {
+			case bm == "zu24" || strings.Contains(sub, "zu24") || strings.Contains(sub, "组选24"):
+				label = "组选24"
+			case isSixingZu6PlayRule(rule):
+				label = "组选6"
 			case bm == "zu6" || (strings.Contains(sub, "zu6") && !strings.Contains(sub, "zu60") && !strings.Contains(sub, "zu120")):
 				label = "组六"
 			case bm == "zu3" || (strings.Contains(sub, "zu3") && !strings.Contains(sub, "zu30")):
@@ -156,7 +178,17 @@ func ValidateSchemeBetContent(kind string, config []byte, content string, maxUni
 	}
 	switch {
 	case known && units <= 0:
-		out = append(out, Violation{Code: ViolationZeroUnits, Detail: "注数为 0"})
+		detail := "注数为 0"
+		if isZu3DanshiPlayRule(rule) {
+			detail = "组三单式：每注须为两个相同号码和一个不同号码（如 112），不含豹子与组六"
+		}
+		if isZu6DanshiPlayRule(rule) {
+			detail = "组六单式：每注须为三个各不相同的号码（如 012），不含豹子与组三"
+		}
+		if isHunhePlayRule(rule) {
+			detail = "混合组选：每注须为三个号码且不含豹子；组选形态相同只计 1 注，顺序不限"
+		}
+		out = append(out, Violation{Code: ViolationZeroUnits, Detail: detail})
 	case known && maxUnits > 0 && units > maxUnits:
 		out = append(out, Violation{
 			Code:   ViolationUnitsOverLimit,
@@ -373,6 +405,99 @@ func splitContentTokens(raw string) []string {
 	return strings.FieldsFunc(raw, func(r rune) bool {
 		return r == ',' || r == '，' || r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == '|'
 	})
+}
+
+const zu12FormatDetail = "组选12：从0-9中输入1个及以上二重号码、2个及以上单号，两区用逗号分隔，如：12,3234"
+const zu12OverlapDetail = "组选12：每个二重号须能与单号区凑成至少 1 注（选该二重时单号区去掉该码后仍≥2；如 23,123 计 2 注，1,12 为 0 注）"
+
+func isZu12PlayRule(rule playRule) bool {
+	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	if bm == "zu12" {
+		return true
+	}
+	sub := strings.ToLower(rule.SubPlayID + " " + rule.CatalogSubID)
+	if strings.Contains(sub, "zu120") || strings.Contains(sub, "组选120") {
+		return false
+	}
+	return strings.Contains(sub, "zu12") || strings.Contains(sub, "组选12")
+}
+
+// parseZu12DualZones 二重≥1、单号区≥2（区内去重；跨区重叠保留）。
+func parseZu12DualZones(content string) (doubles, singles string, ok bool) {
+	content = strings.TrimSpace(strings.ReplaceAll(content, "，", ","))
+	if content == "" {
+		return "", "", false
+	}
+	parts := strings.Split(content, ",")
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	doubles = uniqueDigitRunSchemes(parts[0])
+	singles = uniqueDigitRunSchemes(parts[1])
+	if len(doubles) < 1 || len(singles) < 2 {
+		return "", "", false
+	}
+	return doubles, singles, true
+}
+
+func uniqueDigitRunSchemes(s string) string {
+	seen := make(map[byte]bool, 10)
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < '0' || c > '9' || seen[c] {
+			continue
+		}
+		seen[c] = true
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
+func validateZu12DualZone(content string) []Violation {
+	doubles, singles, ok := parseZu12DualZones(content)
+	if !ok {
+		return []Violation{{Code: ViolationZeroUnits, Detail: zu12FormatDetail}}
+	}
+	if countZu12DualZoneBetUnits(content) > 0 {
+		return nil
+	}
+	if hasZu12Overlap(doubles, singles) {
+		return []Violation{{Code: ViolationZeroUnits, Detail: zu12OverlapDetail}}
+	}
+	return []Violation{{Code: ViolationZeroUnits, Detail: zu12FormatDetail}}
+}
+
+func hasZu12Overlap(doubles, singles string) bool {
+	set := make(map[byte]bool, len(doubles))
+	for i := 0; i < len(doubles); i++ {
+		set[doubles[i]] = true
+	}
+	for i := 0; i < len(singles); i++ {
+		if set[singles[i]] {
+			return true
+		}
+	}
+	return false
+}
+
+// countZu12DualZoneBetUnits 对每个二重 d，C(|单号\{d}|, 2) 求和。
+func countZu12DualZoneBetUnits(content string) int {
+	a, b, ok := parseZu12DualZones(content)
+	if !ok {
+		return 0
+	}
+	total := 0
+	for i := 0; i < len(a); i++ {
+		n := 0
+		for j := 0; j < len(b); j++ {
+			if b[j] != a[i] {
+				n++
+			}
+		}
+		total += combinInt(n, 2)
+	}
+	return total
 }
 
 func dedupStrings(in []string) []string {
