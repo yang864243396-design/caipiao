@@ -31,7 +31,7 @@ const ren4Zu12 = {
 describe('任四组选12 双区 placeholder / 校验 / 计注', () => {
   it('placeholder 为选位 + 二重/单号双区', () => {
     expect(groupContentPlaceholder(ren4Zu12)).toBe(
-      '从万、千、百、十、个中勾选至少 4 个，再从0-9中，输入1个及以上的二重号码，2个及以上的单号，两个位置由逗号分隔，如：12,3234',
+      '从万、千、百、十、个中勾选至少 4 个、最多 5 个位置，再从0-9中，输入1个及以上的二重号码，2个及以上的单号，两个位置由逗号分隔，如：12,3234',
     )
     expect(groupDigitInputHint(ren4Zu12)).toContain('二重')
     expect(zuxuanPoolMinPick(ren4Zu12)).toBeNull()

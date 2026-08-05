@@ -30,7 +30,7 @@ describe('任四组选24 号池 placeholder / 校验 / 计注', () => {
   it('placeholder 含选位与至少 4 码', () => {
     const tip = groupContentPlaceholder(ren4Zu24)
     expect(tip).toBe(
-      '从万、千、百、十、个中勾选至少 4 个，再输入4个及以上0-9的号码，多选用逗号分隔，如：1,3,5,7',
+      '从万、千、百、十、个中勾选至少 4 个、最多 5 个位置，再输入4个及以上0-9的号码，多选用逗号分隔，如：1,3,5,7',
     )
   })
 

@@ -579,6 +579,14 @@ export function bareConfigForRenxuanPicks(config: PlayConfig): PlayConfig {
       else if (!sid) bare.catalogSubId = '145'
     }
   }
+  // 剥位会清掉 renPositionCount / 任选文案；组选复式最少选号等仍依赖「任二/任三」信号
+  if (k >= 2 && k <= 5) {
+    const tag = k === 2 ? '任二' : k === 3 ? '任三' : k === 4 ? '任四' : `任${k}`
+    const method = String(bare.playMethodLabel ?? '')
+    if (!new RegExp(tag).test(method)) {
+      bare.playMethodLabel = method ? `${method}${tag}` : tag
+    }
+  }
   return bare
 }
 
@@ -2968,7 +2976,108 @@ export function catalogFieldsFromPlayConfig(
   return out
 }
 
+/**
+ * 任选选位面板 placeholder：前缀选位说明 + 按子玩法具体录入规则（勿用通用「再选择/输入号码；C(选位数,k)」）。
+ */
+export function renxuanPositionPanelPlaceholder(config: PlayConfig): string {
+  const kRaw = config.renPositionCount ?? renPickCountFromConfig(config)
+  const k = kRaw >= 2 && kRaw <= 5 ? kRaw : 2
+  const maxPositions = 5
+  const prefix = `从万、千、百、十、个中勾选至少 ${k} 个、最多 ${maxPositions} 个位置`
+  const bm = (config.betMode ?? '').trim()
+  const method = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''} ${bm}`
+
+  // —— 单式票面 ——
+  if (isRenxuanPositionDanshiConfig(config)) {
+    if (isZu3DanshiConfig(config)) {
+      return `${prefix}，再输入两个号相同号码和一个不同号码组成一注。所选位置与号码须与开奖一致，顺序不限。示例：112,223`
+    }
+    if (isZu6DanshiConfig(config)) {
+      return `${prefix}，再输入三个各不相同的3个号码组成一注。所选位置与号码须与开奖一致，顺序不限。示例：012,345`
+    }
+    if (isHunhePlayConfig(config)) {
+      return `${prefix}，再输入三个号码组成一注，所选${k}个位置的开奖号码与输入号码一致，顺序不限。示例：012,345`
+    }
+    const n = config.segmentLen > 0 ? config.segmentLen : k
+    const example = Array.from({ length: 2 }, (_, ti) =>
+      Array.from({ length: n }, (_, i) => String((i + ti * 3) % 10)).join(''),
+    ).join(',')
+    if (isZuxuanDanshiConfig(config)) {
+      return `${prefix}，再输入 ${n} 位号码组成一注。所选位置与号码须与开奖一致，顺序不限。示例：${example}`
+    }
+    return `${prefix}，再输入 ${n} 位号码组成一注。所选位置与号码顺序均须与开奖一致。示例：${example}`
+  }
+
+  // —— 号池 / 和值 ——
+  if (bm === 'zu24' || /组选24|zu24/i.test(method)) {
+    return `${prefix}，再输入4个及以上0-9的号码，多选用逗号分隔，如：1,3,5,7`
+  }
+  if (bm === 'zu12' || (/组选12|zu12/i.test(method) && !/组选120|zu120/i.test(method))) {
+    return `${prefix}，再从0-9中，输入1个及以上的二重号码，2个及以上的单号，两个位置由逗号分隔，如：12,3234`
+  }
+  if (isSixingZu6PlayConfig(config)) {
+    return `${prefix}，再输入两个及以上的0-9的号码，多选用逗号分隔，如1,2`
+  }
+  if (
+    !isZu3DanshiConfig(config) &&
+    (bm === 'zu3' || (/组三|zu3/i.test(method) && !/组选3|组选30|zu30|和值|单式|_ds/i.test(method)))
+  ) {
+    return `${prefix}，再输入两个及以上0-9的号码，多选用逗号分隔，如1,3,5,7`
+  }
+  if (
+    !isZu6DanshiConfig(config) &&
+    !isSixingZu6PlayConfig(config) &&
+    (bm === 'zu6' || (/组六|zu6/i.test(method) && !/组选6|组选60|组选120|zu60|zu120|和值|单式|_ds/i.test(method)))
+  ) {
+    return `${prefix}，再输入三个及以上0-9的号码，多选用逗号分隔，如1,3,5,7`
+  }
+  if (
+    bm === 'hezhi' ||
+    (/和值/.test(method) && !/尾数|跨度|单双|大小/.test(method))
+  ) {
+    const pool = poolFromConfig(config)
+    const min = config.numberPoolMin ?? pool?.min ?? (k <= 2 ? 0 : 0)
+    const max = config.numberPoolMax ?? pool?.max ?? (k <= 2 ? 18 : 27)
+    return `${prefix}，再输入和值 ${min}–${max}，多选用逗号分隔（如 14,15,16）`
+  }
+  if (bm === 'baodan' || /包胆/.test(method)) {
+    return `${prefix}，再输入一个 0–9 的号码（如 5）`
+  }
+  if (bm === 'kuadu' || /跨度/.test(method)) {
+    const pool = poolFromConfig(config)
+    const min = config.numberPoolMin ?? pool?.min ?? 0
+    const max = config.numberPoolMax ?? pool?.max ?? 9
+    return `${prefix}，再输入跨度 ${min}–${max}，每个数字用逗号分隔（如 0,3,9）`
+  }
+  if (
+    bm === 'weishu' ||
+    /和值尾数/.test(method) ||
+    (/尾数/.test(method) && !/单双|大小/.test(method))
+  ) {
+    const pool = poolFromConfig(config)
+    const min = config.numberPoolMin ?? pool?.min ?? 0
+    const max = config.numberPoolMax ?? pool?.max ?? 9
+    return `${prefix}，再输入和值尾数 ${min}–${max}，多选用逗号分隔（如 1,3,5）`
+  }
+  if (bm === 'zuxuan_fs' || /组选复式|zuxuan_fs/i.test(method)) {
+    const min = k <= 2 ? 2 : 3
+    const cn = min === 2 ? '两个' : '三个'
+    const eg = min === 2 ? '1,2' : '1,3,5,7'
+    return `${prefix}，再输入${cn}及以上的0-9的号码，多选用逗号分隔，如${eg}`
+  }
+  // 其它号池：按最少选号推断
+  const minPick = zuxuanPoolMinPick(config) ?? (k <= 2 ? 2 : 3)
+  const cn =
+    minPick === 2 ? '两个' : minPick === 3 ? '三个' : minPick === 4 ? '四个' : `${minPick}个`
+  const eg = minPick <= 2 ? '1,2' : '1,3,5,7'
+  return `${prefix}，再输入${cn}及以上的0-9的号码，多选用逗号分隔，如${eg}`
+}
+
 export function groupContentPlaceholder(config: PlayConfig): string {
+  // 任选选位：按子玩法拼具体录入规则（优先于下方和值/组三等扁选文案）
+  if (isRenxuanNeedsPositionConfig(config)) {
+    return renxuanPositionPanelPlaceholder(config)
+  }
   // 和值优先：任二直选和值等勿落成组三/组六「N 个及以上」提示
   if (
     config.betMode === 'hezhi' ||
@@ -3048,20 +3157,6 @@ export function groupContentPlaceholder(config: PlayConfig): string {
   if (config.betMode === 'tuotou') {
     return '拖头：胆码|拖码，如 01,02|03,04,05'
   }
-  if (isRenxuanPositionDanshiConfig(config)) {
-    const k = config.renPositionCount ?? 2
-    if (isZu3DanshiConfig(config)) {
-      return `从万、千、百、十、个中勾选至少 ${k} 个、最多 5 个位置，再输入两个号相同号码和一个不同号码组成一注。所选位置与号码须与开奖一致，顺序不限。示例：112,223`
-    }
-    if (isZu6DanshiConfig(config)) {
-      return `从万、千、百、十、个中勾选至少 ${k} 个、最多 5 个位置，再输入三个各不相同的3个号码组成一注。所选位置与号码须与开奖一致，顺序不限。示例：012,345`
-    }
-    if (isHunhePlayConfig(config)) {
-      return `从万、千、百、十、个中勾选至少 ${k} 个、最多 5 个位置，再输入三个号码组成一注，所选${k}个位置的开奖号码与输入号码一致，顺序不限。示例：012,345`
-    }
-    const n = config.segmentLen > 0 ? config.segmentLen : k
-    return `先勾选至少 ${k} 个、最多 5 个位置，再输入 ${n} 位号码（逗号分隔）；多选位按组合计注，如：千,百,个↵12,34`
-  }
   if ((config.betMode ?? '').endsWith('_dp')) {
     return '对碰：A组|B组，如 马|龙 或 01,02|03,04'
   }
@@ -3115,27 +3210,6 @@ export function groupContentPlaceholder(config: PlayConfig): string {
   if (config.betMode === 'hunhe') {
     const digitLen = hunheDigitLenFromConfig(config)
     return `混合组选：每注 ${digitLen} 位，不含豹子；组选形态相同只计 1 注（如 123,321 计 1 注）`
-  }
-  // 任四组选24：选位 + 号池至少 4 码
-  if (
-    isRenxuanNeedsPositionConfig(config) &&
-    (config.betMode === 'zu24' || /组选24|zu24/i.test(`${config.playMethodLabel ?? ''} ${config.subPlayId ?? ''}`))
-  ) {
-    const k = config.renPositionCount ?? renPickCountFromConfig(config)
-    const need = k >= 2 && k <= 5 ? k : 4
-    return `从万、千、百、十、个中勾选至少 ${need} 个，再输入4个及以上0-9的号码，多选用逗号分隔，如：1,3,5,7`
-  }
-  // 任四组选12：选位 + 二重/单号双区
-  if (isRenxuanNeedsPositionConfig(config) && isZu12PlayConfig(config)) {
-    const k = config.renPositionCount ?? renPickCountFromConfig(config)
-    const need = k >= 2 && k <= 5 ? k : 4
-    return `从万、千、百、十、个中勾选至少 ${need} 个，再从0-9中，输入1个及以上的二重号码，2个及以上的单号，两个位置由逗号分隔，如：12,3234`
-  }
-  // 任四组选6：选位 + 至少 2 码（C(n,2)）
-  if (isRenxuanNeedsPositionConfig(config) && isSixingZu6PlayConfig(config)) {
-    const k = config.renPositionCount ?? renPickCountFromConfig(config)
-    const need = k >= 2 && k <= 5 ? k : 4
-    return `从万、千、百、十、个中勾选至少 ${need} 个、最多 5 个位置，再输入两个及以上的0-9的号码，多选用逗号分隔，如1,2`
   }
   if (config.betMode === 'zu24' || /组选24|zu24/i.test(config.playMethodLabel ?? '')) {
     return '输入4个及以上0-9的号码，多选用逗号分隔，如：1,3,5,7'

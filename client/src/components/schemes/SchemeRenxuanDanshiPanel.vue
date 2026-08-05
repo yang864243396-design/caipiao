@@ -8,12 +8,8 @@ import {
   buildRenxuanPositionContent,
   defaultRenxuanPositions,
   isRenxuanPositionPoolConfig,
-  isHunhePlayConfig,
-  isSixingZu6PlayConfig,
-  isZu3DanshiConfig,
-  isZu6DanshiConfig,
-  isZuxuanDanshiConfig,
   parseRenxuanPositionContent,
+  renxuanPositionPanelPlaceholder,
   type PlayConfig,
 } from '@/utils/betPayload'
 import {
@@ -50,10 +46,6 @@ const usesDigitInput = computed(
 )
 const usesPickPanel = computed(
   () => isPool.value && schemeGroupUsesPickPanel(bareConfig.value),
-)
-
-const digitLen = computed(() =>
-  props.config.segmentLen > 0 ? props.config.segmentLen : pickCount.value,
 )
 
 const positions = ref<string[]>([])
@@ -121,45 +113,7 @@ function togglePosition(lab: string) {
   positions.value = SSC_POSITION_LABELS.filter((p) => set.has(p))
 }
 
-const placeholder = computed(() => {
-  const k = pickCount.value
-  const bm = (props.config.betMode ?? '').trim()
-  const method = `${props.config.playMethodLabel ?? ''} ${props.config.subPlayId ?? ''}`
-  // 任四组选24：选位 + 至少 4 个单码号池
-  if (isPool.value && (bm === 'zu24' || /组选24|zu24/i.test(method))) {
-    return `从万、千、百、十、个中勾选至少 ${k} 个，再输入4个及以上0-9的号码，多选用逗号分隔，如：1,3,5,7`
-  }
-  // 任四组选12：选位 + 二重号/单号双区
-  if (isPool.value && (bm === 'zu12' || (/组选12|zu12/i.test(method) && !/组选120|zu120/i.test(method)))) {
-    return `从万、千、百、十、个中勾选至少 ${k} 个，再从0-9中，输入1个及以上的二重号码，2个及以上的单号，两个位置由逗号分隔，如：12,3234`
-  }
-  // 任四组选6：选位 + 至少 2 个 0-9 号码（C(n,2)）
-  if (isPool.value && isSixingZu6PlayConfig(props.config)) {
-    return `从万、千、百、十、个中勾选至少 ${k} 个、最多 ${maxPositions} 个位置，再输入两个及以上的0-9的号码，多选用逗号分隔，如1,2`
-  }
-  if (isPool.value) {
-    return `从万、千、百、十、个中勾选至少 ${k} 个、最多 ${maxPositions} 个位置，再选择/输入号码；所选位置多于 ${k} 个时按组合计注（C(选位数,${k})×号码注数）。`
-  }
-  // 任三组三单式：须两同号 + 一异号（勿用 012 这类组六形态示例）
-  if (isZu3DanshiConfig(props.config)) {
-    return `从万、千、百、十、个中勾选至少 ${k} 个、最多 ${maxPositions} 个位置，再输入两个号相同号码和一个不同号码组成一注。所选位置与号码须与开奖一致，顺序不限。示例：112,223`
-  }
-  // 任三组六单式：须三位互不相同
-  if (isZu6DanshiConfig(props.config)) {
-    return `从万、千、百、十、个中勾选至少 ${k} 个、最多 ${maxPositions} 个位置，再输入三个各不相同的3个号码组成一注。所选位置与号码须与开奖一致，顺序不限。示例：012,345`
-  }
-  // 任三混合组选：三位一注，选位开奖与输入号码一致、顺序不限（组选）
-  if (isHunhePlayConfig(props.config)) {
-    return `从万、千、百、十、个中勾选至少 ${k} 个、最多 ${maxPositions} 个位置，再输入三个号码组成一注，所选${k}个位置的开奖号码与输入号码一致，顺序不限。示例：012,345`
-  }
-  const example = Array.from({ length: 2 }, (_, ti) =>
-    Array.from({ length: digitLen.value }, (_, i) => String((i + ti * 3) % 10)).join(''),
-  ).join(',')
-  if (isZuxuanDanshiConfig(props.config)) {
-    return `从万、千、百、十、个中勾选至少 ${k} 个、最多 ${maxPositions} 个位置，再输入 ${digitLen.value} 位号码组成一注。所选位置与号码须与开奖一致，顺序不限。示例：${example}`
-  }
-  return `从万、千、百、十、个中勾选至少 ${k} 个、最多 ${maxPositions} 个位置，再输入 ${digitLen.value} 位号码组成一注。所选位置与号码顺序均须与开奖一致。示例：${example}`
-})
+const placeholder = computed(() => renxuanPositionPanelPlaceholder(props.config))
 </script>
 
 <template>
