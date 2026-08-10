@@ -116,7 +116,7 @@ func (s *Service) buildCreateDefinitionConfig(
 		"subId":       in.SubPlayID,
 	}
 
-	// 内置计画：创建时无彩种/玩法，待选择收藏方案后物化（v8 §3.6）
+	// 未选彩种：只落基础配置（历史兼容；当前创建校验已要求内置计划带彩种）
 	if in.LotteryCode == "" {
 		return json.Marshal(cfg)
 	}
@@ -131,6 +131,10 @@ func (s *Service) buildCreateDefinitionConfig(
 	template := strings.TrimSpace(cat.PlayTemplate.String)
 	if cat.PlayTemplate.Valid && template != "" {
 		cfg["playTemplate"] = template
+		// 内置计画：玩法随收藏方案物化，创建时可无 playTypeId/subPlayId
+		if in.RunTypeID == RunTypeBuiltinPlan && (in.PlayTypeID == "" || in.SubPlayID == "") {
+			return json.Marshal(cfg)
+		}
 		sub, subErr := s.q.GetSubPlay(ctx, sqlcdb.GetSubPlayParams{
 			TemplateCode: template,
 			TypeID:       in.PlayTypeID,
@@ -159,12 +163,12 @@ func validateCreateInput(in CreateDefinitionInput) error {
 	if in.RunTypeID == "" {
 		return fmt.Errorf("%w: runTypeId 不能为空", ErrInvalidCreateRequest)
 	}
-	// 内置计画：彩种与玩法随收藏方案物化带出，创建时放宽（v8 §2）
-	if in.Kind == "custom" && in.RunTypeID == RunTypeBuiltinPlan {
-		return nil
-	}
 	if in.LotteryCode == "" {
 		return fmt.Errorf("%w: lotteryCode 不能为空", ErrInvalidCreateRequest)
+	}
+	// 内置计画：须关联彩种；玩法随收藏方案物化，创建时可不带
+	if in.Kind == "custom" && in.RunTypeID == RunTypeBuiltinPlan {
+		return nil
 	}
 	if in.PlayTypeID == "" || in.SubPlayID == "" {
 		return fmt.Errorf("%w: playTypeId / subPlayId 不能为空", ErrInvalidCreateRequest)

@@ -33,6 +33,7 @@ import {
   canGenerateOneclickPlan,
   generateNewbiePlan,
   generateOneclickPlan,
+  parseFreeList,
   type AdvanceMode,
   type CalcType,
   type PlanTableRow,
@@ -114,10 +115,25 @@ function needsBetPlanTable(): boolean {
   return false
 }
 
+function normalizeSimpleMultiples(): string | null {
+  const raw = simpleMultiples.value.trim()
+  if (!raw) return '至少要输入一个直线倍投'
+  const list = parseFreeList(raw)
+  if (!list) return '倍数须为不小于 1 的正整数（逗号分隔），不能为 0'
+  simpleMultiples.value = list.join(',')
+  return null
+}
+
+function onSimpleMultiplesBlur() {
+  if (!simpleMultiples.value.trim()) return
+  const err = normalizeSimpleMultiples()
+  if (err) ElMessage.warning(err)
+}
+
 function validateBetMultiplier(): string | null {
   const kind = normalizeBetMultiplierPersistKind(activeSubTab.value)
-  if (kind === '2' && !simpleMultiples.value.trim()) {
-    return '至少要输入一个直线倍投'
+  if (kind === '2') {
+    return normalizeSimpleMultiples()
   }
   if (kind === '3' && !selectedAdvancedId.value) {
     return '无法保存，请先在高级倍投列表中选择一个方案'
@@ -862,9 +878,18 @@ const showPlanTable = computed(() => activeSubTab.value === '0' || activeSubTab.
       <!-- 简单倍投（直线表；翻倍方式固定挂翻倍，UI 已屏蔽） -->
       <template v-else-if="activeSubTab === '2'">
         <div class="bms-card bms-card--simple">
-          <el-input v-model="simpleMultiples" type="textarea" :rows="3" size="small" resize="none" class="bms-textarea"
-            placeholder="直线倍数表，逗号分隔，如 2,4,8,17" />
+          <el-input
+            v-model="simpleMultiples"
+            type="textarea"
+            :rows="3"
+            size="small"
+            resize="none"
+            class="bms-textarea"
+            placeholder="直线倍数表，逗号分隔正整数，如 1,2,4,8（最小 1）"
+            @blur="onSimpleMultiplesBlur"
+          />
         </div>
+        <p class="bms-hint bms-hint--primary">* 每档倍数须为不小于 1 的正整数，不能为 0</p>
         <p class="bms-hint bms-hint--danger">* 倍数计算上限为 200000 倍为止，超出不计</p>
       </template>
 

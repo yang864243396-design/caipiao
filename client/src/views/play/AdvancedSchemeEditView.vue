@@ -52,6 +52,7 @@ import {
 import SchemeGroupPickPanel from '@/components/schemes/SchemeGroupPickPanel.vue'
 import SchemeGroupInputPanel from '@/components/schemes/SchemeGroupInputPanel.vue'
 import SchemeLhcTemaPanel from '@/components/schemes/SchemeLhcTemaPanel.vue'
+import SchemeLhcRenyiDuipengPanel from '@/components/schemes/SchemeLhcRenyiDuipengPanel.vue'
 import SchemeRenxuanDanshiPanel from '@/components/schemes/SchemeRenxuanDanshiPanel.vue'
 import {
   adaptSchemeGroupContentForPlay,
@@ -131,6 +132,7 @@ import {
   schemeGroupContentToInputBox,
   schemeGroupUsesDigitInput,
   schemeGroupUsesLhcTemaPanel,
+  schemeGroupUsesLhcRenyiDuipengPanel,
   schemeGroupUsesPickPanel,
   schemeGroupUsesTextInputPanel,
   textPickOptionsForConfig,
@@ -180,6 +182,7 @@ import {
 import type { BetMultiplierPayload } from '@/api/schemes/betMultiplier'
 import { simBetFromSchemeConfig } from '@/utils/schemeSimBet'
 import { PRIMARY_CURRENCIES, type PrimaryCurrency } from '@/api/guaji/accounts'
+import { normalizeSchemeMultiplier } from '@/api/cloud/center'
 
 const route = useRoute()
 const router = useRouter()
@@ -225,6 +228,14 @@ const stopLoss = ref('')
 const takeProfit = ref('')
 const multCoeff = ref('1')
 const betUnit = ref('2')
+
+/** 编辑中只保留数字；失焦/变更时规范为 ≥1 的正整数 */
+function onMultCoeffInput(v: string | number) {
+  multCoeff.value = String(v ?? '').replace(/[^\d]/g, '')
+}
+function normalizeMultCoeff() {
+  multCoeff.value = normalizeSchemeMultiplier(multCoeff.value)
+}
 /** 方案内容按组划分，默认一组 */
 const schemeGroups = ref<string[]>([''])
 
@@ -242,6 +253,10 @@ const { playConfig: schemePlayConfig, load: loadPlayTree } = usePlayTreeConfig(
 const schemeUsesPickPanel = computed(() => schemeGroupUsesPickPanel(schemePlayConfig.value))
 /** 六合彩特码：19 属性快捷项 + 0–49 号码输入框 */
 const schemeUsesLhcTemaPanel = computed(() => schemeGroupUsesLhcTemaPanel(schemePlayConfig.value))
+/** 二全中任意对碰：A区 / B区双输入框（1–49，| 分隔） */
+const schemeUsesLhcRenyiDuipengPanel = computed(() =>
+  schemeGroupUsesLhcRenyiDuipengPanel(schemePlayConfig.value),
+)
 /** 数字玩法方案内容改用输入框录入（对齐第三方，不点选） */
 const schemeUsesDigitInput = computed(() => schemeGroupUsesDigitInput(schemePlayConfig.value))
 /** 复式数字框或非任选单式整注框（带失焦校验） */
@@ -712,6 +727,10 @@ function formatJushuContentDisplay(content: string): string {
         .filter(Boolean)
         .join(', ')
     }
+    return raw.trim()
+  }
+  // 任意对碰：保持 A|B 展示，勿把 | 当成换行压缩
+  if (schemeUsesLhcRenyiDuipengPanel.value) {
     return raw.trim()
   }
   if (schemeUsesDigitInput.value) {
@@ -3521,6 +3540,7 @@ const rdEstimatedUnits = computed(() => {
 const favorites = ref<SchemeFavoriteRow[]>([])
 const favoritesLoading = ref(false)
 const favoritesLoaded = ref(false)
+const favoritesLoadError = ref('')
 const favSelectedSnapshotId = ref('')
 const builtinSnapshotId = ref('')
 const builtinApplying = ref(false)
@@ -3530,16 +3550,29 @@ const builtinChosenFavorite = computed(
   () => favorites.value.find((f) => f.snapshotId === builtinSnapshotId.value) ?? null,
 )
 
-async function loadFavorites(): Promise<void> {
+/** 内置计划仅展示当前关联彩种下的收藏 */
+const favoritesForLottery = computed(() => {
+  const lot = lotteryCode.value.trim()
+  if (!lot) return []
+  return favorites.value.filter((f) => f.lotteryCode === lot)
+})
+
+async function loadFavorites(force = false): Promise<void> {
   if (favoritesLoading.value) return
+  if (favoritesLoaded.value && !force) return
   favoritesLoading.value = true
+  favoritesLoadError.value = ''
   try {
     favorites.value = await fetchSchemeFavorites()
-  } catch {
+    favoritesLoaded.value = true
+  } catch (err) {
     favorites.value = []
+    favoritesLoaded.value = false
+    favoritesLoadError.value =
+      err instanceof ApiError ? err.message : err instanceof Error ? err.message : '收藏列表加载失败'
+    ElMessage.warning(favoritesLoadError.value)
   } finally {
     favoritesLoading.value = false
-    favoritesLoaded.value = true
   }
 }
 
@@ -3552,13 +3585,22 @@ function formatFavoredAt(raw: string): string {
 function startBuiltinReselect(): void {
   builtinReselecting.value = true
   favSelectedSnapshotId.value = builtinSnapshotId.value
-  if (!favoritesLoaded.value) void loadFavorites()
+  void loadFavorites(true)
 }
 
 async function confirmBuiltinPlan(): Promise<void> {
   if (builtinApplying.value) return
+  if (!lotteryCode.value.trim()) {
+    ElMessage.warning('请先选择彩种')
+    return
+  }
   if (!favSelectedSnapshotId.value) {
     ElMessage.warning('请先选择一个收藏方案')
+    return
+  }
+  const picked = favorites.value.find((f) => f.snapshotId === favSelectedSnapshotId.value)
+  if (picked && picked.lotteryCode !== lotteryCode.value.trim()) {
+    ElMessage.warning('所选收藏方案与当前彩种不一致')
     return
   }
   if (isDraftScheme.value) {
@@ -3631,7 +3673,7 @@ function applyDraftSnapshot(draft: SchemeDraftSnapshot): void {
   stopLoss.value = draft.stopLoss
   takeProfit.value = draft.takeProfit
   betUnit.value = normalizeBetUnitValue(draft.betUnit ?? (draft as { betMode?: string }).betMode ?? '2')
-  multCoeff.value = draft.multCoeff || '1'
+  multCoeff.value = normalizeSchemeMultiplier(draft.multCoeff || '1')
   shareStatus.value = draft.shareStatus
   runTypeId.value = normalizeRunTypeId(draft.meta.runTypeId)
   lotteryCode.value = draft.meta.lotteryCode || lotteryCode.value
@@ -3651,7 +3693,7 @@ function buildLiveDraftMeta(): SchemeDraftMeta {
     kind: schemeKind.value,
     // 草稿保留空名称；提交上云前仍校验必填，不在此处写占位名
     schemeName: schemeName.value.trim(),
-    lotteryCode: isBuiltinPlan.value ? '' : lotteryCode.value.trim(),
+    lotteryCode: lotteryCode.value.trim(),
     runTypeId: runTypeId.value,
     playTypeId: isBuiltinPlan.value ? '' : playTypeId.value.trim(),
     subPlayId: isBuiltinPlan.value ? '' : subPlayId.value.trim(),
@@ -3672,7 +3714,7 @@ function buildDraftSnapshot(): SchemeDraftSnapshot {
     stopLoss: stopLoss.value,
     takeProfit: takeProfit.value,
     betUnit: betUnit.value,
-    multCoeff: multCoeff.value,
+    multCoeff: normalizeSchemeMultiplier(multCoeff.value),
     shareStatus: shareStatus.value,
     betMultiplierKind: betMultiplierKind.value,
     betMultiplier: betMultiplierPayload.value ?? existing?.betMultiplier,
@@ -3694,9 +3736,26 @@ function syncRunTypePanelsAfterSnapshot(): void {
     scheduleHcwStats()
   }
   if (runTypeId.value === 'random_draw') ensureRdCounts()
-  if (runTypeId.value === 'builtin_plan' && !favoritesLoaded.value) void loadFavorites()
+  if (runTypeId.value === 'builtin_plan') void loadFavorites()
   if (runTypeId.value === 'adv_fixed_rotate' && !jushuList.value.length) seedJushuFromGroups()
 }
+
+watch(isBuiltinPlan, (on) => {
+  if (on) void loadFavorites(true)
+})
+
+watch(lotteryCode, () => {
+  if (!isBuiltinPlan.value) return
+  const lot = lotteryCode.value.trim()
+  if (
+    favSelectedSnapshotId.value &&
+    !favorites.value.some(
+      (f) => f.snapshotId === favSelectedSnapshotId.value && f.lotteryCode === lot,
+    )
+  ) {
+    favSelectedSnapshotId.value = ''
+  }
+})
 
 /** 从倍投设定等子页返回时，用离开前快照覆盖远端/草稿加载结果 */
 function applyPendingRestoreSnapshot(): void {
@@ -3749,7 +3808,7 @@ async function loadRemoteDefinition() {
       remoteHasInstance.value = false
       shareLocked.value = false
       await loadLotteries()
-      if (!lotteryCode.value && lotteries.value.length && !isBuiltinPlan.value) {
+      if (!lotteryCode.value && lotteries.value.length) {
         lotteryCode.value = lotteries.value[0].code
       }
       if (lotteryCode.value) {
@@ -3776,7 +3835,7 @@ async function loadRemoteDefinition() {
       }
       schemeCurrency.value = normalizeSchemeCurrency(cfg.schemeCurrency)
       if (cfg.multCoeff != null && String(cfg.multCoeff).trim() !== '') {
-        multCoeff.value = String(cfg.multCoeff).trim()
+        multCoeff.value = normalizeSchemeMultiplier(String(cfg.multCoeff).trim())
       }
       const times = normalizeSchemeTimePairFromConfig(cfg.startTime, cfg.endTime)
       startTime.value = times.start
@@ -3981,7 +4040,7 @@ function buildRemoteDraftPatch(): UpdateSchemeInput {
     simBet: simBet.value,
     schemeFunds: schemeFunds.value,
     schemeCurrency: schemeCurrency.value,
-    multCoeff: multCoeff.value.trim() || '1',
+    multCoeff: normalizeSchemeMultiplier(multCoeff.value),
     startTime: startTime.value,
     endTime: endTime.value,
     // 内置计画配置只读（服务端物化），不回写 schemeGroups；固定取码仅保存单元素数组
@@ -4289,8 +4348,12 @@ async function onSaveCloud() {
     await warn('方案名称不能为空')
     return
   }
-  if (!isBuiltinPlan.value && (!lottery || !playTypeId.value || !subPlayId.value)) {
-    await warn('请选择彩种与玩法')
+  if (!lottery) {
+    await warn('请选择彩种')
+    return
+  }
+  if (!isBuiltinPlan.value && (!playTypeId.value || !subPlayId.value)) {
+    await warn('请选择玩法')
     return
   }
   if (!isBuiltinPlan.value) {
@@ -4343,18 +4406,11 @@ async function onSaveCloud() {
       return
     }
   }
+  normalizeMultCoeff()
   const multCoeffRaw = multCoeff.value.trim()
-  if (!multCoeffRaw) {
-    await warn('倍数系数不能为空')
-    return
-  }
   const multCoeffNum = Number(multCoeffRaw)
-  if (!Number.isFinite(multCoeffNum) || multCoeffNum < 0) {
-    await warn('倍数系数不能小于 0')
-    return
-  }
-  if (!Number.isInteger(multCoeffNum)) {
-    await warn('倍数系数只能为整数')
+  if (!multCoeffRaw || !Number.isInteger(multCoeffNum) || multCoeffNum < 1) {
+    await warn('倍数系数须为不小于 1 的正整数')
     return
   }
 
@@ -4811,7 +4867,7 @@ async function onSaveCloud() {
   const cloudPayload = {
     kind: schemeKind.value,
     schemeName: name,
-    lotteryCode: isBuiltinPlan.value ? '' : lottery,
+    lotteryCode: lottery,
     shareStatus: (isCustomKind.value ? shareStatus.value : 'private') as 'private' | 'public',
     simBet: simBet.value,
     schemeFunds: schemeFunds.value,
@@ -5110,7 +5166,7 @@ function onTimeDialogOpened() {
               clearable
             />
           </div>
-          <div v-if="!isBuiltinPlan" class="scf-field">
+          <div class="scf-field">
             <span class="scf-lbl" id="scf-lbl-lottery">彩种</span>
             <button
               v-if="identityEditable"
@@ -5147,7 +5203,7 @@ function onTimeDialogOpened() {
             <div v-else class="scf-readonly">{{ runTypeLabel }}</div>
           </div>
           <p v-if="isBuiltinPlan" class="scf-identity-hint">
-            内置计划无需选择彩种与玩法，创建后在方案内容中选择已收藏的跟单大厅方案
+            内置计划需关联彩种，无需选择玩法；请在下方方案内容中选择同彩种的已收藏跟单方案
           </p>
           <div v-if="!isBuiltinPlan" class="scf-field">
             <span class="scf-lbl" id="scf-lbl-play">玩法类型</span>
@@ -5299,8 +5355,18 @@ function onTimeDialogOpened() {
           <div class="scf-grid2">
             <div class="scf-field">
               <label class="scf-lbl" for="scf-mult">倍数系数</label>
-              <el-input id="scf-mult" v-model="multCoeff" size="large" class="scf-el-inp" type="number" :min="0"
-                :step="1" />
+              <el-input
+                id="scf-mult"
+                :model-value="multCoeff"
+                size="large"
+                class="scf-el-inp"
+                inputmode="numeric"
+                maxlength="6"
+                placeholder="正整数，最小 1"
+                @update:model-value="onMultCoeffInput"
+                @change="normalizeMultCoeff"
+                @blur="normalizeMultCoeff"
+              />
             </div>
             <div class="scf-field">
               <span class="scf-lbl">投注单位</span>
@@ -5392,6 +5458,11 @@ function onTimeDialogOpened() {
               />
               <SchemeLhcTemaPanel
                 v-else-if="schemeUsesLhcTemaPanel"
+                v-model="schemeGroups[idx]"
+                :config="schemePlayConfig"
+              />
+              <SchemeLhcRenyiDuipengPanel
+                v-else-if="schemeUsesLhcRenyiDuipengPanel"
                 v-model="schemeGroups[idx]"
                 :config="schemePlayConfig"
               />
@@ -6153,14 +6224,44 @@ function onTimeDialogOpened() {
             </div>
           </template>
           <template v-else>
-            <el-empty v-if="favoritesLoaded && !favorites.length" description="暂无收藏方案，先去跟单大厅收藏方案" :image-size="64" />
+            <div v-if="favoritesLoading" class="scf-run-tip" style="padding: 1rem 0">正在加载收藏方案…</div>
+            <el-empty
+              v-else-if="favoritesLoadError"
+              :description="favoritesLoadError"
+              :image-size="64"
+            >
+              <el-button type="primary" @click="loadFavorites(true)">重新加载</el-button>
+            </el-empty>
+            <el-empty
+              v-else-if="!lotteryCode.trim()"
+              description="请先选择彩种，再选择同彩种的收藏方案"
+              :image-size="64"
+            />
+            <el-empty
+              v-else-if="favoritesLoaded && !favorites.length"
+              description="暂无收藏方案，先去跟单大厅收藏方案"
+              :image-size="64"
+            />
+            <el-empty
+              v-else-if="favoritesLoaded && !favoritesForLottery.length"
+              description="当前彩种下暂无收藏方案，请切换彩种或去跟单大厅收藏"
+              :image-size="64"
+            />
             <template v-else>
               <div class="scf-bp-list">
-                <button v-for="f in favorites" :key="f.snapshotId" type="button" class="scf-bp-item"
+                <button
+                  v-for="f in favoritesForLottery"
+                  :key="f.snapshotId"
+                  type="button"
+                  class="scf-bp-item"
                   :class="{ 'is-sel': favSelectedSnapshotId === f.snapshotId }"
-                  @click="favSelectedSnapshotId = f.snapshotId">
-                  <span class="scf-bp-radio" :class="{ 'is-on': favSelectedSnapshotId === f.snapshotId }"
-                    aria-hidden="true" />
+                  @click="favSelectedSnapshotId = f.snapshotId"
+                >
+                  <span
+                    class="scf-bp-radio"
+                    :class="{ 'is-on': favSelectedSnapshotId === f.snapshotId }"
+                    aria-hidden="true"
+                  />
                   <span class="scf-bp-info">
                     <span class="scf-bp-name">{{ f.schemeName }}</span>
                     <span class="scf-bp-meta">
@@ -6170,8 +6271,12 @@ function onTimeDialogOpened() {
                 </button>
               </div>
               <div class="scf-bp-actions">
-                <el-button type="primary" :loading="builtinApplying" :disabled="!favSelectedSnapshotId"
-                  @click="confirmBuiltinPlan">
+                <el-button
+                  type="primary"
+                  :loading="builtinApplying"
+                  :disabled="!favSelectedSnapshotId"
+                  @click="confirmBuiltinPlan"
+                >
                   确认选择
                 </el-button>
                 <el-button v-if="builtinReselecting" plain @click="builtinReselecting = false">取消</el-button>
@@ -6280,6 +6385,11 @@ function onTimeDialogOpened() {
           />
           <SchemeLhcTemaPanel
             v-else-if="schemeUsesLhcTemaPanel"
+            v-model="jushuForm.content"
+            :config="schemePlayConfig"
+          />
+          <SchemeLhcRenyiDuipengPanel
+            v-else-if="schemeUsesLhcRenyiDuipengPanel"
             v-model="jushuForm.content"
             :config="schemePlayConfig"
           />

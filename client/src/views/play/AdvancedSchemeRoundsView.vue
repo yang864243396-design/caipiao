@@ -24,6 +24,11 @@ import {
   upsertDraftAdvancedTemplate,
 } from '@/utils/draftAdvancedTemplates'
 import { SCHEME_DRAFT_ID, isDraftSchemeId } from '@/utils/schemeDraftStorage'
+import {
+  SCHEME_ROUND_MULT_CAP,
+  defaultSchemeRoundRules,
+  validateSchemeRoundRules,
+} from '@shared/schemeRoundRules'
 
 const route = useRoute()
 const router = useRouter()
@@ -95,16 +100,7 @@ function cancelTitleEdit() {
 }
 
 
-function defaultRows(): SchemeRoundRule[] {
-  // 默认挂翻倍（1-based 局号）：未中进下一局、命中回第 1 局
-  return [
-    { mult: 1, afterHit: 1, afterMiss: 2 },
-    { mult: 2, afterHit: 1, afterMiss: 3 },
-    { mult: 4, afterHit: 1, afterMiss: 1 },
-  ]
-}
-
-const rows = ref<SchemeRoundRule[]>(defaultRows())
+const rows = ref<SchemeRoundRule[]>(defaultSchemeRoundRules())
 
 function normalizeRoundRows(raw: unknown): SchemeRoundRule[] | null {
   if (!Array.isArray(raw) || raw.length === 0) return null
@@ -170,19 +166,17 @@ function goBack() {
 }
 
 function addRound() {
-  rows.value.push({ mult: 0, afterHit: 1, afterMiss: 1 })
+  rows.value.push({ mult: 1, afterHit: 1, afterMiss: 1 })
 }
 
 function removeRow(index: number) {
   rows.value.splice(index, 1)
 }
 
-const MULT_CAP = 200_000
-
 async function onSave() {
-  const bad = rows.value.some((r) => !Number.isFinite(r.mult) || r.mult > MULT_CAP)
-  if (bad) {
-    ElMessage.warning(`倍数须在 0～${MULT_CAP} 之间`)
+  const roundErr = validateSchemeRoundRules(rows.value)
+  if (roundErr) {
+    ElMessage.warning(roundErr)
     return
   }
 
@@ -292,7 +286,7 @@ onActivated(() => {
 })
 
 function reloadRounds() {
-  rows.value = defaultRows()
+  rows.value = defaultSchemeRoundRules()
   templateMemberOwned.value = false
   const definitionId = memberDefinitionId()
   if (definitionId) {
@@ -334,7 +328,8 @@ function reloadRounds() {
       </div>
     </header>
 
-    <p class="ase-hint ase-hint--danger">* 倍数计算上限为 200000 倍为止，超出不计</p>
+    <p class="ase-hint ase-hint--primary">* 每局倍数须为不小于 1 的正数，不能为 0</p>
+    <p class="ase-hint ase-hint--danger">* 倍数计算上限为 {{ SCHEME_ROUND_MULT_CAP }} 倍为止，超出不计</p>
     <p class="ase-hint">中后 / 挂后填写目标局数（从 1 开始，对应当前表中的「局数」列）</p>
 
     <main class="ase-main">
@@ -347,7 +342,7 @@ function reloadRounds() {
           </el-table-column>
           <el-table-column label="倍数" :min-width="56" align="center" class-name="ase-cell-input">
             <template #default="{ row }">
-              <el-input-number v-model="row.mult" :min="0" :max="MULT_CAP" size="small" :controls="false" />
+              <el-input-number v-model="row.mult" :min="1" :max="SCHEME_ROUND_MULT_CAP" :step="1" size="small" :controls="false" />
             </template>
           </el-table-column>
           <el-table-column label="中后" :min-width="56" align="center" class-name="ase-cell-input">
@@ -491,6 +486,10 @@ function reloadRounds() {
   padding: 0.5rem var(--page-gutter);
   font-size: 0.6875rem;
   line-height: 1.45;
+}
+
+.ase-hint--primary {
+  color: #0066ff;
 }
 
 .ase-hint--danger {

@@ -194,6 +194,9 @@ func templateVisibleToMember(ctx context.Context, s *Service, row sqlcdb.GetSche
 func templateConfigWithRounds(existing []byte, rounds json.RawMessage) ([]byte, error) {
 	cfg := parseTemplateConfig(existing)
 	if len(rounds) > 0 && string(rounds) != "null" {
+		if err := validateSchemeRoundsMult(rounds); err != nil {
+			return nil, err
+		}
 		var v interface{}
 		if err := json.Unmarshal(rounds, &v); err != nil {
 			return nil, err

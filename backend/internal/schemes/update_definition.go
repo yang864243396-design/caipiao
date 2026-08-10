@@ -38,6 +38,7 @@ func (s *Service) materializeBuiltinPlan(
 	memberID int64,
 	existingConfig []byte,
 	snapshotID string,
+	expectedLotteryCode string,
 ) (map[string]interface{}, *builtinPlanLottery, error) {
 	if snapshotID == "" {
 		return nil, nil, fmt.Errorf("%w: snapshotId 不能为空", ErrInvalidUpdatePatch)
@@ -65,6 +66,17 @@ func (s *Service) materializeBuiltinPlan(
 			return nil, nil, ErrSnapshotNotFound
 		}
 		return nil, nil, err
+	}
+
+	// 方案已关联彩种时，收藏快照须同彩种（定义行或配置）
+	existingLot := strings.TrimSpace(expectedLotteryCode)
+	if existingLot == "" {
+		if v, _ := cfg["lotteryCode"].(string); strings.TrimSpace(v) != "" {
+			existingLot = strings.TrimSpace(v)
+		}
+	}
+	if existingLot != "" && snap.LotteryCode != existingLot {
+		return nil, nil, fmt.Errorf("%w: 收藏方案彩种与当前方案不一致", ErrInvalidUpdatePatch)
 	}
 
 	snapCfg := map[string]interface{}{}
@@ -183,8 +195,8 @@ func ParseUpdatePatch(raw map[string]json.RawMessage) (UpdateDefinitionPatch, er
 		mc := strings.TrimSpace(unquoteJSONString(v))
 		if mc != "" {
 			n, err := strconv.ParseInt(mc, 10, 64)
-			if err != nil || n < 0 {
-				return UpdateDefinitionPatch{}, fmt.Errorf("%w: multCoeff 须为非负整数", ErrInvalidUpdatePatch)
+			if err != nil || n < 1 {
+				return UpdateDefinitionPatch{}, fmt.Errorf("%w: multCoeff 须为正整数且不小于 1", ErrInvalidUpdatePatch)
 			}
 			mc = strconv.FormatInt(n, 10)
 		}
@@ -352,7 +364,9 @@ func (s *Service) UpdateDefinition(
 	var planOverlay map[string]interface{}
 	var planLottery *builtinPlanLottery
 	if patch.HasBuiltinPlan {
-		overlay, lot, perr := s.materializeBuiltinPlan(ctx, m.ID, def.Config, patch.BuiltinPlanSnapshotID)
+		overlay, lot, perr := s.materializeBuiltinPlan(
+			ctx, m.ID, def.Config, patch.BuiltinPlanSnapshotID, def.LotteryCode,
+		)
 		if perr != nil {
 			return Definition{}, perr
 		}
@@ -713,6 +727,31 @@ func parseMultSequence(raw string) []float64 {
 		out = append(out, f)
 	}
 	return out
+}
+
+// validateSchemeRoundsMult 高级倍投局次倍数须为 1～200000，禁止 0。
+func validateSchemeRoundsMult(rounds json.RawMessage) error {
+	parsed := parseSchemeRoundsFromRawJSON(rounds)
+	if len(parsed) == 0 {
+		return fmt.Errorf("%w: rounds 不能为空或格式错误", ErrInvalidUpdatePatch)
+	}
+	for _, r := range parsed {
+		if r.Mult < 1 || r.Mult > 200000 {
+			return fmt.Errorf("%w: rounds.mult 须为 1～200000 的正数", ErrInvalidUpdatePatch)
+		}
+	}
+	return nil
+}
+
+func parseSchemeRoundsFromRawJSON(rounds json.RawMessage) []schemeRound {
+	if len(rounds) == 0 || string(rounds) == "null" {
+		return nil
+	}
+	var v interface{}
+	if err := json.Unmarshal(rounds, &v); err != nil {
+		return nil
+	}
+	return parseSchemeRoundsFromRaw(v)
 }
 
 func mapDefinitionFromConfigUpdateRow(row sqlcdb.UpdateSchemeDefinitionConfigRow, hasInstance bool) Definition {

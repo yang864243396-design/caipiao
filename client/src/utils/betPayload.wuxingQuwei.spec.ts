@@ -54,6 +54,7 @@ describe('五星一帆风顺 数字池', () => {
     expect(countBetUnits(c, '0,3')).toBe(2)
     const v = validateGroupContent(c, '0,3')
     expect(v.ok).toBe(true)
+    if (!v.ok) return
     expect(v.normalized).toBe('0,3')
     expect(v.betUnits).toBe(2)
     expect(validateGroupContent(c, '0,3,9').ok).toBe(false)

@@ -43,6 +43,7 @@ declare module 'vue' {
     SchemeContentReadonlyPanel: typeof import('./src/components/schemes/SchemeContentReadonlyPanel.vue')['default']
     SchemeGroupInputPanel: typeof import('./src/components/schemes/SchemeGroupInputPanel.vue')['default']
     SchemeGroupPickPanel: typeof import('./src/components/schemes/SchemeGroupPickPanel.vue')['default']
+    SchemeLhcRenyiDuipengPanel: typeof import('./src/components/schemes/SchemeLhcRenyiDuipengPanel.vue')['default']
     SchemeLhcTemaPanel: typeof import('./src/components/schemes/SchemeLhcTemaPanel.vue')['default']
     SchemeRenxuanDanshiPanel: typeof import('./src/components/schemes/SchemeRenxuanDanshiPanel.vue')['default']
   }

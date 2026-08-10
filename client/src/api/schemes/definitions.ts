@@ -238,7 +238,7 @@ export interface UpdateSchemeInput {
   /** 方案币种：USDT / TRX / CNY；未填历史方案默认 USDT */
   schemeCurrency?: string
 
-  /** 方案倍数系数（非负整数） */
+  /** 方案倍数系数（正整数，最小 1） */
   multCoeff?: string
 
   startTime?: string

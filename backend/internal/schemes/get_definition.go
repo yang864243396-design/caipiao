@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -77,6 +78,27 @@ func (s *Service) enrichBetMultiplierPayload(ctx context.Context, payload json.R
 		return payload, err
 	}
 	kind, _ := m["kind"].(string)
+	// 简单倍投：倍数串须解析出 ≥1 的正数序列（0 会被丢弃，不能只剩空表）
+	if kind == "2" {
+		if sm, ok := m["simple"].(map[string]interface{}); ok {
+			ms, _ := sm["multiples"].(string)
+			if len(parseMultSequence(ms)) == 0 {
+				return nil, fmt.Errorf("%w: simple.multiples 须为不小于 1 的正数序列", ErrInvalidUpdatePatch)
+			}
+		}
+	}
+	if kind == "3" {
+		if adv, ok := m["advanced"].(map[string]interface{}); ok {
+			if raw, ok := adv["rounds"]; ok {
+				b, _ := json.Marshal(raw)
+				if len(b) > 0 && string(b) != "null" {
+					if err := validateSchemeRoundsMult(b); err != nil {
+						return nil, err
+					}
+				}
+			}
+		}
+	}
 	if kind != "3" {
 		return payload, nil
 	}
@@ -108,6 +130,9 @@ func (s *Service) enrichBetMultiplierPayload(ctx context.Context, payload json.R
 func (s *Service) PutRounds(ctx context.Context, account, definitionID string, rounds json.RawMessage) (Definition, error) {
 	if len(rounds) == 0 || string(rounds) == "null" {
 		return Definition{}, ErrInvalidUpdatePatch
+	}
+	if err := validateSchemeRoundsMult(rounds); err != nil {
+		return Definition{}, err
 	}
 	return s.UpdateDefinition(ctx, account, definitionID, UpdateDefinitionPatch{
 		Rounds:    append(json.RawMessage(nil), rounds...),

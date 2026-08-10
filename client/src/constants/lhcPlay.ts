@@ -269,6 +269,30 @@ export function isLhcWsDuipengConfig(config: LhcErquanzhongConfigLike): boolean 
   return /二全中/.test(text) && /尾数对碰/.test(method + text)
 }
 
+/**
+ * 二全中/二中特/特串·任意对碰（目录 284/290/296；betMode=renyi_dp）。
+ * 落库：A区|B区，区内逗号分隔 01–49，两侧号码不可重复。
+ */
+export function isLhcRenyiDuipengConfig(config: LhcErquanzhongConfigLike): boolean {
+  const { tpl, bm, typeId, typeLabel, method, group, sid, text } = lhcErquanzhongContext(config)
+  if (tpl && tpl !== 'lhc_std') return false
+  if (sid === '284' || sid === '290' || sid === '296' || sid === 'renyi_dp') return true
+  if (bm === 'renyi_dp') return true
+  return (
+    /任意对碰/.test(method + text) &&
+    (typeId === 'erquanzhong' ||
+      typeId === 'erzhongte' ||
+      typeId === 'techuan' ||
+      typeId === 'g003' ||
+      typeLabel === '二全中' ||
+      typeLabel === '二中特' ||
+      typeLabel === '特串' ||
+      typeLabel === '连码' ||
+      group === '二全中' ||
+      /二全中|二中特|特串|连码/.test(text))
+  )
+}
+
 /** 二全中/二中特/特串·生尾对碰（目录 283/289/295；betMode=sw_dp） */
 export function isLhcSwDuipengConfig(config: LhcErquanzhongConfigLike): boolean {
   const { tpl, bm, typeId, typeLabel, method, group, sid, text } = lhcErquanzhongContext(config)

@@ -80,15 +80,21 @@ func TestValidateCreateInput(t *testing.T) {
 			in: withField(func(in *CreateDefinitionInput) { in.SubPlayID = "" }),
 		},
 		{
-			// 内置计划的彩种与玩法要等选了收藏方案才物化出来，创建时必须放行
-			name: "内置计划可不带彩种与玩法",
+			// 内置计划须关联彩种；玩法等选了收藏方案再物化
+			name: "内置计划可不带玩法",
+			in: withField(func(in *CreateDefinitionInput) {
+				in.RunTypeID = RunTypeBuiltinPlan
+				in.PlayTypeID, in.SubPlayID = "", ""
+			}),
+		},
+		{
+			name: "内置计划缺少彩种", wantErr: true, wantMsg: "lotteryCode",
 			in: withField(func(in *CreateDefinitionInput) {
 				in.RunTypeID = RunTypeBuiltinPlan
 				in.LotteryCode, in.PlayTypeID, in.SubPlayID = "", "", ""
 			}),
 		},
 		{
-			// 放宽只对 custom 生效
 			name: "跟单方案的内置计划仍要求彩种", wantErr: true, wantMsg: "lotteryCode",
 			in: withField(func(in *CreateDefinitionInput) {
 				in.Kind = "follow"
@@ -291,26 +297,25 @@ func TestCreateDefinitionAllRunTypes(t *testing.T) {
 	}
 }
 
-// TestCreateDefinitionBuiltinPlanWithoutLottery 内置计划创建时不带彩种与玩法，
-// 这些字段要等选了收藏方案才物化出来。
-func TestCreateDefinitionBuiltinPlanWithoutLottery(t *testing.T) {
+// TestCreateDefinitionBuiltinPlanWithLotteryNoPlay 内置计划创建须带彩种、可不带玩法，
+// 玩法字段等选了收藏方案才物化出来。
+func TestCreateDefinitionBuiltinPlanWithLotteryNoPlay(t *testing.T) {
 	env := newCreateEnv(t)
 	def, err := env.create(t, CreateDefinitionInput{
-		Kind: "custom", RunTypeID: RunTypeBuiltinPlan,
+		Kind: "custom", RunTypeID: RunTypeBuiltinPlan, LotteryCode: env.lottery,
 	})
 	if err != nil {
 		t.Fatalf("建内置计划方案失败：%v", err)
 	}
-	if def.LotteryCode != "" {
-		t.Errorf("内置计划创建时不应带彩种，实际 %q", def.LotteryCode)
+	if def.LotteryCode != env.lottery {
+		t.Errorf("内置计划创建时应带彩种，实际 %q", def.LotteryCode)
 	}
 	cfg := loadDefinitionConfig(t, env, def.ID)
 	if got, _ := cfg["runTypeId"].(string); got != RunTypeBuiltinPlan {
 		t.Errorf("配置 runTypeId = %q", got)
 	}
-	// 没有彩种就查不到模板，这一步应当被跳过而不是报错
-	if _, ok := cfg["playTemplate"]; ok {
-		t.Errorf("未选彩种时不应写入 playTemplate，实际 %v", cfg["playTemplate"])
+	if got, _ := cfg["lotteryCode"].(string); got != env.lottery {
+		t.Errorf("配置 lotteryCode = %q, want %q", got, env.lottery)
 	}
 }
 
