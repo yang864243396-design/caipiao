@@ -374,6 +374,8 @@ async function onSoftStop(row: { id: string; status: string }) {
 
             <el-table-column prop="schemeName" label="方案名称" min-width="140" show-overflow-tooltip />
 
+            <el-table-column prop="playMethod" label="玩法" min-width="140" show-overflow-tooltip />`n            <el-table-column prop="lottery" label="彩种" min-width="120" show-overflow-tooltip />
+
             <el-table-column label="变动金额" min-width="120" align="right">
 
               <template #default="{ row }">

@@ -5,6 +5,8 @@ export interface AdminBetOrderRow {
   issueNo: string
   member: string
   lottery: string
+  currency: string
+  drawNumbers: string
   schemeName: string
   amount: number
   payoutAmount: number
@@ -16,6 +18,8 @@ export interface AdminChaseOrderRow {
   chaseNo: string
   member: string
   lottery: string
+  currency: string
+  drawNumbers: string
   totalIssues: number
   doneIssues: number
   periodsLeft: number

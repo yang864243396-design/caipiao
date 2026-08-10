@@ -5,6 +5,8 @@ export type FundCurrency = 'all' | 'USDT' | 'TRX' | 'CNY'
 export interface MemberFundRecordRow {
   id: string
   schemeName: string
+  playMethod: string
+  lottery: string
   currency: string
   amount: number
   time: string

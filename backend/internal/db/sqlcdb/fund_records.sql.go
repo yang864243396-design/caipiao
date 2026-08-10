@@ -65,11 +65,19 @@ SELECT
     l.balance_after::float8 AS balance_after,
     COALESCE(l.currency, 'CNY') AS currency,
     l.created_at,
-    COALESCE(sch.scheme_name, '') AS scheme_name
+    COALESCE(sch.scheme_name, '') AS scheme_name,
+    COALESCE(sch.play_method, '') AS play_method,
+    COALESCE(sch.lottery_name, '') AS lottery_name
 FROM wallet_ledger l
 LEFT JOIN LATERAL (
-    SELECT c.scheme_name
+    SELECT
+        c.scheme_name,
+        COALESCE(bo.play_method, '') AS play_method,
+        COALESCE(bo.lottery_name, '') AS lottery_name
     FROM cloud_bet_records c
+    LEFT JOIN bet_orders bo
+      ON bo.member_id = c.member_id
+     AND bo.order_no = c.bet_order_no
     WHERE c.member_id = l.member_id
       AND (
         (NULLIF(TRIM(l.order_ref), '') IS NOT NULL AND c.bet_order_no = l.order_ref)
@@ -125,6 +133,8 @@ type ListMemberFundRecordsRow struct {
 	Currency     string             `json:"currency"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	SchemeName   string             `json:"scheme_name"`
+	PlayMethod   string             `json:"play_method"`
+	LotteryName  string             `json:"lottery_name"`
 }
 
 func (q *Queries) ListMemberFundRecords(ctx context.Context, arg ListMemberFundRecordsParams) ([]ListMemberFundRecordsRow, error) {
@@ -153,6 +163,8 @@ func (q *Queries) ListMemberFundRecords(ctx context.Context, arg ListMemberFundR
 			&i.Currency,
 			&i.CreatedAt,
 			&i.SchemeName,
+			&i.PlayMethod,
+			&i.LotteryName,
 		); err != nil {
 			return nil, err
 		}
@@ -173,11 +185,19 @@ SELECT
     l.balance_after::float8 AS balance_after,
     COALESCE(l.currency, 'CNY') AS currency,
     l.created_at,
-    COALESCE(sch.scheme_name, '') AS scheme_name
+    COALESCE(sch.scheme_name, '') AS scheme_name,
+    COALESCE(sch.play_method, '') AS play_method,
+    COALESCE(sch.lottery_name, '') AS lottery_name
 FROM wallet_ledger l
 LEFT JOIN LATERAL (
-    SELECT c.scheme_name
+    SELECT
+        c.scheme_name,
+        COALESCE(bo.play_method, '') AS play_method,
+        COALESCE(bo.lottery_name, '') AS lottery_name
     FROM cloud_bet_records c
+    LEFT JOIN bet_orders bo
+      ON bo.member_id = c.member_id
+     AND bo.order_no = c.bet_order_no
     WHERE c.member_id = l.member_id
       AND (
         (NULLIF(TRIM(l.order_ref), '') IS NOT NULL AND c.bet_order_no = l.order_ref)
@@ -239,6 +259,8 @@ type ListMemberFundRecordsAfterCursorRow struct {
 	Currency     string             `json:"currency"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	SchemeName   string             `json:"scheme_name"`
+	PlayMethod   string             `json:"play_method"`
+	LotteryName  string             `json:"lottery_name"`
 }
 
 func (q *Queries) ListMemberFundRecordsAfterCursor(ctx context.Context, arg ListMemberFundRecordsAfterCursorParams) ([]ListMemberFundRecordsAfterCursorRow, error) {
@@ -269,6 +291,8 @@ func (q *Queries) ListMemberFundRecordsAfterCursor(ctx context.Context, arg List
 			&i.Currency,
 			&i.CreatedAt,
 			&i.SchemeName,
+			&i.PlayMethod,
+			&i.LotteryName,
 		); err != nil {
 			return nil, err
 		}
@@ -289,11 +313,19 @@ SELECT
     l.balance_after::float8 AS balance_after,
     COALESCE(l.currency, 'CNY') AS currency,
     l.created_at,
-    COALESCE(sch.scheme_name, '') AS scheme_name
+    COALESCE(sch.scheme_name, '') AS scheme_name,
+    COALESCE(sch.play_method, '') AS play_method,
+    COALESCE(sch.lottery_name, '') AS lottery_name
 FROM wallet_ledger l
 LEFT JOIN LATERAL (
-    SELECT c.scheme_name
+    SELECT
+        c.scheme_name,
+        COALESCE(bo.play_method, '') AS play_method,
+        COALESCE(bo.lottery_name, '') AS lottery_name
     FROM cloud_bet_records c
+    LEFT JOIN bet_orders bo
+      ON bo.member_id = c.member_id
+     AND bo.order_no = c.bet_order_no
     WHERE c.member_id = l.member_id
       AND (
         (NULLIF(TRIM(l.order_ref), '') IS NOT NULL AND c.bet_order_no = l.order_ref)
@@ -350,6 +382,8 @@ type ListMemberFundRecordsPagedRow struct {
 	Currency     string             `json:"currency"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	SchemeName   string             `json:"scheme_name"`
+	PlayMethod   string             `json:"play_method"`
+	LotteryName  string             `json:"lottery_name"`
 }
 
 func (q *Queries) ListMemberFundRecordsPaged(ctx context.Context, arg ListMemberFundRecordsPagedParams) ([]ListMemberFundRecordsPagedRow, error) {
@@ -379,6 +413,8 @@ func (q *Queries) ListMemberFundRecordsPaged(ctx context.Context, arg ListMember
 			&i.Currency,
 			&i.CreatedAt,
 			&i.SchemeName,
+			&i.PlayMethod,
+			&i.LotteryName,
 		); err != nil {
 			return nil, err
 		}
@@ -454,12 +490,20 @@ SELECT
     l.balance_after::float8 AS balance_after,
     COALESCE(l.currency, 'CNY') AS currency,
     l.created_at,
-    COALESCE(sch.scheme_name, '') AS scheme_name
+    COALESCE(sch.scheme_name, '') AS scheme_name,
+    COALESCE(sch.play_method, '') AS play_method,
+    COALESCE(sch.lottery_name, '') AS lottery_name
 FROM wallet_ledger l
 INNER JOIN members m ON m.id = l.member_id
 LEFT JOIN LATERAL (
-    SELECT c.scheme_name
+    SELECT
+        c.scheme_name,
+        COALESCE(bo.play_method, '') AS play_method,
+        COALESCE(bo.lottery_name, '') AS lottery_name
     FROM cloud_bet_records c
+    LEFT JOIN bet_orders bo
+      ON bo.member_id = c.member_id
+     AND bo.order_no = c.bet_order_no
     WHERE c.member_id = l.member_id
       AND (
         (NULLIF(TRIM(l.order_ref), '') IS NOT NULL AND c.bet_order_no = l.order_ref)
@@ -525,6 +569,8 @@ type ListAdminFundRecordsPagedRow struct {
 	Currency     string             `json:"currency"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	SchemeName   string             `json:"scheme_name"`
+	PlayMethod   string             `json:"play_method"`
+	LotteryName  string             `json:"lottery_name"`
 }
 
 func (q *Queries) ListAdminFundRecordsPaged(ctx context.Context, arg ListAdminFundRecordsPagedParams) ([]ListAdminFundRecordsPagedRow, error) {
@@ -555,6 +601,8 @@ func (q *Queries) ListAdminFundRecordsPaged(ctx context.Context, arg ListAdminFu
 			&i.Currency,
 			&i.CreatedAt,
 			&i.SchemeName,
+			&i.PlayMethod,
+			&i.LotteryName,
 		); err != nil {
 			return nil, err
 		}

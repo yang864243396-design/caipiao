@@ -14,11 +14,19 @@ SELECT
     l.balance_after::float8 AS balance_after,
     COALESCE(l.currency, 'CNY') AS currency,
     l.created_at,
-    COALESCE(sch.scheme_name, '') AS scheme_name
+    COALESCE(sch.scheme_name, '') AS scheme_name,
+    COALESCE(sch.play_method, '') AS play_method,
+    COALESCE(sch.lottery_name, '') AS lottery_name
 FROM wallet_ledger l
 LEFT JOIN LATERAL (
-    SELECT c.scheme_name
+    SELECT
+        c.scheme_name,
+        COALESCE(bo.play_method, '') AS play_method,
+        COALESCE(bo.lottery_name, '') AS lottery_name
     FROM cloud_bet_records c
+    LEFT JOIN bet_orders bo
+      ON bo.member_id = c.member_id
+     AND bo.order_no = c.bet_order_no
     WHERE c.member_id = l.member_id
       AND (
         (NULLIF(TRIM(l.order_ref), '') IS NOT NULL AND c.bet_order_no = l.order_ref)
@@ -84,11 +92,19 @@ SELECT
     l.balance_after::float8 AS balance_after,
     COALESCE(l.currency, 'CNY') AS currency,
     l.created_at,
-    COALESCE(sch.scheme_name, '') AS scheme_name
+    COALESCE(sch.scheme_name, '') AS scheme_name,
+    COALESCE(sch.play_method, '') AS play_method,
+    COALESCE(sch.lottery_name, '') AS lottery_name
 FROM wallet_ledger l
 LEFT JOIN LATERAL (
-    SELECT c.scheme_name
+    SELECT
+        c.scheme_name,
+        COALESCE(bo.play_method, '') AS play_method,
+        COALESCE(bo.lottery_name, '') AS lottery_name
     FROM cloud_bet_records c
+    LEFT JOIN bet_orders bo
+      ON bo.member_id = c.member_id
+     AND bo.order_no = c.bet_order_no
     WHERE c.member_id = l.member_id
       AND (
         (NULLIF(TRIM(l.order_ref), '') IS NOT NULL AND c.bet_order_no = l.order_ref)
@@ -133,11 +149,19 @@ SELECT
     l.balance_after::float8 AS balance_after,
     COALESCE(l.currency, 'CNY') AS currency,
     l.created_at,
-    COALESCE(sch.scheme_name, '') AS scheme_name
+    COALESCE(sch.scheme_name, '') AS scheme_name,
+    COALESCE(sch.play_method, '') AS play_method,
+    COALESCE(sch.lottery_name, '') AS lottery_name
 FROM wallet_ledger l
 LEFT JOIN LATERAL (
-    SELECT c.scheme_name
+    SELECT
+        c.scheme_name,
+        COALESCE(bo.play_method, '') AS play_method,
+        COALESCE(bo.lottery_name, '') AS lottery_name
     FROM cloud_bet_records c
+    LEFT JOIN bet_orders bo
+      ON bo.member_id = c.member_id
+     AND bo.order_no = c.bet_order_no
     WHERE c.member_id = l.member_id
       AND (
         (NULLIF(TRIM(l.order_ref), '') IS NOT NULL AND c.bet_order_no = l.order_ref)
@@ -217,12 +241,20 @@ SELECT
     l.balance_after::float8 AS balance_after,
     COALESCE(l.currency, 'CNY') AS currency,
     l.created_at,
-    COALESCE(sch.scheme_name, '') AS scheme_name
+    COALESCE(sch.scheme_name, '') AS scheme_name,
+    COALESCE(sch.play_method, '') AS play_method,
+    COALESCE(sch.lottery_name, '') AS lottery_name
 FROM wallet_ledger l
 INNER JOIN members m ON m.id = l.member_id
 LEFT JOIN LATERAL (
-    SELECT c.scheme_name
+    SELECT
+        c.scheme_name,
+        COALESCE(bo.play_method, '') AS play_method,
+        COALESCE(bo.lottery_name, '') AS lottery_name
     FROM cloud_bet_records c
+    LEFT JOIN bet_orders bo
+      ON bo.member_id = c.member_id
+     AND bo.order_no = c.bet_order_no
     WHERE c.member_id = l.member_id
       AND (
         (NULLIF(TRIM(l.order_ref), '') IS NOT NULL AND c.bet_order_no = l.order_ref)

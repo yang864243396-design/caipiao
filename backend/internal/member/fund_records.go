@@ -18,6 +18,8 @@ const fundRecordsDefaultLimit = 20
 type FundRecordItem struct {
 	ID           string  `json:"id"`
 	SchemeName   string  `json:"schemeName"`
+	PlayMethod   string  `json:"playMethod"`
+	Lottery      string  `json:"lottery"`
 	Currency     string  `json:"currency"`
 	Amount       float64 `json:"amount"`
 	Time         string  `json:"time"`
@@ -330,12 +332,12 @@ func (s *Service) AdminFundRecords(ctx context.Context, q AdminSiteFundRecordsQu
 	}
 
 	filter := sqlcdb.CountAdminFundRecordsParams{
-		TimeFrom:       pgtype.Timestamptz{Time: timeFrom, Valid: true},
-		TimeTo:         pgtype.Timestamptz{Time: timeTo, Valid: true},
-		MemberAccount:  pgTextOptional(q.MemberAccount),
-		LedgerNo:       pgTextOptional(q.LedgerNo),
-		FlowDir:        flowDir,
-		Currency:       currency,
+		TimeFrom:      pgtype.Timestamptz{Time: timeFrom, Valid: true},
+		TimeTo:        pgtype.Timestamptz{Time: timeTo, Valid: true},
+		MemberAccount: pgTextOptional(q.MemberAccount),
+		LedgerNo:      pgTextOptional(q.LedgerNo),
+		FlowDir:       flowDir,
+		Currency:      currency,
 	}
 	total, err := s.q.CountAdminFundRecords(ctx, filter)
 	if err != nil {
@@ -367,6 +369,8 @@ func (s *Service) AdminFundRecords(ctx context.Context, q AdminSiteFundRecordsQu
 			BalanceAfter: row.BalanceAfter,
 			Currency:     row.Currency,
 			SchemeName:   row.SchemeName,
+			PlayMethod:   row.PlayMethod,
+			LotteryName:  row.LotteryName,
 			CreatedAt:    row.CreatedAt,
 		})
 		items = append(items, AdminSiteFundRecordItem{
@@ -390,6 +394,8 @@ type fundRecordRow struct {
 	BalanceAfter float64
 	Currency     string
 	SchemeName   string
+	PlayMethod   string
+	LotteryName  string
 	CreatedAt    pgtype.Timestamptz
 }
 
@@ -404,6 +410,8 @@ func fundRowsFromList(rows []sqlcdb.ListMemberFundRecordsRow) []fundRecordRow {
 			BalanceAfter: r.BalanceAfter,
 			Currency:     r.Currency,
 			SchemeName:   r.SchemeName,
+			PlayMethod:   r.PlayMethod,
+			LotteryName:  r.LotteryName,
 			CreatedAt:    r.CreatedAt,
 		}
 	}
@@ -421,6 +429,8 @@ func fundRowsFromCursor(rows []sqlcdb.ListMemberFundRecordsAfterCursorRow) []fun
 			BalanceAfter: r.BalanceAfter,
 			Currency:     r.Currency,
 			SchemeName:   r.SchemeName,
+			PlayMethod:   r.PlayMethod,
+			LotteryName:  r.LotteryName,
 			CreatedAt:    r.CreatedAt,
 		}
 	}
@@ -438,6 +448,8 @@ func fundRowsFromPaged(rows []sqlcdb.ListMemberFundRecordsPagedRow) []fundRecord
 			BalanceAfter: r.BalanceAfter,
 			Currency:     r.Currency,
 			SchemeName:   r.SchemeName,
+			PlayMethod:   r.PlayMethod,
+			LotteryName:  r.LotteryName,
 			CreatedAt:    r.CreatedAt,
 		}
 	}
@@ -453,12 +465,22 @@ func mapFundRecordRow(row fundRecordRow) FundRecordItem {
 		flowLabel = "收入"
 	}
 	schemeName := strings.TrimSpace(row.SchemeName)
+	playMethod := strings.TrimSpace(row.PlayMethod)
+	lottery := strings.TrimSpace(row.LotteryName)
+	if lottery == "" {
+		lottery = "-"
+	}
+	if playMethod == "" {
+		playMethod = "-"
+	}
 	if schemeName == "" {
 		schemeName = "—"
 	}
 	return FundRecordItem{
 		ID:           row.LedgerNo,
 		SchemeName:   schemeName,
+		PlayMethod:   playMethod,
+		Lottery:      lottery,
 		Currency:     row.Currency,
 		Amount:       delta,
 		Time:         timeutil.FormatISO(row.CreatedAt.Time),

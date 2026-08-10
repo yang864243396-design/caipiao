@@ -12,6 +12,8 @@ export interface AdminMemberRow {
   account: string
   displayName: string
   guajiBalances: AdminGuajiBalances
+  totalBetAmount: number
+  payoutAmount: number
   balanceYuan?: number
   status: '正常' | '禁用'
   registeredAt: string

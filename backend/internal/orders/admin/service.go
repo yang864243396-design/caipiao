@@ -48,6 +48,8 @@ type BetRow struct {
 	IssueNo      string  `json:"issueNo"`
 	Member       string  `json:"member"`
 	Lottery      string  `json:"lottery"`
+	Currency     string  `json:"currency"`
+	DrawNumbers  string  `json:"drawNumbers"`
 	SchemeName   string  `json:"schemeName"`
 	Amount       float64 `json:"amount"`
 	PayoutAmount float64 `json:"payoutAmount"`
@@ -59,6 +61,8 @@ type ChaseRow struct {
 	ChaseNo     string  `json:"chaseNo"`
 	Member      string  `json:"member"`
 	Lottery     string  `json:"lottery"`
+	Currency    string  `json:"currency"`
+	DrawNumbers string  `json:"drawNumbers"`
 	TotalIssues int32   `json:"totalIssues"`
 	DoneIssues  int32   `json:"doneIssues"`
 	PeriodsLeft int32   `json:"periodsLeft"`
@@ -128,6 +132,8 @@ func (s *Service) ListBets(ctx context.Context, q BetListQuery) (ListResult[BetR
 			IssueNo:      strings.TrimSpace(row.IssueNo),
 			Member:       strings.TrimSpace(row.Account),
 			Lottery:      row.LotteryName,
+			Currency:     strings.TrimSpace(row.Currency),
+			DrawNumbers:  strings.TrimSpace(row.DrawNumbers),
 			SchemeName:   schemeName,
 			Amount:       roundMoney(row.Amount),
 			PayoutAmount: roundMoney(row.PayoutAmount),

@@ -224,6 +224,12 @@ async function onClearAuth(row: MemberRow) {
       <el-table-column label="CNY" min-width="112" align="right">
         <template #default="{ row }">{{ fmtMoney(row.guajiBalances.cny) }}</template>
       </el-table-column>
+      <el-table-column label="总投注金额" min-width="120" align="right">
+        <template #default="{ row }">{{ fmtMoney(row.totalBetAmount) }}</template>
+      </el-table-column>
+      <el-table-column label="派彩金额" min-width="120" align="right">
+        <template #default="{ row }">{{ fmtMoney(row.payoutAmount) }}</template>
+      </el-table-column>
       <el-table-column label="注册" min-width="140">
         <template #default="{ row }">{{ fmt(row.registeredAt) }}</template>
       </el-table-column>

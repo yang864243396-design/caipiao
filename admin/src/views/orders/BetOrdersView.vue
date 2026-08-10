@@ -220,6 +220,8 @@ function chaseStatusTagType(status: string): 'success' | 'info' | 'warning' | ''
           <el-table-column prop="issueNo" label="期号" min-width="140" show-overflow-tooltip />
           <el-table-column prop="member" label="会员账号" min-width="108" />
           <el-table-column prop="lottery" label="彩种" min-width="120" />
+          <el-table-column prop="currency" label="币种" min-width="80" />
+          <el-table-column prop="drawNumbers" label="开奖号码" min-width="130" show-overflow-tooltip />
           <el-table-column prop="schemeName" label="方案" min-width="120" show-overflow-tooltip />
           <el-table-column label="投注金额" min-width="100" align="right">
             <template #default="{ row }">{{ row.amount.toFixed(2) }}</template>
@@ -270,6 +272,8 @@ function chaseStatusTagType(status: string): 'success' | 'info' | 'warning' | ''
           <el-table-column prop="chaseNo" label="追号单号" min-width="140" show-overflow-tooltip />
           <el-table-column prop="member" label="会员账号" min-width="108" />
           <el-table-column prop="lottery" label="彩种" min-width="120" />
+          <el-table-column prop="currency" label="币种" min-width="80" />
+          <el-table-column prop="drawNumbers" label="开奖号码" min-width="130" show-overflow-tooltip />
           <el-table-column label="追号进度" min-width="100" align="center">
             <template #default="{ row }">{{ row.doneIssues }}/{{ row.totalIssues }}</template>
           </el-table-column>

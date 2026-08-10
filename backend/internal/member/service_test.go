@@ -36,3 +36,23 @@ func TestRoundMoney(t *testing.T) {
 		t.Fatalf("got %v", roundMoney(12888.666))
 	}
 }
+
+func TestMapFundRecordRowPlayMethod(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "keeps resolved play method", input: "ssc direct", want: "ssc direct"},
+		{name: "uses dash for missing play method", input: "", want: "-"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mapFundRecordRow(fundRecordRow{PlayMethod: tt.input}).PlayMethod
+			if got != tt.want {
+				t.Fatalf("PlayMethod = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

@@ -23,14 +23,16 @@ type AdminGuajiBalances struct {
 }
 
 type AdminMemberRow struct {
-	ID            string             `json:"id"`
-	Account       string             `json:"account"`
-	DisplayName   string             `json:"displayName"`
-	Status        string             `json:"status"`
-	GuajiBalances AdminGuajiBalances `json:"guajiBalances"`
-	BalanceYuan   float64            `json:"balanceYuan,omitempty"`
-	RegisteredAt  string             `json:"registeredAt"`
-	LastLoginAt   string             `json:"lastLoginAt"`
+	ID             string             `json:"id"`
+	Account        string             `json:"account"`
+	DisplayName    string             `json:"displayName"`
+	Status         string             `json:"status"`
+	TotalBetAmount float64            `json:"totalBetAmount"`
+	PayoutAmount   float64            `json:"payoutAmount"`
+	GuajiBalances  AdminGuajiBalances `json:"guajiBalances"`
+	BalanceYuan    float64            `json:"balanceYuan,omitempty"`
+	RegisteredAt   string             `json:"registeredAt"`
+	LastLoginAt    string             `json:"lastLoginAt"`
 }
 
 type AdminMemberListResult struct {
@@ -120,12 +122,14 @@ func (s *Service) AdminGetMember(ctx context.Context, memberID int64) (AdminMemb
 
 func mapAdminMemberRow(row sqlcdb.ListAdminMembersRow) AdminMemberRow {
 	return AdminMemberRow{
-		ID:           formatMemberID(row.ID),
-		Account:      row.Account,
-		DisplayName:  row.DisplayName,
-		Status:       statusLabel(row.Status),
-		RegisteredAt: timeutil.FormatISO(row.RegisteredAt.Time),
-		LastLoginAt:  formatLastLogin(row.LastLoginAt),
+		ID:             formatMemberID(row.ID),
+		Account:        row.Account,
+		DisplayName:    row.DisplayName,
+		Status:         statusLabel(row.Status),
+		TotalBetAmount: roundMoney(row.TotalBetAmount),
+		PayoutAmount:   roundMoney(row.PayoutAmount),
+		RegisteredAt:   timeutil.FormatISO(row.RegisteredAt.Time),
+		LastLoginAt:    formatLastLogin(row.LastLoginAt),
 	}
 }
 

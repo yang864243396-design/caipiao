@@ -16,6 +16,8 @@ SELECT COUNT(*)::bigint
 FROM bet_orders b
 INNER JOIN members m ON m.id = b.member_id
 LEFT JOIN cloud_bet_records c ON c.bet_order_no = b.order_no
+LEFT JOIN lottery_draws d ON d.lottery_code = b.lottery_code
+    AND d.issue_no = b.issue_no
 WHERE (
     $1::text IS NULL
     OR $1::text = ''
@@ -134,6 +136,8 @@ SELECT
     b.issue_no,
     m.account,
     b.lottery_name,
+    COALESCE(b.currency, '') AS currency,
+    COALESCE(array_to_string(ARRAY(SELECT jsonb_array_elements_text(d.balls)), ' '), '') AS draw_numbers,
     COALESCE(c.scheme_name, '') AS scheme_name,
     b.amount::float8 AS amount,
     CASE
@@ -145,6 +149,8 @@ SELECT
 FROM bet_orders b
 INNER JOIN members m ON m.id = b.member_id
 LEFT JOIN cloud_bet_records c ON c.bet_order_no = b.order_no
+LEFT JOIN lottery_draws d ON d.lottery_code = b.lottery_code
+    AND d.issue_no = b.issue_no
 WHERE (
     $1::text IS NULL
     OR $1::text = ''
@@ -181,13 +187,15 @@ type ListAdminBetOrdersParams struct {
 type ListAdminBetOrdersRow struct {
 	ThirdPartyBetID string             `json:"third_party_bet_id"`
 	IssueNo         string             `json:"issue_no"`
-	Account      string             `json:"account"`
-	LotteryName  string             `json:"lottery_name"`
-	SchemeName   string             `json:"scheme_name"`
-	Amount       float64            `json:"amount"`
-	PayoutAmount float64            `json:"payout_amount"`
-	Status       string             `json:"status"`
-	PlacedAt     pgtype.Timestamptz `json:"placed_at"`
+	Account         string             `json:"account"`
+	LotteryName     string             `json:"lottery_name"`
+	Currency        string             `json:"currency"`
+	DrawNumbers     string             `json:"draw_numbers"`
+	SchemeName      string             `json:"scheme_name"`
+	Amount          float64            `json:"amount"`
+	PayoutAmount    float64            `json:"payout_amount"`
+	Status          string             `json:"status"`
+	PlacedAt        pgtype.Timestamptz `json:"placed_at"`
 }
 
 func (q *Queries) ListAdminBetOrders(ctx context.Context, arg ListAdminBetOrdersParams) ([]ListAdminBetOrdersRow, error) {
@@ -211,6 +219,8 @@ func (q *Queries) ListAdminBetOrders(ctx context.Context, arg ListAdminBetOrders
 			&i.IssueNo,
 			&i.Account,
 			&i.LotteryName,
+			&i.Currency,
+			&i.DrawNumbers,
 			&i.SchemeName,
 			&i.Amount,
 			&i.PayoutAmount,

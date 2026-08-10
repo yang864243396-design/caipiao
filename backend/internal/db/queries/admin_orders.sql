@@ -3,6 +3,8 @@ SELECT COUNT(*)::bigint
 FROM bet_orders b
 INNER JOIN members m ON m.id = b.member_id
 LEFT JOIN cloud_bet_records c ON c.bet_order_no = b.order_no
+LEFT JOIN lottery_draws d ON d.lottery_code = b.lottery_code
+    AND d.issue_no = b.issue_no
 WHERE (
     sqlc.narg(issue_no)::text IS NULL
     OR sqlc.narg(issue_no)::text = ''
@@ -34,6 +36,8 @@ SELECT
     b.issue_no,
     m.account,
     b.lottery_name,
+    COALESCE(b.currency, '') AS currency,
+    COALESCE(array_to_string(ARRAY(SELECT jsonb_array_elements_text(d.balls)), ' '), '') AS draw_numbers,
     COALESCE(c.scheme_name, '') AS scheme_name,
     b.amount::float8 AS amount,
     CASE
@@ -45,6 +49,8 @@ SELECT
 FROM bet_orders b
 INNER JOIN members m ON m.id = b.member_id
 LEFT JOIN cloud_bet_records c ON c.bet_order_no = b.order_no
+LEFT JOIN lottery_draws d ON d.lottery_code = b.lottery_code
+    AND d.issue_no = b.issue_no
 WHERE (
     sqlc.narg(issue_no)::text IS NULL
     OR sqlc.narg(issue_no)::text = ''
