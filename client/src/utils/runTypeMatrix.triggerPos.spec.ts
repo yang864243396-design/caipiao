@@ -211,7 +211,8 @@ describe('六合特码高级开某投某', () => {
       {
         typeId: 'g001',
         label: '特码',
-        subPlays: [{ subId: '272', label: '特码A', segmentRule: null }],
+        sortOrder: 1,
+        subPlays: [{ subId: '272', label: '特码A', sortOrder: 1, outboundPlayCode: '272' }],
       },
     ]
     expect(lotteryHasAdvTriggerPlay(lhcTree)).toBe(true)
@@ -236,7 +237,8 @@ describe('六合特码高级开某投某', () => {
         {
           typeId: 'erquanzhong',
           label: '二全中',
-          subPlays: [{ subId: 'fushi', label: '复式', segmentRule: null }],
+          sortOrder: 1,
+          subPlays: [{ subId: 'fushi', label: '复式', sortOrder: 1, outboundPlayCode: 'fushi' }],
         },
       ]),
     ).toBe(true)

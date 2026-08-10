@@ -117,7 +117,7 @@ async function openEdit(row: SchemeTemplateRow) {
 
 function addRound() {
 
-  draftRounds.value.push({ mult: 0, afterHit: 1, afterMiss: 1 })
+  draftRounds.value.push({ mult: 1, afterHit: 1, afterMiss: 1 })
 
 }
 
@@ -337,7 +337,7 @@ async function toggleEnabled(row: SchemeTemplateRow, enabled: boolean) {
 
           <p style="margin: 0 0 0.5rem; font-size: 12px; color: var(--el-text-color-secondary)">
 
-            倍数上限 {{ SCHEME_ROUND_MULT_CAP }} 倍；中后 / 挂后为目标局数（从 1 开始）。
+            倍数须为 1～{{ SCHEME_ROUND_MULT_CAP }} 的正数（不能为 0）；中后 / 挂后为目标局数（从 1 开始）。
 
           </p>
 
@@ -359,7 +359,7 @@ async function toggleEnabled(row: SchemeTemplateRow, enabled: boolean) {
 
               <template #default="{ row }">
 
-                <el-input-number v-model="row.mult" :min="0" :max="SCHEME_ROUND_MULT_CAP" size="small"
+                <el-input-number v-model="row.mult" :min="1" :max="SCHEME_ROUND_MULT_CAP" :step="1" size="small"
                   :controls="false" />
 
               </template>

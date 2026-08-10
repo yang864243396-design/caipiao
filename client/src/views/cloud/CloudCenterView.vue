@@ -264,10 +264,20 @@ async function loadCloudData() {
   }
 }
 
+function onPlanMultiplierInput(v: string | number) {
+  planMultiplier.value = String(v ?? '').replace(/[^\d]/g, '')
+}
+
+function onPlanMultiplierChange() {
+  planMultiplier.value = normalizeSchemeMultiplier(planMultiplier.value)
+  void persistGlobalSettings()
+}
+
 async function persistGlobalSettings() {
   if (globalSaving.value) return
   globalSaving.value = true
   try {
+    planMultiplier.value = normalizeSchemeMultiplier(planMultiplier.value)
     const saved = await saveCloudGlobalSettings(
       globalSettingsFromUi({
         totalStopLoss: totalStopLoss.value,
@@ -1020,9 +1030,17 @@ function statusBadgeClass(s: CloudSchemeCard): string {
         <div class="cc-field">
           <label class="cc-lbl">方案倍数系数</label>
           <div class="cc-mult-wrap">
-            <div class="cc-mult-prefix" aria-hidden="true">乘</div>
-            <el-input v-model="planMultiplier" type="number" size="default" class="cc-el-inp cc-el-inp--grow"
-              @change="persistGlobalSettings" />
+            <div class="cc-mult-prefix" aria-hidden="true">×</div>
+            <el-input
+              :model-value="planMultiplier"
+              inputmode="numeric"
+              maxlength="6"
+              size="default"
+              class="cc-el-inp cc-el-inp--grow"
+              placeholder="正整数，最小 1"
+              @update:model-value="onPlanMultiplierInput"
+              @change="onPlanMultiplierChange"
+            />
           </div>
         </div>
 

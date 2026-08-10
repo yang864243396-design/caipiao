@@ -51,8 +51,10 @@ describe('五星组选60 双区', () => {
     expect(zuxuanPoolMinPick(c)).toBeNull()
     expect(validateZu60Content('1,234').ok).toBe(true)
     expect(validateZu60Content('12,3').ok).toBe(false)
-    expect(validateGroupContent(c, '1,234').ok).toBe(true)
-    expect(validateGroupContent(c, '1,234').ok && validateGroupContent(c, '1,234').betUnits).toBe(1)
+    const v = validateGroupContent(c, '1,234')
+    expect(v.ok).toBe(true)
+    if (!v.ok) return
+    expect(v.betUnits).toBe(1)
   })
 })
 

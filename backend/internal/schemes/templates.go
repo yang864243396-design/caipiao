@@ -455,9 +455,9 @@ func mapTemplateAdminPlatformPagedRow(row sqlcdb.ListSchemeTemplatesAdminPlatfor
 func defaultTemplateSeedConfig() ([]byte, error) {
 	return encodeTemplateConfig(map[string]interface{}{
 		"rounds": []map[string]interface{}{
-			{"mult": 0, "afterHit": 2, "afterMiss": 1},
-			{"mult": 1, "afterHit": 2, "afterMiss": 3},
-			{"mult": 3, "afterHit": 2, "afterMiss": 1},
+			{"mult": 1, "afterHit": 1, "afterMiss": 2},
+			{"mult": 2, "afterHit": 1, "afterMiss": 3},
+			{"mult": 4, "afterHit": 1, "afterMiss": 1},
 		},
 	})
 }

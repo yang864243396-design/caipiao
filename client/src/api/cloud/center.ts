@@ -194,7 +194,7 @@ export function globalSettingsToUi(api: CloudGlobalSettingsDto) {
 
     totalTakeProfit: String(api.totalTakeProfit ?? 0),
 
-    planMultiplier: String(api.planMultiplier ?? 1),
+    planMultiplier: normalizeSchemeMultiplier(String(api.planMultiplier ?? 1)),
 
     breakPeriodStop: api.breakPeriodStop ?? false,
 
@@ -222,7 +222,7 @@ export function globalSettingsFromUi(ui: {
 
     totalTakeProfit: Number(ui.totalTakeProfit) || 0,
 
-    planMultiplier: Number(ui.planMultiplier) || 1,
+    planMultiplier: Number(normalizeSchemeMultiplier(ui.planMultiplier)),
 
     breakPeriodStop: ui.breakPeriodStop,
 
