@@ -52,6 +52,7 @@ import {
 import SchemeGroupPickPanel from '@/components/schemes/SchemeGroupPickPanel.vue'
 import SchemeGroupInputPanel from '@/components/schemes/SchemeGroupInputPanel.vue'
 import SchemeLhcTemaPanel from '@/components/schemes/SchemeLhcTemaPanel.vue'
+import SchemeLhcRenyiDuipengPanel from '@/components/schemes/SchemeLhcRenyiDuipengPanel.vue'
 import SchemeRenxuanDanshiPanel from '@/components/schemes/SchemeRenxuanDanshiPanel.vue'
 import {
   adaptSchemeGroupContentForPlay,
@@ -131,6 +132,7 @@ import {
   schemeGroupContentToInputBox,
   schemeGroupUsesDigitInput,
   schemeGroupUsesLhcTemaPanel,
+  schemeGroupUsesLhcRenyiDuipengPanel,
   schemeGroupUsesPickPanel,
   schemeGroupUsesTextInputPanel,
   textPickOptionsForConfig,
@@ -251,6 +253,10 @@ const { playConfig: schemePlayConfig, load: loadPlayTree } = usePlayTreeConfig(
 const schemeUsesPickPanel = computed(() => schemeGroupUsesPickPanel(schemePlayConfig.value))
 /** 六合彩特码：19 属性快捷项 + 0–49 号码输入框 */
 const schemeUsesLhcTemaPanel = computed(() => schemeGroupUsesLhcTemaPanel(schemePlayConfig.value))
+/** 二全中任意对碰：A区 / B区双输入框（1–49，| 分隔） */
+const schemeUsesLhcRenyiDuipengPanel = computed(() =>
+  schemeGroupUsesLhcRenyiDuipengPanel(schemePlayConfig.value),
+)
 /** 数字玩法方案内容改用输入框录入（对齐第三方，不点选） */
 const schemeUsesDigitInput = computed(() => schemeGroupUsesDigitInput(schemePlayConfig.value))
 /** 复式数字框或非任选单式整注框（带失焦校验） */
@@ -721,6 +727,10 @@ function formatJushuContentDisplay(content: string): string {
         .filter(Boolean)
         .join(', ')
     }
+    return raw.trim()
+  }
+  // 任意对碰：保持 A|B 展示，勿把 | 当成换行压缩
+  if (schemeUsesLhcRenyiDuipengPanel.value) {
     return raw.trim()
   }
   if (schemeUsesDigitInput.value) {
@@ -5345,21 +5355,18 @@ function onTimeDialogOpened() {
           <div class="scf-grid2">
             <div class="scf-field">
               <label class="scf-lbl" for="scf-mult">倍数系数</label>
-              <div class="scf-mult-wrap">
-                <div class="scf-mult-prefix" aria-hidden="true">×</div>
-                <el-input
-                  id="scf-mult"
-                  :model-value="multCoeff"
-                  size="large"
-                  class="scf-el-inp scf-el-inp--grow"
-                  inputmode="numeric"
-                  maxlength="6"
-                  placeholder="正整数，最小 1"
-                  @update:model-value="onMultCoeffInput"
-                  @change="normalizeMultCoeff"
-                  @blur="normalizeMultCoeff"
-                />
-              </div>
+              <el-input
+                id="scf-mult"
+                :model-value="multCoeff"
+                size="large"
+                class="scf-el-inp"
+                inputmode="numeric"
+                maxlength="6"
+                placeholder="正整数，最小 1"
+                @update:model-value="onMultCoeffInput"
+                @change="normalizeMultCoeff"
+                @blur="normalizeMultCoeff"
+              />
             </div>
             <div class="scf-field">
               <span class="scf-lbl">投注单位</span>
@@ -5451,6 +5458,11 @@ function onTimeDialogOpened() {
               />
               <SchemeLhcTemaPanel
                 v-else-if="schemeUsesLhcTemaPanel"
+                v-model="schemeGroups[idx]"
+                :config="schemePlayConfig"
+              />
+              <SchemeLhcRenyiDuipengPanel
+                v-else-if="schemeUsesLhcRenyiDuipengPanel"
                 v-model="schemeGroups[idx]"
                 :config="schemePlayConfig"
               />
@@ -6376,6 +6388,11 @@ function onTimeDialogOpened() {
             v-model="jushuForm.content"
             :config="schemePlayConfig"
           />
+          <SchemeLhcRenyiDuipengPanel
+            v-else-if="schemeUsesLhcRenyiDuipengPanel"
+            v-model="jushuForm.content"
+            :config="schemePlayConfig"
+          />
           <SchemeGroupInputPanel
             v-else-if="schemeUsesTextInputPanel"
             v-model="jushuForm.content"
@@ -6708,32 +6725,6 @@ function onTimeDialogOpened() {
   line-height: 1;
 }
 
-.scf-mult-wrap {
-  display: flex;
-  align-items: stretch;
-  gap: 0.5rem;
-  width: 100%;
-}
-
-.scf-mult-prefix {
-  flex-shrink: 0;
-  min-width: 2.25rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--el-color-primary);
-  color: #fff;
-  font-size: 0.875rem;
-  font-weight: 700;
-  border-radius: 0.5rem;
-  font-family: 'Plus Jakarta Sans', 'Inter', sans-serif;
-}
-
-.scf-el-inp--grow {
-  flex: 1;
-  min-width: 0;
-}
-
 .scf-field > .scf-el-inp,
 .scf-field > .scf-el-select,
 .scf-field > .scf-seg,
@@ -6742,8 +6733,7 @@ function onTimeDialogOpened() {
 .scf-field > .scf-funds-row,
 .scf-field > .scf-time-hit,
 .scf-field > .scf-radio-wrap,
-.scf-field > .scf-play-pair,
-.scf-field > .scf-mult-wrap {
+.scf-field > .scf-play-pair {
   width: 100%;
   min-width: 0;
 }

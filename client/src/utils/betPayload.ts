@@ -19,6 +19,7 @@ import {
   isLhcSxDuipengConfig,
   isLhcWsDuipengConfig,
   isLhcSwDuipengConfig,
+  isLhcRenyiDuipengConfig,
   isLhcTemaAttrOption,
   isLhcTemaPlayConfig,
   isLhcTemaWaveOption,
@@ -32,6 +33,7 @@ export {
   isLhcSxDuipengConfig,
   isLhcWsDuipengConfig,
   isLhcSwDuipengConfig,
+  isLhcRenyiDuipengConfig,
   isLhcTemaPlayConfig,
 }
 import { isBetUnitValue } from '@/constants/betModeOptions'
@@ -1047,6 +1049,59 @@ export function parseLhcSwDuipengTokens(raw: string): string[] {
   return [zs[0]!, ts[0]!]
 }
 
+/** 任意对碰两侧：A|B，区内逗号分隔 01–49（保序去重） */
+export function parseLhcRenyiDuipengSides(raw: string): { a: string[]; b: string[] } | null {
+  const text = String(raw ?? '').trim()
+  if (!text) return { a: [], b: [] }
+  const sep = text.includes('|') ? '|' : text.includes('#') ? '#' : ''
+  if (!sep) return null
+  const [left, right] = text.split(sep)
+  return {
+    a: [...new Set(parseLhcNumberTokens(left ?? ''))],
+    b: [...new Set(parseLhcNumberTokens(right ?? ''))],
+  }
+}
+
+export function formatLhcRenyiDuipengContent(a: string[], b: string[]): string {
+  const left = [...new Set(a.map((n) => String(Number(n)).padStart(2, '0')).filter((n) => {
+    const v = Number(n)
+    return v >= 1 && v <= 49
+  }))]
+  const right = [...new Set(b.map((n) => String(Number(n)).padStart(2, '0')).filter((n) => {
+    const v = Number(n)
+    return v >= 1 && v <= 49
+  }))]
+  if (!left.length && !right.length) return ''
+  return `${left.join(',')}|${right.join(',')}`
+}
+
+/** 任意对碰校验：两侧各≥1 个 01–49，且两侧号码集合不交叉 */
+export function validateLhcRenyiDuipengContent(
+  raw: string,
+): { ok: true; normalized: string; betUnits: number } | { ok: false; message: string } {
+  const text = String(raw ?? '').trim()
+  if (!text) return { ok: false, message: '任意对碰：请填写 A区 与 B区 号码' }
+  const sides = parseLhcRenyiDuipengSides(text)
+  if (!sides) {
+    return { ok: false, message: '任意对碰：请用 | 分隔 A区 与 B区（如 01,13|02,14）' }
+  }
+  if (!sides.a.length || !sides.b.length) {
+    return { ok: false, message: '任意对碰：A区、B区均须至少填写 1 个 01–49 号码' }
+  }
+  const bSet = new Set(sides.b)
+  const overlap = sides.a.filter((n) => bSet.has(n))
+  if (overlap.length) {
+    return {
+      ok: false,
+      message: `任意对碰：A区与 B区号码不可重复（重复：${overlap.join(',')}）`,
+    }
+  }
+  const normalized = formatLhcRenyiDuipengContent(sides.a, sides.b)
+  const betUnits = sides.a.length * sides.b.length
+  if (betUnits <= 0) return { ok: false, message: '任意对碰：选号无效' }
+  return { ok: true, normalized, betUnits }
+}
+
 /** 生尾对碰注数：肖展开 × 尾展开 − 共有号码（对齐第三方） */
 export function countLhcSwDuipengUnits(zodiac: string, tail: string): number {
   const left = LHC_ZODIAC_NUMBERS[String(zodiac ?? '').trim()] ?? []
@@ -1703,6 +1758,12 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
   if (config.inputMode === 'lhc_num') {
     if (isLhcTemaPlayConfig(config)) {
       return parseLhcTemaContentTokens(content).length
+    }
+    // 任意对碰：A|B → |A|×|B|（勿把两侧扁平成总个数）
+    if (isLhcRenyiDuipengConfig(config) || config.betMode === 'renyi_dp') {
+      const sides = parseLhcRenyiDuipengSides(content)
+      if (!sides?.a.length || !sides.b.length) return 0
+      return sides.a.length * sides.b.length
     }
     const pool = parseLhcNumberTokens(content)
     if (!pool.length) return 0
@@ -3744,6 +3805,9 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
   if (config.inputMode === 'danshi' && isLhcDanshiBetMode(config.betMode ?? '')) {
     if (!content) return { ok: false, message: '请输入选号内容' }
     const betMode = config.betMode ?? ''
+    if (isLhcRenyiDuipengConfig(config) || betMode === 'renyi_dp') {
+      return validateLhcRenyiDuipengContent(content)
+    }
     // 二全中拖头：允许扁选 01,13,25（与复式同口径）；勿强制要求 |
     if (isLhcErquanzhongTuotouConfig(config)) {
       const flat = content.includes('|') || content.includes('#')
@@ -3851,6 +3915,9 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
       const betUnits = countBetUnits(config, normalized)
       if (betUnits <= 0) return { ok: false, message: '生尾对碰：选号无效' }
       return { ok: true, normalized, betUnits }
+    }
+    if (isLhcRenyiDuipengConfig(config) || config.betMode === 'renyi_dp') {
+      return validateLhcRenyiDuipengContent(content)
     }
     if (config.inputMode === 'lhc_num' && isLhcErquanzhongNumInputConfig(config)) {
       // 兼容旧拖头 胆|拖：展成扁选再校验
@@ -4461,6 +4528,9 @@ export function groupContentPlaceholder(config: PlayConfig): string {
   }
   if (config.betMode === 'tuotou') {
     return '拖头：胆码|拖码，如 01,02|03,04,05'
+  }
+  if (isLhcRenyiDuipengConfig(config) || config.betMode === 'renyi_dp') {
+    return '任意对碰：A区|B区，如 01,13|02,14（两侧 01–49，不可重复）'
   }
   if ((config.betMode ?? '').endsWith('_dp')) {
     return '对碰：A组|B组，如 马|龙 或 01,02|03,04'

@@ -11,6 +11,7 @@ import {
   isLhcErquanzhongFushiConfig,
   isLhcErquanzhongNumInputConfig,
   isLhcErquanzhongTuotouConfig,
+  isLhcRenyiDuipengConfig,
   isLhcSxDuipengConfig,
   isLhcWsDuipengConfig,
   isLhcSwDuipengConfig,
@@ -57,8 +58,14 @@ export {
   isLhcErquanzhongFushiConfig,
   isLhcErquanzhongNumInputConfig,
   isLhcErquanzhongTuotouConfig,
+  isLhcRenyiDuipengConfig,
   isLhcSxDuipengConfig,
   isLhcTemaPlayConfig,
+}
+
+/** 任意对碰：A/B 双区输入面板（勿走 01–49 单区点选） */
+export function schemeGroupUsesLhcRenyiDuipengPanel(config: PlayConfig): boolean {
+  return isLhcRenyiDuipengConfig(config) || config.betMode === 'renyi_dp'
 }
 
 /** 双区组选规范化：合法则去重保序；半截输入尽量保留「头区,尾区」形态 */
@@ -94,6 +101,7 @@ export function schemeGroupUsesLhcTemaPanel(config: PlayConfig): boolean {
 /** 方案内容是否用 chip/选号面板（与 SchemeGroupPickPanel 同源） */
 export function schemeGroupUsesPickPanel(config: PlayConfig): boolean {
   if (schemeGroupUsesLhcTemaPanel(config)) return false
+  if (schemeGroupUsesLhcRenyiDuipengPanel(config)) return false
   // 二全中复式/拖头：改用逗号分隔输入框，勿点选 01–49
   if (isLhcErquanzhongNumInputConfig(config)) return false
   const mode = config.inputMode
@@ -253,6 +261,7 @@ export function useCompactPickChips(config: PlayConfig): boolean {
  */
 export function schemeGroupUsesDigitInput(config: PlayConfig): boolean {
   if (schemeGroupUsesLhcTemaPanel(config)) return false
+  if (schemeGroupUsesLhcRenyiDuipengPanel(config)) return false
   // 二全中复式/拖头：输入框录入 01–49（即使未走 pick 分支也启用）
   if (isLhcErquanzhongNumInputConfig(config)) return true
   if (!schemeGroupUsesPickPanel(config)) return false
