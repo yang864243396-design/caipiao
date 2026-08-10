@@ -115,20 +115,25 @@ func universeForRule(rule playRule) (PlayUniverse, bool) {
 }
 
 func universeKindForRule(rule playRule) string {
+	if isLHCSxDuipengPlayRule(rule) || isLHCWsDuipengPlayRule(rule) || isLHCSwDuipengPlayRule(rule) {
+		return UniverseAttribute
+	}
 	switch strings.ToLower(strings.TrimSpace(rule.BetMode)) {
 	case "daxiao", "danshuang", "dxds", "zhuangxian",
-		"longhu", "longhuhe", "longhubao", "hezhi", "kuadu", "weishu":
+		"longhu", "longhuhe", "longhubao", "hezhi", "kuadu", "weishu",
+		"tema", "zhengte":
 		return UniverseAttribute
 	case "teshu":
-		// 快三 / PC28 的特殊号是「豹子/对子/顺子」这类固定选项，形态确定。
-		// 时时彩五星特殊号则两种都有——「豹子/顺子」选文字，「一帆风顺」选一个 0-9 数字，
-		// 只看 betMode 分不出来，必须查子玩法表。在接上子玩法表之前一律判为未知，
-		// 不做任何断言：两边都猜错过，与其误报不如挂在"未覆盖"里让人看见这个缺口。
+		// 快三 / PC28 / 前三特殊号：豹子/对子/顺子 固定选项。
+		// 五星趣味（一帆风顺等）：0–9 数字池。
+		if isWuxingQuweiDigitPlay(rule) {
+			return UniverseTokenList
+		}
 		switch strings.TrimSpace(rule.PlayTemplate) {
 		case "k3_std", "pc28_std":
 			return UniverseAttribute
 		}
-		return ""
+		return UniverseAttribute
 	case "danshi", "zhixuan_ds", "zuxuan_ds", "hunhe":
 		return UniverseCombos
 	case "budingwei", "baodan", "zuxuan_fs",

@@ -1,4 +1,39 @@
-import { LHC_ZODIAC_NUMBERS, lhcMinPickCount } from '@/constants/lhcPlay'
+import {
+  LHC_TEMA_ATTR_OPTIONS,
+  LHC_TEMA_WAVE_OPTIONS,
+  LHC_ZODIACS,
+  LHC_ZODIAC_NUMBERS,
+  LHC_TAIL_NUMBERS,
+  LHC_TAIL_OPTIONS,
+  LHC_ERQUANZHONG_NUM_MAX_PICKS,
+  LHC_ERQUANZHONG_NUM_MIN_PICKS,
+  LHC_SX_DUIPENG_MAX_PICKS,
+  LHC_SX_DUIPENG_MIN_PICKS,
+  LHC_WS_DUIPENG_MAX_PICKS,
+  LHC_WS_DUIPENG_MIN_PICKS,
+  LHC_SW_DUIPENG_MAX_PICKS,
+  LHC_SW_DUIPENG_MIN_PICKS,
+  isLhcErquanzhongFushiConfig,
+  isLhcErquanzhongNumInputConfig,
+  isLhcErquanzhongTuotouConfig,
+  isLhcSxDuipengConfig,
+  isLhcWsDuipengConfig,
+  isLhcSwDuipengConfig,
+  isLhcTemaAttrOption,
+  isLhcTemaPlayConfig,
+  isLhcTemaWaveOption,
+  lhcMinPickCount,
+} from '@/constants/lhcPlay'
+
+export {
+  isLhcErquanzhongFushiConfig,
+  isLhcErquanzhongNumInputConfig,
+  isLhcErquanzhongTuotouConfig,
+  isLhcSxDuipengConfig,
+  isLhcWsDuipengConfig,
+  isLhcSwDuipengConfig,
+  isLhcTemaPlayConfig,
+}
 import { isBetUnitValue } from '@/constants/betModeOptions'
 import {
   isCatalogPlayTypeId,
@@ -15,7 +50,11 @@ import {
 } from '@/utils/playInputProfile'
 
 export { hunheDigitLenFromConfig } from '@/utils/playInputProfile'
-import { segmentBetMultiplier } from '@/utils/runTypeMatrix'
+import {
+  isPerPosDxdsPlayConfig,
+  isWuxingSumDxdsPlayConfig,
+  segmentBetMultiplier,
+} from '@/utils/runTypeMatrix'
 import {
   isLonghuPlayConfig,
   longhuPickHint,
@@ -575,7 +614,7 @@ export function bareConfigForRenxuanPicks(config: PlayConfig): PlayConfig {
     const sid = String(bare.catalogSubId ?? '').trim()
     if (!sid || !/^\d+$/.test(sid)) {
       const fromSub = String(config.catalogSubId ?? config.subPlayId ?? '').trim()
-      if (/^(132|136|139|145)$/.test(fromSub)) bare.catalogSubId = fromSub
+      if (/^(132|139|145)$/.test(fromSub)) bare.catalogSubId = fromSub
       else if (!sid) bare.catalogSubId = '145'
     }
   }
@@ -878,10 +917,30 @@ export function parsePickTokens(raw: string, pool?: { min?: number; max?: number
   if (max > 9) {
     return parsePoolTokens(raw, min, max)
   }
-  return raw
+  // 0–9 号池：粘连「12」「1234567890」按位拆开（对齐录入失焦与后端 formatSSCZuxuanPoolDigits）
+  const parts = String(raw ?? '')
     .split(/[\s,，\n]+/)
     .map((s) => s.trim())
-    .filter((s) => /^[0-9]$/.test(s))
+    .filter(Boolean)
+  const seen = new Set<string>()
+  const out: string[] = []
+  const push = (ch: string) => {
+    if (!/^[0-9]$/.test(ch)) return
+    const n = Number(ch)
+    if (n < min || n > max) return
+    if (seen.has(ch)) return
+    seen.add(ch)
+    out.push(ch)
+  }
+  for (const p of parts) {
+    if (!/^\d+$/.test(p)) continue
+    if (p.length === 1) {
+      push(p)
+      continue
+    }
+    for (const ch of p) push(ch)
+  }
+  return out
 }
 
 /** 直选复式各位均为同一单码（豹子/对子）——第三方网页计 0 注 */
@@ -944,6 +1003,217 @@ export function parseLhcNumberTokens(raw: string): string[] {
       return n >= 1 && n <= 49
     })
     .map((s) => String(Number(s)).padStart(2, '0'))
+}
+
+const LHC_ZODIAC_SET = new Set<string>(LHC_ZODIACS)
+
+/** 解析生肖 token（保序去重；兼容 马|龙 / 马,龙） */
+export function parseLhcZodiacTokens(raw: string): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const t of String(raw ?? '')
+    .split(/[\s,，\n|#]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)) {
+    if (!LHC_ZODIAC_SET.has(t) || seen.has(t)) continue
+    seen.add(t)
+    out.push(t)
+  }
+  return out
+}
+
+const LHC_TAIL_SET = new Set<string>(LHC_TAIL_OPTIONS)
+
+/** 解析尾数 token（保序去重；兼容 0|1 / 0,1 / 0尾） */
+export function parseLhcTailTokens(raw: string): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const t of String(raw ?? '')
+    .split(/[\s,，\n|#]+/)
+    .map((s) => s.trim().replace(/尾$/, ''))
+    .filter(Boolean)) {
+    if (!LHC_TAIL_SET.has(t) || seen.has(t)) continue
+    seen.add(t)
+    out.push(t)
+  }
+  return out
+}
+
+/** 解析生尾对碰：恰好 1 肖 + 1 尾 → [肖, 尾]；顺序归一为肖在前 */
+export function parseLhcSwDuipengTokens(raw: string): string[] {
+  const zs = parseLhcZodiacTokens(raw)
+  const ts = parseLhcTailTokens(raw)
+  if (zs.length !== 1 || ts.length !== 1) return []
+  return [zs[0]!, ts[0]!]
+}
+
+/** 生尾对碰注数：肖展开 × 尾展开 − 共有号码（对齐第三方） */
+export function countLhcSwDuipengUnits(zodiac: string, tail: string): number {
+  const left = LHC_ZODIAC_NUMBERS[String(zodiac ?? '').trim()] ?? []
+  const t = String(tail ?? '')
+    .trim()
+    .replace(/尾$/, '')
+  const right = LHC_TAIL_NUMBERS[t] ?? []
+  if (!left.length || !right.length) return 0
+  const rightSet = new Set(right)
+  let overlap = 0
+  for (const n of left) {
+    if (rightSet.has(n)) overlap++
+  }
+  return left.length * right.length - overlap
+}
+
+export type LhcTemaParts = {
+  nums: string[]
+  attrs: string[]
+  waves: string[]
+}
+
+function aliasLhcTemaToken(raw: string): string {
+  let t = String(raw ?? '').trim()
+  if (t.endsWith('||')) t = t.slice(0, -2).trim()
+  if (t === '洪波') return '红波'
+  if (t === '绿播') return '绿波'
+  return t
+}
+
+function sortLhcTemaByCanon(tokens: string[], canon: readonly string[]): string[] {
+  const rank = new Map(canon.map((v, i) => [v, i]))
+  return [...tokens].sort((a, b) => (rank.get(a) ?? 999) - (rank.get(b) ?? 999))
+}
+
+/** 特码方案内容：`号码|属性|波色`；兼容旧逗号混选与 `07||,13||` */
+export function parseLhcTemaParts(raw: string): LhcTemaParts {
+  const text = String(raw ?? '').trim()
+  const numSet = new Set<string>()
+  const attrSet = new Set<string>()
+  const waveSet = new Set<string>()
+
+  const take = (token: string) => {
+    const t = aliasLhcTemaToken(token)
+    if (!t) return
+    if (isLhcTemaWaveOption(t)) {
+      waveSet.add(t)
+      return
+    }
+    if (isLhcTemaAttrOption(t)) {
+      attrSet.add(t)
+      return
+    }
+    if (!/^\d{1,2}$/.test(t)) return
+    const n = Number(t)
+    // 第三方特码仅 01–49；00 会回「投注数字不合规」
+    if (n < 1 || n > 49) return
+    numSet.add(String(n).padStart(2, '0'))
+  }
+
+  if (text.includes('|')) {
+    // 旧多注：07||,13|| / 大|| → 按逗号拆再分类
+    if (/,\s*\S+\|\|/.test(text) || /\|\|,\s*/.test(text)) {
+      for (const part of text.split(/[,，]+/)) take(part)
+    } else {
+      const sections = text.split('|')
+      for (const sec of sections.slice(0, 3)) {
+        for (const part of sec.split(/[,，\s\n]+/)) take(part)
+      }
+      // 多余段也扫一遍，避免脏数据丢 token
+      for (const sec of sections.slice(3)) {
+        for (const part of sec.split(/[,，\s\n]+/)) take(part)
+      }
+    }
+  } else {
+    for (const part of text.split(/[,，\s\n]+/)) take(part)
+  }
+
+  const nums = [...numSet].sort((a, b) => Number(a) - Number(b))
+  const attrs = sortLhcTemaByCanon([...attrSet], LHC_TEMA_ATTR_OPTIONS)
+  const waves = sortLhcTemaByCanon([...waveSet], LHC_TEMA_WAVE_OPTIONS)
+  return { nums, attrs, waves }
+}
+
+export function formatLhcTemaParts(parts: LhcTemaParts): string {
+  const nums = parts.nums.join(',')
+  const attrs = parts.attrs.join(',')
+  const waves = parts.waves.join(',')
+  if (!nums && !attrs && !waves) return ''
+  return `${nums}|${attrs}|${waves}`
+}
+
+export function parseLhcTemaContentTokens(raw: string): string[] {
+  const { nums, attrs, waves } = parseLhcTemaParts(raw)
+  return [...nums, ...attrs, ...waves]
+}
+
+export function normalizeLhcTemaContent(raw: string): string {
+  return formatLhcTemaParts(parseLhcTemaParts(raw))
+}
+
+/** 拆特码录入 token（兼容 flat 逗号混选与 号码|属性|波色） */
+export function splitLhcTemaRawTokens(raw: string): string[] {
+  const text = String(raw ?? '').trim()
+  if (!text) return []
+  if (text.includes('|')) {
+    if (/,\s*\S+\|\|/.test(text) || /\|\|,\s*/.test(text)) {
+      return text
+        .split(/[,，]+/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+    }
+    return text
+      .split('|')
+      .flatMap((sec) => sec.split(/[,，\s\n]+/))
+      .map((s) => s.trim())
+      .filter(Boolean)
+  }
+  return text
+    .split(/[,，\s\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
+/** 单 token：合法则返回规范化值（01 / 大 / 红波），否则 invalid */
+export function classifyLhcTemaToken(
+  raw: string,
+): { ok: true; value: string } | { ok: false; raw: string } {
+  const original = String(raw ?? '').trim()
+  if (!original) return { ok: false, raw: '' }
+  const t = aliasLhcTemaToken(original)
+  if (!t) return { ok: false, raw: original }
+  if (isLhcTemaWaveOption(t) || isLhcTemaAttrOption(t)) return { ok: true, value: t }
+  if (!/^\d{1,2}$/.test(t)) return { ok: false, raw: original }
+  const n = Number(t)
+  if (n < 1 || n > 49) return { ok: false, raw: original }
+  return { ok: true, value: String(n).padStart(2, '0') }
+}
+
+export function lhcTemaInvalidTokens(raw: string): string[] {
+  const bad: string[] = []
+  const seen = new Set<string>()
+  for (const part of splitLhcTemaRawTokens(raw)) {
+    const c = classifyLhcTemaToken(part)
+    if (c.ok) continue
+    if (!c.raw || seen.has(c.raw)) continue
+    seen.add(c.raw)
+    bad.push(c.raw)
+  }
+  return bad
+}
+
+/**
+ * 开某投某正/反投录入：逗号混选保序去重，如 01,02,大,03,蓝波。
+ * 下单时再由 normalizeLhcTemaContent / 后端 wire 合成 号码|属性|波色。
+ */
+export function normalizeLhcTemaFlatContent(raw: string): string {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const part of splitLhcTemaRawTokens(raw)) {
+    const c = classifyLhcTemaToken(part)
+    if (!c.ok) continue
+    if (seen.has(c.value)) continue
+    seen.add(c.value)
+    out.push(c.value)
+  }
+  return out.join(',')
 }
 
 function comboCount(n: number, k: number): number {
@@ -1022,24 +1292,39 @@ function lhcDuipengGroupSize(betMode: string, raw: string): number {
     .map((s) => s.trim())
     .filter(Boolean)
   if (!tokens.length) return 0
-  if (betMode === 'sx_dp') return tokens.length
+  // 生肖对碰：一侧展开为该肖全部号码个数（马=5，其余肖=4）
+  if (betMode === 'sx_dp') {
+    let n = 0
+    for (const t of tokens) {
+      n += (LHC_ZODIAC_NUMBERS[t] ?? []).length
+    }
+    return n
+  }
+  // 尾数对碰：一侧展开为该尾全部号码个数（0=4，1–9=5）
   if (betMode === 'ws_dp') {
-    return tokens.filter((s) => /^[0-9]$/.test(s)).length
+    let n = 0
+    for (const t of tokens) {
+      const tok = t.replace(/尾$/, '')
+      n += (LHC_TAIL_NUMBERS[tok] ?? []).length
+    }
+    return n
+  }
+  // 生尾对碰单侧：生肖或尾数
+  if (betMode === 'sw_dp') {
+    let n = 0
+    for (const t of tokens) {
+      const zNums = LHC_ZODIAC_NUMBERS[t]
+      if (zNums?.length) {
+        n += zNums.length
+        continue
+      }
+      const tok = t.replace(/尾$/, '')
+      n += (LHC_TAIL_NUMBERS[tok] ?? []).length
+    }
+    return n
   }
   const nums = parseLhcNumberTokens(tokens.join(','))
   if (nums.length) return nums.length
-  if (betMode === 'sw_dp') {
-    const zodiacNums = new Set<string>()
-    for (const z of tokens) {
-      for (const n of LHC_ZODIAC_NUMBERS[z] ?? []) zodiacNums.add(n)
-      if (/^[0-9]$/.test(z)) {
-        for (let n = 1; n <= 49; n++) {
-          if (String(n % 10) === z) zodiacNums.add(String(n).padStart(2, '0'))
-        }
-      }
-    }
-    return zodiacNums.size || tokens.length
-  }
   return tokens.length
 }
 
@@ -1059,14 +1344,44 @@ function countLhcDanshiUnits(config: PlayConfig, content: string): number {
       const min = lhcMinPickCount('fushi', subId)
       return Math.max(d, 1) * comboCount(t, Math.max(min - 1, 1))
     }
-    return parseLhcNumberTokens(content).length
+    // 二全中拖头扁选：首号为胆，其余为拖
+    const pool = [...new Set(parseLhcNumberTokens(content))]
+    if (pool.length >= 2) {
+      const subId = config.catalogSubId ?? config.subPlayId
+      const min = lhcMinPickCount('fushi', subId)
+      return comboCount(pool.length - 1, Math.max(min - 1, 1))
+    }
+    return 0
   }
   if (betMode.endsWith('_dp')) {
     const sep = content.includes('|') ? '|' : content.includes('#') ? '#' : ''
     if (sep) {
       const [a, b] = content.split(sep)
+      if (betMode === 'sw_dp') {
+        const parts = parseLhcSwDuipengTokens(content)
+        if (parts.length !== LHC_SW_DUIPENG_MAX_PICKS) return 0
+        return countLhcSwDuipengUnits(parts[0]!, parts[1]!)
+      }
       const units = lhcDuipengGroupSize(betMode, a ?? '') * lhcDuipengGroupSize(betMode, b ?? '')
-      return units || (content ? 1 : 0)
+      return units || 0
+    }
+    // 生肖对碰扁选：恰好两个生肖 → |侧号码数 × |侧号码数（马×肖=20，肖×肖=16）
+    if (betMode === 'sx_dp') {
+      const zs = parseLhcZodiacTokens(content)
+      if (zs.length !== LHC_SX_DUIPENG_MAX_PICKS) return 0
+      return lhcDuipengGroupSize('sx_dp', zs[0]!) * lhcDuipengGroupSize('sx_dp', zs[1]!)
+    }
+    // 尾数对碰扁选：恰好两个尾数 → 展开积（0×1=20；1×2=25）
+    if (betMode === 'ws_dp') {
+      const ts = parseLhcTailTokens(content)
+      if (ts.length !== LHC_WS_DUIPENG_MAX_PICKS) return 0
+      return lhcDuipengGroupSize('ws_dp', ts[0]!) * lhcDuipengGroupSize('ws_dp', ts[1]!)
+    }
+    // 生尾对碰扁选：1 肖 + 1 尾 → 展开积 − 共有号码（狗|5=19，与第三方一致）
+    if (betMode === 'sw_dp') {
+      const parts = parseLhcSwDuipengTokens(content)
+      if (parts.length !== LHC_SW_DUIPENG_MAX_PICKS) return 0
+      return countLhcSwDuipengUnits(parts[0]!, parts[1]!)
     }
     return content ? 1 : 0
   }
@@ -1091,6 +1406,10 @@ export function parseGroupPicks(
       digits: parseTextPickTokens(trimmed, longhuPickOptionsForConfig(config)),
       lines: [],
     }
+  }
+  // 五星趣味：0–9 数字池（勿当豹子/对子/顺子）
+  if (isWuxingQuweiDigitPlayConfig(config)) {
+    return { digits: parseWuxingQuweiDigits(trimmed), lines: [] }
   }
   const textModes = ['daxiao', 'danshuang', 'dxds', 'teshu', 'longhubao', 'zhuangxian'] as const
   if (config.betMode && (textModes as readonly string[]).includes(config.betMode)) {
@@ -1132,9 +1451,18 @@ export function parseGroupPicks(
     config.inputMode === 'lhc_tail' ||
     config.inputMode === 'lhc_attr'
   ) {
+    if (isLhcSxDuipengConfig(config) || config.betMode === 'sx_dp') {
+      return { digits: parseLhcZodiacTokens(trimmed), lines: [] }
+    }
+    if (isLhcWsDuipengConfig(config) || config.betMode === 'ws_dp') {
+      return { digits: parseLhcTailTokens(trimmed), lines: [] }
+    }
+    if (isLhcSwDuipengConfig(config) || config.betMode === 'sw_dp') {
+      return { digits: parseLhcSwDuipengTokens(trimmed), lines: [] }
+    }
     return {
       digits: trimmed
-        .split(/[,，\s]+/)
+        .split(/[,，\s|#]+/)
         .map((s) => s.trim())
         .filter(Boolean),
       lines: [],
@@ -1152,6 +1480,9 @@ export function buildGroupContent(
   },
 ): string {
   if (isLonghuPlayConfig(config)) {
+    return (picks.digits ?? []).join(',')
+  }
+  if (isWuxingQuweiDigitPlayConfig(config)) {
     return (picks.digits ?? []).join(',')
   }
   const textModes = ['daxiao', 'danshuang', 'dxds', 'teshu', 'longhubao', 'zhuangxian'] as const
@@ -1185,6 +1516,24 @@ export function buildGroupContent(
     return [...new Set(parseLhcNumberTokens((picks.digits ?? []).join(',')))].join(',')
   }
   if (config.inputMode === 'lhc_zodiac' || config.inputMode === 'lhc_tail' || config.inputMode === 'lhc_attr') {
+    // 生肖对碰：两个生肖合成 肖A|肖B
+    if (isLhcSxDuipengConfig(config) || config.betMode === 'sx_dp') {
+      const zs = parseLhcZodiacTokens((picks.digits ?? []).join(','))
+      if (zs.length >= 2) return `${zs[0]}|${zs[1]}`
+      return zs.join('|')
+    }
+    // 尾数对碰：两个尾数合成 尾A|尾B
+    if (isLhcWsDuipengConfig(config) || config.betMode === 'ws_dp') {
+      const ts = parseLhcTailTokens((picks.digits ?? []).join(','))
+      if (ts.length >= 2) return `${ts[0]}|${ts[1]}`
+      return ts.join('|')
+    }
+    // 生尾对碰：1 肖 + 1 尾 → 肖|尾
+    if (isLhcSwDuipengConfig(config) || config.betMode === 'sw_dp') {
+      const parts = parseLhcSwDuipengTokens((picks.digits ?? []).join(','))
+      if (parts.length === 2) return `${parts[0]}|${parts[1]}`
+      return (picks.digits ?? []).join('|')
+    }
     return (picks.digits ?? []).join(',')
   }
   const pool = poolFromConfig(config)
@@ -1215,9 +1564,9 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
     return countRenxuanNeedsPositionUnits(config, content)
   }
 
-  // 组选12 双区（非任选剥位路径）；任选剥位后内层 bare 也会走到此
-  if (isZu12PlayConfig(config)) {
-    const n = countZu12BetUnits(content)
+  // 双区组选（12/4/五星60·20·10·5）；任选剥位后内层 bare 也会走到此
+  if (isZuDualPlayConfig(config)) {
+    const n = countZuDualBetUnits(config, content)
     return n > 0 ? applySegmentBetMultiplier(config, n) : 0
   }
 
@@ -1295,6 +1644,30 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
     return parseGroupPicks(config, content).digits.length
   }
 
+  // 五星趣味：选几个 0–9 计几注
+  if (isWuxingQuweiDigitPlayConfig(config)) {
+    return applySegmentBetMultiplier(config, parseWuxingQuweiDigits(content).length)
+  }
+  // 前二/后二/前三/后三大小单双：按位各 1 选项 → 1 注（勿按换行扁平计 2）
+  if (isPerPosDxdsPlayConfig(config)) {
+    const lines = splitGroupLines(content)
+    const allowed = ['大', '小', '单', '双']
+    for (let i = 0; i < config.segmentLen; i++) {
+      if (parseTextPickTokens(lines[i] ?? '', allowed).length !== 1) return 0
+    }
+    return 1
+  }
+
+  // 五星和值单双/大小、哈希尾数单双/大小：仅 1 选项 → 1 注
+  if (isWuxingSumDxdsPlayConfig(config)) {
+    const allowed =
+      config.betMode === 'daxiao' || /和值大小|尾数大小/.test(config.playMethodLabel ?? '')
+        ? ['大', '小']
+        : ['单', '双']
+    const n = parseTextPickTokens(content, allowed).length
+    return n === 1 ? 1 : 0
+  }
+
   // 特殊号 / 大小单双等文字选项：选几个计几注（对齐第三方）
   const textBetModes = ['daxiao', 'danshuang', 'dxds', 'teshu', 'longhubao', 'zhuangxian'] as const
   if (config.betMode && (textBetModes as readonly string[]).includes(config.betMode)) {
@@ -1328,6 +1701,9 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
   }
 
   if (config.inputMode === 'lhc_num') {
+    if (isLhcTemaPlayConfig(config)) {
+      return parseLhcTemaContentTokens(content).length
+    }
     const pool = parseLhcNumberTokens(content)
     if (!pool.length) return 0
     const betMode = config.betMode ?? ''
@@ -1336,15 +1712,32 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
     if (betMode === 'fushi' || betMode === 'buzhong' || betMode === 'xuanyi') {
       return comboCount(pool.length, min)
     }
-    if (betMode === 'tuotou' && content.includes('|')) {
-      const [dan, tuo] = content.split('|')
-      const d = parseLhcNumberTokens(dan ?? '').length
-      const t = parseLhcNumberTokens(tuo ?? '').length
-      return d * comboCount(t, Math.max(min - 1, 1))
+    if (betMode === 'tuotou') {
+      if (content.includes('|')) {
+        const [dan, tuo] = content.split('|')
+        const d = parseLhcNumberTokens(dan ?? '').length
+        const t = parseLhcNumberTokens(tuo ?? '').length
+        return d * comboCount(t, Math.max(min - 1, 1))
+      }
+      // 二全中拖头扁选：首号为胆，其余为拖
+      const uniq = [...new Set(pool)]
+      if (uniq.length >= 2) {
+        return comboCount(uniq.length - 1, Math.max(min - 1, 1))
+      }
+      return 0
     }
     return pool.length
   }
   if (config.inputMode === 'lhc_zodiac' || config.inputMode === 'lhc_tail' || config.inputMode === 'lhc_attr') {
+    if (isLhcSxDuipengConfig(config) || config.betMode === 'sx_dp') {
+      return countLhcDanshiUnits(config, content)
+    }
+    if (isLhcWsDuipengConfig(config) || config.betMode === 'ws_dp') {
+      return countLhcDanshiUnits(config, content)
+    }
+    if (isLhcSwDuipengConfig(config) || config.betMode === 'sw_dp') {
+      return countLhcDanshiUnits(config, content)
+    }
     const parts = content.split(/[,，]/).map((s) => s.trim()).filter(Boolean)
     return parts.length || 0
   }
@@ -1369,6 +1762,7 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
   }
 
   // 直选组合：按位乘积 × 段长（三星×3，对齐第三方「组合」）
+  // 支持多行按位，或单行逗号按位（前后四如 `12,2,3,45`）
   if (
     config.inputMode === 'multiline' &&
     config.segmentLen > 1 &&
@@ -1378,10 +1772,11 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
       (config.playMethodLabel ?? '').endsWith('组合') ||
       (config.playMethodLabel ?? '').includes('直选组合'))
   ) {
-    const lines = splitGroupLines(content)
+    const parts = splitZhixuanPositionParts(content, config.segmentLen)
+    if (!parts) return 0
     let units = 1
     for (let i = 0; i < config.segmentLen; i++) {
-      const n = parsePickTokens(lines[i] ?? '').length
+      const n = [...new Set(parsePickTokens(parts[i] ?? ''))].length
       if (!n) return 0
       units *= n
     }
@@ -1466,13 +1861,18 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
     if (bm === 'zu24' || /组选24|zu24/i.test(zuxuanN)) {
       return n < 4 ? 0 : applySegmentBetMultiplier(config, comboCount(n, 4))
     }
+    if (bm === 'zu120' || /组选120|zu120/i.test(zuxuanN)) {
+      return n < 5 ? 0 : applySegmentBetMultiplier(config, comboCount(n, 5))
+    }
     if (bm === 'zu12' || (/组选12|zu12/i.test(zuxuanN) && !/组选120|zu120/i.test(zuxuanN))) {
       // 双区「二重,单号」：C(m,1)×C(n,2)；扁选号池不再按 C(n,2)*2 估算
       const dual = countZu12BetUnits(content)
       return dual > 0 ? applySegmentBetMultiplier(config, dual) : 0
     }
     if (bm === 'zu4' || (/组选4|zu4/i.test(zuxuanN) && !/组选24|zu24|组选12|zu12/i.test(zuxuanN))) {
-      return n === 2 ? applySegmentBetMultiplier(config, 1) : 0
+      const dual = countZu4BetUnits(content)
+      if (dual > 0) return applySegmentBetMultiplier(config, dual)
+      return 0
     }
     // 四星/任四组选6：C(n,2)（须在三星组六 C(n,3) 之前）
     if (isSixingZu6PlayConfig(config)) {
@@ -1536,8 +1936,12 @@ export function zuxuanPoolMinPick(config: PlayConfig): number | null {
   if (config.betMode === 'baodan' || /包胆|baodan|_bd\b/i.test(text)) {
     return null
   }
-  // 组选12：二重≥1 + 单号≥2，见 validateZu12Content
-  if (config.betMode === 'zu12' || /组选12|zu12/i.test(text)) {
+  // 组选120 须先于组选12（避免「组选12」前缀 / zu12⊂zu120 误匹配）
+  if (config.betMode === 'zu120' || /组选120|zu120/i.test(text)) {
+    return 5
+  }
+  // 双区组选（12/4/五星60·20·10·5）：见 validateZuDualContent，勿套扁选下限
+  if (isZuDualPlayConfig(config)) {
     return null
   }
   if (config.betMode === 'zu24' || /组选24|zu24/i.test(text)) {
@@ -1570,6 +1974,9 @@ export function zuxuanPoolMinPickMessage(config: PlayConfig): string {
   if (config.betMode === 'zu24' || /组选24|zu24/i.test(text)) {
     return `组选24至少选择 ${min} 个号码`
   }
+  if (config.betMode === 'zu120' || /组选120|zu120/i.test(text)) {
+    return `组选120至少选择 ${min} 个号码`
+  }
   if (isSixingZu6PlayConfig(config)) {
     return `组选6至少选择 ${min} 个号码`
   }
@@ -1589,19 +1996,22 @@ export function zuxuanPoolMinPickMessage(config: PlayConfig): string {
  */
 export function isSixingZu6PlayConfig(config: PlayConfig): boolean {
   if (isZu6DanshiConfig(config)) return false
+  // 直选组合（前后四 rule136 等）绝非组选6
+  if (isZhixuanZuhePlayConfig(config)) return false
   const method = String(config.playMethodLabel ?? '')
   const sidRaw = String(config.catalogSubId ?? config.subPlayId ?? '').trim()
   // catalog 可能是「组选6 145」合并串，取出数字 id
   const sid =
     /^\d+$/.test(sidRaw)
       ? sidRaw
-      : (sidRaw.match(/(?:^|[\s|,/])(132|136|139|145)(?:$|[\s|,/])/)?.[1] ?? sidRaw)
+      : (sidRaw.match(/(?:^|[\s|,/])(132|139|145)(?:$|[\s|,/])/)?.[1] ?? sidRaw)
   const text = `${method} ${sidRaw} ${config.betMode ?? ''}`
   if (/组选60|组选120|zu60|zu120/i.test(text)) return false
   // 文案明确「组选6」
   if (/组选6/i.test(method)) return true
-  // 规则 id：四星组选6=132/136；前后四组选6=139；任四组选6=145
-  if (['132', '136', '139', '145'].includes(sid)) return true
+  // 规则 id：四星组选6=132；前后四组选6=139；任四组选6=145
+  // （136 是前后四直选组合，勿列入）
+  if (['132', '139', '145'].includes(sid)) return true
   const bm = (config.betMode ?? '').trim()
   const isZu6 =
     bm === 'zu6' ||
@@ -1628,6 +2038,239 @@ export function isZu12PlayConfig(config: PlayConfig): boolean {
   if (bm === 'zu12') return true
   const text = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''}`
   return /组选12|zu12/i.test(text) && !/组选120|zu120/i.test(text)
+}
+
+/** 五星趣味（一帆风顺/好事成双/三星报喜/四季发财）：0–9 数字池，非豹子/对子/顺子 */
+export function isWuxingQuweiDigitPlayConfig(config: PlayConfig): boolean {
+  const text = [
+    config.playMethodLabel,
+    config.playTypeLabel,
+    config.subPlayId,
+    config.catalogSubId,
+    config.betMode,
+  ]
+    .map((s) => String(s ?? '').trim())
+    .join(' ')
+  if (/一帆风顺|好事成双|三星报喜|四季发财/i.test(text)) return true
+  if (/yifan|haoshi|sanxing|siji|wuxing_yifan|wuxing_haoshi|wuxing_sanxing|wuxing_siji/i.test(text)) {
+    return true
+  }
+  const sid = String(config.catalogSubId ?? config.subPlayId ?? '').trim()
+  return ['162', '163', '164', '165'].includes(sid)
+}
+
+/** 一帆风顺第三方最多 2 码；好事成双/三星报喜/四季发财可至 10 */
+export function wuxingQuweiMaxPicks(config: PlayConfig): number {
+  const text = [
+    config.playMethodLabel,
+    config.subPlayId,
+    config.catalogSubId,
+  ]
+    .map((s) => String(s ?? ''))
+    .join(' ')
+  if (/一帆风顺|yifan|wuxing_yifan|\b162\b/i.test(text)) return 2
+  return 10
+}
+
+export function wuxingQuweiFormatHint(config: PlayConfig): string {
+  const label = String(config.playMethodLabel ?? '')
+  const name = /四季发财/.test(label)
+    ? '四季发财'
+    : /三星报喜/.test(label)
+      ? '三星报喜'
+      : /好事成双/.test(label)
+        ? '好事成双'
+        : '一帆风顺'
+  const max = wuxingQuweiMaxPicks(config)
+  const example = max <= 2 ? '0,3' : '0,3,9'
+  if (max <= 2) {
+    return `${name}：输入 1–2 个 0–9 号码，每个数字用逗号分隔（如 ${example}）`
+  }
+  return `${name}：输入 0–9，每个数字用逗号分隔（如 ${example}）`
+}
+
+/** 趣味数字池：保序去重，连写拆位 */
+export function parseWuxingQuweiDigits(raw: string): string[] {
+  const text = String(raw ?? '')
+    .replace(/，/g, ',')
+    .trim()
+  if (!text) return []
+  const parts = text.split(/[,，\s|]+/).map((s) => s.trim()).filter(Boolean)
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const p of parts) {
+    if (/^\d+$/.test(p) && p.length > 1) {
+      for (const ch of p) {
+        if (ch >= '0' && ch <= '9' && !seen.has(ch)) {
+          seen.add(ch)
+          out.push(ch)
+        }
+      }
+      continue
+    }
+    if (p.length === 1 && p >= '0' && p <= '9' && !seen.has(p)) {
+      seen.add(p)
+      out.push(p)
+    }
+  }
+  return out
+}
+
+/** 组选4：双区「三重号池,单号池」（如 1,2 / 12,34） */
+export function isZu4PlayConfig(config: PlayConfig): boolean {
+  const bm = (config.betMode ?? '').trim()
+  if (bm === 'zu4') return true
+  const text = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''}`
+  return /组选4|zu4/i.test(text) && !/组选24|zu24|组选12|zu12/i.test(text)
+}
+
+/** 五星组选60：双区「二重号,单号」 */
+export function isZu60PlayConfig(config: PlayConfig): boolean {
+  const bm = (config.betMode ?? '').trim()
+  if (bm === 'zu60') return true
+  const text = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''}`
+  return /组选60|zu60/i.test(text)
+}
+
+/** 五星组选30：双区「二重号,单号」（二重≥3、单号≥1） */
+export function isZu30PlayConfig(config: PlayConfig): boolean {
+  const bm = (config.betMode ?? '').trim()
+  if (bm === 'zu30') return true
+  const text = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''}`
+  return /组选30|zu30/i.test(text)
+}
+
+/** 五星组选20：双区「三重号,单号」，两区个数须相同 */
+export function isZu20PlayConfig(config: PlayConfig): boolean {
+  const bm = (config.betMode ?? '').trim()
+  if (bm === 'zu20') return true
+  const text = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''}`
+  // 勿误伤组选120（文案含 zu120）
+  return /组选20|zu20/i.test(text) && !/组选120|zu120/i.test(text)
+}
+
+/** 五星组选10：双区「三重号,二重号」 */
+export function isZu10PlayConfig(config: PlayConfig): boolean {
+  const bm = (config.betMode ?? '').trim()
+  if (bm === 'zu10') return true
+  const text = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''}`
+  return /组选10|zu10/i.test(text)
+}
+
+/** 五星组选5：双区「四重号,单号」 */
+export function isZu5PlayConfig(config: PlayConfig): boolean {
+  const bm = (config.betMode ?? '').trim()
+  if (bm === 'zu5') return true
+  const text = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''}`
+  return /组选5|zu5/i.test(text) && !/组选50|组选5\d/i.test(text)
+}
+
+export type ZuDualKind = 'zu12' | 'zu4' | 'zu60' | 'zu30' | 'zu20' | 'zu10' | 'zu5'
+
+/** 双区组选元信息（头区/尾区标签与下限） */
+export type ZuDualMeta = {
+  kind: ZuDualKind
+  headLabel: string
+  tailLabel: string
+  minHead: number
+  minTail: number
+  /** 两区选号个数必须相同（组选20） */
+  equalCounts: boolean
+  example: string
+}
+
+export function zuDualKindOf(config: PlayConfig): ZuDualKind | null {
+  if (isZu60PlayConfig(config)) return 'zu60'
+  if (isZu30PlayConfig(config)) return 'zu30'
+  if (isZu20PlayConfig(config)) return 'zu20'
+  if (isZu10PlayConfig(config)) return 'zu10'
+  if (isZu5PlayConfig(config)) return 'zu5'
+  if (isZu12PlayConfig(config)) return 'zu12'
+  if (isZu4PlayConfig(config)) return 'zu4'
+  return null
+}
+
+export function zuDualMetaOf(config: PlayConfig): ZuDualMeta | null {
+  const kind = zuDualKindOf(config)
+  if (!kind) return null
+  switch (kind) {
+    case 'zu12':
+      return {
+        kind,
+        headLabel: '二重号',
+        tailLabel: '单号',
+        minHead: 1,
+        minTail: 2,
+        equalCounts: false,
+        example: '12,3234',
+      }
+    case 'zu4':
+      return {
+        kind,
+        headLabel: '三重号',
+        tailLabel: '单号',
+        minHead: 1,
+        minTail: 1,
+        equalCounts: false,
+        example: '1,2',
+      }
+    case 'zu60':
+      return {
+        kind,
+        headLabel: '二重号',
+        tailLabel: '单号',
+        minHead: 1,
+        minTail: 3,
+        equalCounts: false,
+        example: '1,234',
+      }
+    case 'zu30':
+      return {
+        kind,
+        headLabel: '二重号',
+        tailLabel: '单号',
+        minHead: 3,
+        minTail: 1,
+        equalCounts: false,
+        example: '123,1',
+      }
+    case 'zu20':
+      // 三重号与单号个数须相同，各≥2（对每个三重 t：C(|单号\{t}|, 2)）
+      return {
+        kind,
+        headLabel: '三重号',
+        tailLabel: '单号',
+        minHead: 2,
+        minTail: 2,
+        equalCounts: true,
+        example: '12,34',
+      }
+    case 'zu10':
+      return {
+        kind,
+        headLabel: '三重号',
+        tailLabel: '二重号',
+        minHead: 1,
+        minTail: 1,
+        equalCounts: false,
+        example: '1,2',
+      }
+    case 'zu5':
+      return {
+        kind,
+        headLabel: '四重号',
+        tailLabel: '单号',
+        minHead: 1,
+        minTail: 1,
+        equalCounts: false,
+        example: '1,2',
+      }
+  }
+}
+
+/** 组选12/4/五星组选60·30·20·10·5 双区玩法 */
+export function isZuDualPlayConfig(config: PlayConfig): boolean {
+  return zuDualKindOf(config) != null
 }
 
 /** 从连写/逗号串提取 0–9 数字（去重保序） */
@@ -1748,6 +2391,376 @@ export function validateZu12Content(raw: string): GroupContentValidation {
   return { ok: true, normalized: zones.normalized, betUnits }
 }
 
+export type Zu4Zones = {
+  triples: string[]
+  singles: string[]
+  normalized: string
+}
+
+/**
+ * 解析组选4 双区内容。须恰好一段逗号分隔：三重号,单号。
+ * 三重 ≥1、单号区 ≥1（各位 0–9，区内去重保序；跨区重叠码保留）。
+ */
+export function parseZu4Zones(raw: string): Zu4Zones | null {
+  const text = String(raw ?? '')
+    .replace(/，/g, ',')
+    .trim()
+  if (!text) return null
+  const parts = text.split(',')
+  if (parts.length !== 2) return null
+  const triples = uniqueDigitsFromRun(parts[0] ?? '')
+  const singles = uniqueDigitsFromRun(parts[1] ?? '')
+  if (triples.length < 1 || singles.length < 1) return null
+  return {
+    triples,
+    singles,
+    normalized: `${triples.join('')},${singles.join('')}`,
+  }
+}
+
+export const ZU4_FORMAT_MSG =
+  '组选4：从0-9中输入1个及以上三重号码、1个及以上单号，两区用逗号分隔，如：1,2'
+
+export const ZU4_OVERLAP_MSG =
+  '组选4：每个三重号须能与单号区凑成至少 1 注（选该三重时单号区去掉该码后仍≥1；如 12,34 计 4 注，1,1 为 0 注）'
+
+/**
+ * 组选4 注数：对每个三重 t，统计单号 s 中 s≠t 的个数并求和。
+ */
+export function countZu4BetUnits(raw: string): number {
+  const zones = parseZu4Zones(raw)
+  if (!zones) return 0
+  let total = 0
+  for (const t of zones.triples) {
+    total += zones.singles.filter((s) => s !== t).length
+  }
+  return total
+}
+
+/**
+ * 组选4 随机双区内容。
+ * @param triplesCount 三重号个数（1–10）
+ * @param singlesCount 单号个数（1–10）；缺省 1
+ */
+export function randomZu4DualContent(triplesCount = 1, singlesCount = 1): string {
+  const shuffle = <T,>(arr: T[]): T[] => {
+    const a = [...arr]
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[a[i], a[j]] = [a[j]!, a[i]!]
+    }
+    return a
+  }
+  const fallback = '1,2'
+  const wantT = Math.min(10, Math.max(1, Math.trunc(triplesCount) || 1))
+  const wantS = Math.min(10, Math.max(1, Math.trunc(singlesCount) || 1))
+  for (let guard = 0; guard < 80; guard++) {
+    const pool = shuffle(Array.from({ length: 10 }, (_, i) => String(i)))
+    const triples = pool.slice(0, wantT)
+    const outside = pool.slice(wantT)
+    const singles: string[] = []
+    for (const d of outside) {
+      if (singles.length >= wantS) break
+      singles.push(d)
+    }
+    for (const d of shuffle([...triples])) {
+      if (singles.length >= wantS) break
+      if (!singles.includes(d)) singles.push(d)
+    }
+    if (triples.length < wantT || singles.length < wantS) continue
+    const raw = `${triples.join('')},${singles.join('')}`
+    const zones = parseZu4Zones(raw)
+    if (zones && countZu4BetUnits(zones.normalized) > 0) return zones.normalized
+  }
+  return fallback
+}
+
+export function validateZu4Content(raw: string): GroupContentValidation {
+  const zones = parseZu4Zones(raw)
+  if (!zones) return { ok: false, message: ZU4_FORMAT_MSG }
+  const betUnits = countZu4BetUnits(raw)
+  if (betUnits <= 0) {
+    const overlapped = zones.singles.some((d) => zones.triples.includes(d))
+    return { ok: false, message: overlapped ? ZU4_OVERLAP_MSG : ZU4_FORMAT_MSG }
+  }
+  return { ok: true, normalized: zones.normalized, betUnits }
+}
+
+export type ZuDualZones = {
+  head: string[]
+  tail: string[]
+  normalized: string
+}
+
+/** 通用双区解析：恰好一段逗号分隔，区内去重保序 */
+export function parseZuDualZones(
+  raw: string,
+  minHead: number,
+  minTail: number,
+  equalCounts = false,
+): ZuDualZones | null {
+  const text = String(raw ?? '')
+    .replace(/，/g, ',')
+    .trim()
+  if (!text) return null
+  const parts = text.split(',')
+  if (parts.length !== 2) return null
+  const head = uniqueDigitsFromRun(parts[0] ?? '')
+  const tail = uniqueDigitsFromRun(parts[1] ?? '')
+  if (head.length < minHead || tail.length < minTail) return null
+  if (equalCounts && head.length !== tail.length) return null
+  return { head, tail, normalized: `${head.join('')},${tail.join('')}` }
+}
+
+/** C(n,3)；n<3 → 0 */
+function combo3(n: number): number {
+  if (n < 3) return 0
+  return (n * (n - 1) * (n - 2)) / 6
+}
+
+export const ZU60_FORMAT_MSG =
+  '组选60：从0-9中输入1个及以上二重号码、3个及以上单号，两区用逗号分隔，如：1,234'
+
+export const ZU60_OVERLAP_MSG =
+  '组选60：每个二重号须能与单号区凑成至少 1 注（选该二重时单号区去掉该码后仍≥3）'
+
+/** 组选60 注数：对每个二重 d，C(|单号\{d}|, 3) 求和 */
+export function countZu60BetUnits(raw: string): number {
+  const zones = parseZuDualZones(raw, 1, 3)
+  if (!zones) return 0
+  let total = 0
+  for (const d of zones.head) {
+    total += combo3(zones.tail.filter((s) => s !== d).length)
+  }
+  return total
+}
+
+export function validateZu60Content(raw: string): GroupContentValidation {
+  const zones = parseZuDualZones(raw, 1, 3)
+  if (!zones) return { ok: false, message: ZU60_FORMAT_MSG }
+  const betUnits = countZu60BetUnits(raw)
+  if (betUnits <= 0) {
+    const overlapped = zones.tail.some((d) => zones.head.includes(d))
+    return { ok: false, message: overlapped ? ZU60_OVERLAP_MSG : ZU60_FORMAT_MSG }
+  }
+  return { ok: true, normalized: zones.normalized, betUnits }
+}
+
+export const ZU30_FORMAT_MSG =
+  '组选30：从0-9中输入3个及以上二重号码、1个及以上单号，两区用逗号分隔，如：123,1'
+
+export const ZU30_OVERLAP_MSG =
+  '组选30：每组二重号须能与单号区凑成至少 1 注（选该对二重时单号区去掉这两码后仍≥1）'
+
+/**
+ * 组选30 注数：对每个二重对 (d1,d2)，计 |单号\{d1,d2}| 并求和。
+ * 无跨区重叠时即 C(|二重|,2)×|单号|（如 123,45→6；1234,5→6）。
+ */
+export function countZu30BetUnits(raw: string): number {
+  const zones = parseZuDualZones(raw, 3, 1)
+  if (!zones) return 0
+  let total = 0
+  const head = zones.head
+  for (let i = 0; i < head.length; i++) {
+    for (let j = i + 1; j < head.length; j++) {
+      const d1 = head[i]!
+      const d2 = head[j]!
+      total += zones.tail.filter((s) => s !== d1 && s !== d2).length
+    }
+  }
+  return total
+}
+
+export function validateZu30Content(raw: string): GroupContentValidation {
+  const zones = parseZuDualZones(raw, 3, 1)
+  if (!zones) return { ok: false, message: ZU30_FORMAT_MSG }
+  const betUnits = countZu30BetUnits(raw)
+  if (betUnits <= 0) {
+    const overlapped = zones.tail.some((d) => zones.head.includes(d))
+    return { ok: false, message: overlapped ? ZU30_OVERLAP_MSG : ZU30_FORMAT_MSG }
+  }
+  return { ok: true, normalized: zones.normalized, betUnits }
+}
+
+export const ZU20_FORMAT_MSG =
+  '组选20：三重号与单号个数须相同，至少各 2 个，两区用逗号分隔，如：12,34'
+
+export const ZU20_OVERLAP_MSG =
+  '组选20：每个三重号须能与单号区凑成至少 1 注（选该三重时单号区去掉该码后仍≥2）'
+
+/** 组选20 注数：两区个数相同且各≥2；对每个三重 t，C(|单号\{t}|, 2) 求和 */
+export function countZu20BetUnits(raw: string): number {
+  const zones = parseZuDualZones(raw, 2, 2, true)
+  if (!zones) return 0
+  let total = 0
+  for (const t of zones.head) {
+    total += combo2(zones.tail.filter((s) => s !== t).length)
+  }
+  return total
+}
+
+export function validateZu20Content(raw: string): GroupContentValidation {
+  const text = String(raw ?? '')
+    .replace(/，/g, ',')
+    .trim()
+  const parts = text.split(',')
+  if (parts.length === 2) {
+    const head = uniqueDigitsFromRun(parts[0] ?? '')
+    const tail = uniqueDigitsFromRun(parts[1] ?? '')
+    if (head.length > 0 && tail.length > 0 && head.length !== tail.length) {
+      return { ok: false, message: ZU20_FORMAT_MSG }
+    }
+  }
+  const zones = parseZuDualZones(raw, 2, 2, true)
+  if (!zones) return { ok: false, message: ZU20_FORMAT_MSG }
+  const betUnits = countZu20BetUnits(zones.normalized)
+  if (betUnits <= 0) {
+    const overlapped = zones.tail.some((d) => zones.head.includes(d))
+    return { ok: false, message: overlapped ? ZU20_OVERLAP_MSG : ZU20_FORMAT_MSG }
+  }
+  return { ok: true, normalized: zones.normalized, betUnits }
+}
+
+export const ZU10_FORMAT_MSG =
+  '组选10：从0-9中输入1个及以上三重号码、1个及以上二重号码，两区用逗号分隔，如：1,2'
+
+export const ZU10_OVERLAP_MSG =
+  '组选10：每个三重号须能与二重号区凑成至少 1 注（选该三重时二重区去掉该码后仍≥1）'
+
+/** 组选10 注数：对每个三重 t，统计二重 d 中 d≠t 的个数并求和 */
+export function countZu10BetUnits(raw: string): number {
+  const zones = parseZuDualZones(raw, 1, 1)
+  if (!zones) return 0
+  let total = 0
+  for (const t of zones.head) {
+    total += zones.tail.filter((d) => d !== t).length
+  }
+  return total
+}
+
+export function validateZu10Content(raw: string): GroupContentValidation {
+  const zones = parseZuDualZones(raw, 1, 1)
+  if (!zones) return { ok: false, message: ZU10_FORMAT_MSG }
+  const betUnits = countZu10BetUnits(raw)
+  if (betUnits <= 0) {
+    const overlapped = zones.tail.some((d) => zones.head.includes(d))
+    return { ok: false, message: overlapped ? ZU10_OVERLAP_MSG : ZU10_FORMAT_MSG }
+  }
+  return { ok: true, normalized: zones.normalized, betUnits }
+}
+
+export const ZU5_FORMAT_MSG =
+  '组选5：从0-9中输入1个及以上四重号码、1个及以上单号，两区用逗号分隔，如：1,2'
+
+export const ZU5_OVERLAP_MSG =
+  '组选5：每个四重号须能与单号区凑成至少 1 注（选该四重时单号区去掉该码后仍≥1）'
+
+/** 组选5 注数：同组选4（四重 × 单号） */
+export function countZu5BetUnits(raw: string): number {
+  return countZu10BetUnits(raw)
+}
+
+export function validateZu5Content(raw: string): GroupContentValidation {
+  const zones = parseZuDualZones(raw, 1, 1)
+  if (!zones) return { ok: false, message: ZU5_FORMAT_MSG }
+  const betUnits = countZu5BetUnits(raw)
+  if (betUnits <= 0) {
+    const overlapped = zones.tail.some((d) => zones.head.includes(d))
+    return { ok: false, message: overlapped ? ZU5_OVERLAP_MSG : ZU5_FORMAT_MSG }
+  }
+  return { ok: true, normalized: zones.normalized, betUnits }
+}
+
+/** 按双区元信息随机一注合法内容 */
+export function randomZuDualContentForConfig(
+  config: PlayConfig,
+  headCount?: number,
+  tailCount?: number,
+): string {
+  const meta = zuDualMetaOf(config)
+  if (!meta) return '1,2'
+  if (meta.kind === 'zu12') return randomZu12DualContent(headCount ?? 1, tailCount ?? 2)
+  if (meta.kind === 'zu4') return randomZu4DualContent(headCount ?? 1, tailCount ?? 1)
+
+  const shuffle = <T,>(arr: T[]): T[] => {
+    const a = [...arr]
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[a[i], a[j]] = [a[j]!, a[i]!]
+    }
+    return a
+  }
+  let wantH = Math.min(10, Math.max(meta.minHead, Math.trunc(headCount ?? meta.minHead) || meta.minHead))
+  let wantT = Math.min(10, Math.max(meta.minTail, Math.trunc(tailCount ?? meta.minTail) || meta.minTail))
+  if (meta.equalCounts) {
+    const n = Math.max(wantH, wantT, meta.minHead, meta.minTail)
+    wantH = n
+    wantT = n
+  }
+  const countFn =
+    meta.kind === 'zu60'
+      ? countZu60BetUnits
+      : meta.kind === 'zu30'
+        ? countZu30BetUnits
+        : meta.kind === 'zu20'
+          ? countZu20BetUnits
+          : meta.kind === 'zu10'
+            ? countZu10BetUnits
+            : countZu5BetUnits
+  for (let guard = 0; guard < 80; guard++) {
+    const pool = shuffle(Array.from({ length: 10 }, (_, i) => String(i)))
+    const head = pool.slice(0, wantH)
+    const outside = pool.slice(wantH)
+    const tail: string[] = []
+    for (const d of outside) {
+      if (tail.length >= wantT) break
+      tail.push(d)
+    }
+    for (const d of shuffle([...head])) {
+      if (tail.length >= wantT) break
+      if (!tail.includes(d)) tail.push(d)
+    }
+    if (head.length < wantH || tail.length < wantT) continue
+    const raw = `${head.join('')},${tail.join('')}`
+    if (countFn(raw) > 0) return raw
+  }
+  return meta.example
+}
+
+/** 校验任意双区组选（含五星 60/30/20/10/5） */
+export function validateZuDualContent(config: PlayConfig, raw: string): GroupContentValidation {
+  const kind = zuDualKindOf(config)
+  if (kind === 'zu12') return validateZu12Content(raw)
+  if (kind === 'zu4') return validateZu4Content(raw)
+  if (kind === 'zu60') return validateZu60Content(raw)
+  if (kind === 'zu30') return validateZu30Content(raw)
+  if (kind === 'zu20') return validateZu20Content(raw)
+  if (kind === 'zu10') return validateZu10Content(raw)
+  if (kind === 'zu5') return validateZu5Content(raw)
+  return { ok: false, message: '不支持的双区组选玩法' }
+}
+
+export function countZuDualBetUnits(config: PlayConfig, raw: string): number {
+  const kind = zuDualKindOf(config)
+  if (kind === 'zu12') return countZu12BetUnits(raw)
+  if (kind === 'zu4') return countZu4BetUnits(raw)
+  if (kind === 'zu60') return countZu60BetUnits(raw)
+  if (kind === 'zu30') return countZu30BetUnits(raw)
+  if (kind === 'zu20') return countZu20BetUnits(raw)
+  if (kind === 'zu10') return countZu10BetUnits(raw)
+  if (kind === 'zu5') return countZu5BetUnits(raw)
+  return 0
+}
+
+export function zuDualFormatHint(config: PlayConfig): string {
+  const meta = zuDualMetaOf(config)
+  if (!meta) return ''
+  if (meta.equalCounts) {
+    return `从0-9中，${meta.headLabel}与${meta.tailLabel}个数须相同，至少各 ${meta.minHead} 个，两区用逗号分隔，如：${meta.example}`
+  }
+  return `从0-9中，输入${meta.minHead}个及以上的${meta.headLabel}，${meta.minTail}个及以上的${meta.tailLabel}，两个位置由逗号分隔，如：${meta.example}`
+}
+
 /** 组选星数：二星组选=2，组三/组六/三星组选复式=3（不受号池 UI 的 segmentLen=1 影响） */
 function zuxuanStarLen(config: PlayConfig): number {
   if (config.segmentLen === 2) return 2
@@ -1774,8 +2787,40 @@ function zuxuanStarLen(config: PlayConfig): number {
 
 function applySegmentBetMultiplier(config: PlayConfig, units: number): number {
   if (units <= 0) return units
-  const m = segmentBetMultiplier(config.guajiGroup ?? config.playTypeLabel ?? '')
+  let m = segmentBetMultiplier(config.guajiGroup ?? config.playTypeLabel ?? '')
+  if (m <= 1) {
+    const tid = String(config.playTypeId ?? '').trim().toLowerCase()
+    if (tid === 'g007' || tid === 'qianzhonghou3') m = 3
+    else if (
+      tid === 'g008' ||
+      tid === 'qianhou2' ||
+      tid === 'g012' ||
+      tid === 'qianhou3' ||
+      tid === 'g014' ||
+      tid === 'qianhou4'
+    ) {
+      m = 2
+    }
+  }
   return m > 1 ? units * m : units
+}
+
+/**
+ * 直选复式/组合按位拆分：多行，或单行恰好 segmentLen 段逗号分位（如 `12,2,3,45`）。
+ * 段数不合规 → null。
+ */
+export function splitZhixuanPositionParts(content: string, segmentLen: number): string[] | null {
+  if (segmentLen <= 0) return null
+  const raw = String(content ?? '')
+    .replace(/\r/g, '')
+    .replace(/，/g, ',')
+  if (!raw.trim()) return null
+  if (raw.includes('\n')) {
+    return splitGroupLinesPad(raw, segmentLen).slice(0, segmentLen)
+  }
+  const parts = raw.split(',').map((p) => p.trim())
+  if (parts.length !== segmentLen) return null
+  return parts
 }
 
 function isSscRenxuanConfig(config: PlayConfig): boolean {
@@ -2096,18 +3141,79 @@ export function weishuMaxBetUnitsMsg(config: PlayConfig): string {
   return `投注注数超过最大投注注数:${weishuMaxBetUnits(config)}`
 }
 
-/** 直选组合单区最大注数（前三组合等，对齐第三方）；多区位按段倍乘（前中后三×3→8100） */
+/** 三星直选组合单区上限（900×3）；四星等按 zhixuanFushiMax×段长 动态计算 */
 export const ZUHE_MAX_BET_UNITS = 2700
+/** @deprecated 请用 zuheMaxBetUnitsMsg(config)；固定 2700 仅覆盖三星单区 */
 export const ZUHE_MAX_BET_UNITS_MSG = '投注注数超过最大投注注数:2700'
 
-/** 直选组合最大注数：单区 2700 × 区位倍乘（前中后三=8100，前后三=5400） */
+/**
+ * 直选组合最大注数 = 直选复式上限 × 段长（复式上限已含区位倍乘）。
+ * 例：前三 900×3=2700；前中后三 2700×3=8100；四星 9000×4=36000。
+ */
 export function zuheMaxBetUnits(config: PlayConfig): number {
+  const seg = Math.max(1, config.segmentLen || 1)
+  const fushiMax = zhixuanFushiMaxBetUnits(config)
+  if (fushiMax > 0) return fushiMax * seg
   const m = segmentBetMultiplier(config.guajiGroup ?? config.playTypeLabel ?? '')
   return ZUHE_MAX_BET_UNITS * Math.max(1, m)
 }
 
 export function zuheMaxBetUnitsMsg(config: PlayConfig): string {
   return `投注注数超过最大投注注数:${zuheMaxBetUnits(config)}`
+}
+
+/** 第三方单次投注最高金额（对齐 guaji 40053） */
+export const MAX_SINGLE_BET_AMOUNT = 100000
+
+/** 最高下注限额文案（如 最高下注限额100000.00USDT） */
+export function maxBetAmountExceededMessage(currency = 'USDT'): string {
+  const cur = String(currency ?? 'USDT').trim().toUpperCase() || 'USDT'
+  return `最高下注限额${MAX_SINGLE_BET_AMOUNT.toFixed(2)}${cur}`
+}
+
+export function isMaxBetAmountExceededMessage(message: string): boolean {
+  return String(message ?? '').includes('最高下注限额')
+}
+
+/** 注数 × 投注单位 × 倍数 → 单次金额 */
+export function calcBetAmount(betUnits: number, mult: number, unitYuan: number): number {
+  const units = betUnits > 0 ? betUnits : 1
+  const m = mult > 0 ? mult : 1
+  const unit = unitYuan > 0 ? unitYuan : 2
+  return Math.round(unit * units * m * 100) / 100
+}
+
+export function betAmountExceedsMax(amount: number): boolean {
+  return amount > MAX_SINGLE_BET_AMOUNT + 1e-9
+}
+
+/**
+ * 从倍投载荷估算模式最高倍率（扫描 rounds[].mult / multiples 等）。
+ * 估高无妨：用于保存前预检，真正限额以后端下单前为准。
+ */
+export function maxModeMultiplierFromPayload(payload: unknown): number {
+  let max = 1
+  const visit = (v: unknown): void => {
+    if (Array.isArray(v)) {
+      for (const x of v) visit(x)
+      return
+    }
+    if (!v || typeof v !== 'object') return
+    const o = v as Record<string, unknown>
+    for (const key of ['mult', 'multiple', 'multiplier'] as const) {
+      const n = Number(o[key])
+      if (Number.isFinite(n) && n > max) max = n
+    }
+    if (typeof o.multiples === 'string') {
+      for (const part of o.multiples.split(/[,，\s]+/)) {
+        const n = Number(part)
+        if (Number.isFinite(n) && n > max) max = n
+      }
+    }
+    for (const val of Object.values(o)) visit(val)
+  }
+  visit(payload)
+  return max > 0 ? max : 1
 }
 
 /**
@@ -2202,6 +3308,11 @@ export function isMaxBetUnitsExceededMessage(message: string): boolean {
   return String(message ?? '').startsWith('投注注数超过最大投注注数:')
 }
 
+/** 注数/金额超限类提示：保存时原样弹窗、不清空内容 */
+export function isBetLimitExceededMessage(message: string): boolean {
+  return isMaxBetUnitsExceededMessage(message) || isMaxBetAmountExceededMessage(message)
+}
+
 /** 直选组合（前三/中三/后三「组合」等） */
 export function isZhixuanZuhePlayConfig(config: PlayConfig): boolean {
   const bm = (config.betMode ?? '').trim()
@@ -2258,13 +3369,13 @@ export function parseNumberTokens(raw: string, expectLen: number): string[] {
   return out
 }
 
-/** 单行选号池是否仅含 0-9 单 digit，逗号/空格分隔 */
+/** 单行选号池是否为 0-9 数字（允许粘连「12」/「1234567890」，校验时按位拆开） */
 function isValidDigitPoolLine(raw: string): boolean {
   const t = raw.trim()
   if (!t) return false
   const parts = t.split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean)
   if (!parts.length) return false
-  return parts.every((p) => /^[0-9]$/.test(p))
+  return parts.every((p) => /^\d+$/.test(p))
 }
 
 export type GroupContentValidation =
@@ -2278,31 +3389,45 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
   const content = raw.trim()
   if (!content) return { ok: false, message: '方案内容不能为空' }
 
-  // 组选12 双区：须在任选剥位 / 通用号池校验之前拦截（「12,34」不是扁选 0-9 号池）
-  if (isZu12PlayConfig(config) && !isRenxuanNeedsPositionConfig(config)) {
-    const zu12 = validateZu12Content(content)
-    if (!zu12.ok) return zu12
+  // 双区组选：须在任选剥位 / 通用号池校验之前拦截（「12,34」不是扁选 0-9 号池）
+  if (isZuDualPlayConfig(config) && !isRenxuanNeedsPositionConfig(config)) {
+    const dual = validateZuDualContent(config, content)
+    if (!dual.ok) return dual
     return {
       ok: true,
-      normalized: zu12.normalized,
-      betUnits: applySegmentBetMultiplier(config, zu12.betUnits),
+      normalized: dual.normalized,
+      betUnits: applySegmentBetMultiplier(config, dual.betUnits),
     }
   }
 
-  // 组三/组六/组选24 号池：保存时强制最低选号数（冷热出号与定码共用）
+  // 组三/组六/组选6/组选24 号池：保存时强制最低选号；粘连「12」「1234567890」按位展开后落库
   // 任选带位名前缀时先剥位再数码（万,千,百,十\n1,2,3）
   const zuxuanMin = zuxuanPoolMinPick(config)
   if (zuxuanMin != null) {
     let poolLine = content
+    let renPrefix = ''
     if (isRenxuanNeedsPositionConfig(config)) {
       const k = config.renPositionCount ?? renPickCountFromConfig(config)
-      poolLine = parseRenxuanPositionContent(content, k).picks
+      const parsed = parseRenxuanPositionContent(content, k)
+      poolLine = parsed.picks
+      if (parsed.positions.length) {
+        renPrefix = `${parsed.positions.join(',')}\n`
+      }
     }
-    if (poolLine && !poolLine.includes('\n')) {
+    // 双区组选已在上方拦截；此处仅扁选号池（含四星组选6）
+    if (poolLine && !poolLine.includes('\n') && !isZuDualPlayConfig(config)) {
       const digits = [...new Set(parsePickTokens(poolLine))]
       if (isValidDigitPoolLine(poolLine) || digits.length > 0) {
         if (digits.length < zuxuanMin) {
           return { ok: false, message: zuxuanPoolMinPickMessage(config) }
+        }
+        if (digits.length > 0) {
+          const normalized = `${renPrefix}${digits.join(',')}`
+          return {
+            ok: true,
+            normalized,
+            betUnits: countBetUnits(config, normalized),
+          }
         }
       }
     }
@@ -2539,13 +3664,16 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
   }
 
   // 直选复式 / 直选组合：按位号池，每一位都必须有号。
+  // 支持多行，或单行逗号按位（前后四直选组合如 `12,2,3,45`）。
   // 禁止把「123，，」→「1,2,3\\n\\n」再误归一成单行「1,2,3」（会被录入框当成万=1/千=2/百=3）。
   if (
     (isZhixuanFushiPlayConfig(config) || isZhixuanZuhePlayConfig(config)) &&
     config.segmentLen > 1
   ) {
-    const rawContent = String(raw ?? '').replace(/\r/g, '')
-    const lines = splitGroupLinesPad(rawContent, config.segmentLen).slice(0, config.segmentLen)
+    const rawContent = String(raw ?? '').replace(/\r/g, '').replace(/，/g, ',')
+    const lines =
+      splitZhixuanPositionParts(rawContent, config.segmentLen) ??
+      splitGroupLinesPad(rawContent, config.segmentLen).slice(0, config.segmentLen)
     const normalizedLines: string[] = []
     for (let i = 0; i < config.segmentLen; i++) {
       const line = lines[i] ?? ''
@@ -2553,7 +3681,7 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
       if (!line.trim()) {
         return { ok: false, message: `${pos}选号不能为空，每一位都需要输入号码` }
       }
-      if (!isValidDigitPoolLine(line)) {
+      if (!isValidDigitPoolLine(line) && !/^\d+$/.test(line.trim())) {
         return { ok: false, message: `${pos}选号格式不合法，请使用 0-9 并以逗号分隔` }
       }
       const digits = [...new Set(parsePickTokens(line))]
@@ -2616,6 +3744,29 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
   if (config.inputMode === 'danshi' && isLhcDanshiBetMode(config.betMode ?? '')) {
     if (!content) return { ok: false, message: '请输入选号内容' }
     const betMode = config.betMode ?? ''
+    // 二全中拖头：允许扁选 01,13,25（与复式同口径）；勿强制要求 |
+    if (isLhcErquanzhongTuotouConfig(config)) {
+      const flat = content.includes('|') || content.includes('#')
+        ? content.replace(/[|#]/g, ',')
+        : content
+      const nums = [...new Set(parseLhcNumberTokens(flat))]
+      if (nums.length < LHC_ERQUANZHONG_NUM_MIN_PICKS) {
+        return {
+          ok: false,
+          message: `二全中拖头：请输入 ${LHC_ERQUANZHONG_NUM_MIN_PICKS}–${LHC_ERQUANZHONG_NUM_MAX_PICKS} 个 01–49 号码，逗号分隔（首个为胆，其余为拖；如 01,13）`,
+        }
+      }
+      if (nums.length > LHC_ERQUANZHONG_NUM_MAX_PICKS) {
+        return {
+          ok: false,
+          message: `二全中拖头：最多 ${LHC_ERQUANZHONG_NUM_MAX_PICKS} 个 01–49 号码，逗号分隔`,
+        }
+      }
+      const normalized = nums.join(',')
+      const betUnits = countBetUnits(config, normalized)
+      if (betUnits <= 0) return { ok: false, message: '二全中拖头：选号无效' }
+      return { ok: true, normalized, betUnits }
+    }
     if (
       (betMode === 'tuotou' || betMode.endsWith('_dp')) &&
       !content.includes('|') &&
@@ -2635,6 +3786,96 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
     config.inputMode === 'lhc_attr'
   ) {
     if (!content) return { ok: false, message: '请先选择号码' }
+    if (config.inputMode === 'lhc_num' && isLhcTemaPlayConfig(config)) {
+      const invalid = lhcTemaInvalidTokens(content)
+      if (invalid.length) {
+        return {
+          ok: false,
+          message: `特码选项无效：${invalid.join('、')}（仅支持 1–49 号码与大/小/单/双/红波等）`,
+        }
+      }
+      const normalized = normalizeLhcTemaContent(content)
+      if (!normalized) return { ok: false, message: '请选择属性或输入 1–49 号码（逗号分隔）' }
+      return { ok: true, normalized, betUnits: parseLhcTemaContentTokens(normalized).length }
+    }
+    if (config.inputMode === 'lhc_zodiac' && (isLhcSxDuipengConfig(config) || config.betMode === 'sx_dp')) {
+      const zs = parseLhcZodiacTokens(content)
+      if (zs.length < LHC_SX_DUIPENG_MIN_PICKS) {
+        return {
+          ok: false,
+          message: `生肖对碰：请选择 ${LHC_SX_DUIPENG_MIN_PICKS} 个生肖（如 马、蛇）`,
+        }
+      }
+      if (zs.length > LHC_SX_DUIPENG_MAX_PICKS) {
+        return {
+          ok: false,
+          message: `生肖对碰：最多选择 ${LHC_SX_DUIPENG_MAX_PICKS} 个生肖`,
+        }
+      }
+      const normalized = `${zs[0]}|${zs[1]}`
+      const betUnits = countBetUnits(config, normalized)
+      if (betUnits <= 0) return { ok: false, message: '生肖对碰：选号无效' }
+      return { ok: true, normalized, betUnits }
+    }
+    if (config.inputMode === 'lhc_tail' && (isLhcWsDuipengConfig(config) || config.betMode === 'ws_dp')) {
+      const ts = parseLhcTailTokens(content)
+      if (ts.length < LHC_WS_DUIPENG_MIN_PICKS) {
+        return {
+          ok: false,
+          message: `尾数对碰：请选择 ${LHC_WS_DUIPENG_MIN_PICKS} 个尾数（如 0、1）`,
+        }
+      }
+      if (ts.length > LHC_WS_DUIPENG_MAX_PICKS) {
+        return {
+          ok: false,
+          message: `尾数对碰：最多选择 ${LHC_WS_DUIPENG_MAX_PICKS} 个尾数`,
+        }
+      }
+      const normalized = `${ts[0]}|${ts[1]}`
+      const betUnits = countBetUnits(config, normalized)
+      if (betUnits <= 0) return { ok: false, message: '尾数对碰：选号无效' }
+      return { ok: true, normalized, betUnits }
+    }
+    if (
+      (config.inputMode === 'lhc_attr' || config.inputMode === 'lhc_zodiac' || config.inputMode === 'lhc_tail') &&
+      (isLhcSwDuipengConfig(config) || config.betMode === 'sw_dp')
+    ) {
+      const parts = parseLhcSwDuipengTokens(content)
+      if (parts.length < LHC_SW_DUIPENG_MIN_PICKS) {
+        return {
+          ok: false,
+          message: '生尾对碰：请各选择 1 个生肖和 1 个尾数（如 马|0）',
+        }
+      }
+      const normalized = `${parts[0]}|${parts[1]}`
+      const betUnits = countBetUnits(config, normalized)
+      if (betUnits <= 0) return { ok: false, message: '生尾对碰：选号无效' }
+      return { ok: true, normalized, betUnits }
+    }
+    if (config.inputMode === 'lhc_num' && isLhcErquanzhongNumInputConfig(config)) {
+      // 兼容旧拖头 胆|拖：展成扁选再校验
+      const flat = content.includes('|') || content.includes('#')
+        ? content.replace(/[|#]/g, ',')
+        : content
+      const nums = [...new Set(parseLhcNumberTokens(flat))]
+      const label = isLhcErquanzhongTuotouConfig(config) ? '二全中拖头' : '二全中复式'
+      if (nums.length < LHC_ERQUANZHONG_NUM_MIN_PICKS) {
+        return {
+          ok: false,
+          message: `${label}：请输入 ${LHC_ERQUANZHONG_NUM_MIN_PICKS}–${LHC_ERQUANZHONG_NUM_MAX_PICKS} 个 01–49 号码，逗号分隔（如 01,13）`,
+        }
+      }
+      if (nums.length > LHC_ERQUANZHONG_NUM_MAX_PICKS) {
+        return {
+          ok: false,
+          message: `${label}：最多 ${LHC_ERQUANZHONG_NUM_MAX_PICKS} 个 01–49 号码，逗号分隔`,
+        }
+      }
+      const normalized = nums.join(',')
+      const betUnits = countBetUnits(config, normalized)
+      if (betUnits <= 0) return { ok: false, message: `${label}：选号无效` }
+      return { ok: true, normalized, betUnits }
+    }
     return { ok: true, normalized: content, betUnits: countBetUnits(config, content) || 1 }
   }
 
@@ -2784,6 +4025,41 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
     return { ok: true, normalized, betUnits }
   }
 
+  // 前二/后二/前三/后三大小单双：每位恰好 1 个大/小/单/双（第三方 wire 大,小）
+  if (isPerPosDxdsPlayConfig(config)) {
+    const allowed = ['大', '小', '单', '双']
+    const rawLines = splitGroupLines(content)
+    const normalizedLines: string[] = []
+    for (let i = 0; i < config.segmentLen; i++) {
+      const pos = config.segmentLabels[i] ?? `第 ${i + 1} 位`
+      const toks = parseTextPickTokens(rawLines[i] ?? '', allowed)
+      if (!toks.length) {
+        return { ok: false, message: `${pos}须选择一个选项（大/小/单/双）` }
+      }
+      if (toks.length > 1) {
+        return { ok: false, message: '仅能选择一个选项（大/小/单/双）' }
+      }
+      normalizedLines.push(toks[0]!)
+    }
+    const normalized = normalizedLines.join('\n')
+    return { ok: true, normalized, betUnits: 1 }
+  }
+
+  // 五星和值单双/大小、哈希尾数单双/大小：仅 1 个选项
+  if (isWuxingSumDxdsPlayConfig(config)) {
+    const isDx = config.betMode === 'daxiao' || /和值大小|尾数大小/.test(config.playMethodLabel ?? '')
+    const allowed = isDx ? ['大', '小'] : ['单', '双']
+    const hint = isDx ? '大/小' : '单/双'
+    const toks = parseTextPickTokens(content, allowed)
+    if (!toks.length) {
+      return { ok: false, message: `须选择一个选项（${hint}）` }
+    }
+    if (toks.length > 1) {
+      return { ok: false, message: `仅能选择一个选项（${hint}）` }
+    }
+    return { ok: true, normalized: toks[0]!, betUnits: 1 }
+  }
+
   const specialBetModes = new Set([
     'longhu',
     'longhuhe',
@@ -2791,7 +4067,7 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
     'daxiao',
     'danshuang',
     // budingwei 已在上方按码数校验（二码≥2，勿 betUnits||1 误放行）
-    // zuhe 已在上方按位校验 + 单区 2700 / 前中后三 8100 注上限
+    // zuhe 已在上方按位校验 + 组合上限（复式上限×段长，含区位）
     // baodan / weishu / kuadu 已在上方单独校验
     'hunhe',
     'teshu',
@@ -2833,6 +4109,17 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
       return { ok: true, normalized: normalizeHunheGroupContent(content, digitLen), betUnits }
     }
     if (config.betMode === 'teshu') {
+      if (isWuxingQuweiDigitPlayConfig(config)) {
+        const digits = parseWuxingQuweiDigits(content)
+        if (digits.length <= 0) {
+          return { ok: false, message: wuxingQuweiFormatHint(config) }
+        }
+        const max = wuxingQuweiMaxPicks(config)
+        if (digits.length > max) {
+          return { ok: false, message: wuxingQuweiFormatHint(config) }
+        }
+        return { ok: true, normalized: digits.join(','), betUnits: digits.length }
+      }
       if (betUnits <= 0) {
         return { ok: false, message: '特殊号：请选择豹子、对子、顺子等，多选以逗号分隔' }
       }
@@ -2908,15 +4195,15 @@ export function validateSchemeGroups(config: PlayConfig, groups: string[]): Sche
       // 超注数等业务拒绝：保留原文便于用户删减；格式错误仍清空
       const detail = !r.ok ? r.message : '选号无效'
       if (!firstDetail) firstDetail = detail
-      normalized.push(isMaxBetUnitsExceededMessage(detail) ? raw : '')
+      normalized.push(isBetLimitExceededMessage(detail) ? raw : '')
     } else {
       normalized.push(r.normalized)
     }
   }
   const ok = invalidIndexes.length === 0
   if (ok) return { ok, normalized, invalidIndexes, message: '' }
-  // 优先返回具体原因（如和值超 900 / 组合超 2700·8100），便于弹窗原样展示
-  if (isMaxBetUnitsExceededMessage(firstDetail)) {
+  // 优先返回具体原因（如和值超限 / 组合超限 / 金额超限），便于弹窗原样展示
+  if (isBetLimitExceededMessage(firstDetail)) {
     return { ok, normalized, invalidIndexes, message: firstDetail }
   }
   const message =
@@ -3140,15 +4427,33 @@ export function groupContentPlaceholder(config: PlayConfig): string {
     if (mode === 'buzhong' || mode === 'xuanyi') {
       return '六合彩：选 1–49 号码，逗号分隔（注数按玩法最少选号数计算）'
     }
+    if (isLhcTemaPlayConfig(config)) {
+      return '特码：点选上方属性；号码在下方输入 1–49，逗号分隔（提交格式：号码|属性|波色）'
+    }
+    if (isLhcErquanzhongTuotouConfig(config)) {
+      return `二全中拖头：输入 ${LHC_ERQUANZHONG_NUM_MIN_PICKS}–${LHC_ERQUANZHONG_NUM_MAX_PICKS} 个 01–49 号码，逗号分隔（首个为胆，其余为拖；如 01,13,25）`
+    }
+    if (isLhcErquanzhongFushiConfig(config)) {
+      return `二全中复式：输入 ${LHC_ERQUANZHONG_NUM_MIN_PICKS}–${LHC_ERQUANZHONG_NUM_MAX_PICKS} 个 01–49 号码，逗号分隔（如 01,13,25）`
+    }
     return '六合彩：选 1–49 号码，逗号分隔（如 01,13,25）'
   }
   if (config.inputMode === 'lhc_zodiac') {
+    if (isLhcSxDuipengConfig(config) || config.betMode === 'sx_dp') {
+      return '生肖对碰：点选 2 个生肖（如 马|蛇）；每个生肖对应固定号码'
+    }
     return '生肖：马,龙,蛇 等，逗号分隔'
   }
   if (config.inputMode === 'lhc_tail') {
+    if (isLhcWsDuipengConfig(config) || config.betMode === 'ws_dp') {
+      return '尾数对碰：点选 2 个尾数（如 0|1）；每个尾数对应固定号码'
+    }
     return '尾数：0–9，逗号分隔'
   }
   if (config.inputMode === 'lhc_attr') {
+    if (isLhcSwDuipengConfig(config) || config.betMode === 'sw_dp') {
+      return '生尾对碰：各选 1 个生肖和 1 个尾数（如 马|0）；两侧展开号码对碰'
+    }
     if (config.betMode === 'zongxiao') return '总肖：二肖–七肖，逗号分隔（如 二肖,五肖）'
     if (config.betMode === 'tematouwei') return '特码头尾：头0–头4、尾0–尾9，逗号分隔'
     if (config.betMode === 'qima') return '七码：单/双/大/小 + 0–7，如 双1'
@@ -3192,6 +4497,24 @@ export function groupContentPlaceholder(config: PlayConfig): string {
   if (isLonghuPlayConfig(config)) {
     return `龙虎：${longhuPickHint(config)}，逗号分隔`
   }
+  if (isPerPosDxdsPlayConfig(config)) {
+    const labels = config.segmentLabels ?? []
+    const posHint = labels.length
+      ? labels.map((l) => (/^[万千百十个]$/.test(l.trim()) ? `${l.trim()}位` : l.trim())).join('、')
+      : '每位'
+    return `大小单双：${posHint}各选一个（大/小/单/双）`
+  }
+  if (isWuxingSumDxdsPlayConfig(config)) {
+    const label = config.playMethodLabel ?? ''
+    if (/尾数大小/.test(label) || (config.betMode === 'daxiao' && /尾数/.test(label))) {
+      return '尾数大小：仅选一个（大 或 小）'
+    }
+    if (/尾数单双/.test(label) || (config.betMode === 'danshuang' && /尾数/.test(label))) {
+      return '尾数单双：仅选一个（单 或 双）'
+    }
+    const isDx = config.betMode === 'daxiao' || /和值大小/.test(label)
+    return isDx ? '五星和值大小：仅选一个（大 或 小）' : '五星和值单双：仅选一个（单 或 双）'
+  }
   if (config.betMode === 'daxiao' || config.betMode === 'danshuang' || config.betMode === 'dxds') {
     return '大小单双：大、小、单、双，逗号分隔'
   }
@@ -3214,11 +4537,17 @@ export function groupContentPlaceholder(config: PlayConfig): string {
   if (config.betMode === 'zu24' || /组选24|zu24/i.test(config.playMethodLabel ?? '')) {
     return '输入4个及以上0-9的号码，多选用逗号分隔，如：1,3,5,7'
   }
-  if (isZu12PlayConfig(config)) {
-    return '从0-9中，输入1个及以上的二重号码，2个及以上的单号，两个位置由逗号分隔，如：12,3234'
+  if (config.betMode === 'zu120' || /组选120|zu120/i.test(config.playMethodLabel ?? '')) {
+    return '输入5个及以上0-9的号码，多选用逗号分隔，如：1,3,5,7,9'
+  }
+  if (isZuDualPlayConfig(config)) {
+    return zuDualFormatHint(config)
   }
   if (isSixingZu6PlayConfig(config)) {
     return '输入两个及以上的0-9的号码，多选用逗号分隔，如1,2'
+  }
+  if (isWuxingQuweiDigitPlayConfig(config)) {
+    return wuxingQuweiFormatHint(config)
   }
   if (config.betMode === 'teshu') {
     return '特殊号：豹子、对子、顺子（PC28 另含极大/极小），多选各计 1 注'

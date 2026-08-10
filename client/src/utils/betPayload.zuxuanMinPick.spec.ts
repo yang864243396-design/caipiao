@@ -55,6 +55,30 @@ describe('zuxuanPoolMinPick', () => {
     expect(validateGroupContent(sixing, '万,千,百,十\n1').ok).toBe(false)
   })
 
+  it('四星组选6：粘连号池按位拆开并可保存', () => {
+    const sixing = cfg({
+      betMode: 'zu6',
+      subPlayId: '132',
+      catalogSubId: '132',
+      playMethodLabel: '组选6',
+      playTypeId: 'g013',
+      playTypeLabel: '四星',
+      guajiGroup: '四星',
+      segmentLen: 4,
+      numberPoolMin: 0,
+      numberPoolMax: 9,
+    })
+    expect(isSixingZu6PlayConfig(sixing)).toBe(true)
+    const r = validateGroupContent(sixing, '1234567890,1234567890')
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.normalized.split(',').sort()).toEqual(
+        ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'].sort(),
+      )
+      expect(r.betUnits).toBe(45) // C(10,2)
+    }
+  })
+
   it('中三组选包胆：不套组选下限，仅允许单胆', () => {
     const bd = cfg({
       betMode: 'baodan',

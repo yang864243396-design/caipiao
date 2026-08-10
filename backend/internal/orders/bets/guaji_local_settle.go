@@ -13,7 +13,8 @@ import (
 	"caipiao/backend/internal/schemes"
 )
 
-// LocalGuajiDrawFallback 构造第三方注单缺失时的本地开奖派奖评估。
+// LocalGuajiDrawFallback 已废弃：PayoutSyncWorker 不再调用本地金额兜底。
+// 保留函数以免旧脚本编译失败；真实注单返奖只认第三方 web_bets 毛派奖。
 func LocalGuajiDrawFallback(pool *db.Pool) accountsvc.LocalDrawFallback {
 	q := sqlcdb.New(pool)
 	return func(ctx context.Context, orderID int64, orderNo string) (accountsvc.LocalDrawSettlement, bool, error) {

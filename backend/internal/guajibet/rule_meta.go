@@ -165,7 +165,8 @@ func InferBetMode(meta RuleMeta) string {
 	case strings.Contains(label, "特殊号"), strings.Contains(label, "特殊"):
 		return "teshu"
 	case strings.Contains(label, "一帆风顺"), strings.Contains(label, "好事成双"),
-		strings.Contains(label, "三星报喜"), strings.Contains(label, "四季发财"):
+		strings.Contains(label, "三星报喜"), strings.Contains(label, "四季发财"),
+		isWuxingQuweiSubID(meta.SubID), isWuxingQuweiSubID(meta.RuleID):
 		return "teshu"
 	case strings.Contains(label, "大小") || strings.Contains(label, "单双"):
 		return "dxds"
@@ -235,4 +236,42 @@ func InferBetMode(meta RuleMeta) string {
 		return "dingwei"
 	}
 	return ""
+}
+
+// isWuxingQuweiDigitMeta 五星趣味（一帆风顺等）：0–9 数字池，非豹子/对子/顺子。
+func isWuxingQuweiDigitMeta(meta RuleMeta) bool {
+	text := meta.Label + " " + meta.FullName + " " + meta.TypeLabel + " " + meta.Group + " " + meta.SubID + " " + meta.RuleID
+	if strings.Contains(text, "一帆风顺") || strings.Contains(text, "好事成双") ||
+		strings.Contains(text, "三星报喜") || strings.Contains(text, "四季发财") {
+		return true
+	}
+	low := strings.ToLower(text)
+	if strings.Contains(low, "yifan") || strings.Contains(low, "haoshi") ||
+		strings.Contains(low, "sanxing") || strings.Contains(low, "siji") {
+		return true
+	}
+	return isWuxingQuweiSubID(meta.SubID) || isWuxingQuweiSubID(meta.RuleID)
+}
+
+// isWuxingYifanMeta 五星一帆风顺：最多选 2 码。
+func isWuxingYifanMeta(meta RuleMeta) bool {
+	text := meta.Label + " " + meta.FullName + " " + meta.TypeLabel + " " + meta.Group + " " + meta.SubID + " " + meta.RuleID
+	if strings.Contains(text, "一帆风顺") || strings.Contains(strings.ToLower(text), "yifan") {
+		return true
+	}
+	sid := strings.TrimSpace(meta.SubID)
+	if sid == "" {
+		sid = strings.TrimSpace(meta.RuleID)
+	}
+	return sid == "162" || sid == "wuxing_yifan"
+}
+
+func isWuxingQuweiSubID(subID string) bool {
+	switch strings.TrimSpace(subID) {
+	case "162", "163", "164", "165",
+		"wuxing_yifan", "wuxing_haoshi", "wuxing_sanxing", "wuxing_siji":
+		return true
+	default:
+		return false
+	}
 }

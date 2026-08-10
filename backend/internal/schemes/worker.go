@@ -420,6 +420,8 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 
 	balls := sqlcdb.ParseDrawBalls(draw.Balls)
 	playEval := evaluatePlayHit(cfg.Play, balls, betContent, cfg.Contrary, cfg.ContraryPlan, cfg.Play.PositionIdx)
+	// 先按 wire 组合注数校准（组选20 等双区若 evaluate 未覆盖，勿在校准前误报 0 注停方案）
+	syncEvalBetUnitsWithWire(cfg.Play, betContent, &playEval)
 	if playEval.BetUnits <= 0 {
 		if cfg.RunTypeID == RunTypeRandomDraw {
 			return w.skipRandomDrawUnsolvable(ctx, inst, draw.IssueNo)
@@ -432,7 +434,6 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 		w.pauseRunningInstance(ctx, inst, StatusReasonBetFailed, guajibet.ErrZeroBets.Error())
 		return errSchemeBetStopped
 	}
-	syncEvalBetUnitsWithWire(cfg.Play, betContent, &playEval)
 	// 超该玩法第三方单组上限：随机出号再重抽；仍超限则计入连续无解。其它模式暂停。
 	if max := maxBetUnitsForPlay(cfg.Play); max > 0 && playEval.BetUnits > max {
 		if cfg.RunTypeID == RunTypeRandomDraw {
@@ -608,6 +609,7 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 				dec = repick.dec
 				betContent = repick.content
 				playEval = repick.playEval
+				syncEvalBetUnitsWithWire(cfg.Play, betContent, &playEval)
 				if playEval.BetUnits <= 0 {
 					if shouldSkipZeroBetUnits(cfg.Play) {
 						w.syncPeriodBetCursor(ctx, qtx, inst, guajiTargetPeriodNo)
@@ -624,7 +626,6 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 					w.pauseRunningInstance(ctx, inst, StatusReasonBetFailed, guajibet.ErrZeroBets.Error())
 					return errSchemeBetStopped
 				}
-				syncEvalBetUnitsWithWire(cfg.Play, betContent, &playEval)
 				if max := maxBetUnitsForPlay(cfg.Play); max > 0 && playEval.BetUnits > max {
 					if cfg.RunTypeID == RunTypeRandomDraw {
 						next, ok := resolveRandomDrawUnderMax(cfg, "")

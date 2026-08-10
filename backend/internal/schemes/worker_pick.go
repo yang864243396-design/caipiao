@@ -503,6 +503,20 @@ func generateRandomDrawContent(cfg parsedSchemeConfig, scale int) string {
 		}
 		return randomZu12DualPool(d, s)
 	}
+	// 组选4：counts=[三重个数, 单号个数] →「三重,单号」
+	if isZu4PlayRule(cfg.Play) {
+		t := randomDrawCountAt(cfg, 0, 1)
+		s := randomDrawCountAt(cfg, 1, 1)
+		t = shrinkCount(t, scale, 1)
+		s = shrinkCount(s, scale, 1)
+		if t > 10 {
+			t = 10
+		}
+		if s > 10 {
+			s = 10
+		}
+		return randomZu4DualPool(t, s)
+	}
 	// 组选号池
 	if isZuxuanPoolRandom(cfg.Play) {
 		k := randomDrawCountAt(cfg, 0, 0)
@@ -616,25 +630,31 @@ func isWholeTicketRandom(rule playRule) bool {
 // 随机产号为"从选项宇宙抽 K 个"，非按位号池、非整注单式。
 // 前二/后二/前三/后三大小单双（SegmentLen>=2）走按位抽样，不算单档属性。
 func isAttributeRandom(rule playRule) bool {
+	if isLHCSxDuipengPlayRule(rule) || isLHCWsDuipengPlayRule(rule) || isLHCSwDuipengPlayRule(rule) {
+		return true
+	}
 	switch strings.ToLower(strings.TrimSpace(rule.BetMode)) {
 	case "dxds":
 		return !isPerPosDxdsRandom(rule)
 	case "daxiao", "danshuang", "zhuangxian",
 		"longhu", "longhuhe", "longhubao", "teshu",
-		"hezhi", "kuadu", "weishu", "budingwei", "baodan":
+		"hezhi", "kuadu", "weishu", "budingwei", "baodan",
+		// 特码/正特：01–49 + 属性 + 波色（68）单档抽样
+		"tema", "zhengte":
+		// 五星趣味仍走属性随机，但宇宙为 0–9（见 attributeUniverse）
 		return true
 	}
 	return false
 }
 
 // randomDrawCountMax 与编辑页 rdSingleCountMax / rdPerPosMax 对齐：按玩法宇宙定上限。
-// 整注 200、组选号池=号池长度、属性=选项宇宙、包胆 1、尾数≤9、按位默认 10（一星 9、按位大小单双 4）。
+	// 整注 200、组选号池=号池长度、属性=选项宇宙、包胆 1、尾数≤9、按位默认 10（一星 9、按位大小单双 1）。
 func randomDrawCountMax(rule playRule) int {
 	if isWholeTicketRandom(rule) {
 		return 200
 	}
-	// 组选12：二重/单号选码个数上限均为 10
-	if isZu12PlayRule(rule) {
+	// 组选12/4：双区选码个数上限均为 10
+	if isZu12PlayRule(rule) || isZu4PlayRule(rule) {
 		return 10
 	}
 	if isZuxuanPoolRandom(rule) {
@@ -646,9 +666,33 @@ func randomDrawCountMax(rule playRule) int {
 	}
 	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
 	if isAttributeRandom(rule) {
+		// 生肖/尾数/生尾对碰：恰好 2 个属性（生尾=1肖+1尾）
+		if isLHCSxDuipengPlayRule(rule) || isLHCWsDuipengPlayRule(rule) || isLHCSwDuipengPlayRule(rule) {
+			return 2
+		}
 		switch bm {
 		case "baodan":
 			return 1
+		case "daxiao", "danshuang", "dxds":
+			// 五星和值单双/大小、哈希尾数单双/大小：仅 1 选项
+			if isSingleTokenDxdsRule(rule) {
+				return 1
+			}
+			n := len(attributeUniverse(rule))
+			if n < 1 {
+				return 1
+			}
+			return n
+		case "teshu":
+			// 一帆风顺第三方最多 2 个号
+			if isWuxingYifanPlay(rule) {
+				return wuxingYifanMaxPicks
+			}
+			n := len(attributeUniverse(rule))
+			if n < 1 {
+				return 10
+			}
+			return n
 		case "weishu":
 			// 与前端 WEISHU_MAX_BET_UNITS 一致
 			n := len(attributeUniverse(rule))
@@ -699,7 +743,7 @@ func randomDrawCountMax(rule playRule) int {
 		}
 	}
 	if isPerPosDxdsRandom(rule) {
-		return 4
+		return 1
 	}
 	// 一星定位胆：每位最多 9（与前端 YIXING_MAX_PICKS_PER_POS 对齐）
 	if isDingweiTriggerPlay(rule) {
@@ -726,9 +770,76 @@ func isPerPosDxdsRandom(rule playRule) bool {
 	return true
 }
 
+// lhcTemaHcwUniverse 特码/正特冷热宇宙：01–49 + 16 属性 + 3 波色（共 68）。
+func lhcTemaHcwUniverse() []string {
+	out := make([]string, 0, 68)
+	for v := 1; v <= 49; v++ {
+		out = append(out, fmt.Sprintf("%02d", v))
+	}
+	out = append(out,
+		"尾双", "尾单", "尾小", "尾大", "总分大", "总分小", "合小", "合大",
+		"大", "小", "单", "双", "合双", "合单", "总分单", "总分双",
+		"红波", "蓝波", "绿波",
+	)
+	return out
+}
+
+// lhcZodiacUniverse 十二生肖有序宇宙（与前端 LHC_ZODIACS / 2026 马年表一致）。
+func lhcZodiacUniverse() []string {
+	return []string{"马", "蛇", "龙", "兔", "虎", "牛", "鼠", "猪", "狗", "鸡", "猴", "羊"}
+}
+
+// lhcTailUniverse 0–9 尾有序宇宙（与前端 LHC_TAIL_OPTIONS 一致）。
+func lhcTailUniverse() []string {
+	return []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
+}
+
+// lhcZodiacAppearsInDraw 开奖七码中是否出现该生肖对应号码。
+func lhcZodiacAppearsInDraw(zodiac string, balls []string) bool {
+	nums, ok := lhcZodiacNumbers[zodiac]
+	if !ok || len(nums) == 0 {
+		return false
+	}
+	want := make(map[int]bool, len(nums))
+	for _, n := range nums {
+		want[n] = true
+	}
+	for _, n := range lhcAllNumbers(balls) {
+		if want[n] {
+			return true
+		}
+	}
+	return false
+}
+
+// lhcTailAppearsInDraw 开奖七码中是否出现该尾数对应号码。
+func lhcTailAppearsInDraw(tail string, balls []string) bool {
+	t, err := strconv.Atoi(strings.TrimSpace(tail))
+	if err != nil || t < 0 || t > 9 {
+		return false
+	}
+	for _, n := range lhcAllNumbers(balls) {
+		if lhcTailOf(n) == t {
+			return true
+		}
+	}
+	return false
+}
+
 // attributeUniverse 属性/聚合玩法的合法选项宇宙（供随机抽样）。数字池型（不定位/包胆）返回 nil，另行处理。
 func attributeUniverse(rule playRule) []string {
+	if isLHCSxDuipengPlayRule(rule) {
+		return lhcZodiacUniverse()
+	}
+	if isLHCWsDuipengPlayRule(rule) {
+		return lhcTailUniverse()
+	}
+	if isLHCSwDuipengPlayRule(rule) {
+		return append(append([]string{}, lhcZodiacUniverse()...), lhcTailUniverse()...)
+	}
 	switch strings.ToLower(strings.TrimSpace(rule.BetMode)) {
+	case "tema", "zhengte":
+		return lhcTemaHcwUniverse()
 	case "daxiao":
 		return []string{"大", "小"}
 	case "danshuang":
@@ -744,6 +855,13 @@ func attributeUniverse(rule playRule) []string {
 	case "longhubao":
 		return []string{"龙", "虎", "豹"}
 	case "teshu":
+		if isWuxingQuweiDigitPlay(rule) {
+			out := make([]string, 0, 10)
+			for v := 0; v <= 9; v++ {
+				out = append(out, strconv.Itoa(v))
+			}
+			return out
+		}
 		if rule.PlayTemplate == "pc28_std" {
 			return []string{"豹子", "对子", "顺子", "极大", "极小"}
 		}
@@ -833,6 +951,33 @@ func greedyAttributeContentUnderMax(rule playRule, k, maxUnits int) string {
 // randomAttributeContent 从属性/聚合玩法的选项宇宙随机抽 k 个（去重、逗号分隔）。
 // 不定位/包胆为数字池型：抽 k 个不重复号码（不定位下限=选码位数）。
 func randomAttributeContent(rule playRule, k int) string {
+	// 生肖对碰：恰好抽 2 肖，落库 肖A|肖B
+	if isLHCSxDuipengPlayRule(rule) {
+		universe := lhcZodiacUniverse()
+		if len(universe) < 2 {
+			return ""
+		}
+		idx := rand.Perm(len(universe))
+		return universe[idx[0]] + "|" + universe[idx[1]]
+	}
+	// 尾数对碰：恰好抽 2 尾，落库 尾A|尾B
+	if isLHCWsDuipengPlayRule(rule) {
+		universe := lhcTailUniverse()
+		if len(universe) < 2 {
+			return ""
+		}
+		idx := rand.Perm(len(universe))
+		return universe[idx[0]] + "|" + universe[idx[1]]
+	}
+	// 生尾对碰：恰好 1 肖 + 1 尾，落库 肖|尾
+	if isLHCSwDuipengPlayRule(rule) {
+		zs := lhcZodiacUniverse()
+		ts := lhcTailUniverse()
+		if len(zs) == 0 || len(ts) == 0 {
+			return ""
+		}
+		return zs[rand.Intn(len(zs))] + "|" + ts[rand.Intn(len(ts))]
+	}
 	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
 	if bm == "budingwei" || bm == "baodan" {
 		pool := playNumberPool(rule)
@@ -960,10 +1105,14 @@ func zuxuanPoolMinPick(rule playRule) int {
 	case "zu12":
 		// 组选12 为双区「二重,单号」（≥1 + ≥2），不走扁选最少 4 码
 		return 0
-	case "zu60", "zu30", "zu120":
-		if n := playPositionCount(rule); n >= 2 {
-			return n
-		}
+	case "zu4":
+		// 组选4 为双区「三重,单号」（≥1 + ≥1），不走扁选最少 4 码
+		return 0
+	case "zu60", "zu30", "zu20", "zu10", "zu5":
+		// 五星组选双区（如 zu60「1,234」），不走扁选最少 5 码
+		return 0
+	case "zu120":
+		// 组选120 扁选号池至少 5 码
 		return 5
 	}
 	// catalog 标明包胆/和值等：即使位长=3 也不套用组选号池下限
@@ -1067,6 +1216,68 @@ func randomZu12DualPool(wantD, wantS int) string {
 		}
 		content := strings.Join(doubles, "") + "," + strings.Join(singles, "")
 		if countZu12DualZoneBetUnits(content) > 0 {
+			return content
+		}
+	}
+	return fallback
+}
+
+// randomZu4DualPool 组选4 随机双区：三重 wantT 个、单号 wantS 个，拼成「三重,单号」。
+// 单号优先取非三重码，不够再重叠；重抽直至注数 ≥1。
+func randomZu4DualPool(wantT, wantS int) string {
+	if wantT < 1 {
+		wantT = 1
+	}
+	if wantT > 10 {
+		wantT = 10
+	}
+	if wantS < 1 {
+		wantS = 1
+	}
+	if wantS > 10 {
+		wantS = 10
+	}
+	pool := []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
+	const fallback = "1,2"
+	for guard := 0; guard < 80; guard++ {
+		perm := rand.Perm(len(pool))
+		triples := make([]string, 0, wantT)
+		for i := 0; i < wantT && i < len(perm); i++ {
+			triples = append(triples, pool[perm[i]])
+		}
+		if len(triples) < wantT {
+			continue
+		}
+		tripleSet := map[string]bool{}
+		for _, t := range triples {
+			tripleSet[t] = true
+		}
+		singles := make([]string, 0, wantS)
+		for i := wantT; i < len(perm) && len(singles) < wantS; i++ {
+			singles = append(singles, pool[perm[i]])
+		}
+		rest := rand.Perm(len(triples))
+		for _, ri := range rest {
+			if len(singles) >= wantS {
+				break
+			}
+			t := triples[ri]
+			found := false
+			for _, s := range singles {
+				if s == t {
+					found = true
+					break
+				}
+			}
+			if !found {
+				singles = append(singles, t)
+			}
+		}
+		if len(singles) < wantS {
+			continue
+		}
+		content := strings.Join(triples, "") + "," + strings.Join(singles, "")
+		if countZu4DualZoneBetUnits(content) > 0 {
 			return content
 		}
 	}
@@ -1297,6 +1508,10 @@ func buildHotColdPickContent(cfg parsedSchemeConfig, draws [][]string) string {
 	}
 	pool := playNumberPool(cfg.Play)
 
+	// 前二/后二/前三/后三大小单双：按位大/小/单/双（十\n个），每位至多 1 选项
+	if content, ok := buildPerPosDxdsHcwPickContent(cfg, draws); ok {
+		return content
+	}
 	// 属性家族（大小单双/龙虎/和值等）；任选和值按投注选位计频
 	if isHotColdAttributePlay(cfg.Play) {
 		if !hotColdLineEnabled(hc, 0) {
@@ -1304,11 +1519,34 @@ func buildHotColdPickContent(cfg parsedSchemeConfig, draws [][]string) string {
 		}
 		res := HotColdWarmAttributeTiersForPositions(cfg.Play, draws, hc.PositionIdxs)
 		full := append(append([]string{}, res.Hot...), res.Cold...)
-		picked := pickHotColdByRanks(full, resolveHotColdRanksForOrder(hc, 0, len(full)))
+		ranks := resolveHotColdRanksForOrder(hc, 0, len(full))
+		// 生肖/尾数对碰：恰好 2 属性，拼 A|B（勿逗号扁选）
+		if isLHCSxDuipengPlayRule(cfg.Play) || isLHCWsDuipengPlayRule(cfg.Play) {
+			if len(ranks) > 2 {
+				ranks = ranks[:2]
+			}
+			picked := pickHotColdByRanks(full, ranks)
+			if len(picked) < 2 {
+				return ""
+			}
+			if len(picked) > 2 {
+				picked = picked[:2]
+			}
+			return picked[0] + "|" + picked[1]
+		}
+		// 生尾对碰：从排序宇宙中各取 1 肖 + 1 尾
+		if isLHCSwDuipengPlayRule(cfg.Play) {
+			return pickLHCSwDuipengFromHotCold(full, ranks)
+		}
+		picked := pickHotColdByRanks(full, ranks)
 		return strings.Join(sortHotColdBetTokens(picked), ",")
 	}
-	// 任选·组选12：投注选位合并计频 → 二重号/单号双区（勿走扁选整体池）
-	if content, ok := buildRenxuanZu12HcwPickContent(cfg, draws, pool); ok {
+	// 组选12（任四/四星等）：合并计频 → 二重号/单号双区（勿走扁选整体池）
+	if content, ok := buildZu12HcwPickContent(cfg, draws, pool); ok {
+		return content
+	}
+	// 组选4（任四/四星等）：合并计频 → 三重号/单号双区
+	if content, ok := buildZu4HcwPickContent(cfg, draws, pool); ok {
 		return content
 	}
 	// 号码整体频次（组选/不定位/包胆）；任选组选复式按投注选位合并计频
@@ -1328,12 +1566,19 @@ func buildHotColdPickContent(cfg parsedSchemeConfig, draws [][]string) string {
 		if isYimaBudingweiPlayRule(cfg.Play) && len(ranks) > 2 {
 			ranks = ranks[:2]
 		}
+		// 一帆风顺最多 2 个号（超过 →「投注数字不可超过两位」）
+		if isWuxingYifanPlay(cfg.Play) && len(ranks) > wuxingYifanMaxPicks {
+			ranks = ranks[:wuxingYifanMaxPicks]
+		}
 		picked := pickHotColdByRanks(full, ranks)
 		if isBaodanPlayRule(cfg.Play) && len(picked) > 1 {
 			picked = picked[:1]
 		}
 		if isYimaBudingweiPlayRule(cfg.Play) && len(picked) > 2 {
 			picked = picked[:2]
+		}
+		if isWuxingYifanPlay(cfg.Play) && len(picked) > wuxingYifanMaxPicks {
+			picked = picked[:wuxingYifanMaxPicks]
 		}
 		return strings.Join(sortHotColdBetTokens(picked), ",")
 	}
@@ -1365,17 +1610,22 @@ func buildHotColdPickContent(cfg parsedSchemeConfig, draws [][]string) string {
 	return strings.Join(lines, "\n")
 }
 
-// buildRenxuanZu12HcwPickContent 任选组选12 冷热：按投注选位合并计频（与任四组选6 同口径），
-// ranks[0]→二重号、ranks[1]→单号，拼成「二重,单号」。凑不足合法双区时返回空串（ok=true），由 Skip 跳过当期。
-func buildRenxuanZu12HcwPickContent(cfg parsedSchemeConfig, draws [][]string, pool []string) (string, bool) {
-	if !isRenxuanNeedsPositionRule(cfg.Play) || !isZu12PlayRule(cfg.Play) {
+// buildZu12HcwPickContent 组选12 冷热：ranks[0]→二重号、ranks[1]→单号，拼「二重,单号」。
+// 任选按投注选位合并计频；四星等定点星段按 SegmentStart/Len 合并计频。
+// 凑不足合法双区时返回空串（ok=true），由 Skip 跳过当期。
+func buildZu12HcwPickContent(cfg parsedSchemeConfig, draws [][]string, pool []string) (string, bool) {
+	if !isZu12PlayRule(cfg.Play) {
 		return "", false
 	}
 	hc := cfg.HotCold
 	if hc == nil {
 		return "", false
 	}
-	hot, cold := hotColdWarmTiersOverallForPositions(draws, cfg.Play, pool, hc.PositionIdxs)
+	var posIdxs []int
+	if isRenxuanNeedsPositionRule(cfg.Play) {
+		posIdxs = hc.PositionIdxs
+	}
+	hot, cold := hotColdWarmTiersOverallForPositions(draws, cfg.Play, pool, posIdxs)
 	full := append(append([]string{}, hot...), cold...)
 	if len(full) == 0 {
 		return "", true
@@ -1392,6 +1642,43 @@ func buildRenxuanZu12HcwPickContent(cfg parsedSchemeConfig, draws [][]string, po
 		return "", true
 	}
 	return content, true
+}
+
+// buildZu4HcwPickContent 组选4 冷热：ranks[0]→三重号、ranks[1]→单号，拼「三重,单号」。
+func buildZu4HcwPickContent(cfg parsedSchemeConfig, draws [][]string, pool []string) (string, bool) {
+	if !isZu4PlayRule(cfg.Play) {
+		return "", false
+	}
+	hc := cfg.HotCold
+	if hc == nil {
+		return "", false
+	}
+	var posIdxs []int
+	if isRenxuanNeedsPositionRule(cfg.Play) {
+		posIdxs = hc.PositionIdxs
+	}
+	hot, cold := hotColdWarmTiersOverallForPositions(draws, cfg.Play, pool, posIdxs)
+	full := append(append([]string{}, hot...), cold...)
+	if len(full) == 0 {
+		return "", true
+	}
+	triplesTok := pickHotColdByRanks(full, resolveHotColdRanksForOrder(hc, 0, len(full)))
+	singlesTok := pickHotColdByRanks(full, resolveHotColdRanksForOrder(hc, 1, len(full)))
+	triples := uniqueDigitRunSchemes(strings.Join(triplesTok, ""))
+	singles := uniqueDigitRunSchemes(strings.Join(singlesTok, ""))
+	if len(triples) < 1 || len(singles) < 1 {
+		return "", true
+	}
+	content := triples + "," + singles
+	if countZu4DualZoneBetUnits(content) <= 0 {
+		return "", true
+	}
+	return content, true
+}
+
+// buildRenxuanZu12HcwPickContent 兼容旧名。
+func buildRenxuanZu12HcwPickContent(cfg parsedSchemeConfig, draws [][]string, pool []string) (string, bool) {
+	return buildZu12HcwPickContent(cfg, draws, pool)
 }
 
 // buildRenxuanHcwOpenPosPickContent 任选直选单式/混合组选冷热：按 openPositionIdxs（k 个绝对位）取各列冷热号。
@@ -1676,9 +1963,18 @@ func isHotColdDigitOverall(rule playRule) bool {
 	if isHunhePlayRule(rule) {
 		return false
 	}
+	// 组选12/4、五星组选60/30/20/10/5 走双区冷热，勿落扁选整体池
+	if isZu12PlayRule(rule) || isZu4PlayRule(rule) ||
+		isZu60PlayRule(rule) || isZu30PlayRule(rule) ||
+		isZu20PlayRule(rule) || isZu10PlayRule(rule) || isZu5PlayRule(rule) {
+		return false
+	}
+	if isWuxingQuweiDigitPlay(rule) {
+		return true
+	}
 	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
 	switch bm {
-	case "zu3", "zu6", "zu24", "zu12", "zu60", "zu30", "zu120", "budingwei", "baodan",
+	case "zu3", "zu6", "zu24", "zu120", "budingwei", "baodan",
 		"zuxuan_fs", "zuxuan_ds":
 		// 组选单式勿走按位「5\n6」——guaji 计 0 注；整体号频后由 Format 展成整注
 		return true
@@ -1695,13 +1991,122 @@ func isHotColdDigitOverall(rule playRule) bool {
 // 于是给「后三和值尾数」选出 "180,280,380" 这种多位内容，第三方直接拒单，
 // 注单永远卡在 pending。weishu 就这么漏了很久。
 func isHotColdAttributePlay(rule playRule) bool {
+	// 五星趣味：按球号整体频次（与号池型一致），勿当豹子/对子/顺子选项计频
+	if isWuxingQuweiDigitPlay(rule) {
+		return false
+	}
+	// 按位大小单双走 buildPerPosDxdsHcwPickContent，勿扁选成「大,小」
+	if isPerPosDxdsRandom(rule) {
+		return false
+	}
+	if isLHCSxDuipengPlayRule(rule) || isLHCWsDuipengPlayRule(rule) || isLHCSwDuipengPlayRule(rule) {
+		return true
+	}
 	switch strings.ToLower(strings.TrimSpace(rule.BetMode)) {
 	case "daxiao", "danshuang", "dxds", "zhuangxian",
 		"longhu", "longhuhe", "longhubao", "teshu",
-		"hezhi", "kuadu", "weishu":
+		"hezhi", "kuadu", "weishu",
+		"tema", "zhengte":
 		return true
 	}
 	return false
+}
+
+// pickLHCSwDuipengFromHotCold 冷热宇宙（肖+尾）中按秩优先各取 1 肖、1 尾 → 肖|尾。
+func pickLHCSwDuipengFromHotCold(full []string, ranks []int) string {
+	ranked := pickHotColdByRanks(full, ranks)
+	scan := append(append([]string{}, ranked...), full...)
+	zSet := make(map[string]bool, 12)
+	for _, z := range lhcZodiacUniverse() {
+		zSet[z] = true
+	}
+	tSet := make(map[string]bool, 10)
+	for _, t := range lhcTailUniverse() {
+		tSet[t] = true
+	}
+	var z, t string
+	for _, tok := range scan {
+		if z == "" && zSet[tok] {
+			z = tok
+		}
+		if t == "" && tSet[tok] {
+			t = tok
+		}
+		if z != "" && t != "" {
+			return z + "|" + t
+		}
+	}
+	return ""
+}
+
+// buildPerPosDxdsHcwPickContent 按位大小单双冷热：每位按该位球号计大/小/单/双频次，
+// 再按 ranks 取号；每位最多 1 选项，内容为「十\n个」。
+func buildPerPosDxdsHcwPickContent(cfg parsedSchemeConfig, draws [][]string) (string, bool) {
+	if !isPerPosDxdsRandom(cfg.Play) {
+		return "", false
+	}
+	hc := cfg.HotCold
+	if hc == nil {
+		return "", true
+	}
+	universe := []string{"大", "小", "单", "双"}
+	n := cfg.Play.SegmentLen
+	if n <= 0 {
+		n = playPositionCount(cfg.Play)
+	}
+	if n <= 0 {
+		return "", true
+	}
+	enabled := hotColdPositionEnabled(hc, n)
+	lines := make([]string, n)
+	filled := 0
+	for i := 0; i < n; i++ {
+		if !enabled[i] {
+			continue
+		}
+		pos := hotColdPositionIdx(cfg.Play, i)
+		counts := map[string]int{"大": 0, "小": 0, "单": 0, "双": 0}
+		for _, balls := range draws {
+			if pos < 0 || pos >= len(balls) {
+				continue
+			}
+			d := atoiBall(balls[pos])
+			if d >= 5 {
+				counts["大"]++
+			} else {
+				counts["小"]++
+			}
+			if d%2 == 1 {
+				counts["单"]++
+			} else {
+				counts["双"]++
+			}
+		}
+		sorted := append([]string{}, universe...)
+		origIdx := map[string]int{"大": 0, "小": 1, "单": 2, "双": 3}
+		sort.SliceStable(sorted, func(a, b int) bool {
+			if counts[sorted[a]] != counts[sorted[b]] {
+				return counts[sorted[a]] > counts[sorted[b]]
+			}
+			return origIdx[sorted[a]] < origIdx[sorted[b]]
+		})
+		ranks := resolveHotColdRanksForOrder(hc, i, len(sorted))
+		if len(ranks) > 1 {
+			ranks = ranks[:1]
+		}
+		picked := pickHotColdByRanks(sorted, ranks)
+		if len(picked) > 1 {
+			picked = picked[:1]
+		}
+		lines[i] = strings.Join(picked, ",")
+		if lines[i] != "" {
+			filled++
+		}
+	}
+	if filled == 0 {
+		return "", true
+	}
+	return strings.Join(lines, "\n"), true
 }
 
 func hotColdPositionIdx(rule playRule, lineIdx int) int {

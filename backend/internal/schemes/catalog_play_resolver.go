@@ -20,6 +20,9 @@ func resolveCatalogPlayRule(cfg map[string]interface{}) (playRule, bool) {
 			playMethod = strings.TrimSpace(stringVal(cfg, "playMethodLabel"))
 		}
 		rule := resolveSSCPlayRule(typeID, subID, betMode, playMethod)
+		// resolveSSCPlayRule 结算用统一写成 ssc_std；下单查 sub_plays 须保留彩种真实模板
+		//（波场秒彩=fast_ssc_std，哈希玩法 g017 仅挂在快速彩模板上）。
+		rule.PlayTemplate = template
 		rule.HezhiZuxuan = detectHezhiZuxuan(cfg, rule, playMethod)
 		return rule, true
 	}

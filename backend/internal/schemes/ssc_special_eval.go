@@ -61,10 +61,18 @@ func sscBetModeEvaluator(mode string, rule playRule) (func(playRule, []string, s
 		return evaluateZu24, true
 	case "zu12":
 		return evaluateZu12, true
+	case "zu4":
+		return evaluateZu4, true
 	case "zu60":
 		return evaluateZu60, true
 	case "zu30":
 		return evaluateZu30, true
+	case "zu20":
+		return evaluateZu20, true
+	case "zu10":
+		return evaluateZu10, true
+	case "zu5":
+		return evaluateZu5, true
 	case "zu120":
 		return evaluateZu120, true
 	default:
@@ -520,35 +528,31 @@ func evaluateDxds(rule playRule, balls []string, content string) betEvaluation {
 	if len(seg) == 0 {
 		return betEvaluation{BetUnits: 1, Odds: odds}
 	}
-	// 前二/后二/前三/后三大小单双：按位多行（十\n个），注数=位积，须各位同时命中
+	// 前二/后二/前三/后三大小单双：按位多行（十\n个），每位仅 1 选项，须各位同时命中
 	if !isWuxingSumDxdsRule(rule) && rule.SegmentLen > 1 && strings.Contains(content, "\n") {
 		lines := splitGroupLinesPad(content, rule.SegmentLen)
-		units := 1
 		allHit := true
 		for i := 0; i < rule.SegmentLen && i < len(seg); i++ {
 			picks := parseTextTokens(lines[i])
 			if len(picks) == 0 {
 				return betEvaluation{BetUnits: 0, Odds: odds}
 			}
-			units *= len(picks)
-			posHit := false
-			for _, pick := range picks {
-				if dxdsPickHit(rule, pick, []string{seg[i]}) {
-					posHit = true
-					break
-				}
-			}
-			if !posHit {
+			// 第三方按位 wire 每位仅 1 选项；多选时与 wire 一致取首个
+			if !dxdsPickHit(rule, picks[0], []string{seg[i]}) {
 				allHit = false
 			}
 		}
-		return betEvaluation{Hit: allHit, BetUnits: units, Odds: odds}
+		return betEvaluation{Hit: allHit, BetUnits: 1, Odds: odds}
 	}
 	picks := parseTextTokens(content)
-	units := len(picks)
-	if units <= 0 {
-		units = 1
+	if len(picks) == 0 {
+		return betEvaluation{BetUnits: 0, Odds: odds}
 	}
+	// 五星和值单双/大小、哈希尾数单双/大小：第三方仅 1 选项
+	if isSingleTokenDxdsRule(rule) {
+		return betEvaluation{Hit: dxdsPickHit(rule, picks[0], seg), BetUnits: 1, Odds: odds}
+	}
+	units := len(picks)
 	hit := false
 	for _, pick := range picks {
 		if dxdsPickHit(rule, pick, seg) {
@@ -560,6 +564,25 @@ func evaluateDxds(rule playRule, balls []string, content string) betEvaluation {
 }
 
 func isWuxingSumDxdsRule(rule playRule) bool {
+	switch strings.TrimSpace(rule.CatalogSubID) {
+	case "263", "264", "268", "269":
+		return true
+	}
+	switch strings.TrimSpace(rule.SubPlayID) {
+	case "263", "264", "268", "269":
+		return true
+	}
+	// 哈希玩法 g017：389=和值单双（勿把 387/390 尾数算进和值）
+	if rule.PlayTypeID == "g017" {
+		switch strings.TrimSpace(rule.CatalogSubID) {
+		case "389":
+			return true
+		}
+		switch strings.TrimSpace(rule.SubPlayID) {
+		case "389":
+			return true
+		}
+	}
 	text := strings.ToLower(rule.CatalogSubID + " " + rule.SubPlayID + " " + rule.BetMode + " " + rule.PlayTypeID)
 	label := rule.CatalogSubID + rule.SubPlayID
 	if strings.Contains(label, "和值大小") || strings.Contains(label, "和值单双") ||
@@ -572,6 +595,29 @@ func isWuxingSumDxdsRule(rule playRule) bool {
 			strings.Contains(text, "大小") || strings.Contains(text, "单双")
 	}
 	return false
+}
+
+// isHashWeishuDxdsRule 哈希玩法尾数单双/大小（第三方仅 1 选项；按尾数位判，非五星和值）。
+func isHashWeishuDxdsRule(rule playRule) bool {
+	label := rule.CatalogSubID + rule.SubPlayID
+	if strings.Contains(label, "尾数单双") || strings.Contains(label, "尾数大小") {
+		return true
+	}
+	sid := strings.TrimSpace(rule.CatalogSubID)
+	if sid == "" {
+		sid = strings.TrimSpace(rule.SubPlayID)
+	}
+	switch sid {
+	case "267", "270", "387", "390":
+		// 267/387=尾数单双，270/390=尾数大小；仅哈希 g017（SSC 下 270 是前二大小单双）
+		return rule.PlayTypeID == "g017"
+	}
+	return false
+}
+
+// isSingleTokenDxdsRule 单 token 大小/单双：五星和值 + 哈希尾数，第三方均仅允许 1 选项。
+func isSingleTokenDxdsRule(rule playRule) bool {
+	return isWuxingSumDxdsRule(rule) || isHashWeishuDxdsRule(rule)
 }
 
 func dxdsPickHit(rule playRule, pick string, seg []string) bool {

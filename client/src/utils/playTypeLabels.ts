@@ -18,7 +18,7 @@ export const PLAY_TYPE_LABELS: Record<string, string> = {
   dxds: '大小单双',
   hezhi: '和值',
   kuadu: '跨度',
-  // lhc_std
+  // lhc_std（语义 id；rules/v2 数字 g00x 与 SSC 冲突，勿在此写 g001→特码）
   tema: '特码',
   erquanzhong: '二全中',
   erzhongte: '二中特',

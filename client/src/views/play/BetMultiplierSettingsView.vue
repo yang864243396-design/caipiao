@@ -419,25 +419,18 @@ async function onConfirm() {
   const schemeId = String(route.query.schemeId ?? '').trim()
   const persist = shouldPersistBetMultiplier()
 
-  if (persist && isDraftSchemeId(schemeId)) {
-    const kind = persistKindLabel()
-    saveDraftBetMultiplier(route.query as Record<string, unknown>, kind, buildBetMultiplierPayload())
-    ElMessage.success('已保存倍投方式')
-    returnToEntry({ bmsKind: kind })
-    return
-  }
-
-  // 方案配置/详情：仅暂存，由编辑页「完成」统一提交（不在此页落库）
+  // 方案配置/详情/草稿：仅暂存，由编辑页「完成」统一提交（不在此页落库）
   if (
     persist &&
-    (returnName === 'advanced-scheme-edit' ||
+    (isDraftSchemeId(schemeId) ||
+      returnName === 'advanced-scheme-edit' ||
       returnName === 'scheme-detail' ||
       String(route.query.detailReturn ?? '') === 'scheme-detail')
   ) {
     const kind = persistKindLabel()
     const payload = buildBetMultiplierPayload()
     saveSchemeEditBmPending(schemeId, kind, payload)
-    // 草稿方案同时写 localStorage，避免只靠 pending / router.back 丢配置
+    // 草稿同时写 localStorage，避免只靠 pending / router.back 丢配置
     if (isDraftSchemeId(schemeId)) {
       saveDraftBetMultiplier(route.query as Record<string, unknown>, kind, payload)
     }

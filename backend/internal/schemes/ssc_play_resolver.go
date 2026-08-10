@@ -14,6 +14,10 @@ func resolveSSCPlayRule(typeID, subID, betMode string, playMethod ...string) pla
 	}
 	labelHint := strings.TrimSpace(method + " " + subID)
 
+	// 数字 rule id / 仅有玩法名时补全五星组选 betMode（否则 zu60「1,234」被扁选展开成 4 码误报「号码池至少选择 5」）
+	if betMode == "" {
+		betMode = inferWuxingZuBetMode(subID, method)
+	}
 	rule := playRule{
 		PlayTemplate: "ssc_std",
 		PlayTypeID:   typeID,
@@ -24,6 +28,18 @@ func resolveSSCPlayRule(typeID, subID, betMode string, playMethod ...string) pla
 	if labelHint != "" && (typeID == "budingwei" || typeID == "g009" || strings.Contains(method, "不定位")) {
 		// 数字 guaji rule id 无法表达前四/二码等，合并 playMethod 供结算解析
 		rule.CatalogSubID = labelHint
+	}
+	// 五星组选：合并玩法名，供 isZu60PlayRule 等在仅有数字 subId 时识别双区
+	if labelHint != "" && (typeID == "g015" || typeID == "wuxing") && isWuxingZuBetMode(betMode) {
+		rule.CatalogSubID = labelHint
+	}
+	// 五星趣味（一帆风顺等）：数字 subId=162… 须合并玩法名，才能与前三「特殊号」文字选项区分
+	if labelHint != "" && (typeID == "g015" || typeID == "wuxing") &&
+		(betMode == "teshu" || isWuxingQuweiLabel(labelHint) || isWuxingQuweiSubID(subID)) {
+		rule.CatalogSubID = labelHint
+		if betMode == "" || betMode == "fushi" || betMode == "1" {
+			rule.BetMode = "teshu"
+		}
 	}
 	if labelHint != "" && (typeID == "dxds" || typeID == "g016" || strings.Contains(method, "大小单双") ||
 		strings.Contains(method, "和值大小") || strings.Contains(method, "和值单双")) {
@@ -303,6 +319,50 @@ func sscSegmentRange(typeID string) (start, length int) {
 		return 0, 2
 	default:
 		return 0, 1
+	}
+}
+
+// inferWuxingZuBetMode 从数字 rule id 或「组选60」等文案推断五星组选 betMode。
+func inferWuxingZuBetMode(subID, playMethod string) string {
+	sid := strings.TrimSpace(subID)
+	switch sid {
+	case "156":
+		return "zu120"
+	case "157":
+		return "zu60"
+	case "158":
+		return "zu30"
+	case "159":
+		return "zu20"
+	case "160":
+		return "zu10"
+	case "161":
+		return "zu5"
+	}
+	text := strings.TrimSpace(playMethod) + " " + sid
+	switch {
+	case strings.Contains(text, "组选120") || strings.Contains(strings.ToLower(text), "zu120"):
+		return "zu120"
+	case strings.Contains(text, "组选60") || strings.Contains(strings.ToLower(text), "zu60"):
+		return "zu60"
+	case strings.Contains(text, "组选30") || strings.Contains(strings.ToLower(text), "zu30"):
+		return "zu30"
+	case strings.Contains(text, "组选20") || strings.Contains(strings.ToLower(text), "zu20"):
+		return "zu20"
+	case strings.Contains(text, "组选10") || strings.Contains(strings.ToLower(text), "zu10"):
+		return "zu10"
+	case strings.Contains(text, "组选5") || strings.Contains(strings.ToLower(text), "zu5"):
+		return "zu5"
+	}
+	return ""
+}
+
+func isWuxingZuBetMode(betMode string) bool {
+	switch strings.ToLower(strings.TrimSpace(betMode)) {
+	case "zu120", "zu60", "zu30", "zu20", "zu10", "zu5":
+		return true
+	default:
+		return false
 	}
 }
 

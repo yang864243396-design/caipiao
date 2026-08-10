@@ -559,15 +559,21 @@ func (c *Client) GetWebBet(ctx context.Context, accessToken, betID string) (*Web
 			}
 		}
 	}
-	items, err := c.ListWebBets(ctx, accessToken, 30, 1)
-	if err != nil {
-		return nil, err
-	}
+	// 与 GetWebBetRaw 对齐：多页扫描，降低因仅扫最近 30 条而 miss 导致长期无第三方毛派奖。
 	want := betID
-	for _, it := range items {
-		if strconv.FormatInt(it.ID, 10) == want {
-			copy := it
-			return &copy, nil
+	for page := 1; page <= 3; page++ {
+		items, err := c.ListWebBets(ctx, accessToken, 50, page)
+		if err != nil {
+			return nil, err
+		}
+		for _, it := range items {
+			if strconv.FormatInt(it.ID, 10) == want {
+				copy := it
+				return &copy, nil
+			}
+		}
+		if len(items) < 50 {
+			break
 		}
 	}
 	return nil, fmt.Errorf("guaji get bet: id %s not found", betID)

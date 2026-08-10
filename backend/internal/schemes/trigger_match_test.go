@@ -23,11 +23,47 @@ func TestSupportsAdvTriggerBetPC28(t *testing.T) {
 		{"g006", "13", "一星", "定位胆", true},
 		{"g010", "233", "2.0模式", "和值", true},
 		{"g010", "999", "2.0模式", "特殊号", false},
+		{"g001", "272", "特码", "特码A", true},
+		{"tema", "tema_a", "特码", "特码A", true},
+		{"g002", "273", "正特码", "正一特", true},
+		{"erquanzhong", "fushi", "二全中", "复式", true},
+		{"g003", "279", "连码", "二全中复式", true},
+		{"erquanzhong", "tuotou", "二全中", "拖头", false},
 	}
 	for _, c := range cases {
 		if got := SupportsAdvTriggerBet(c.typeID, c.subID, c.group, c.label); got != c.want {
 			t.Errorf("SupportsAdvTriggerBet(%q,%q,%q,%q)=%v want %v", c.typeID, c.subID, c.group, c.label, got, c.want)
 		}
+	}
+}
+
+func TestTriggerOpenMatchesLHCTema(t *testing.T) {
+	t.Parallel()
+	// 六合 7 球：前 6 正码 + 特码；开某投某「开出」应对特码，勿比对正码一
+	rule := playRule{PlayTemplate: "lhc_std", BetMode: "tema", PlayTypeID: "g001", CatalogSubID: "272"}
+	balls := []string{"01", "12", "23", "34", "45", "06", "07"}
+	if !triggerOpenMatches(rule, balls, "07") {
+		t.Fatal("tema open 07 should match special ball")
+	}
+	if !triggerOpenMatches(rule, balls, "7") {
+		t.Fatal("tema open 7 should normalize-match 07")
+	}
+	if triggerOpenMatches(rule, balls, "01") {
+		t.Fatal("tema must not match zhengma1 as open")
+	}
+	zheng := playRule{PlayTemplate: "lhc_std", BetMode: "zhengte", PlayTypeID: "g002", CatalogSubID: "zheng1_te"}
+	if !triggerOpenMatches(zheng, balls, "01") {
+		t.Fatal("zheng1_te should match balls[0]")
+	}
+	if triggerOpenMatches(zheng, balls, "07") {
+		t.Fatal("zheng1_te must not match tema ball")
+	}
+	er2 := playRule{PlayTemplate: "lhc_std", BetMode: "fushi", PlayTypeID: "erquanzhong", CatalogSubID: "277"}
+	if !triggerOpenMatches(er2, balls, "07") {
+		t.Fatal("二全中复式 open should match tema")
+	}
+	if triggerOpenMatches(er2, balls, "01") {
+		t.Fatal("二全中复式 must not match zhengma1 as open")
 	}
 }
 

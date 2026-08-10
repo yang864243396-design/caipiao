@@ -904,7 +904,11 @@ func isPositionDxds(meta RuleMeta) bool {
 
 func formatDxdsBetContent(meta RuleMeta, groupContent string) string {
 	if isSingleTokenTextDxds(meta) {
-		return formatTextTokens(groupContent)
+		// 五星和值单双/大小等：第三方仅 1 选项；多选时取首个
+		if toks := splitPickTokens(groupContent); len(toks) > 0 {
+			return toks[0]
+		}
+		return strings.TrimSpace(groupContent)
 	}
 	_, length := segmentRange(meta)
 	if length <= 0 {

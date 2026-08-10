@@ -4,6 +4,9 @@ import {
   LHC_NUMBERS,
   LHC_TAIL_OPTIONS,
   LHC_ZODIACS,
+  isLhcSxDuipengConfig,
+  isLhcWsDuipengConfig,
+  isLhcSwDuipengConfig,
   lhcAttrOptions,
 } from '@/constants/lhcPlay'
 import {
@@ -13,10 +16,14 @@ import {
 } from '@/utils/betPayload'
 import {
   digitOptionsForConfig,
+  lhcTailChipLabel,
+  lhcTailChipSub,
+  lhcZodiacChipSub,
   poolMaxPicksForConfig,
   schemeGroupUsesPickPanel,
   textPickOptionsForConfig,
   togglePoolPick,
+  toggleSwDuipengPick,
   useCompactPickChips,
 } from '@/utils/pickPanelOptions'
 
@@ -59,6 +66,42 @@ const lhcPickOptions = computed((): readonly string[] => {
   return []
 })
 
+const showZodiacNums = computed(() => {
+  const c = props.config
+  const sid = String(c.catalogSubId ?? c.subPlayId ?? '')
+  return (
+    isLhcSxDuipengConfig(c) ||
+    c.betMode === 'sx_dp' ||
+    c.subPlayId === 'sx_dp' ||
+    sid === '281' ||
+    sid === '287' ||
+    sid === '293'
+  )
+})
+const showTailNums = computed(() => {
+  const c = props.config
+  const sid = String(c.catalogSubId ?? c.subPlayId ?? '')
+  return (
+    isLhcWsDuipengConfig(c) ||
+    c.betMode === 'ws_dp' ||
+    c.subPlayId === 'ws_dp' ||
+    sid === '282' ||
+    sid === '288' ||
+    sid === '294'
+  )
+})
+const showSwDuipeng = computed(() => {
+  const c = props.config
+  const sid = String(c.catalogSubId ?? c.subPlayId ?? '')
+  return (
+    isLhcSwDuipengConfig(c) ||
+    c.betMode === 'sw_dp' ||
+    c.subPlayId === 'sw_dp' ||
+    sid === '283' ||
+    sid === '289' ||
+    sid === '295'
+  )
+})
 function syncFromModel(content: string) {
   // 单式等走 textarea 时不挂载选号态，避免把「123」解析成个位号池再回写清空
   if (!showPanel.value) {
@@ -126,6 +169,10 @@ watch([pickDigits, pickLines], emitContent, { deep: true })
 
 function togglePickDigit(d: string) {
   if (props.disabled) return
+  if (showSwDuipeng.value) {
+    pickDigits.value = toggleSwDuipengPick(pickDigits.value, d)
+    return
+  }
   pickDigits.value = togglePoolPick(pickDigits.value, d, poolMaxPicksForConfig(props.config))
 }
 
@@ -147,7 +194,44 @@ function isLineDigitSelected(lineIndex: number, d: string) {
 
 <template>
   <div v-if="showPanel" class="sgp-panel" :class="{ 'is-disabled': disabled }">
-    <template v-if="textPickOptions.length && config.inputMode === 'multiline'">
+    <!-- 生肖对碰 / 尾数对碰 / 生尾对碰：与生尾对碰同一套 chip（主文案 + 号码副文案） -->
+    <template v-if="showZodiacNums || showTailNums || showSwDuipeng">
+      <div v-if="showZodiacNums || showSwDuipeng" class="sgp-row sgp-row--sw">
+        <span class="sgp-pos">生肖</span>
+        <div class="sgp-chips sgp-chips--lhc sgp-chips--zodiac">
+          <button
+            v-for="d in LHC_ZODIACS"
+            :key="`z-${d}`"
+            type="button"
+            class="sgp-chip sgp-chip--lhc sgp-chip--zodiac"
+            :class="{ 'is-active': pickDigits.includes(d) }"
+            :disabled="disabled"
+            @click="togglePickDigit(d)"
+          >
+            <span class="sgp-chip-zodiac">{{ d }}</span>
+            <span class="sgp-chip-nums">{{ lhcZodiacChipSub(d) }}</span>
+          </button>
+        </div>
+      </div>
+      <div v-if="showTailNums || showSwDuipeng" class="sgp-row sgp-row--sw">
+        <span class="sgp-pos">尾数</span>
+        <div class="sgp-chips sgp-chips--lhc sgp-chips--zodiac">
+          <button
+            v-for="d in LHC_TAIL_OPTIONS"
+            :key="`t-${d}`"
+            type="button"
+            class="sgp-chip sgp-chip--lhc sgp-chip--zodiac"
+            :class="{ 'is-active': pickDigits.includes(d) }"
+            :disabled="disabled"
+            @click="togglePickDigit(d)"
+          >
+            <span class="sgp-chip-zodiac">{{ lhcTailChipLabel(d) }}</span>
+            <span class="sgp-chip-nums">{{ lhcTailChipSub(d) }}</span>
+          </button>
+        </div>
+      </div>
+    </template>
+    <template v-else-if="textPickOptions.length && config.inputMode === 'multiline'">
       <div v-for="(label, li) in config.segmentLabels" :key="label" class="sgp-row">
         <span class="sgp-pos">{{ label }}</span>
         <div class="sgp-chips" :class="{ 'sgp-chips--single-row': singleRowChips }">
@@ -271,6 +355,12 @@ function isLineDigitSelected(lineIndex: number, d: string) {
   white-space: nowrap;
 }
 
+/* 生肖/尾数对碰：左侧标签与多行 chip 顶部对齐 */
+.sgp-row--sw .sgp-pos {
+  line-height: 1.25;
+  padding-top: 0.45rem;
+}
+
 .sgp-chips {
   display: flex;
   flex-wrap: wrap;
@@ -309,6 +399,39 @@ function isLineDigitSelected(lineIndex: number, d: string) {
 .sgp-chip--lhc {
   min-width: 2.25rem;
   font-size: 12px;
+}
+
+.sgp-chips--zodiac {
+  max-height: none;
+}
+
+.sgp-chip--zodiac {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0.1rem;
+  min-width: 7.5rem;
+  height: auto;
+  min-height: 2.5rem;
+  padding: 0.35rem 0.5rem;
+  line-height: 1.25;
+}
+
+.sgp-chip-zodiac {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sgp-chip-nums {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+  font-variant-numeric: tabular-nums;
+  font-family: Inter, 'Noto Sans SC', sans-serif;
+}
+
+.sgp-chip--zodiac.is-active .sgp-chip-nums {
+  color: rgb(0 80 203 / 75%);
 }
 
 .sgp-chip.is-active {

@@ -23,6 +23,44 @@ func TestEvaluateLHCErquanzhong(t *testing.T) {
 	}
 }
 
+func TestEvaluateLHCSxDuipeng(t *testing.T) {
+	rule := resolveLHCPlayRule("g003", "281", "sx_dp")
+	if rule.BetMode != "sx_dp" || rule.PlayTypeID != "g003" {
+		t.Fatalf("rule=%+v", rule)
+	}
+	// 马=1,13,25,37,49 蛇=2,14,26,38；开奖含 13 与 14 → 命中
+	balls := []string{"13", "14", "25", "33", "41", "7", "49"}
+	ev := evaluatePlayHit(rule, balls, "马|蛇", false, "", 0)
+	if !ev.Hit || ev.BetUnits != 20 {
+		t.Fatalf("马|蛇 want hit units=20, ev=%+v", ev)
+	}
+	evFlat := evaluatePlayHit(rule, balls, "马,蛇", false, "", 0)
+	if !evFlat.Hit || evFlat.BetUnits != 20 {
+		t.Fatalf("flat 马,蛇 want hit units=20, ev=%+v", evFlat)
+	}
+	ev16 := evaluatePlayHit(rule, balls, "蛇|龙", false, "", 0)
+	if ev16.BetUnits != 16 {
+		t.Fatalf("蛇|龙 want units=16, ev=%+v", ev16)
+	}
+}
+
+func TestEvaluateLHCErquanzhongTuotouFlat(t *testing.T) {
+	rule := resolveLHCPlayRule("erquanzhong", "tuotou", "tuotou")
+	balls := []string{"3", "12", "25", "33", "41", "7", "49"}
+	// 扁选：胆 03，拖 12,01 → 组合 (03,12) 命中正码；注数 = C(2,1) = 2
+	ev := evaluatePlayHit(rule, balls, "03,12,01", false, "", 0)
+	if !ev.Hit {
+		t.Fatalf("want flat tuotou hit, ev=%+v", ev)
+	}
+	if ev.BetUnits != 2 {
+		t.Fatalf("units=%d want 2", ev.BetUnits)
+	}
+	evBar := evaluatePlayHit(rule, balls, "03|12,01", false, "", 0)
+	if !evBar.Hit || evBar.BetUnits != 2 {
+		t.Fatalf("bar tuotou want hit units=2, ev=%+v", evBar)
+	}
+}
+
 func TestEvaluateLHCBuzhong5(t *testing.T) {
 	rule := resolveLHCPlayRule("buzhong_xuanyi", "5bz", "buzhong")
 	balls := []string{"3", "12", "25", "33", "41", "7", "49"}

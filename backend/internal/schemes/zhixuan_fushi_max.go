@@ -64,10 +64,26 @@ func countZhixuanFushiBetUnits(content string, segLen int) int {
 	if segLen <= 1 {
 		return 0
 	}
-	lines := splitGroupLinesPad(content, segLen)
+	content = strings.TrimSpace(strings.ReplaceAll(content, "，", ","))
+	if content == "" {
+		return 0
+	}
+	var parts []string
+	if strings.ContainsAny(content, "\n\r") {
+		parts = splitGroupLinesPad(content, segLen)
+	} else {
+		// wire / 单行按位：如前后四直选组合 `1,2,3,4`、复式 `12,34,56,78`
+		parts = strings.Split(content, ",")
+		if len(parts) != segLen {
+			return 0
+		}
+		for i := range parts {
+			parts[i] = strings.TrimSpace(parts[i])
+		}
+	}
 	units := 1
 	for i := 0; i < segLen; i++ {
-		n := len(parseDigitTokens(lines[i]))
+		n := len(parseFushiPositionDigits(playRule{}, parts[i]))
 		if n == 0 {
 			return 0
 		}

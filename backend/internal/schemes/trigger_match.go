@@ -18,6 +18,30 @@ func SupportsAdvTriggerBetLegacy(playTypeID, subPlayID string) bool {
 	return SupportsAdvTriggerBet(playTypeID, subPlayID, "", "")
 }
 
+// isLHCErquanzhongFushiRule 六合二全中复式（开某投某开出按特码）。
+func isLHCErquanzhongFushiRule(rule playRule) bool {
+	if strings.TrimSpace(rule.PlayTemplate) != "lhc_std" {
+		return false
+	}
+	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	if bm == "tuotou" || strings.HasSuffix(bm, "_dp") {
+		return false
+	}
+	sid := strings.TrimSpace(rule.CatalogSubID)
+	if sid == "" {
+		sid = strings.TrimSpace(rule.SubPlayID)
+	}
+	// 目录：二全中复式 279（兼容旧误写 277）
+	if sid == "279" || sid == "277" {
+		return true
+	}
+	tid := strings.ToLower(strings.TrimSpace(rule.PlayTypeID))
+	if tid == "erquanzhong" {
+		return bm == "fushi" || bm == ""
+	}
+	return false
+}
+
 // triggerOpenMatches 上期开奖是否命中映射行的「开出」条件。
 // watchPositions 非空时：任一选定投注位开出等于 open 即命中；空则回退 rule.PositionIdx。
 func triggerOpenMatches(rule playRule, balls []string, open string, watchPositions ...[]int) bool {
@@ -27,6 +51,39 @@ func triggerOpenMatches(rule playRule, balls []string, open string, watchPositio
 	}
 	if isLonghuPlay(rule) {
 		return normalizeTriggerToken(longhuResult(rule, balls)) == open
+	}
+	// 六合：特码/二全中复式开出=特码（第 7 球）；生肖对碰开出=特码生肖；正特=对应正码位
+	if rule.PlayTemplate == "lhc_std" {
+		switch strings.TrimSpace(rule.BetMode) {
+		case "tema":
+			return normalizeTriggerToken(strconv.Itoa(lhcTema(balls))) == open
+		case "zhengte":
+			return normalizeTriggerToken(strconv.Itoa(lhcZhengteBall(rule, balls))) == open
+		case "sx_dp":
+			return normalizeTriggerToken(lhcZodiacOf(lhcTema(balls))) == open
+		case "ws_dp":
+			return normalizeTriggerToken(strconv.Itoa(lhcTailOf(lhcTema(balls)))) == open
+		case "sw_dp":
+			tema := lhcTema(balls)
+			o := normalizeTriggerToken(open)
+			return o == normalizeTriggerToken(lhcZodiacOf(tema)) ||
+				o == normalizeTriggerToken(strconv.Itoa(lhcTailOf(tema)))
+		}
+		if isLHCSxDuipengPlayRule(rule) {
+			return normalizeTriggerToken(lhcZodiacOf(lhcTema(balls))) == open
+		}
+		if isLHCWsDuipengPlayRule(rule) {
+			return normalizeTriggerToken(strconv.Itoa(lhcTailOf(lhcTema(balls)))) == open
+		}
+		if isLHCSwDuipengPlayRule(rule) {
+			tema := lhcTema(balls)
+			o := normalizeTriggerToken(open)
+			return o == normalizeTriggerToken(lhcZodiacOf(tema)) ||
+				o == normalizeTriggerToken(strconv.Itoa(lhcTailOf(tema)))
+		}
+		if isLHCErquanzhongFushiRule(rule) {
+			return normalizeTriggerToken(strconv.Itoa(lhcTema(balls))) == open
+		}
 	}
 	if rule.PlayTemplate == "pc28_std" {
 		switch strings.TrimSpace(rule.BetMode) {
@@ -118,4 +175,19 @@ func pc28LonghubaoResult(balls []string) string {
 	default:
 		return "豹"
 	}
+}
+
+// lhcZhengteBall 正特开出球号（正一特…正六特 → balls[0..5]）。
+func lhcZhengteBall(rule playRule, balls []string) int {
+	idx := 0
+	sub := strings.ToLower(rule.CatalogSubID)
+	if strings.HasPrefix(sub, "zheng") && len(sub) >= 6 {
+		if n, err := strconv.Atoi(sub[5:6]); err == nil && n >= 1 && n <= 6 {
+			idx = n - 1
+		}
+	}
+	if idx >= 0 && idx < 6 && len(balls) > idx {
+		return atoiBall(balls[idx])
+	}
+	return 0
 }

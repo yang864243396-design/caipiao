@@ -8,7 +8,6 @@ import (
 const (
 	hezhiKuaduMaxBetUnits = 900
 	weishuMaxBetUnitsCap  = 9
-	zuheMaxBetUnitsBase   = 2700
 )
 
 // 任二直选复式第三方上限 900（勿按 SegmentLen=2 套前二公式 → 90）。
@@ -67,7 +66,16 @@ func maxBetUnitsForPlay(rule playRule) int {
 		// 单区最多 9 个尾数；前中后三等再×区位（9×3=27）
 		return weishuMaxBetUnitsCap * z
 	case "zuhe":
-		return zuheMaxBetUnitsBase * z
+		// 直选组合 = 直选复式上限 × 段长 × 区位（三星 900×3=2700；四星 9000×4=36000）
+		base := zhixuanSegmentMaxBetUnits(rule)
+		if base <= 0 {
+			return 0
+		}
+		seg := rule.SegmentLen
+		if seg <= 0 {
+			seg = 3
+		}
+		return base * seg * z
 	default:
 		return 0
 	}
@@ -211,12 +219,30 @@ func contentExceedsBetUnitsMax(rule playRule, content string) bool {
 	return n > max
 }
 
+// countLHCPlayWireBetUnits 六合注数（与 evaluateLHCByBetMode 对齐）。
+func countLHCPlayWireBetUnits(rule playRule, content string) int {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return 0
+	}
+	if ev, ok := evaluateLHCByBetMode(rule, nil, content); ok && ev.BetUnits > 0 {
+		return ev.BetUnits
+	}
+	return 0
+}
+
 // countPlayWireBetUnits 按第三方 bets_nums 口径统计注数（用已解析的 SegmentLen，
 // 不依赖 guajibet 对 typeId 文案的区位推断）。
 func countPlayWireBetUnits(rule playRule, content string) int {
 	content = strings.TrimSpace(normalizeZhixuanDanshiContent(rule, content))
 	if content == "" {
 		return 0
+	}
+	// 六合：勿走时时彩直选复式位积（SegmentLen=1 时恒为 0）
+	if rule.PlayTemplate == "lhc_std" || isLHCPlayRule(rule) {
+		if n := countLHCPlayWireBetUnits(rule, content); n > 0 {
+			return n
+		}
 	}
 	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
 	seg := rule.SegmentLen
@@ -246,8 +272,11 @@ func countPlayWireBetUnits(rule playRule, content string) int {
 	case "weishu":
 		base = len(parseIntTokens(content))
 	case "zuhe":
-		// 直选组合：每位一注形态的展开注数与复式位积同口径（再×区位）
-		base = countZhixuanFushiBetUnits(content, seg)
+		// 直选组合：位积 × 段长（三星×3 / 四星×4），再×区位
+		base = countZhixuanFushiBetUnits(content, seg) * seg
+		if base <= 0 {
+			return 0
+		}
 	case "danshi", "zhixuan_ds", "zuxuan_ds", "hunhe":
 		base = len(parseSegmentTokensForRule(rule, content, seg))
 		if base <= 0 {
@@ -257,7 +286,22 @@ func countPlayWireBetUnits(rule playRule, content string) int {
 	case "zu12":
 		// 双区「二重,单号」：C(m,1)×C(n,2)
 		base = countZu12DualZoneBetUnits(content)
-	case "zuxuan_fs", "zu3", "zu6", "zu24", "zu4", "zu120", "zu60", "zu30":
+	case "zu4":
+		// 双区「三重,单号」：对每个三重 t 计 |单号\{t}|
+		base = countZu4DualZoneBetUnits(content)
+	case "zu60":
+		// 双区「二重,单号」：对每个二重 d 计 C(|单号\{d}|, 3)
+		base = countZu60DualZoneBetUnits(content)
+	case "zu30":
+		// 双区「二重≥3,单号≥1」：对每个二重对计 |单号\{d1,d2}|
+		base = countZu30DualZoneBetUnits(content)
+	case "zu20":
+		// 双区「三重,单号」个数相同且各≥2：对每个三重 t 计 C(|单号\{t}|, 2)
+		base = countZu20DualZoneBetUnits(content)
+	case "zu10", "zu5":
+		// 双区各≥1：对每个头区码计 |尾区\{头}|
+		base = countZuPairDualZoneBetUnits(content)
+	case "zuxuan_fs", "zu3", "zu6", "zu24", "zu120":
 		// 与 evaluateZuxuanFushi / guajibet C(n,k) 对齐，供上限与金额同步
 		pool := uniqueStringTokens(parseDigitTokens(content))
 		base = zuxuanPoolUnitsForRule(rule, pool)

@@ -540,11 +540,14 @@ func (s *Service) ItemByRecordNo(ctx context.Context, memberID int64, recordNo s
 	case StatusHit:
 		if row.PayoutAmount.Valid {
 			if f, ok := numericToFloat64(row.PayoutAmount); ok {
-				v := round2(f)
-				payoutAmount = &v
+				// 仅展示第三方毛派奖；0/无效视为未回传 → 前端 —
+				if f > 1e-9 {
+					v := round2(f)
+					payoutAmount = &v
+				}
 			}
 		}
-		// 中奖无第三方原值（历史单 / 本地兜底）→ 前端显示 —
+		// 中奖但无第三方毛派奖 → 前端显示 —（禁止用 amount+pnl 本地推算）
 	}
 
 	currency := strings.ToUpper(strings.TrimSpace(row.Currency))

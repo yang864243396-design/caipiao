@@ -196,8 +196,10 @@ func SampleGroupContent(meta RuleMeta) string {
 			return sampleWuxingZu30Content()
 		case "zu20":
 			return sampleWuxingZu20Content()
-		case "zu10", "zu5":
-			return sampleWuxingZuZeroPoolContent()
+		case "zu10":
+			return sampleWuxingZu10Content()
+		case "zu5":
+			return sampleWuxingZu5Content()
 		}
 	case "baodan":
 		return "3"
@@ -354,6 +356,14 @@ func FormatBetContentForRule(meta RuleMeta, groupContent string) string {
 			return formatLHCPickDigits(groupContent)
 		case "tema", "zhengte":
 			return formatLHCTemaWire(groupContent)
+		case "tuotou":
+			return formatLHCTuotouWire(groupContent)
+		case "sx_dp":
+			return formatLHCSxDuipengWire(groupContent)
+		case "ws_dp":
+			return formatLHCWsDuipengWire(groupContent)
+		case "sw_dp":
+			return formatLHCSwDuipengWire(groupContent)
 		case "zongxiao":
 			return formatLHCZongxiaoWire(groupContent)
 		case "qima":
@@ -462,6 +472,18 @@ func FormatBetContentForRule(meta RuleMeta, groupContent string) string {
 		}
 		return formatSSCZuheContent(segStart, segLen, groupContent)
 	case "teshu", "longhu", "longhuhe", "zhuangxian":
+		if InferBetMode(meta) == "teshu" && isWuxingQuweiDigitMeta(meta) {
+			wire := formatSSCZuxuanPoolDigits(groupContent)
+			// 一帆风顺第三方最多 2 个号（超过 →「投注数字不可超过两位」）
+			if isWuxingYifanMeta(meta) {
+				toks := uniqueStringsPreserve(splitPickTokens(wire))
+				if len(toks) > 2 {
+					toks = toks[:2]
+				}
+				return strings.Join(toks, ",")
+			}
+			return wire
+		}
 		return formatTextTokens(groupContent)
 	}
 
@@ -633,7 +655,9 @@ func CountBetNums(meta RuleMeta, wireContent string) int {
 		return applySegmentMultiplier(meta, zu6PoolUnits(len(splitPickDigits(wireContent))))
 	case "zu12":
 		return applySegmentMultiplier(meta, countZu12BetNums(wireContent))
-	case "zu24", "zu4", "zu120", "zu60", "zu30", "zu20", "zu10", "zu5":
+	case "zu4":
+		return applySegmentMultiplier(meta, countZu4BetNums(wireContent))
+	case "zu24", "zu120", "zu60", "zu30", "zu20", "zu10", "zu5":
 		if n := countWuxingZuBetNums(mode, wireContent); n > 0 {
 			return applySegmentMultiplier(meta, n)
 		}
@@ -659,6 +683,13 @@ func CountBetNums(meta RuleMeta, wireContent string) int {
 		return applySegmentMultiplier(meta, n)
 	case "teshu", "longhu", "longhuhe", "dxds", "daxiao", "danshuang":
 		if isPositionDxds(meta) {
+			return 1
+		}
+		// 五星和值单双/大小等单 token 玩法：始终 1 注
+		if isSingleTokenTextDxds(meta) {
+			if len(splitPickTokens(wireContent)) == 0 {
+				return 0
+			}
 			return 1
 		}
 		tokens := splitPickTokens(wireContent)
@@ -876,7 +907,7 @@ func ResolveBetsNums(meta RuleMeta, wireContent string, amount, amountUnit float
 		mode := InferBetMode(meta)
 		switch mode {
 		case "zuxuan_fs", "zu3", "zu6", "zu24", "zu12", "zu4", "zu120", "zu60", "zu30",
-			"zuxuan_ds", "hunhe", "fushi", "zuhe":
+			"zu20", "zu10", "zu5", "zuxuan_ds", "hunhe", "fushi", "zuhe":
 			return 0
 		}
 	}
@@ -903,7 +934,8 @@ func ResolveBetsNums(meta RuleMeta, wireContent string, amount, amountUnit float
 func isZuxuanPoolZeroBet(meta RuleMeta, wireContent string) bool {
 	mode := InferBetMode(meta)
 	switch mode {
-	case "zuxuan_fs", "zu3", "zu6", "zu24", "zu12", "zu4", "zu120", "zu60", "zu30":
+	case "zuxuan_fs", "zu3", "zu6", "zu24", "zu12", "zu4", "zu120", "zu60", "zu30",
+		"zu20", "zu10", "zu5":
 	default:
 		return false
 	}
@@ -921,11 +953,22 @@ func IsFushiBaoziZeroBet(meta RuleMeta, wireContent string) bool {
 // ResolveSolo 是否须 solo=true；注数超过平台单挑上限时须 solo=false。
 func ResolveSolo(meta RuleMeta, wireContent string, betsNums int) bool {
 	// 前后二：实测任意注数 solo=true →「单挑参数错误」，必须 solo=false。
-	// 前后四：实测须 solo=true（与前后二相反）；白名单优先于注数上限。
 	if guajiGroupRequiresSoloFalse(meta) {
 		return false
 	}
 	if guajiGroupRequiresSoloTrue(meta) {
+		// 五星直选复式：≤wuxingFushiSoloMaxBets 须 true，更大须 false（绕过 guajiSoloMaxBets=18）。
+		// 实测（tron_ffc_1m rule153）：32/1000/1800 注 solo=true 过、solo=false 拒；
+		// 1875/2000/10000/90000 注 solo=false 过、solo=true 拒（def-1-1785990509756）。
+		if isWuxingZhixuanFushiMeta(meta) {
+			return betsNums > 0 && betsNums <= wuxingFushiSoloMaxBets
+		}
+		// 前后四直选复式/单式：≤qianhou4SoloMaxBets 须 true，更大须 false。
+		// 实测（tron_ffc_1m rule134）：48/192/200 注 solo=true 过、solo=false 拒；
+		// 216/18000 注 solo=false 过、solo=true 拒（def-1-1785981350952 / def-1-1785981220412）。
+		if isQianhou4Meta(meta) {
+			return betsNums > 0 && betsNums <= qianhou4SoloMaxBets
+		}
 		return true
 	}
 	if betsNums > guajiSoloMaxBets {
@@ -1032,10 +1075,12 @@ func guajiGroupRequiresSoloFalse(meta RuleMeta) bool {
 	return strings.Contains(text, "前后二")
 }
 
-// guajiGroupRequiresSoloTrue 第三方要求 solo=true 的区位组合玩法。
+// guajiGroupRequiresSoloTrue 第三方倾向 solo=true 的区位组合玩法（再由 ResolveSolo 按注数钳制）。
 // 实测（2026-07）：前后四直选复式/单式 bets=段积×2 时 solo=false →「单挑参数错误」，solo=true 才过。
+// 实测（2026-08-06）：前后四有独立单挑上限 qianhou4SoloMaxBets（与中三 18 不同）。
 // 实测（2026-07-23）：五星直选复式 32 注 content=25,26,37,16,48 solo=false →「单挑参数错误」，solo=true 才过。
-// 直选组合 / 组选24 等仍走 solo=false（勿一律 true）。白名单优先于 guajiSoloMaxBets。
+// 实测（2026-08-06）：五星直选复式亦有上限 wuxingFushiSoloMaxBets（大号池 90000 注须 solo=false）。
+// 直选组合 / 组选24 等仍走 solo=false（勿一律 true）。
 func guajiGroupRequiresSoloTrue(meta RuleMeta) bool {
 	mode := InferBetMode(meta)
 	if isQianhou4Meta(meta) {
@@ -1869,24 +1914,37 @@ func formatSSCFushiContent(start, length int, groupContent string) string {
 	return strings.Join(parts, ",")
 }
 
-// formatSSCZuheContent 三/四/五星直选组合：wire 与直选复式同形。
-// 多行按位；无换行时「1,2,3」表示三位各 1 码（勿压成 123,123,123）。
+// formatSSCZuheContent 直选组合：wire 为「按序 N 位、逗号分隔」，如前后四 `1,2,3,4`。
+// 多行按位亦可；位数不对时返回空串（勿把 `1234`/`1,2,3` 压成 `1234,1234,...`）。
 func formatSSCZuheContent(start, length int, groupContent string) string {
+	_ = start
 	if length <= 0 {
 		length = 1
 	}
+	groupContent = strings.TrimSpace(strings.ReplaceAll(groupContent, "，", ","))
+	if groupContent == "" {
+		return ""
+	}
+	var rawParts []string
 	if strings.ContainsAny(groupContent, "\n\r") {
-		return formatSSCFushiContent(start, length, groupContent)
-	}
-	tokens := splitPickTokens(groupContent)
-	if len(tokens) == length {
-		parts := make([]string, length)
-		for i := 0; i < length; i++ {
-			parts[i] = normalizePickDigits(tokens[i])
+		rawParts = splitPositionLines(groupContent)
+		for len(rawParts) > 0 && strings.TrimSpace(rawParts[len(rawParts)-1]) == "" {
+			rawParts = rawParts[:len(rawParts)-1]
 		}
-		return strings.Join(parts, ",")
+	} else {
+		rawParts = splitCommaParts(groupContent)
 	}
-	return formatSSCFushiContent(start, length, groupContent)
+	if len(rawParts) != length {
+		return ""
+	}
+	parts := make([]string, length)
+	for i := 0; i < length; i++ {
+		parts[i] = normalizePickDigits(rawParts[i])
+		if parts[i] == "" {
+			return ""
+		}
+	}
+	return strings.Join(parts, ",")
 }
 
 func countSSCFushiProduct(wireContent string) int {
@@ -2197,8 +2255,17 @@ func sortDigitRunes(s string) string {
 }
 
 // guajiSoloMaxBets 第三方单挑注数上限（实测中三直选复式：18 注 solo=true 可过，20 注起报「单挑参数错误」）。
-// 五星/前后四等须绕过此上限的玩法走 guajiGroupRequiresSoloTrue。
+// 五星用 wuxingFushiSoloMaxBets；前后四用 qianhou4SoloMaxBets。
 const guajiSoloMaxBets = 18
+
+// qianhou4SoloMaxBets 前后四直选复式/单式单挑上限（2026-08-06 tron_ffc_1m rule134 实测）：
+// ≤200 注 solo=true；≥216 注须 solo=false（定码近满号池 18000 注走 false）。
+const qianhou4SoloMaxBets = 200
+
+// wuxingFushiSoloMaxBets 五星直选复式单挑上限（2026-08-06 tron_ffc_1m rule153 实测）：
+// ≤1800 须 solo=true；≥1875 须 solo=false（1801–1874 无合法位积，阈值取 1800）。
+// def-1-1785990509756：90000 注 solo=true →「单挑参数错误」。
+const wuxingFushiSoloMaxBets = 1800
 
 // hunheSoloMaxBets 单区混合组选（前/中/后三等）单挑注数上限。
 // 实测 rule=23（2026-07-30）：3 注 solo=true 过 / solo=false 拒；4 注 solo=false 过 / solo=true 拒。
@@ -2345,6 +2412,31 @@ func countBudingweiBetNums(meta RuleMeta, wireContent string) int {
 		return 0
 	}
 	return combin(len(picks), need)
+}
+
+// countZu4BetNums 组选4：对每个三重 t，统计单号 s 中 s≠t 的个数并求和。
+// 跨区重叠原样保留；仅计注时排除同码（12,34→4；1,2→1；1,12→1；1,1→0）。
+func countZu4BetNums(wireContent string) int {
+	parts := splitCommaParts(wireContent)
+	if len(parts) != 2 {
+		return 0
+	}
+	a := uniqueDigitRun(normalizePickDigits(parts[0]))
+	b := uniqueDigitRun(normalizePickDigits(parts[1]))
+	if len(a) < 1 || len(b) < 1 {
+		return 0
+	}
+	total := 0
+	for i := 0; i < len(a); i++ {
+		n := 0
+		for j := 0; j < len(b); j++ {
+			if b[j] != a[i] {
+				n++
+			}
+		}
+		total += n
+	}
+	return total
 }
 
 // countZu12BetNums 组选12：对每个二重 d，C(|单号\{d}|, 2) 求和。

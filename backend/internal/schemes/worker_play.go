@@ -505,8 +505,10 @@ func shouldSkipZeroBetUnits(rule playRule) bool {
 		// 对子被滤空或号池不足：跳过本期，勿停方案报「注数为0」
 		return true
 	}
-	// 组选12：当期二重/单号凑不足 1 注 → Skip（不停方案）
-	if isZu12PlayRule(rule) {
+	// 组选12/4/60/30/20/10/5：当期双区凑不足 1 注 → Skip（不停方案）
+	if isZu12PlayRule(rule) || isZu4PlayRule(rule) ||
+		isZu60PlayRule(rule) || isZu30PlayRule(rule) ||
+		isZu20PlayRule(rule) || isZu10PlayRule(rule) || isZu5PlayRule(rule) {
 		return true
 	}
 	return zuxuanPoolMinPick(rule) >= 2
@@ -791,6 +793,11 @@ func isSixingZu6PlayRule(rule playRule) bool {
 	if isZu6DanshiPlayRule(rule) {
 		return false
 	}
+	// 直选组合（前后四 rule136 等）绝非组选6
+	bmEarly := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	if bmEarly == "zuhe" {
+		return false
+	}
 	text := rule.SubPlayID + " " + rule.CatalogSubID + " " + rule.BetMode + " " + rule.PlayTypeID
 	lower := strings.ToLower(text)
 	if strings.Contains(text, "组选60") || strings.Contains(text, "组选120") ||
@@ -805,7 +812,8 @@ func isSixingZu6PlayRule(rule playRule) bool {
 			return r == '|' || r == '/' || r == ' ' || r == ',' || r == '，'
 		}) {
 			switch strings.TrimSpace(tok) {
-			case "132", "136", "139", "145":
+			// 四星组选6=132；前后四组选6=139；任四组选6=145（136 是前后四直选组合）
+			case "132", "139", "145":
 				return true
 			}
 		}

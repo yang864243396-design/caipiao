@@ -7,10 +7,26 @@ export const ADV_TRIGGER_PC28_SUB_LABELS = new Set(['和值', '大小单双', '�
 export const ADV_TRIGGER_PC28_SUBS = new Set(['hezhi', 'dxds', 'longhubao'])
 
 /** rules/v2 同步后支持的玩法类型 label（groups[].name） */
-export const ADV_TRIGGER_PLAY_TYPE_LABELS = new Set(['一星', '龙虎', '2.0模式', '2.8模式'])
+export const ADV_TRIGGER_PLAY_TYPE_LABELS = new Set([
+  '一星',
+  '龙虎',
+  '2.0模式',
+  '2.8模式',
+  '特码',
+  '正特码',
+])
 
 /** 旧 type_id 兼容 */
-export const ADV_TRIGGER_PLAY_TYPES = new Set(['dingwei', 'longhu', 'pc28_20', 'pc28_28'])
+export const ADV_TRIGGER_PLAY_TYPES = new Set([
+  'dingwei',
+  'longhu',
+  'pc28_20',
+  'pc28_28',
+  'tema',
+  'zhengte',
+  'g001',
+  'g002',
+])
 
 export const PC28_MODE_LABELS = new Set(['2.0模式', '2.8模式'])
 
@@ -101,6 +117,7 @@ export function inferBetModeFromCatalog(
     if (typeId === 'g014' && subLabel.includes('复式')) return 'xuanyi'
     if (subLabel.includes('拖头')) return 'tuotou'
     if (subLabel.includes('生肖对碰')) return 'sx_dp'
+    if (subLabel.includes('尾数对碰')) return 'ws_dp'
     if (subLabel.includes('尾数对碰')) return 'ws_dp'
     if (subLabel.includes('生尾对碰')) return 'sw_dp'
     if (subLabel.includes('任意对碰')) return 'renyi_dp'
@@ -218,6 +235,114 @@ export function inferBetModeFromCatalog(
   return ''
 }
 
+function isLhcTemaAdvTriggerType(typeId: string, typeLabel: string): boolean {
+  const pt = String(typeId ?? '').trim()
+  const label = String(typeLabel ?? '').trim()
+  return (
+    label === '特码' ||
+    label === '正特码' ||
+    pt === 'tema' ||
+    pt === 'zhengte' ||
+    pt === 'g001' ||
+    pt === 'g002'
+  )
+}
+
+/** 二全中复式（非拖头/对碰）开放高级开某投某 */
+function isLhcErquanzhongFushiAdvTrigger(
+  playTypeId: string,
+  subPlayId: string,
+  typeLabel: string,
+  subLabel: string,
+): boolean {
+  const pt = String(playTypeId ?? '').trim()
+  const sub = String(subPlayId ?? '').trim()
+  const label = String(typeLabel ?? '').trim()
+  const subLbl = String(subLabel ?? '').trim()
+  if (/拖头|对碰/.test(subLbl)) return false
+  // 目录：二全中复式 279（兼容旧误写 277）
+  if (sub === '279' || sub === '277') return true
+  if (pt === 'erquanzhong' || label === '二全中') {
+    return sub === 'fushi' || sub === '' || /复式/.test(subLbl) || subLbl === ''
+  }
+  if (label === '连码' || pt === 'g003') {
+    return /二全中/.test(subLbl) && /复式/.test(subLbl)
+  }
+  return /二全中/.test(`${label}${subLbl}`) && /复式/.test(subLbl)
+}
+
+/** 二全中生肖对碰：高级开某投某（开出=特码生肖，正/反投=两个生肖） */
+export function isLhcSxDuipengAdvTrigger(
+  playTypeId: string,
+  subPlayId?: string,
+  typeLabel?: string,
+  subLabel?: string,
+): boolean {
+  const pt = String(playTypeId ?? '').trim()
+  const sub = String(subPlayId ?? '').trim()
+  const label = String(typeLabel ?? '').trim()
+  const subLbl = String(subLabel ?? '').trim()
+  if (sub === '281' || sub === 'sx_dp') return true
+  if (/生肖对碰/.test(subLbl)) {
+    return (
+      pt === 'erquanzhong' ||
+      pt === 'g003' ||
+      label === '二全中' ||
+      label === '连码' ||
+      /二全中|连码/.test(`${label}${subLbl}`)
+    )
+  }
+  return false
+}
+
+/** 二全中尾数对碰：高级开某投某（开出=特码尾数，正/反投=两个尾数） */
+export function isLhcWsDuipengAdvTrigger(
+  playTypeId: string,
+  subPlayId?: string,
+  typeLabel?: string,
+  subLabel?: string,
+): boolean {
+  const pt = String(playTypeId ?? '').trim()
+  const sub = String(subPlayId ?? '').trim()
+  const label = String(typeLabel ?? '').trim()
+  const subLbl = String(subLabel ?? '').trim()
+  if (sub === '282' || sub === 'ws_dp' || sub === '288' || sub === '294') return true
+  if (/尾数对碰/.test(subLbl)) {
+    return (
+      pt === 'erquanzhong' ||
+      pt === 'g003' ||
+      label === '二全中' ||
+      label === '连码' ||
+      /二全中|连码/.test(`${label}${subLbl}`)
+    )
+  }
+  return false
+}
+
+/** 二全中生尾对碰：高级开某投某（开出=特码生肖或特码尾，正/反投=1肖+1尾） */
+export function isLhcSwDuipengAdvTrigger(
+  playTypeId: string,
+  subPlayId?: string,
+  typeLabel?: string,
+  subLabel?: string,
+): boolean {
+  const pt = String(playTypeId ?? '').trim()
+  const sub = String(subPlayId ?? '').trim()
+  const label = String(typeLabel ?? '').trim()
+  const subLbl = String(subLabel ?? '').trim()
+  if (sub === '283' || sub === 'sw_dp' || sub === '289' || sub === '295') return true
+  if (/生尾对碰/.test(subLbl)) {
+    return (
+      pt === 'erquanzhong' ||
+      pt === 'g003' ||
+      label === '二全中' ||
+      label === '连码' ||
+      /二全中|连码/.test(`${label}${subLbl}`)
+    )
+  }
+  return false
+}
+
 export function supportsAdvTriggerBet(
   playTypeId: string,
   subPlayId?: string,
@@ -230,6 +355,11 @@ export function supportsAdvTriggerBet(
   const subLbl = String(subLabel ?? '').trim()
 
   if (pt === 'dingwei' || pt === 'longhu' || label === '一星' || label === '龙虎') return true
+  if (isLhcTemaAdvTriggerType(pt, label)) return true
+  if (isLhcSxDuipengAdvTrigger(pt, sub, label, subLbl)) return true
+  if (isLhcWsDuipengAdvTrigger(pt, sub, label, subLbl)) return true
+  if (isLhcSwDuipengAdvTrigger(pt, sub, label, subLbl)) return true
+  if (isLhcErquanzhongFushiAdvTrigger(pt, sub, label, subLbl)) return true
   if (pt === 'pc28_20' || pt === 'pc28_28' || label === '2.0模式' || label === '2.8模式') {
     return ADV_TRIGGER_PC28_SUB_LABELS.has(subLbl) || ADV_TRIGGER_PC28_SUBS.has(sub)
   }
@@ -240,6 +370,20 @@ export function lotteryHasAdvTriggerPlay(playTypes: PlayTypeNode[]): boolean {
   for (const t of playTypes) {
     const label = t.label.trim()
     if (label === '一星' || label === '龙虎' || t.typeId === 'dingwei' || t.typeId === 'longhu') {
+      return true
+    }
+    if (isLhcTemaAdvTriggerType(t.typeId, label)) {
+      return true
+    }
+    if (
+      t.subPlays?.some(
+        (s) =>
+          isLhcErquanzhongFushiAdvTrigger(t.typeId, s.subId, label, s.label.trim()) ||
+          isLhcSxDuipengAdvTrigger(t.typeId, s.subId, label, s.label.trim()) ||
+          isLhcWsDuipengAdvTrigger(t.typeId, s.subId, label, s.label.trim()) ||
+          isLhcSwDuipengAdvTrigger(t.typeId, s.subId, label, s.label.trim()),
+      )
+    ) {
       return true
     }
     if (isPc28ModeType(label, t.typeId)) {
@@ -398,8 +542,14 @@ export function supportsRandomDrawSubPlay(subLabel: string, playTypeLabel = ''):
   if (sub.includes('单式') || sub.includes('混合')) return true
   // 组合家族：组三/组六/组选N/组选复式（号码池随机）
   if (/组三|组六|组选/.test(sub)) return true
-  // 属性/聚合家族：大小单双/龙虎/特殊号/庄闲/和值/跨度/不定位/包胆
-  if (/大小单双|大小|单双|龙虎|庄闲|特殊号|豹子|对子|顺子|和值|跨度|不定位|包胆/.test(sub)) return true
+  // 属性/聚合家族：大小单双/龙虎/特殊号/庄闲/和值/跨度/不定位/包胆；五星趣味数字池
+  if (
+    /大小单双|大小|单双|龙虎|庄闲|特殊号|豹子|对子|顺子|和值|跨度|不定位|包胆|一帆风顺|好事成双|三星报喜|四季发财/.test(
+      sub,
+    )
+  ) {
+    return true
+  }
   return false
 }
 
@@ -421,7 +571,8 @@ export function supportsHotColdWarmSubPlay(subLabel: string, playTypeLabel = '')
   ) {
     return true
   }
-  return /组三|组六|组选|不定位|包胆/.test(sub)
+  // 号码池型：组选 + 不定位 + 包胆 + 五星趣味
+  return /组三|组六|组选|不定位|包胆|一帆风顺|好事成双|三星报喜|四季发财/.test(sub)
 }
 
 export function filterHotColdWarmSubPlays<T extends { value: string | number; label?: string }>(
@@ -566,6 +717,14 @@ type AdvTriggerPosConfig = {
 function isAdvTriggerTextLikePlay(config: AdvTriggerPosConfig): boolean {
   if (isLonghuPlayConfigLike(config) || isPc28ModeConfigLike(config)) return true
   const bm = String(config.betMode ?? '')
+  // 五星趣味为数字池，勿当文字特殊号
+  const label = String(config.playMethodLabel ?? '')
+  if (
+    /一帆风顺|好事成双|三星报喜|四季发财/i.test(label) ||
+    /yifan|haoshi|sanxing|siji/i.test(`${config.subPlayId ?? ''} ${label}`)
+  ) {
+    return false
+  }
   return (
     bm === 'dxds' ||
     bm === 'daxiao' ||
@@ -706,14 +865,79 @@ export function isRenxuanHcwOpenPosPlay(config: AdvTriggerPosConfig): boolean {
 }
 
 /**
- * 任选·组选12 冷热：投注选位合并计频 + 二重号/单号双池（与任四组选6 同口径，无独立开奖选位）。
+ * 组选12 冷热：二重号/单号双池（任四组选12、四星组选12、前后四组选12 等）。
+ * 任选另需投注选位合并计频；定点星段（四星等）按玩法位合并计频。
  */
-export function isRenxuanHcwZu12Play(config: AdvTriggerPosConfig): boolean {
-  if (!isRenxuanNeedsPositionTriggerPlay(config)) return false
+export function isHcwZu12DualPlay(config: AdvTriggerPosConfig): boolean {
   const bm = String(config.betMode ?? '').toLowerCase()
   if (bm === 'zu12') return true
   const text = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''}`
   return /组选12|zu12/i.test(text) && !/组选120|zu120/i.test(text)
+}
+
+/**
+ * 组选4 冷热：三重号/单号双池（四星组选4、前后四组选4 等）。
+ */
+export function isHcwZu4DualPlay(config: AdvTriggerPosConfig): boolean {
+  const bm = String(config.betMode ?? '').toLowerCase()
+  if (bm === 'zu4') return true
+  const text = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''}`
+  return /组选4|zu4/i.test(text) && !/组选24|zu24|组选12|zu12/i.test(text)
+}
+
+/** 五星组选60/30/20/10/5 冷热双区 */
+export function isHcwWuxingZuDualPlay(config: AdvTriggerPosConfig): boolean {
+  const bm = String(config.betMode ?? '').toLowerCase()
+  if (bm === 'zu60' || bm === 'zu30' || bm === 'zu20' || bm === 'zu10' || bm === 'zu5') return true
+  const text = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''}`
+  if (/组选120|zu120/i.test(text)) return false
+  return (
+    /组选60|zu60/i.test(text) ||
+    /组选30|zu30/i.test(text) ||
+    /组选20|zu20/i.test(text) ||
+    /组选10|zu10/i.test(text) ||
+    (/组选5|zu5/i.test(text) && !/组选50|组选5\d/i.test(text))
+  )
+}
+
+/** 组选12/4 或五星组选60·30·20·10·5 冷热双区 */
+export function isHcwZuDualPlay(config: AdvTriggerPosConfig): boolean {
+  return isHcwZu12DualPlay(config) || isHcwZu4DualPlay(config) || isHcwWuxingZuDualPlay(config)
+}
+
+/**
+ * 任选·组选12 冷热：投注选位合并计频 + 二重号/单号双池（无独立开奖选位）。
+ */
+export function isRenxuanHcwZu12Play(config: AdvTriggerPosConfig): boolean {
+  return isRenxuanNeedsPositionTriggerPlay(config) && isHcwZu12DualPlay(config)
+}
+
+/** 任选·组选4 冷热 */
+export function isRenxuanHcwZu4Play(config: AdvTriggerPosConfig): boolean {
+  return isRenxuanNeedsPositionTriggerPlay(config) && isHcwZu4DualPlay(config)
+}
+
+/** 任选·组选12/4 冷热（需投注选位） */
+export function isRenxuanHcwZuDualPlay(config: AdvTriggerPosConfig): boolean {
+  return isRenxuanHcwZu12Play(config) || isRenxuanHcwZu4Play(config)
+}
+
+/**
+ * 单 token 大小/单双（第三方仅 1 选项）：
+ * - 五星和值单双 / 和值大小
+ * - 哈希玩法尾数单双 / 尾数大小（波场/哈希分分彩等）
+ */
+export function isWuxingSumDxdsPlayConfig(config: AdvTriggerPosConfig): boolean {
+  const label = `${config.playMethodLabel ?? ''} ${config.playTypeLabel ?? ''} ${config.guajiGroup ?? ''}`
+  if (/和值单双|和值大小|尾数单双|尾数大小/.test(label)) return true
+  const sid = String(config.catalogSubId ?? config.subPlayId ?? '').trim()
+  const typeId = String(config.playTypeId ?? '').trim()
+  // 哈希 g017：267/387=尾数单双，270/390=尾数大小，389=和值单双（勿把 388 幸运庄闲算进来）
+  if (typeId === 'g017' || label.includes('哈希')) {
+    return ['267', '270', '387', '389', '390'].includes(sid)
+  }
+  // SSC 五星和值：263/268=单双，264/269=大小
+  return ['263', '264', '268', '269'].includes(sid)
 }
 
 /**
@@ -724,6 +948,7 @@ export function isPerPosDxdsPlayConfig(config: AdvTriggerPosConfig): boolean {
   const segLen = Math.max(0, Number(config.segmentLen) || 0)
   if (segLen < 2) return false
   if (isLonghuPlayConfigLike(config) || isPc28ModeConfigLike(config)) return false
+  if (isWuxingSumDxdsPlayConfig(config)) return false
   const bm = String(config.betMode ?? '').toLowerCase()
   const label = `${config.playMethodLabel ?? ''} ${config.playTypeLabel ?? ''}`
   if (label.includes('和值大小') || label.includes('和值单双') || label.includes('五星和值')) {
@@ -732,6 +957,16 @@ export function isPerPosDxdsPlayConfig(config: AdvTriggerPosConfig): boolean {
   if (bm === 'dxds') return true
   if (label.includes('大小单双') && !label.includes('和值')) return true
   return false
+}
+
+/** 时时彩按位大小单双选项宇宙 */
+export const PER_POS_DXDS_OPTIONS = ['大', '小', '单', '双'] as const
+
+/** 球号 → 同时命中的大小/单双（每位一球对应两项） */
+export function sscDigitDxdsAttrs(digit: number): string[] {
+  if (!Number.isFinite(digit)) return []
+  const n = Math.trunc(digit)
+  return [n >= 5 ? '大' : '小', n % 2 === 1 ? '单' : '双']
 }
 
 /** 按位列位数：优先 segmentLen，其次 segmentLabels 长度（一星五位兜底） */

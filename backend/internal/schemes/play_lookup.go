@@ -56,6 +56,22 @@ func typeIDMatchesAlias(got, want string) bool {
 	return false
 }
 
+// playTemplateLookupOrder 子玩法查询模板顺序。ssc_std ↔ fast_ssc_std 互为兜底：
+// 方案若被结算解析写成 ssc_std，仍能命中波场秒彩上的哈希玩法（g017）。
+func playTemplateLookupOrder(template string) []string {
+	template = strings.TrimSpace(template)
+	switch template {
+	case "ssc_std":
+		return []string{"ssc_std", "fast_ssc_std"}
+	case "fast_ssc_std":
+		return []string{"fast_ssc_std", "ssc_std"}
+	case "":
+		return nil
+	default:
+		return []string{template}
+	}
+}
+
 // lookupSubPlay 查子玩法；兼容方案存 bet_mode、legacy dingwei_* 或 rules 同步后 sub_id 变更。
 func lookupSubPlay(ctx context.Context, q *sqlcdb.Queries, template, typeID, subID, betMode string, positionIdx int) (sqlcdb.GetSubPlayRow, error) {
 	template = strings.TrimSpace(template)
@@ -69,6 +85,24 @@ func lookupSubPlay(ctx context.Context, q *sqlcdb.Queries, template, typeID, sub
 		return sqlcdb.GetSubPlayRow{}, fmt.Errorf("sub play lookup unavailable")
 	}
 
+	var lastMiss error
+	for _, tpl := range playTemplateLookupOrder(template) {
+		row, err := lookupSubPlayExact(ctx, q, tpl, typeID, subID, betMode, positionIdx)
+		if err == nil {
+			return row, nil
+		}
+		if !strings.Contains(err.Error(), "sub play not found") {
+			return sqlcdb.GetSubPlayRow{}, err
+		}
+		lastMiss = err
+	}
+	if lastMiss != nil {
+		return sqlcdb.GetSubPlayRow{}, lastMiss
+	}
+	return sqlcdb.GetSubPlayRow{}, fmt.Errorf("sub play not found: %s/%s/%s", template, typeID, subID)
+}
+
+func lookupSubPlayExact(ctx context.Context, q *sqlcdb.Queries, template, typeID, subID, betMode string, positionIdx int) (sqlcdb.GetSubPlayRow, error) {
 	for _, tid := range catalogTypeIDAliases(typeID) {
 		row, err := q.GetSubPlay(ctx, sqlcdb.GetSubPlayParams{
 			TemplateCode: template,

@@ -59,6 +59,25 @@ func TestValidateSchemeConfig_ren4Zu6TypeIdSubIdPayload(t *testing.T) {
 	}
 }
 
+func TestValidateSchemeBetContent_sixingZu6FlatDigitRun(t *testing.T) {
+	t.Parallel()
+	// 四星组选6：粘连号池「1234567890,1234567890」须按位拆开，勿报「不在合法号池」
+	raw := []byte(`{
+		"playTemplate":"ssc_std","playTypeId":"g013","subPlayId":"132","catalogSubId":"132",
+		"betMode":"zu6","playMethodLabel":"组选6","segmentLen":4,
+		"playTypeLabel":"四星","guajiGroup":"四星"
+	}`)
+	if vs := ValidateSchemeBetContent("custom", raw, "1234567890,1234567890", 0); len(vs) > 0 {
+		t.Fatalf("flat digit run should pass: %+v", vs)
+	}
+	if vs := ValidateSchemeBetContent("custom", raw, "12", 0); len(vs) > 0 {
+		t.Fatalf("glued 12 should expand and pass: %+v", vs)
+	}
+	if vs := ValidateSchemeBetContent("custom", raw, "1,2", 0); len(vs) > 0 {
+		t.Fatalf("1,2 should pass: %+v", vs)
+	}
+}
+
 func TestZuxuanPoolMinPick_zhong3Zu6StillThree(t *testing.T) {
 	t.Parallel()
 	raw := []byte(`{"playTemplate":"ssc_std","playTypeId":"g002","subPlayId":"261","betMode":"zu6","playMethodLabel":"中三组六"}`)

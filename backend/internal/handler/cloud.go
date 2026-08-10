@@ -365,6 +365,7 @@ func (h *Handler) handleCloudInstanceErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, instances.ErrNotFound), errors.Is(err, schemes.ErrDefinitionNotFound):
 		apix.Fail(w, http.StatusNotFound, apix.CodeNotFound, "实例不存在")
 	case errors.Is(err, schemes.ErrStartTimeNotAfterNow), errors.Is(err, schemes.ErrEndTimeReached), errors.Is(err, schemes.ErrMinBetAmountTooLow),
+		errors.Is(err, schemes.ErrMaxBetAmountExceeded),
 		errors.Is(err, schemes.ErrSimSchemeConcurrentLimit), errors.Is(err, schemes.ErrSimSchemeDailyStartLimit),
 		errors.Is(err, schemes.ErrSimSchemeQuotaSchema):
 		apix.Fail(w, http.StatusOK, apix.CodeValidation, err.Error())

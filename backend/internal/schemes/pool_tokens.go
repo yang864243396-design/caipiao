@@ -76,6 +76,35 @@ func parsePickTokensForRule(rule playRule, raw string) []string {
 	return tokens
 }
 
+// parseFushiPositionDigits 解析直选复式/组合「一位」号池。
+// 支持逗号分码（`0,1,3`）与 wire 粘连（`013`）；空或无数字 → nil（勿回落默认 0）。
+func parseFushiPositionDigits(rule playRule, raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	if strings.ContainsAny(raw, ",， \t\n\r") {
+		if !hasDigitPickToken(raw) {
+			return nil
+		}
+		return parsePickTokensForRule(rule, raw)
+	}
+	seen := map[byte]struct{}{}
+	out := make([]string, 0, len(raw))
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		if c < '0' || c > '9' {
+			continue
+		}
+		if _, ok := seen[c]; ok {
+			continue
+		}
+		seen[c] = struct{}{}
+		out = append(out, string(c))
+	}
+	return out
+}
+
 func parseSegmentTokensForRule(rule playRule, raw string, segmentLen int) []string {
 	raw = strings.NewReplacer("\n", ",", "，", ",", " ", ",").Replace(raw)
 	parts := strings.Split(raw, ",")

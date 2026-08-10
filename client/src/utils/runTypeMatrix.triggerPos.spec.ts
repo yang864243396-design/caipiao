@@ -1,11 +1,19 @@
 import { describe, expect, it } from 'vitest'
+import type { PlayTypeNode } from '@/types/playCatalog'
 import {
   defaultRenxuanHcwOpenPositionIdxs,
   defaultRenxuanTriggerPositionIdxs,
+  isHcwZu12DualPlay,
+  isHcwZu4DualPlay,
+  isHcwZuDualPlay,
+  isRenxuanHcwZu4Play,
   isRenxuanHcwOpenPosPlay,
+  isRenxuanHcwZu12Play,
   isRenxuanPerPosTriggerPlay,
   isRenxuanZhixuanDanshiTriggerPlay,
   isZhixuanDanshiPerPosPlay,
+  lotteryHasAdvTriggerPlay,
+  supportsAdvTriggerBet,
   supportsAdvTriggerPerPosColumns,
   supportsAdvTriggerPositionPicker,
 } from './runTypeMatrix'
@@ -149,5 +157,102 @@ describe('supportsAdvTriggerPerPosColumns', () => {
     expect(defaultRenxuanHcwOpenPositionIdxs(3)).toEqual([0, 1, 2])
     expect(defaultRenxuanHcwOpenPositionIdxs(4)).toEqual([0, 1, 2, 3])
     expect(defaultRenxuanTriggerPositionIdxs(3)).toEqual([0, 1, 4])
+  })
+
+  it('四星组选12 冷热走二重/单号双池；任选才带投注选位', () => {
+    const sixing = {
+      betMode: 'zu12',
+      playTypeId: 'sixing',
+      playMethodLabel: '组选12',
+      playTypeLabel: '四星',
+      segmentLen: 4,
+      segmentLabels: ['千', '百', '十', '个'],
+    }
+    expect(isHcwZu12DualPlay(sixing)).toBe(true)
+    expect(isRenxuanHcwZu12Play(sixing)).toBe(false)
+    const ren4 = {
+      betMode: 'zu12',
+      playTypeId: 'g011',
+      playMethodLabel: '任四组选12',
+      renPositionCount: 4,
+      segmentLen: 1,
+    }
+    expect(isHcwZu12DualPlay(ren4)).toBe(true)
+    expect(isRenxuanHcwZu12Play(ren4)).toBe(true)
+  })
+
+  it('四星组选4 冷热走三重/单号双池；任选才带投注选位', () => {
+    const sixing = {
+      betMode: 'zu4',
+      playTypeId: 'sixing',
+      playMethodLabel: '组选4',
+      playTypeLabel: '四星',
+      segmentLen: 4,
+      segmentLabels: ['千', '百', '十', '个'],
+    }
+    expect(isHcwZu4DualPlay(sixing)).toBe(true)
+    expect(isHcwZuDualPlay(sixing)).toBe(true)
+    expect(isRenxuanHcwZu4Play(sixing)).toBe(false)
+    const ren4 = {
+      betMode: 'zu4',
+      playTypeId: 'g011',
+      playMethodLabel: '任四组选4',
+      renPositionCount: 4,
+      segmentLen: 1,
+    }
+    expect(isHcwZu4DualPlay(ren4)).toBe(true)
+    expect(isRenxuanHcwZu4Play(ren4)).toBe(true)
+  })
+})
+
+describe('六合特码高级开某投某', () => {
+  it('特码/正特码玩法树应开放高级开某投某运行类型', () => {
+    const lhcTree: PlayTypeNode[] = [
+      {
+        typeId: 'g001',
+        label: '特码',
+        subPlays: [{ subId: '272', label: '特码A', segmentRule: null }],
+      },
+    ]
+    expect(lotteryHasAdvTriggerPlay(lhcTree)).toBe(true)
+    expect(supportsAdvTriggerBet('g001', '272', '特码', '特码A')).toBe(true)
+    expect(supportsAdvTriggerBet('tema', 'tema_a', '特码', '特码A')).toBe(true)
+  })
+
+  it('二全中复式应开放高级开某投某', () => {
+    expect(supportsAdvTriggerBet('erquanzhong', 'fushi', '二全中', '复式')).toBe(true)
+    expect(supportsAdvTriggerBet('g003', '279', '连码', '二全中复式')).toBe(true)
+    expect(supportsAdvTriggerBet('g003', '281', '连码', '二全中生肖对碰')).toBe(true)
+    expect(supportsAdvTriggerBet('erquanzhong', 'sx_dp', '二全中', '生肖对碰')).toBe(true)
+    expect(supportsAdvTriggerBet('g003', '282', '连码', '二全中尾数对碰')).toBe(true)
+    expect(supportsAdvTriggerBet('erquanzhong', 'ws_dp', '二全中', '尾数对碰')).toBe(true)
+    expect(supportsAdvTriggerBet('g003', '283', '连码', '二全中生尾对碰')).toBe(true)
+    expect(supportsAdvTriggerBet('erquanzhong', 'sw_dp', '二全中', '生尾对碰')).toBe(true)
+    expect(supportsAdvTriggerBet('g003', '283', '连码', '二全中生尾对碰')).toBe(true)
+    expect(supportsAdvTriggerBet('erquanzhong', 'sw_dp', '二全中', '生尾对碰')).toBe(true)
+    expect(supportsAdvTriggerBet('erquanzhong', 'tuotou', '二全中', '拖头')).toBe(false)
+    expect(
+      lotteryHasAdvTriggerPlay([
+        {
+          typeId: 'erquanzhong',
+          label: '二全中',
+          subPlays: [{ subId: 'fushi', label: '复式', segmentRule: null }],
+        },
+      ]),
+    ).toBe(true)
+  })
+
+  it('特码开某投某不按七位分列', () => {
+    expect(
+      supportsAdvTriggerPerPosColumns({
+        betMode: 'tema',
+        playTypeId: 'g001',
+        catalogSubId: '272',
+        playTypeLabel: '特码',
+        playMethodLabel: '特码A',
+        inputMode: 'lhc_num',
+        segmentLen: 1,
+      }),
+    ).toBe(false)
   })
 })

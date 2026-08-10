@@ -197,9 +197,13 @@ export function consumeSchemeEditBmPending(schemeId: string): BetMultiplierPaylo
     const raw = sessionStorage.getItem(key)
     sessionStorage.removeItem(key)
     if (!raw) return null
-    const parsed = JSON.parse(raw) as { payload?: BetMultiplierPayload }
-    if (parsed?.payload && typeof parsed.payload === 'object' && parsed.payload.kind) {
-      return parsed.payload
+    const parsed = JSON.parse(raw) as { kind?: string; payload?: BetMultiplierPayload }
+    if (!parsed?.payload || typeof parsed.payload !== 'object') return null
+    const payload = { ...parsed.payload }
+    const kind = payload.kind || parsed.kind
+    if (kind === '0' || kind === '1' || kind === '2' || kind === '3') {
+      payload.kind = kind
+      return payload
     }
   } catch {
     /* ignore */

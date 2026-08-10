@@ -142,6 +142,10 @@ func (w *Worker) placeGuajiSchemeBet(
 	}
 	// 本端 evaluate 注数偶发偏少（如单式未按逗号切分）；以 wire 注数为准同步金额，避免账本少扣、对账差一倍。
 	amount = calcBetAmount(betsNums, float64(multInt), amountUnit)
+	// 第三方单次金额上限：本端预检，避免撞 guaji 40053。
+	if betAmountExceedsMax(amount) {
+		return schemeGuajiBetMeta{}, preflightPlaceErr(fmt.Errorf("%w: %w", guajibet.ErrPlaceRejected, errMaxBetAmountExceeded(cfg.Currency)))
+	}
 
 	periodNo := strings.TrimSpace(draw.IssueNo)
 	if !guajiBetPeriodMatches(inst.LotteryCode, periodNo) {

@@ -41,12 +41,39 @@ func HotColdWarmAttributeTiersForPositions(rule playRule, draws [][]string, posi
 		counts[opt] = 0
 	}
 	counted := 0
+	sxDp := isLHCSxDuipengPlayRule(rule)
+	wsDp := isLHCWsDuipengPlayRule(rule)
+	swDp := isLHCSwDuipengPlayRule(rule)
 	for _, balls := range draws {
 		if len(balls) == 0 {
 			continue
 		}
 		any := false
 		for _, opt := range universe {
+			// 生肖对碰：单肖不是合法注，按「该肖号码是否出现在七码」计频
+			if sxDp {
+				if lhcZodiacAppearsInDraw(opt, balls) {
+					counts[opt]++
+					any = true
+				}
+				continue
+			}
+			// 尾数对碰：单尾不是合法注，按「该尾号码是否出现在七码」计频
+			if wsDp {
+				if lhcTailAppearsInDraw(opt, balls) {
+					counts[opt]++
+					any = true
+				}
+				continue
+			}
+			// 生尾对碰：宇宙含肖+尾，分别按七码出现计频
+			if swDp {
+				if lhcZodiacAppearsInDraw(opt, balls) || lhcTailAppearsInDraw(opt, balls) {
+					counts[opt]++
+					any = true
+				}
+				continue
+			}
 			content := attributeHitContent(rule, opt, positionIdxs)
 			if evaluatePlayHit(rule, balls, content, false, "", rule.PositionIdx).Hit {
 				counts[opt]++

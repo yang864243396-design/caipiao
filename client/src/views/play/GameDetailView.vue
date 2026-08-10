@@ -51,9 +51,13 @@ import {
 } from '@/utils/betPayload'
 import {
   digitOptionsForConfig,
+  lhcTailChipLabel,
+  lhcTailChipSub,
+  lhcZodiacChipSub,
   poolMaxPicksForConfig,
   textPickOptionsForConfig,
   togglePoolPick,
+  toggleSwDuipengPick,
 } from '@/utils/pickPanelOptions'
 import SchemeRenxuanDanshiPanel from '@/components/schemes/SchemeRenxuanDanshiPanel.vue'
 import {
@@ -68,6 +72,9 @@ import {
   LHC_NUMBERS,
   LHC_TAIL_OPTIONS,
   LHC_ZODIACS,
+  isLhcSxDuipengConfig,
+  isLhcWsDuipengConfig,
+  isLhcSwDuipengConfig,
   lhcAttrOptions,
 } from '@/constants/lhcPlay'
 import { BET_MODE_OPTIONS } from '@/constants/betModeOptions'
@@ -180,6 +187,35 @@ const lhcPickOptions = computed((): readonly string[] => {
   }
   return LHC_NUMBERS
 })
+
+function lhcChipLabel(d: string): string {
+  const cfg = playConfig.value
+  if (cfg.inputMode === 'lhc_tail' && (isLhcWsDuipengConfig(cfg) || cfg.betMode === 'ws_dp')) {
+    return lhcTailChipLabel(d)
+  }
+  return d
+}
+
+const isSxDuipengPick = computed(
+  () => isLhcSxDuipengConfig(playConfig.value) || playConfig.value.betMode === 'sx_dp',
+)
+const isWsDuipengPick = computed(
+  () => isLhcWsDuipengConfig(playConfig.value) || playConfig.value.betMode === 'ws_dp',
+)
+const isSwDuipengPick = computed(
+  () => isLhcSwDuipengConfig(playConfig.value) || playConfig.value.betMode === 'sw_dp',
+)
+const isDuipengPick = computed(
+  () => isSxDuipengPick.value || isWsDuipengPick.value || isSwDuipengPick.value,
+)
+
+function toggleDuipengDigit(d: string) {
+  if (isSwDuipengPick.value) {
+    pickDigits.value = toggleSwDuipengPick(pickDigits.value, d)
+    return
+  }
+  pickDigits.value = togglePoolPick(pickDigits.value, d, poolMaxPicksForConfig(playConfig.value))
+}
 
 function initManualPicks(cfg: PlayConfig = playConfig.value) {
   if (snapshotId.value) return
@@ -1538,6 +1574,41 @@ async function handleBetError(e: unknown, fallback = '投注失败'): Promise<vo
               </button>
             </div>
           </template>
+          <!-- 生肖/尾数/生尾对碰：与方案编辑页一致的主文案 + 号码副文案 -->
+          <template v-else-if="isDuipengPick">
+            <div v-if="isSxDuipengPick || isSwDuipengPick" class="dock-pick-row dock-pick-row--sw">
+              <span class="dock-pick-pos">生肖</span>
+              <div class="dock-pick-chips dock-pick-chips--zodiac">
+                <button
+                  v-for="d in LHC_ZODIACS"
+                  :key="`z-${d}`"
+                  type="button"
+                  class="dock-pick-chip dock-pick-chip--zodiac"
+                  :class="{ 'is-active': pickDigits.includes(d) }"
+                  @click="toggleDuipengDigit(d)"
+                >
+                  <span class="dock-pick-chip-main">{{ d }}</span>
+                  <span class="dock-pick-chip-nums">{{ lhcZodiacChipSub(d) }}</span>
+                </button>
+              </div>
+            </div>
+            <div v-if="isWsDuipengPick || isSwDuipengPick" class="dock-pick-row dock-pick-row--sw">
+              <span class="dock-pick-pos">尾数</span>
+              <div class="dock-pick-chips dock-pick-chips--zodiac">
+                <button
+                  v-for="d in LHC_TAIL_OPTIONS"
+                  :key="`t-${d}`"
+                  type="button"
+                  class="dock-pick-chip dock-pick-chip--zodiac"
+                  :class="{ 'is-active': pickDigits.includes(d) }"
+                  @click="toggleDuipengDigit(d)"
+                >
+                  <span class="dock-pick-chip-main">{{ lhcTailChipLabel(d) }}</span>
+                  <span class="dock-pick-chip-nums">{{ lhcTailChipSub(d) }}</span>
+                </button>
+              </div>
+            </div>
+          </template>
           <template v-else-if="playConfig.inputMode === 'lhc_zodiac' || playConfig.inputMode === 'lhc_tail' || playConfig.inputMode === 'lhc_attr'">
             <div class="dock-pick-chips dock-pick-chips--lhc">
               <button
@@ -1548,7 +1619,7 @@ async function handleBetError(e: unknown, fallback = '投注失败'): Promise<vo
                 :class="{ 'is-active': pickDigits.includes(d) }"
                 @click="togglePickDigit(d)"
               >
-                {{ d }}
+                {{ lhcChipLabel(d) }}
               </button>
             </div>
           </template>
@@ -2798,9 +2869,52 @@ async function handleBetError(e: unknown, fallback = '投注失败'): Promise<vo
   overflow-y: auto;
 }
 
+.dock-pick-chips--zodiac {
+  flex: 1;
+  min-width: 0;
+}
+
+.dock-pick-row--sw {
+  margin-bottom: 0.5rem;
+}
+
+.dock-pick-row--sw .dock-pick-pos {
+  padding-top: 0.45rem;
+  line-height: 1.25;
+}
+
 .dock-pick-chip--lhc {
   min-width: 2.25rem;
   font-size: 12px;
+}
+
+.dock-pick-chip--zodiac {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0.1rem;
+  min-width: 7.5rem;
+  height: auto;
+  min-height: 2.5rem;
+  padding: 0.35rem 0.5rem;
+  line-height: 1.25;
+}
+
+.dock-pick-chip-main {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dock-pick-chip-nums {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+  font-variant-numeric: tabular-nums;
+  font-family: Inter, 'Noto Sans SC', sans-serif;
+}
+
+.dock-pick-chip--zodiac.is-active .dock-pick-chip-nums {
+  color: rgb(0 80 203 / 75%);
 }
 
 .dock-pick-chip {

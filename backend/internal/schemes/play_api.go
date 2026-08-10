@@ -6,6 +6,8 @@ import (
 	"hash/fnv"
 	"strconv"
 	"strings"
+
+	"caipiao/backend/internal/guajibet"
 )
 
 // BetPayload is persisted on bet_orders for settlement.
@@ -118,6 +120,13 @@ func validateGroupContent(rule playRule, content string) error {
 		}
 		return nil
 	}
+	// 六合须先于「直选复式/单式」分支：betMode=fushi 时勿按时时彩按位校验。
+	if rule.PlayTemplate == "lhc_std" || isLHCPlayRule(rule) {
+		if validateLHCGroupContent(rule, content) {
+			return nil
+		}
+		return fmt.Errorf("选号无效")
+	}
 	sub := rule.SubPlayID
 	if sub == "zhixuan_ds" || rule.BetMode == "danshi" || rule.BetMode == "zhixuan_ds" {
 		tokens := parseNumberTokens(content, rule.SegmentLen)
@@ -194,15 +203,17 @@ func validateGroupContent(rule playRule, content string) error {
 			return fmt.Errorf("每个位置最多只能投注9个号码")
 		}
 	}
-	if rule.PlayTemplate == "lhc_std" || isLHCPlayRule(rule) {
-		if validateLHCGroupContent(rule, content) {
-			return nil
-		}
-		return fmt.Errorf("选号无效")
-	}
 	if isSpecialBetMode(rule.BetMode) {
 		if strings.TrimSpace(content) == "" {
 			return fmt.Errorf("选号无效")
+		}
+		// 前二/后二/前三/后三大小单双：每位仅 1 个大/小/单/双
+		if err := validatePerPosDxdsContent(rule, content); err != nil {
+			return err
+		}
+		// 五星和值单双/大小、哈希尾数单双/大小：仅 1 个选项
+		if err := validateWuxingSumDxdsContent(rule, content); err != nil {
+			return err
 		}
 		// 和值/跨度：组合注数上限（前二=90、前三=900…）
 		bm := strings.TrimSpace(rule.BetMode)
@@ -301,6 +312,63 @@ func isSpecialBetMode(mode string) bool {
 	}
 }
 
+// validatePerPosDxdsContent 前二/后二/前三/后三大小单双：每位恰好 1 个大/小/单/双。
+func validatePerPosDxdsContent(rule playRule, content string) error {
+	if !isPerPosDxdsRandom(rule) {
+		return nil
+	}
+	allowed := map[string]bool{"大": true, "小": true, "单": true, "双": true}
+	lines := splitGroupLinesPad(content, rule.SegmentLen)
+	for i := 0; i < rule.SegmentLen; i++ {
+		raw := ""
+		if i < len(lines) {
+			raw = lines[i]
+		}
+		picks := make([]string, 0, 1)
+		for _, t := range parseTextTokens(raw) {
+			if allowed[t] {
+				picks = append(picks, t)
+			}
+		}
+		if len(picks) == 0 {
+			return fmt.Errorf("第 %d 位须选择一个选项（大/小/单/双）", i+1)
+		}
+		if len(picks) > 1 {
+			return fmt.Errorf("仅能选择一个选项（大/小/单/双）")
+		}
+	}
+	return nil
+}
+
+// validateWuxingSumDxdsContent 五星和值单双/大小、哈希尾数单双/大小：恰好 1 个选项。
+func validateWuxingSumDxdsContent(rule playRule, content string) error {
+	if !isSingleTokenDxdsRule(rule) {
+		return nil
+	}
+	bm := strings.ToLower(strings.TrimSpace(rule.BetMode))
+	label := rule.CatalogSubID + rule.SubPlayID
+	isDx := bm == "daxiao" || strings.Contains(label, "和值大小") || strings.Contains(label, "尾数大小")
+	allowed := map[string]bool{"单": true, "双": true}
+	hint := "单/双"
+	if isDx {
+		allowed = map[string]bool{"大": true, "小": true}
+		hint = "大/小"
+	}
+	picks := make([]string, 0, 1)
+	for _, t := range parseTextTokens(content) {
+		if allowed[t] {
+			picks = append(picks, t)
+		}
+	}
+	if len(picks) == 0 {
+		return fmt.Errorf("须选择一个选项（%s）", hint)
+	}
+	if len(picks) > 1 {
+		return fmt.Errorf("仅能选择一个选项（%s）", hint)
+	}
+	return nil
+}
+
 func validateSyxwRenxuanContent(rule playRule, content string) bool {
 	if rule.BetMode == "danshi" || strings.HasSuffix(rule.CatalogSubID, "_ds") {
 		for _, line := range splitGroupLines(content) {
@@ -317,6 +385,17 @@ func validateLHCGroupContent(rule playRule, content string) bool {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return false
+	}
+	if rule.BetMode == "sx_dp" {
+		zs := parseLHCZodiacs(strings.NewReplacer("|", ",", "#", ",").Replace(content))
+		return len(zs) >= 2
+	}
+	if rule.BetMode == "ws_dp" || isLHCWsDuipengPlayRule(rule) {
+		return len(parseLHCTailTokens(content)) >= 2
+	}
+	if rule.BetMode == "sw_dp" || isLHCSwDuipengPlayRule(rule) {
+		_, _, ok := guajibet.ParseLHCSwDuipengSides(content)
+		return ok
 	}
 	if rule.BetMode == "tuotou" || strings.Contains(rule.BetMode, "_dp") {
 		return strings.Contains(content, "|") || strings.Contains(content, "#") || len(parseLHCNumbers(content)) > 0

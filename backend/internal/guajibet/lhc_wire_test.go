@@ -3,8 +3,8 @@ package guajibet
 import "testing"
 
 func TestSampleLHCTuotouContent_numberErquanzhong(t *testing.T) {
-	meta := ParseRuleMeta("lhc_std", "g003", "278", "拖头", "连码",
-		[]byte(`{"guajiTeam":"二全中","guajiGroup":"连码","guajiFullName":"二全中拖头"}`), "278")
+	meta := ParseRuleMeta("lhc_std", "g003", "280", "拖头", "连码",
+		[]byte(`{"guajiTeam":"二全中","guajiGroup":"连码","guajiFullName":"二全中拖头"}`), "280")
 	got := sampleLHCTuotouContent(meta)
 	if got != "01|02,03" {
 		t.Fatalf("sample=%q want 01|02,03", got)
@@ -12,6 +12,111 @@ func TestSampleLHCTuotouContent_numberErquanzhong(t *testing.T) {
 	wire := FormatBetContentForRule(meta, got)
 	if n := countLHCBetNums(meta, wire); n != 2 {
 		t.Fatalf("bets=%d want 2", n)
+	}
+}
+
+func TestFormatLHCWsDuipengWire(t *testing.T) {
+	meta := ParseRuleMeta("lhc_std", "g003", "282", "尾数对碰", "连码",
+		[]byte(`{"guajiTeam":"二全中","guajiGroup":"连码","guajiFullName":"二全中尾数对碰"}`), "282")
+	want := "10,20,30,40|01,11,21,31,41"
+	if w := FormatBetContentForRule(meta, "0,1"); w != want {
+		t.Fatalf("flat wire=%q want %s", w, want)
+	}
+	if w := FormatBetContentForRule(meta, "0|1"); w != want {
+		t.Fatalf("bar wire=%q want %s", w, want)
+	}
+	if w := FormatBetContentForRule(meta, want); w != want {
+		t.Fatalf("number wire=%q want idempotent %s", w, want)
+	}
+	if n := countLHCBetNums(meta, "0|1"); n != 20 {
+		t.Fatalf("0|1 bets=%d want 20", n)
+	}
+	if n := countLHCBetNums(meta, "1|2"); n != 25 {
+		t.Fatalf("1|2 bets=%d want 25", n)
+	}
+	meta.ForcedBetMode = "ws_dp"
+	meta2 := ParseRuleMeta("lhc_std", "g003", "282", "", "", nil, "282")
+	meta2.ForcedBetMode = "ws_dp"
+	if w := FormatBetContentForRule(meta2, "0|1"); w != want {
+		t.Fatalf("forced mode wire=%q want %s", w, want)
+	}
+	if got := SampleGroupContent(meta); FormatBetContentForRule(meta, got) != want && got != want {
+		t.Fatalf("sample=%q want %s", got, want)
+	}
+}
+
+func TestFormatLHCSxDuipengWire(t *testing.T) {
+	meta := ParseRuleMeta("lhc_std", "g003", "281", "生肖对碰", "连码",
+		[]byte(`{"guajiTeam":"二全中","guajiGroup":"连码","guajiFullName":"二全中生肖对碰"}`), "281")
+	wantHorseSnake := "01,13,25,37,49|02,14,26,38"
+	if w := FormatBetContentForRule(meta, "马,蛇"); w != wantHorseSnake {
+		t.Fatalf("flat wire=%q want %s", w, wantHorseSnake)
+	}
+	if w := FormatBetContentForRule(meta, "马|蛇"); w != wantHorseSnake {
+		t.Fatalf("bar wire=%q want %s", w, wantHorseSnake)
+	}
+	// 已是号码列表：幂等
+	if w := FormatBetContentForRule(meta, wantHorseSnake); w != wantHorseSnake {
+		t.Fatalf("number wire=%q want idempotent %s", w, wantHorseSnake)
+	}
+	if n := countLHCBetNums(meta, "马,蛇"); n != 20 {
+		t.Fatalf("马|蛇 bets=%d want 20", n)
+	}
+	if n := countLHCBetNums(meta, "蛇|龙"); n != 16 {
+		t.Fatalf("蛇|龙 bets=%d want 16", n)
+	}
+	if n := countLHCBetNums(meta, wantHorseSnake); n != 20 {
+		t.Fatalf("expanded bets=%d want 20", n)
+	}
+	if got := SampleGroupContent(meta); FormatBetContentForRule(meta, got) != wantHorseSnake && got != wantHorseSnake {
+		t.Fatalf("sample=%q want %s", got, wantHorseSnake)
+	}
+}
+
+// TestFormatLHCSxDuipengWire_def1786204366339 复现定码二全中生肖对碰：
+// 方案落库「马|兔」；若原样下单会被第三方拒「投注数字不合规」；
+// 须展开为号码列表且 bets=20（2026-08-09 bet-probe 实测：马|兔 拒 / 展开 过）。
+func TestFormatLHCSxDuipengWire_def1786204366339(t *testing.T) {
+	meta := ParseRuleMeta("lhc_std", "g003", "281", "二全中生肖对碰", "连码",
+		[]byte(`{"guajiTeam":"二全中","guajiGroup":"连码","guajiRuleId":"281","guajiFullName":"二全中生肖对碰"}`), "281")
+	meta.ForcedBetMode = "sx_dp"
+	want := "01,13,25,37,49|04,16,28,40"
+	if w := FormatBetContentForRule(meta, "马|兔"); w != want {
+		t.Fatalf("wire=%q want %s", w, want)
+	}
+	if n := CountBetNums(meta, "马|兔"); n != 20 {
+		t.Fatalf("bets=%d want 20", n)
+	}
+	// 仅靠 ForcedBetMode / rule id，label 为空也须展开
+	meta2 := ParseRuleMeta("lhc_std", "g003", "281", "", "", nil, "281")
+	meta2.ForcedBetMode = "sx_dp"
+	if w := FormatBetContentForRule(meta2, "马|兔"); w != want {
+		t.Fatalf("forced mode wire=%q want %s", w, want)
+	}
+}
+
+func TestFormatLHCTuotouWire_flatErquanzhong(t *testing.T) {
+	meta := ParseRuleMeta("lhc_std", "g003", "280", "拖头", "连码",
+		[]byte(`{"guajiTeam":"二全中","guajiGroup":"连码","guajiFullName":"二全中拖头"}`), "280")
+	// 扁选落库 → 下单 胆|拖
+	if w := FormatBetContentForRule(meta, "7,13,25"); w != "07|13,25" {
+		t.Fatalf("flat wire=%q want 07|13,25", w)
+	}
+	if w := FormatBetContentForRule(meta, "07,13,25"); w != "07|13,25" {
+		t.Fatalf("flat wire=%q want 07|13,25", w)
+	}
+	// 已是胆|拖：幂等补零
+	if w := FormatBetContentForRule(meta, "7|13,25"); w != "07|13,25" {
+		t.Fatalf("bar wire=%q want 07|13,25", w)
+	}
+	if once := FormatBetContentForRule(meta, "07,13,25"); FormatBetContentForRule(meta, once) != once {
+		t.Fatalf("wire not idempotent: %q", once)
+	}
+	if n := countLHCBetNums(meta, "07,13,25"); n != 2 {
+		t.Fatalf("flat bets=%d want 2", n)
+	}
+	if n := countLHCBetNums(meta, "07|13,25"); n != 2 {
+		t.Fatalf("bar bets=%d want 2", n)
 	}
 }
 
@@ -158,8 +263,8 @@ func TestSampleLHCGroupContent_duipeng(t *testing.T) {
 }
 
 func TestSampleLHCSwDuipengContent(t *testing.T) {
-	meta := ParseRuleMeta("lhc_std", "g003", "281", "生尾对碰", "连码",
-		[]byte(`{"guajiTeam":"二全中","guajiGroup":"连码","guajiFullName":"二全中生尾对碰"}`), "281")
+	meta := ParseRuleMeta("lhc_std", "g003", "283", "生尾对碰", "连码",
+		[]byte(`{"guajiTeam":"二全中","guajiGroup":"连码","guajiFullName":"二全中生尾对碰"}`), "283")
 	got := SampleGroupContent(meta)
 	want := "07,19,31,43|10,20,30,40"
 	if got != want {
@@ -170,7 +275,39 @@ func TestSampleLHCSwDuipengContent(t *testing.T) {
 		t.Fatalf("bets=%d want 16 wire=%q", n, wire)
 	}
 	if got := MatrixSkipReason(meta); got != "" {
-		t.Fatalf("281 should not skip: %q", got)
+		t.Fatalf("283 should not skip: %q", got)
+	}
+}
+
+func TestFormatLHCSwDuipengWire(t *testing.T) {
+	meta := ParseRuleMeta("lhc_std", "g003", "283", "生尾对碰", "连码",
+		[]byte(`{"guajiTeam":"二全中","guajiGroup":"连码","guajiFullName":"二全中生尾对碰"}`), "283")
+	meta.ForcedBetMode = "sw_dp"
+	got := FormatBetContentForRule(meta, "马|0")
+	want := "01,13,25,37,49|10,20,30,40"
+	if got != want {
+		t.Fatalf("wire=%q want %q", got, want)
+	}
+	if n := CountBetNums(meta, "马|0"); n != 20 {
+		t.Fatalf("马|0 bets=%d want 20", n)
+	}
+	if n := CountBetNums(meta, "0|马"); n != 20 {
+		t.Fatalf("0|马 bets=%d want 20", n)
+	}
+	// 狗∩5尾={45}：展开仍含两侧 45，注数须 4×5−1=19（bets=20 第三方拒）
+	wireDog5 := FormatBetContentForRule(meta, "狗|5")
+	wantDog5 := "09,21,33,45|05,15,25,35,45"
+	if wireDog5 != wantDog5 {
+		t.Fatalf("狗|5 wire=%q want %q", wireDog5, wantDog5)
+	}
+	if n := CountBetNums(meta, "狗|5"); n != 19 {
+		t.Fatalf("狗|5 bets=%d want 19", n)
+	}
+	if n := CountBetNums(meta, wireDog5); n != 19 {
+		t.Fatalf("expanded 狗|5 bets=%d want 19", n)
+	}
+	if n := CountBetNums(meta, "马|1"); n != 24 {
+		t.Fatalf("马|1 bets=%d want 24 (∩01)", n)
 	}
 }
 
@@ -179,8 +316,18 @@ func TestFormatLHCTemaZongxiaoQimaWire(t *testing.T) {
 	if w := FormatBetContentForRule(tema, "07"); w != "07||" {
 		t.Fatalf("tema wire=%q", w)
 	}
-	if w := FormatBetContentForRule(tema, "7,13"); w != "07||,13||" {
+	if w := FormatBetContentForRule(tema, "7,13"); w != "07,13||" {
 		t.Fatalf("tema multi wire=%q", w)
+	}
+	if w := FormatBetContentForRule(tema, "大,红波,7,13"); w != "07,13|大|红波" {
+		t.Fatalf("tema attrs wire=%q", w)
+	}
+	if w := FormatBetContentForRule(tema, "07||,13||"); w != "07,13||" {
+		t.Fatalf("tema legacy multi wire=%q", w)
+	}
+	// 00 非法：下单会「投注数字不合规」，wire 须滤掉
+	if w := FormatBetContentForRule(tema, "00,01,02|大|红波"); w != "01,02|大|红波" {
+		t.Fatalf("tema strip 00 wire=%q", w)
 	}
 	zx := ParseRuleMeta("lhc_std", "g005", "301", "总肖", "生肖", nil, "301")
 	if w := FormatBetContentForRule(zx, "2,5"); w != "二肖,五肖" {

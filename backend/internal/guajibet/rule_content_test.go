@@ -98,6 +98,37 @@ func TestFormatBetContentForRule_qian3Zuhe(t *testing.T) {
 	}
 }
 
+// 前后四直选组合（rule136）：按序 4 位、逗号分隔，例如 1,2,3,4；禁止粘连四码展成复式。
+func TestFormatBetContentForRule_qianhou4ZuheOrderedComma(t *testing.T) {
+	seg, _ := json.Marshal(map[string]string{
+		"guajiGroup": "前后四", "guajiRuleId": "136",
+	})
+	meta := ParseRuleMeta("ssc_std", "g014", "136", "前后四直选组合", "前后四", seg, "136")
+	cases := []struct {
+		in, want string
+	}{
+		{"1,2,3,4", "1,2,3,4"},
+		{"1\n2\n3\n4", "1,2,3,4"},
+		{"12,34,5,6", "12,34,5,6"},
+		{"12\n34\n5\n6", "12,34,5,6"},
+	}
+	for _, tc := range cases {
+		got := FormatBetContentForRule(meta, tc.in)
+		if got != tc.want {
+			t.Fatalf("in %q: got %q want %q", tc.in, got, tc.want)
+		}
+	}
+	if n := CountBetNums(meta, "1,2,3,4"); n != 8 {
+		t.Fatalf("betsNums=%d want 8 (1×4×前后四2)", n)
+	}
+	if formatSSCZuheContent(0, 4, "1234") != "" {
+		t.Fatalf("glued 1234 must not format")
+	}
+	if got := FormatBetContentForRule(meta, "1234"); got == "1234,1234,1234,1234" {
+		t.Fatalf("must not expand glued digits, got %q", got)
+	}
+}
+
 func TestFormatBetContentForRule_dingwei(t *testing.T) {
 	meta := dingweiMeta()
 	got := FormatBetContentForRule(meta, "7")
@@ -965,14 +996,29 @@ func TestResolveSolo_sscQian2ZuxuanHezhi(t *testing.T) {
 func TestGuajiGroupRequiresSoloTrue_qianhou4Fushi(t *testing.T) {
 	// 正确 ruleId：复式 134（旧测试误用 130）
 	meta := ParseRuleMeta("ssc_std", "g014", "134", "直选复式", "", nil, "134")
+	meta.ForcedBetMode = "fushi"
 	if guajiGroupRequiresSoloFalse(meta) {
 		t.Fatal("g014 前后四复式不应走 solo=false 白名单")
 	}
 	if !guajiGroupRequiresSoloTrue(meta) {
-		t.Fatal("g014 前后四复式应 solo=true")
+		t.Fatal("g014 前后四复式应倾向 solo=true（再按注数钳制）")
 	}
 	if !ResolveSolo(meta, "0\n1\n2\n3", 2) {
 		t.Fatal("前后四直选复式 ResolveSolo 应为 true（bets=段积×2）")
+	}
+	// def-1-1785981350952：冷热 48 注须 solo=true
+	if !ResolveSolo(meta, "08,58,159,35", 48) {
+		t.Fatal("前后四冷热 48 注须 solo=true（实测 solo=false→单挑参数错误）")
+	}
+	if !ResolveSolo(meta, "01234,0123,01234,0", qianhou4SoloMaxBets) {
+		t.Fatal("前后四恰好 200 注仍应 solo=true")
+	}
+	// def-1-1785981220412：定码近满号池 18000 注须 solo=false
+	if ResolveSolo(meta, "0123456789,0123456789,0123456789,012345678", 18000) {
+		t.Fatal("前后四 18000 注须 solo=false（实测 solo=true→单挑参数错误）")
+	}
+	if ResolveSolo(meta, "012345,012345,012,0", qianhou4SoloMaxBets+16) {
+		t.Fatal("前后四超过 200 注须 solo=false")
 	}
 	metaZuhe := ParseRuleMeta("ssc_std", "g014", "136", "直选组合", "", nil, "136")
 	if guajiGroupRequiresSoloTrue(metaZuhe) {
@@ -998,13 +1044,27 @@ func TestResolveSolo_wuxingFushiHotColdPool(t *testing.T) {
 		t.Fatalf("wire bets=%d want 32", n)
 	}
 	if !guajiGroupRequiresSoloTrue(meta) {
-		t.Fatal("五星直选复式应强制 solo=true")
+		t.Fatal("五星直选复式应倾向 solo=true（再按注数钳制）")
 	}
 	if !ResolveSolo(meta, wire, 32) {
 		t.Fatal("五星复式 32 注须 solo=true（实测 solo=false→单挑参数错误）")
 	}
 	if !ResolveSolo(meta, "2,2,3,1,4", 1) {
 		t.Fatal("五星复式 1 注应 solo")
+	}
+	if !ResolveSolo(meta, "0123456789,0123456789,012345678,01,0", 1800) {
+		t.Fatal("五星复式 1800 注须 solo=true")
+	}
+	// def-1-1785990509756：近满号池 90000 注 solo=true → 单挑参数错误，须 solo=false
+	big := "0123456789,0123456789,0123456789,0123456789,012345678"
+	if n := CountBetNums(meta, big); n != 90000 {
+		t.Fatalf("big bets=%d want 90000", n)
+	}
+	if ResolveSolo(meta, big, 90000) {
+		t.Fatal("五星复式 90000 注须 solo=false（实测 solo=true→单挑参数错误）")
+	}
+	if ResolveSolo(meta, "01234,01234,01234,01234,012", 1875) {
+		t.Fatal("五星复式 1875 注须 solo=false")
 	}
 	// format 幂等
 	if again := FormatBetContentForRule(meta, wire); again != wire {
@@ -1282,6 +1342,14 @@ func TestFormatBetContentForRule_dxdsHou2(t *testing.T) {
 	if NeedsSoloForRule(meta, got) {
 		t.Fatal("后二大小单双不应 solo")
 	}
+	// 行内多选时 wire 仍每位取首个（第三方每位仅 1 选项）
+	got2 := FormatBetContentForRule(meta, "大,小\n单,双")
+	if got2 != "大,单" {
+		t.Fatalf("multi wire=%q want 大,单", got2)
+	}
+	if n := CountBetNums(meta, got2); n != 1 {
+		t.Fatalf("multi betsNums=%d want 1", n)
+	}
 }
 
 func TestSegmentRange_dxdsHou2ByRuleID266(t *testing.T) {
@@ -1307,8 +1375,25 @@ func TestInferBetMode_wuxingTeshu(t *testing.T) {
 	if mode := InferBetMode(meta); mode != "teshu" {
 		t.Fatalf("mode=%q want teshu", mode)
 	}
+	if !isWuxingQuweiDigitMeta(meta) {
+		t.Fatal("一帆风顺应为数字池趣味玩法")
+	}
 	if NeedsSoloForRule(meta, "6") {
 		t.Fatal("一帆风顺不应 solo")
+	}
+	wire := FormatBetContentForRule(meta, "0,3")
+	if wire != "0,3" {
+		t.Fatalf("wire=%q want 0,3", wire)
+	}
+	if n := CountBetNums(meta, wire); n != 2 {
+		t.Fatalf("bets=%d want 2", n)
+	}
+	// 超过 2 码出站截断（对齐第三方「投注数字不可超过两位」）
+	if got := FormatBetContentForRule(meta, "0,3,9"); got != "0,3" {
+		t.Fatalf("truncate wire=%q want 0,3", got)
+	}
+	if n := CountBetNums(meta, FormatBetContentForRule(meta, "039")); n != 2 {
+		t.Fatalf("flat 039 bets=%d want 2", n)
 	}
 }
 
@@ -1331,6 +1416,18 @@ func TestFormatBetContentForRule_wuxingHzDs(t *testing.T) {
 	got := FormatBetContentForRule(meta, "单")
 	if got != "单" {
 		t.Fatalf("wire=%q want 单", got)
+	}
+	// 多选时 wire 仅取首个；注数恒为 1
+	got2 := FormatBetContentForRule(meta, "单,双")
+	if got2 != "单" {
+		t.Fatalf("multi wire=%q want 单", got2)
+	}
+	if n := CountBetNums(meta, got2); n != 1 {
+		t.Fatalf("betsNums=%d want 1", n)
+	}
+	meta268 := ParseRuleMeta("ssc_std", "g016", "268", "五星和值单双", "大小单双", nil, "268")
+	if got3 := FormatBetContentForRule(meta268, "双"); got3 != "双" {
+		t.Fatalf("268 wire=%q want 双", got3)
 	}
 }
 
@@ -1581,6 +1678,13 @@ func TestMatrixSkipReason_lhcTemaWire(t *testing.T) {
 	}
 	if n := CountBetNums(meta, wire); n != 1 {
 		t.Fatalf("bets=%d want 1", n)
+	}
+	wire2 := FormatBetContentForRule(meta, "07,13|大|红波")
+	if wire2 != "07,13|大|红波" {
+		t.Fatalf("wire2=%q want 07,13|大|红波", wire2)
+	}
+	if n := CountBetNums(meta, wire2); n != 4 {
+		t.Fatalf("bets=%d want 4", n)
 	}
 	zx := ParseRuleMeta("lhc_std", "g005", "301", "总肖", "生肖", nil, "301")
 	if FormatBetContentForRule(zx, "2") != "二肖" {

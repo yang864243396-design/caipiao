@@ -4,6 +4,7 @@ import { fetchGameDraws } from '@/api/games/detail'
 import { fetchHotColdWarmTiers } from '@/api/schemes/definitions'
 import SchemeGroupInputPanel from '@/components/schemes/SchemeGroupInputPanel.vue'
 import SchemeGroupPickPanel from '@/components/schemes/SchemeGroupPickPanel.vue'
+import SchemeLhcTemaPanel from '@/components/schemes/SchemeLhcTemaPanel.vue'
 import SchemeRenxuanDanshiPanel from '@/components/schemes/SchemeRenxuanDanshiPanel.vue'
 import type { PlayConfig } from '@/utils/betPayload'
 import {
@@ -11,20 +12,38 @@ import {
   countBetUnits,
   groupContentPlaceholder,
   isRenxuanNeedsPositionConfig,
-  isZu12PlayConfig,
+  isZuDualPlayConfig,
   isZuxuanDanshiConfig,
   maxHezhiKuaduRandomCount,
   playConfigSummary,
-  randomZu12DualContent,
+  randomZuDualContentForConfig,
+  zuDualMetaOf,
   SSC_POSITION_LABELS,
   WEISHU_MAX_BET_UNITS,
+  isLhcErquanzhongFushiConfig,
+  isLhcTemaPlayConfig,
   zuxuanPoolMinPick,
 } from '@/utils/betPayload'
 import {
+  LHC_SX_DUIPENG_MAX_PICKS,
+  LHC_SW_DUIPENG_MAX_PICKS,
+  LHC_SW_DUIPENG_OPTIONS,
+  LHC_WS_DUIPENG_MAX_PICKS,
+  LHC_TAIL_OPTIONS,
+  LHC_ZODIACS,
+  isLhcSxDuipengConfig,
+  isLhcSwDuipengConfig,
+  isLhcWsDuipengConfig,
+  lhcTemaHcwUniverse,
+  pickRandomLhcSwDuipengPair,
+} from '@/constants/lhcPlay'
+import {
   digitOptionsForConfig,
+  lhcTailChipLabel,
   poolMaxPicksForConfig,
   schemeGroupContentToInputBox,
   schemeGroupUsesDigitInput,
+  schemeGroupUsesLhcTemaPanel,
   schemeGroupUsesTextInputPanel,
   schemeGroupUsesPickPanel,
 } from '@/utils/pickPanelOptions'
@@ -33,10 +52,13 @@ import {
   defaultRenxuanTriggerPositionIdxs,
   isLonghuPlayConfigLike,
   isPerPosDxdsPlayConfig,
+  PER_POS_DXDS_OPTIONS,
+  sscDigitDxdsAttrs,
   isRenxuanNeedsPositionTriggerPlay,
   isRenxuanPerPosTriggerPlay,
   isRenxuanHcwOpenPosPlay,
-  isRenxuanHcwZu12Play,
+  isHcwZuDualPlay,
+  isRenxuanHcwZuDualPlay,
   isZhixuanDanshiPerPosPlay,
   supportsAdvTriggerPerPosColumns,
   supportsAdvTriggerPositionPicker,
@@ -114,10 +136,26 @@ const isRenxuanHcwDualPosPlay = computed(() =>
   isRenxuanHcwOpenPosPlay(props.playConfig),
 )
 
-/** 任选·组选12 冷热：投注选位合并计频 + 二重/单号双池 */
-const isRenxuanHcwZu12 = computed(() => isRenxuanHcwZu12Play(props.playConfig))
+/** 任选·组选12/4：投注选位说明 */
+const isRenxuanHcwZuDual = computed(() => isRenxuanHcwZuDualPlay(props.playConfig))
 
-/** 直选单式/混合组选冷热需要独立开奖选位；组选12 按投注选位计频 */
+/** 双区组选冷热双池（组选12/4、五星60·20·10·5 等） */
+const isHcwZuDual = computed(() => isHcwZuDualPlay(props.playConfig))
+const zuDualMeta = computed(() => zuDualMetaOf(props.playConfig))
+const zuDualHeadLabel = computed(() => zuDualMeta.value?.headLabel ?? '二重号')
+const zuDualTailLabel = computed(() => zuDualMeta.value?.tailLabel ?? '单号')
+const zuDualSingleMin = computed(() => zuDualMeta.value?.minTail ?? 2)
+const zuDualHeadMin = computed(() => zuDualMeta.value?.minHead ?? 1)
+const zuDualZoneLabels = computed(() => {
+  const m = zuDualMeta.value
+  return m ? ([m.headLabel, m.tailLabel] as const) : (['二重号', '单号'] as const)
+})
+
+function randomZuDualContent(headCount: number, tailCount?: number): string {
+  return randomZuDualContentForConfig(props.playConfig, headCount, tailCount)
+}
+
+/** 直选单式/混合组选冷热需要独立开奖选位；组选12/4 按投注选位计频 */
 const showHcwOpenPosition = computed(() => isRenxuanHcwDualPosPlay.value)
 
 const renxuanRunPosNeed = computed(() => {
@@ -187,8 +225,12 @@ const hcwOpenPosHint = computed(() => {
 const hcwBetPosHint = computed(() => {
   const need = renxuanRunPosNeed.value
   const bet = hcwBetPosIdxs.value.map((i) => SSC_POSITION_LABELS[i] ?? String(i)).join('/') || '所选投注位'
-  if (isRenxuanHcwZu12.value) {
-    return `投注选位至少选 ${need} 个（当前${bet}），下方二重号/单号池按所选位合并历史开奖频次更新；二重≥1、单号≥2，凑不足 1 注则跳过当期。`
+  if (isRenxuanHcwZuDual.value) {
+    const head = zuDualHeadLabel.value
+    const minS = zuDualSingleMin.value
+    const tail = zuDualTailLabel.value
+    const minH = zuDualHeadMin.value
+    return `投注选位至少选 ${need} 个（当前${bet}），下方${head}/${tail}池按所选位合并历史开奖频次更新；${head}≥${minH}、${tail}≥${minS}，凑不足 1 注则跳过当期。`
   }
   return `投注选位至少选 ${need} 个（当前${bet}），取开奖选位频次号码组合出票。`
 })
@@ -243,6 +285,12 @@ const triggerOpenPositionIdx = computed(() => {
 })
 
 const TRIGGER_OPEN_POS_HINT = '开奖选位：上期该位球号查开出映射行。'
+
+const TRIGGER_TEMA_OPEN_HINT = '以上期开奖特码为开号标准'
+
+const showTriggerTemaOpenHint = computed(
+  () => isLhcTemaPlayConfig(props.playConfig) || isLhcErquanzhongFushiConfig(props.playConfig),
+)
 
 const triggerBetPosHint = computed(() => {
   const need = triggerRenPosNeed.value
@@ -324,11 +372,10 @@ const triggerPositionIdxs = computed(() => {
 
 const triggerRows = computed<SchemeTriggerRow[]>(() => props.triggerBet?.rows ?? [])
 const triggerMode = computed(() => props.triggerBet?.mode ?? 'always_pos')
-const isTriggerZu12DualInput = computed(() => isZu12PlayConfig(props.playConfig))
-const TRIGGER_ZU12_ZONE_LABELS = ['二重号', '单号'] as const
+const isTriggerZuDualInput = computed(() => isZuDualPlayConfig(props.playConfig))
 
-/** 组选12 双区只读：0=二重号，1=单号 */
-function getZu12TriggerZone(raw: string, zone: 0 | 1): string {
+/** 组选12/4 双区只读：0=头区（二重/三重），1=单号 */
+function getZuDualTriggerZone(raw: string, zone: 0 | 1): string {
   const text = String(raw ?? '').replace(/，/g, ',')
   if (!text) return ''
   const idx = text.indexOf(',')
@@ -364,35 +411,52 @@ function normalizePoolToken(raw: string): string {
 }
 
 const hcwDigitOverall = computed(() => {
-  if (isRenxuanHcwZu12.value) return false
+  if (isHcwZuDual.value) return false
   const cfg = props.playConfig as { betMode?: string; subPlayId?: string; playMethodLabel?: string }
   const bm = String(cfg.betMode ?? '').toLowerCase()
   // 混合组选：与直选复式同按位（千/百/十），勿因文案含「组选」进单档号码池
   if (bm === 'hunhe') return false
+  const label = String(cfg.playMethodLabel ?? '')
+  if (/一帆风顺|好事成双|三星报喜|四季发财/i.test(label)) return true
   if (
-    ['zu3', 'zu6', 'zu24', 'zu12', 'zu60', 'zu30', 'zu120', 'budingwei', 'baodan', 'zuxuan_fs', 'zuxuan_ds'].includes(
+    ['zu3', 'zu6', 'zu24', 'zu60', 'zu30', 'zu120', 'budingwei', 'baodan', 'zuxuan_fs', 'zuxuan_ds'].includes(
       bm,
     )
   ) {
     return true
   }
   const sub = `${String(cfg.subPlayId ?? '')}`.toLowerCase()
-  if (/zuxuan_fs|zu3|zu6|zu24|zu12|zu60|zu30|zu120|budingwei|baodan/.test(sub)) return true
-  const label = String(cfg.playMethodLabel ?? '')
+  if (/zuxuan_fs|zu3|zu6|zu24|zu12|zu4|zu60|zu30|zu120|budingwei|baodan/.test(sub)) {
+    if (/zu12/i.test(sub) && !/zu120/i.test(sub)) return false
+    if (/zu4/i.test(sub) && !/zu24|zu12/i.test(sub)) return false
+    return true
+  }
   if (label.includes('单式') || label.includes('混合')) return false
+  if (/组选12/.test(label) && !/组选120/.test(label)) return false
+  if (/组选4/.test(label) && !/组选24|组选12/.test(label)) return false
   return /组三|组六|组选|不定位|包胆/.test(label)
 })
 
+const hcwPerPosDxds = computed(() => isPerPosDxdsPlayConfig(props.playConfig))
+
 const hcwAttribute = computed(() => {
+  const label = String(props.playConfig.playMethodLabel ?? '')
+  if (/一帆风顺|好事成双|三星报喜|四季发财/i.test(label)) return false
+  // 按位大小单双：十/个分列展示，勿进单档「选项池」
+  if (isPerPosDxdsPlayConfig(props.playConfig)) return false
+  // 特码/正特：号码+属性+波色 单档选项池（68 项）
+  if (isLhcTemaPlayConfig(props.playConfig)) return true
+  // 生肖/尾数/生尾对碰：属性选项池
+  if (isLhcSxDuipengConfig(props.playConfig) || isLhcWsDuipengConfig(props.playConfig) || isLhcSwDuipengConfig(props.playConfig)) return true
   const bm = String(props.playConfig.betMode ?? '').toLowerCase()
-  return ['daxiao', 'danshuang', 'dxds', 'zhuangxian', 'longhu', 'longhuhe', 'longhubao', 'teshu', 'hezhi', 'kuadu'].includes(bm)
+  return ['daxiao', 'danshuang', 'dxds', 'zhuangxian', 'longhu', 'longhuhe', 'longhubao', 'teshu', 'hezhi', 'kuadu', 'weishu', 'tema', 'zhengte', 'sx_dp', 'ws_dp', 'sw_dp'].includes(bm)
 })
 
 const hcwSingleGroup = computed(() => hcwDigitOverall.value || hcwAttribute.value)
 
-/** 按位展示档数：组选12=2；直选单式=开奖选位数；其余以玩法位数与 ranks 为准 */
+/** 按位展示档数：组选12/4=2；直选单式=开奖选位数；其余以玩法位数与 ranks 为准 */
 const hcwPosCount = computed(() => {
-  if (isRenxuanHcwZu12.value) return 2
+  if (isHcwZuDual.value) return 2
   if (hcwSingleGroup.value) return 1
   if (isRenxuanHcwDualPosPlay.value) {
     return Math.max(2, hcwOpenPosIdxs.value.length || renxuanRunPosNeed.value)
@@ -531,17 +595,22 @@ const hcwEstimatePools = computed(() => {
   })
 })
 
-const hcwFallbackOptions = computed(() =>
-  hcwAttribute.value
-    ? hcwAttrUniverse.value.length
-      ? hcwAttrUniverse.value
-      : numberPoolTokens.value
-    : numberPoolTokens.value,
-)
+const hcwFallbackOptions = computed(() => {
+  if (hcwPerPosDxds.value) return [...PER_POS_DXDS_OPTIONS]
+  if (hcwAttribute.value) {
+    if (hcwAttrUniverse.value.length) return hcwAttrUniverse.value
+    if (isLhcTemaPlayConfig(props.playConfig)) return lhcTemaHcwUniverse()
+    if (isLhcSxDuipengConfig(props.playConfig)) return [...LHC_ZODIACS]
+    if (isLhcWsDuipengConfig(props.playConfig)) return [...LHC_TAIL_OPTIONS]
+    if (isLhcSwDuipengConfig(props.playConfig)) return [...LHC_SW_DUIPENG_OPTIONS]
+    return numberPoolTokens.value
+  }
+  return numberPoolTokens.value
+})
 
 const hcwGroupLabels = computed(() => {
   if (hcwAttribute.value) return ['选项池']
-  if (isRenxuanHcwZu12.value) return ['二重号', '单号']
+  if (isHcwZuDual.value) return [...zuDualZoneLabels.value]
   if (hcwDigitOverall.value) return ['号码池']
   if (isRenxuanHcwDualPosPlay.value) {
     return hcwOpenPosIdxs.value.map((i) => SSC_POSITION_LABELS[i] ?? String(i))
@@ -592,10 +661,24 @@ function hcwPositionOffset(ballsLen: number): number {
     }
     return 0
   }
-  const typeId = props.playConfig.playTypeId
+  const typeId = String(props.playConfig.playTypeId ?? '').toLowerCase()
+  if (typeId === 'sixing' || typeId === 'g013' || typeId === 'hou4') {
+    return ballsLen >= 5 ? 1 : 0
+  }
   if (typeId.startsWith('hou')) return ballsLen - segLen
   if (typeId.startsWith('zhong')) return Math.floor((ballsLen - segLen) / 2)
   return 0
+}
+
+function hcwFixedSegmentBallIdxs(): number[] {
+  const labels = props.playConfig.segmentLabels ?? []
+  const idxs = labels
+    .map((l) => SSC_POSITION_LABELS.indexOf(l as (typeof SSC_POSITION_LABELS)[number]))
+    .filter((i) => i >= 0)
+  if (idxs.length > 0) return idxs
+  const n = Math.max(1, positionCount.value)
+  const offset = hcwPositionOffset(5)
+  return Array.from({ length: n }, (_, i) => offset + i)
 }
 
 async function loadHcwAttrStats(seq: number): Promise<void> {
@@ -642,6 +725,56 @@ async function loadHcwAttrStats(seq: number): Promise<void> {
   hcwStatsGen.value += 1
 }
 
+async function loadHcwPerPosDxdsStats(seq: number, code: string): Promise<void> {
+  const uni = [...PER_POS_DXDS_OPTIONS]
+  const ballIdxs = hcwFixedSegmentBallIdxs()
+  const dims = Math.max(1, ballIdxs.length || hcwPosCount.value)
+  const res = await fetchGameDraws(code, undefined, hcwTotalPeriods.value)
+  if (seq !== hcwLoadSeq) return
+  const items = Array.isArray(res?.items) ? res.items : []
+  const freq: Array<Record<string, number>> = Array.from({ length: dims }, () => {
+    const row: Record<string, number> = {}
+    for (const opt of uni) row[opt] = 0
+    return row
+  })
+  let counted = 0
+  for (const it of items) {
+    const balls = Array.isArray(it?.balls) ? it.balls : []
+    if (!balls.length) continue
+    for (let p = 0; p < dims; p++) {
+      const ballIdx = ballIdxs[p] ?? p
+      const n = Number(balls[ballIdx])
+      if (!Number.isFinite(n)) continue
+      for (const opt of sscDigitDxdsAttrs(n)) {
+        freq[p]![opt] = (freq[p]![opt] ?? 0) + 1
+        counted += 1
+      }
+    }
+  }
+  if (!counted) {
+    if (hcwStatsReady.value && hcwFreq.value.length) return
+    hcwStatsReady.value = false
+    hcwTiers.value = Array.from({ length: dims }, () => ({
+      hot: [] as string[],
+      warm: [] as string[],
+      cold: [...uni],
+    }))
+    hcwFreq.value = []
+    return
+  }
+  const half = Math.ceil(uni.length / 2)
+  hcwTiers.value = freq.map((counts) => {
+    const sorted = [...uni].sort((a, b) => {
+      const diff = (counts[b] ?? 0) - (counts[a] ?? 0)
+      return diff !== 0 ? diff : uni.indexOf(a) - uni.indexOf(b)
+    })
+    return { hot: sorted.slice(0, half), warm: [], cold: sorted.slice(half) }
+  })
+  hcwFreq.value = freq.map((counts) => ({ ...counts }))
+  hcwStatsReady.value = true
+  hcwStatsGen.value += 1
+}
+
 async function loadHcwStats(): Promise<void> {
   if (props.runTypeId !== 'hot_cold_warm') return
   const seq = ++hcwLoadSeq
@@ -658,13 +791,19 @@ async function loadHcwStats(): Promise<void> {
       hcwFreq.value = []
       return
     }
+    if (hcwPerPosDxds.value) {
+      await loadHcwPerPosDxdsStats(seq, code)
+      return
+    }
     const res = await fetchGameDraws(code, undefined, hcwTotalPeriods.value)
     if (seq !== hcwLoadSeq) return
     const items = Array.isArray(res?.items) ? res.items : []
     const pool = numberPoolTokens.value
-    // 任选组选12：按投注选位合并计频，二重/单号两池共用
-    if (isRenxuanHcwZu12.value) {
-      const betIdxs = hcwBetPosIdxs.value.filter((i) => Number.isInteger(i) && i >= 0 && i < 5)
+    // 组选12/4：任选按投注选位、四星等按玩法位合并计频；头区/单号两池共用
+    if (isHcwZuDual.value) {
+      const betIdxs = isRenxuanNeedsPositionConfig(props.playConfig)
+        ? hcwBetPosIdxs.value.filter((i) => Number.isInteger(i) && i >= 0 && i < 5)
+        : hcwFixedSegmentBallIdxs()
       const counts: Record<string, number> = {}
       let counted = 0
       for (const it of items) {
@@ -835,11 +974,22 @@ const hcwCellsByPos = computed(() => {
   return hcwGroupLabels.value.map((_, pi) => hcwDisplayCells(pi))
 })
 
+function hcwZuDualPicks(): string {
+  const head = (hcwEstimatePools.value[0] ?? []).join('').replace(/[^0-9]/g, '')
+  const singles = (hcwEstimatePools.value[1] ?? []).join('').replace(/[^0-9]/g, '')
+  if (!head && !singles) return ''
+  return `${head},${singles}`
+}
+
 const hcwEstimatedUnits = computed(() => {
   // 与编辑页一致：和值/跨度等走 countBetUnits（组合数×段倍乘），勿按选项个数计注
   if (hcwAttribute.value) {
     const line = (hcwEstimatePools.value[0] ?? []).filter((t) => t.trim() !== '').join(',')
     return line ? countBetUnits(props.playConfig, line) : 0
+  }
+  if (isHcwZuDual.value) {
+    const dual = hcwZuDualPicks()
+    return dual ? countBetUnits(props.playConfig, wrapRdRenxuanContent(dual)) : 0
   }
   if (hcwDigitOverall.value) {
     const line = (hcwEstimatePools.value[0] ?? []).join(',')
@@ -874,6 +1024,7 @@ watch(
 )
 
 const schemeUsesPickPanel = computed(() => schemeGroupUsesPickPanel(props.playConfig))
+const schemeUsesLhcTemaPanel = computed(() => schemeGroupUsesLhcTemaPanel(props.playConfig))
 const schemeUsesTextInputPanel = computed(() => schemeGroupUsesTextInputPanel(props.playConfig))
 const schemeUsesRenxuanDanshi = computed(() => isRenxuanNeedsPositionConfig(props.playConfig))
 const groupInputPlaceholder = computed(() => groupContentPlaceholder(props.playConfig))
@@ -885,15 +1036,28 @@ const displayedGroupIndexes = computed(() => {
 
 const rdCounts = computed(() => {
   const raw = props.randomDraw?.counts ?? []
+  const dual = isZuDualPlayConfig(props.playConfig)
+  const minH = zuDualHeadMin.value
+  const minS = zuDualSingleMin.value
   if (raw.length) {
     const counts = raw.map((n) => Math.max(1, Math.trunc(Number(n) || 1)))
-    // 组选12：旧配置仅 [K] 时展示补默认单号 2
-    if (isZu12PlayConfig(props.playConfig) && counts.length < 2) {
-      return [counts[0] ?? 1, 2]
+    // 双区组选：旧配置仅 [K] 时展示补默认尾区个数
+    if (dual && counts.length < 2) {
+      return [Math.max(minH, counts[0] ?? minH), minS]
+    }
+    if (dual && counts.length >= 2) {
+      let d = Math.min(10, Math.max(minH, counts[0] ?? minH))
+      let s = Math.min(10, Math.max(minS, counts[1] ?? minS))
+      if (zuDualMeta.value?.equalCounts) {
+        const n = Math.max(d, s, minH, minS)
+        d = n
+        s = n
+      }
+      return [d, s]
     }
     return counts
   }
-  if (isZu12PlayConfig(props.playConfig)) return [1, 2]
+  if (dual) return [minH, minS]
   return [1]
 })
 
@@ -918,12 +1082,12 @@ const rdWholeTicket = computed(() => {
   return label.includes('单式')
 })
 
-/** 组选12 随机：二重号/单号两个选码个数 */
-const isRdZu12Dual = computed(() => isZu12PlayConfig(props.playConfig) && !rdWholeTicket.value)
+/** 组选12/4 随机：头区/单号两个选码个数 */
+const isRdZuDual = computed(() => isZuDualPlayConfig(props.playConfig) && !rdWholeTicket.value)
 
 /** 组选号池随机；包胆/和值属属性单选，勿因文案含「组选」误入。 */
 const rdZuxuanPool = computed(() => {
-  if (rdWholeTicket.value || isRdZu12Dual.value) return false
+  if (rdWholeTicket.value || isRdZuDual.value) return false
   const cfg = props.playConfig as {
     betMode?: string
     subPlayId?: string
@@ -944,9 +1108,13 @@ const rdZuxuanPool = computed(() => {
 })
 
 const rdAttribute = computed(() => {
-  if (rdWholeTicket.value || rdZuxuanPool.value || isRdZu12Dual.value) return false
+  if (rdWholeTicket.value || rdZuxuanPool.value || isRdZuDual.value) return false
   // 前二/后二/前三/后三大小单双：按位展示，不走单档「选项个数」
   if (isPerPosDxdsPlayConfig(props.playConfig)) return false
+  // 特码/正特：01–49 + 属性 + 波色，单档「选项个数」上限 68
+  if (isLhcTemaPlayConfig(props.playConfig)) return true
+  // 生肖/尾数/生尾对碰：恰好 2 个属性
+  if (isLhcSxDuipengConfig(props.playConfig) || isLhcWsDuipengConfig(props.playConfig) || isLhcSwDuipengConfig(props.playConfig)) return true
   const bm = String(props.playConfig.betMode ?? '').toLowerCase()
   return [
     'daxiao',
@@ -959,13 +1127,19 @@ const rdAttribute = computed(() => {
     'teshu',
     'hezhi',
     'kuadu',
+    'weishu',
     'budingwei',
     'baodan',
+    'tema',
+    'zhengte',
+    'sx_dp',
+    'ws_dp',
+    'sw_dp',
   ].includes(bm)
 })
 
 const rdSingleCountMode = computed(
-  () => !isRdZu12Dual.value && (rdWholeTicket.value || rdZuxuanPool.value || rdAttribute.value),
+  () => !isRdZuDual.value && (rdWholeTicket.value || rdZuxuanPool.value || rdAttribute.value),
 )
 const rdSingleCountLabel = computed(() => {
   if (rdWholeTicket.value) return '注数'
@@ -984,6 +1158,16 @@ const rdSingleCountMax = computed(() => {
     const cfg = props.playConfig
     const bm = String(cfg.betMode ?? '').toLowerCase()
     if (bm === 'baodan') return 1
+    // 特码/正特：宇宙 68，勿用号池 49 当上限
+    if (isLhcTemaPlayConfig(cfg)) {
+      const max = lhcTemaHcwUniverse().length
+      const saved = Math.max(1, Math.trunc(Number(rdCounts.value[0]) || 1))
+      return Math.max(max, saved)
+    }
+    // 生肖/尾数/生尾对碰：恰好 2 个属性
+    if (isLhcSxDuipengConfig(cfg)) return LHC_SX_DUIPENG_MAX_PICKS
+    if (isLhcWsDuipengConfig(cfg)) return LHC_WS_DUIPENG_MAX_PICKS
+    if (isLhcSwDuipengConfig(cfg)) return LHC_SW_DUIPENG_MAX_PICKS
     const pickCap = poolMaxPicksForConfig(cfg)
     if (bm === 'budingwei' && pickCap != null && pickCap > 0) {
       return Math.min(pickCap, numberPoolTokens.value.length || pickCap)
@@ -1025,8 +1209,11 @@ const rdEstimatedUnits = computed(() => {
     }
     return n
   }
-  if (isRdZu12Dual.value) {
-    const sample = randomZu12DualContent(rdCounts.value[0] ?? 1, rdCounts.value[1] ?? 2)
+  if (isRdZuDual.value) {
+    const sample = randomZuDualContent(
+      rdCounts.value[0] ?? 1,
+      rdCounts.value[1] ?? zuDualSingleMin.value,
+    )
     return countBetUnits(props.playConfig, wrapRdRenxuanContent(sample))
   }
   if (rdZuxuanPool.value) {
@@ -1039,10 +1226,30 @@ const rdEstimatedUnits = computed(() => {
   }
   if (rdAttribute.value) {
     const k = Math.max(1, rdCounts.value[0] ?? 1)
-    const uni = [...numberPoolTokens.value]
-    const picks = (uni.length ? uni : Array.from({ length: k }, (_, i) => String(i)))
-      .slice(0, k)
-      .join(',')
+    const sxDp = isLhcSxDuipengConfig(props.playConfig)
+    const wsDp = isLhcWsDuipengConfig(props.playConfig)
+    const swDp =
+      isLhcSwDuipengConfig(props.playConfig) ||
+      String(props.playConfig.betMode ?? '').toLowerCase() === 'sw_dp'
+    const uni = isLhcTemaPlayConfig(props.playConfig)
+      ? lhcTemaHcwUniverse()
+      : sxDp
+        ? [...LHC_ZODIACS]
+        : wsDp
+          ? [...LHC_TAIL_OPTIONS]
+          : swDp
+            ? [...LHC_SW_DUIPENG_OPTIONS]
+            : [...numberPoolTokens.value]
+    const sep = sxDp || wsDp || swDp ? '|' : ','
+    // 生尾对碰：勿用宇宙前两项（两肖）估注
+    const picks = swDp
+      ? pickRandomLhcSwDuipengPair().join('|')
+      : (uni.length ? uni : Array.from({ length: k }, (_, i) => String(i)))
+          .slice(0, k)
+          .join(sep)
+    if ((isLhcTemaPlayConfig(props.playConfig) || sxDp || wsDp || swDp) && picks) {
+      return countBetUnits(props.playConfig, picks)
+    }
     if (isRenxuanNeedsPositionConfig(props.playConfig) && picks) {
       return countBetUnits(props.playConfig, wrapRdRenxuanContent(picks))
     }
@@ -1059,6 +1266,17 @@ const rdEstimatedUnits = computed(() => {
 
 function groupBetUnits(content: string): number {
   return countBetUnits(props.playConfig, content)
+}
+
+/** 尾数/生尾对碰展示：0 → 0尾（落库仍为 0）；生肖保持原样 */
+function formatWsDpTokenLabel(token: string): string {
+  const sw = isLhcSwDuipengConfig(props.playConfig)
+  const ws = isLhcWsDuipengConfig(props.playConfig)
+  if (!ws && !sw) return token
+  if ((LHC_TAIL_OPTIONS as readonly string[]).includes(String(token).replace(/尾$/, ''))) {
+    return lhcTailChipLabel(token) || token
+  }
+  return token
 }
 
 function formatGroupContent(content: string): string {
@@ -1124,6 +1342,12 @@ function formatGroupContent(content: string): string {
         <div class="scr-textarea-wrap">
           <SchemeRenxuanDanshiPanel
             v-if="schemeUsesRenxuanDanshi"
+            :model-value="schemeGroups[idx] ?? ''"
+            :config="playConfig"
+            disabled
+          />
+          <SchemeLhcTemaPanel
+            v-else-if="schemeUsesLhcTemaPanel"
             :model-value="schemeGroups[idx] ?? ''"
             :config="playConfig"
             disabled
@@ -1244,14 +1468,33 @@ function formatGroupContent(content: string): string {
       <div
         class="scr-trig-grid scr-trig-grid--head"
         :class="{
-          'scr-trig-grid--posrow': showTriggerPerPosColumns || isTriggerZu12DualInput,
-          'scr-trig-grid--zu12-head': isTriggerZu12DualInput,
+          'scr-trig-grid--posrow': showTriggerPerPosColumns || isTriggerZuDualInput,
+          'scr-trig-grid--zu12-head': isTriggerZuDualInput,
         }"
-        aria-hidden="true"
+        :aria-hidden="showTriggerTemaOpenHint ? undefined : true"
       >
         <span>启用</span>
-        <span>开出</span>
-        <template v-if="showTriggerPerPosColumns || isTriggerZu12DualInput">
+        <span
+          class="scr-trig-open-lbl"
+          :class="{ 'scr-lbl--with-help': showTriggerTemaOpenHint }"
+        >
+          <span>开出</span>
+          <el-popover
+            v-if="showTriggerTemaOpenHint"
+            placement="bottom"
+            :width="260"
+            trigger="click"
+            :content="TRIGGER_TEMA_OPEN_HINT"
+            popper-class="scr-help-popper"
+          >
+            <template #reference>
+              <button type="button" class="scr-help-btn" aria-label="开出说明" @click.stop>
+                <span class="scr-ms scr-ms--help" aria-hidden="true">help</span>
+              </button>
+            </template>
+          </el-popover>
+        </span>
+        <template v-if="showTriggerPerPosColumns || isTriggerZuDualInput">
           <span>位置</span>
         </template>
         <span>正投</span>
@@ -1271,7 +1514,7 @@ function formatGroupContent(content: string): string {
           >
             <el-switch v-if="pIdx === 0" :model-value="row.enabled" size="small" disabled />
             <span v-else class="scr-trig-cell-placeholder" aria-hidden="true" />
-            <span v-if="pIdx === 0" class="scr-trig-open">{{ row.open }}</span>
+            <span v-if="pIdx === 0" class="scr-trig-open">{{ formatWsDpTokenLabel(row.open) }}</span>
             <span v-else class="scr-trig-cell-placeholder" aria-hidden="true" />
             <span class="scr-trig-pos-name">{{ triggerPosName(label) }}</span>
             <el-input
@@ -1287,7 +1530,7 @@ function formatGroupContent(content: string): string {
           </div>
         </div>
       </template>
-      <template v-else-if="isTriggerZu12DualInput">
+      <template v-else-if="isTriggerZuDualInput">
         <div
           v-for="row in triggerRows"
           :key="row.open"
@@ -1295,17 +1538,17 @@ function formatGroupContent(content: string): string {
           :class="{ 'is-off': !row.enabled }"
         >
           <div
-            v-for="(zLabel, zIdx) in TRIGGER_ZU12_ZONE_LABELS"
-            :key="`scr-trig-zu12-${row.open}-${zIdx}`"
+            v-for="(zLabel, zIdx) in zuDualZoneLabels"
+            :key="`scr-trig-zu-dual-${row.open}-${zIdx}`"
             class="scr-trig-grid scr-trig-grid--posrow"
           >
             <el-switch v-if="zIdx === 0" :model-value="row.enabled" size="small" disabled />
             <span v-else class="scr-trig-cell-placeholder" aria-hidden="true" />
-            <span v-if="zIdx === 0" class="scr-trig-open">{{ row.open }}</span>
+            <span v-if="zIdx === 0" class="scr-trig-open">{{ formatWsDpTokenLabel(row.open) }}</span>
             <span v-else class="scr-trig-cell-placeholder" aria-hidden="true" />
             <span class="scr-trig-pos-name">{{ zLabel }}</span>
-            <el-input :model-value="getZu12TriggerZone(row.pos, zIdx as 0 | 1)" size="small" disabled />
-            <el-input :model-value="getZu12TriggerZone(row.neg, zIdx as 0 | 1)" size="small" disabled />
+            <el-input :model-value="getZuDualTriggerZone(row.pos, zIdx as 0 | 1)" size="small" disabled />
+            <el-input :model-value="getZuDualTriggerZone(row.neg, zIdx as 0 | 1)" size="small" disabled />
           </div>
         </div>
       </template>
@@ -1317,7 +1560,7 @@ function formatGroupContent(content: string): string {
           :class="{ 'is-off': !row.enabled }"
         >
           <el-switch :model-value="row.enabled" size="small" disabled />
-          <span class="scr-trig-open">{{ row.open }}</span>
+          <span class="scr-trig-open">{{ formatWsDpTokenLabel(row.open) }}</span>
           <el-input :model-value="row.pos" size="small" disabled />
           <el-input :model-value="row.neg" size="small" disabled />
         </div>
@@ -1378,11 +1621,11 @@ function formatGroupContent(content: string): string {
       >
         <span
           class="scr-lbl"
-          :class="{ 'scr-lbl--with-help': showHcwOpenPosition || isRenxuanHcwZu12 }"
+          :class="{ 'scr-lbl--with-help': showHcwOpenPosition || isRenxuanHcwZuDual }"
         >
           <span>投注选位</span>
           <el-popover
-            v-if="showHcwOpenPosition || isRenxuanHcwZu12"
+            v-if="showHcwOpenPosition || isRenxuanHcwZuDual"
             placement="bottom"
             :width="280"
             trigger="click"
@@ -1453,7 +1696,7 @@ function formatGroupContent(content: string): string {
       </div>
       <div
         v-for="(label, pi) in hcwGroupLabels"
-        :key="`hcw-${pi}-${isRenxuanHcwZu12 ? hcwBetPosIdxs.join('_') : hcwOpenPosIdxs.join('_')}-${hcwStatsGen}`"
+        :key="`hcw-${pi}-${isHcwZuDual ? (isRenxuanNeedsPositionConfig(playConfig) ? hcwBetPosIdxs.join('_') : hcwFixedSegmentBallIdxs().join('_')) : hcwOpenPosIdxs.join('_')}-${hcwStatsGen}`"
         class="scr-hcw-pos"
       >
         <div class="scr-hcw-pos-head">
@@ -1502,7 +1745,7 @@ function formatGroupContent(content: string): string {
             }"
             disabled
           >
-            <span class="scr-hcw-cell-num">{{ cell.token }}</span>
+            <span class="scr-hcw-cell-num">{{ formatWsDpTokenLabel(cell.token) }}</span>
             <span class="scr-hcw-cell-cnt">{{ cell.count == null ? '—' : cell.count }}</span>
           </button>
         </div>
@@ -1530,14 +1773,26 @@ function formatGroupContent(content: string): string {
           >{{ label }}</span>
         </div>
       </div>
-      <div v-if="isRdZu12Dual" class="scr-rd-pos-grid">
+      <div v-if="isRdZuDual" class="scr-rd-pos-grid">
         <div class="scr-rd-row">
-          <span class="scr-rd-pos">二重号</span>
-          <el-input-number :model-value="rdCounts[0] ?? 1" :min="1" :max="10" size="small" disabled />
+          <span class="scr-rd-pos">{{ zuDualHeadLabel }}</span>
+          <el-input-number
+            :model-value="rdCounts[0] ?? zuDualHeadMin"
+            :min="zuDualHeadMin"
+            :max="10"
+            size="small"
+            disabled
+          />
         </div>
         <div class="scr-rd-row">
-          <span class="scr-rd-pos">单号</span>
-          <el-input-number :model-value="rdCounts[1] ?? 2" :min="2" :max="10" size="small" disabled />
+          <span class="scr-rd-pos">{{ zuDualTailLabel }}</span>
+          <el-input-number
+            :model-value="rdCounts[1] ?? zuDualSingleMin"
+            :min="zuDualSingleMin"
+            :max="10"
+            size="small"
+            disabled
+          />
         </div>
       </div>
       <template v-else-if="rdSingleCountMode">
@@ -1558,7 +1813,7 @@ function formatGroupContent(content: string): string {
           <el-input-number
             :model-value="rdCounts[pi] ?? 1"
             :min="1"
-            :max="isPerPosDxdsPlayConfig(playConfig) ? 4 : 10"
+            :max="isPerPosDxdsPlayConfig(playConfig) ? 1 : 10"
             size="small"
             disabled
           />
@@ -1869,6 +2124,21 @@ function formatGroupContent(content: string): string {
 }
 
 .scr-trig-grid--head span {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--scr-on-variant);
+  letter-spacing: 0.02em;
+}
+
+.scr-trig-open-lbl {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.scr-trig-grid--head .scr-trig-open-lbl > span {
   font-size: 11px;
   font-weight: 700;
   color: var(--scr-on-variant);

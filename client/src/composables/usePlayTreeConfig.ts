@@ -40,19 +40,37 @@ export function usePlayTreeConfig(
   }
 
   const playConfig = computed((): PlayConfig | PlayTreePlayConfig => {
-    if (playTree.value && typeId.value && subId.value) {
-      const sel = findSubPlay(playTree.value, typeId.value, subId.value)
+    const tree = playTree.value
+    const tid = typeId.value.trim()
+    const sid = subId.value.trim()
+    if (tree && tid && sid) {
+      const sel = findSubPlay(tree, tid, sid)
       if (sel) {
-        return resolvePlayConfigFromTree(
-          playTree.value.playTemplate,
-          sel.typeNode,
-          sel.subNode,
-        )
+        return resolvePlayConfigFromTree(tree.playTemplate, sel.typeNode, sel.subNode)
+      }
+      // 树已加载但未精确命中：勿把非 SSC 的 g001 误映射成时时彩「前三」
+      // （六合彩 g001=特码、子玩法 272=特码A）
+      if (tree.playTemplate !== 'ssc_std' && tree.playTemplate !== 'fast_ssc_std') {
+        const typeNode = tree.playTypes.find((t) => t.typeId === tid)
+        return {
+          playTemplate: tree.playTemplate,
+          typeId: tid,
+          subId: sid,
+          betMode: '',
+          playTypeLabel: typeNode?.label?.trim() || tid,
+          playMethodLabel: sid,
+          playTypeId: tid,
+          subPlayId: sid,
+          catalogSubId: sid,
+          segmentLen: 1,
+          segmentLabels: ['选号'],
+          inputMode: 'pool',
+        } as PlayTreePlayConfig
       }
     }
     return resolvePlayConfig({
-      playTypeId: typeId.value || undefined,
-      subPlayId: subId.value || undefined,
+      playTypeId: tid || undefined,
+      subPlayId: sid || undefined,
     })
   })
 

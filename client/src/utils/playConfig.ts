@@ -20,6 +20,15 @@ import {
   isLonghuPlayType,
   isPc28ModeType,
 } from '@/utils/runTypeMatrix'
+import {
+  isLhcErquanzhongTuotouConfig,
+  isLhcSxDuipengConfig,
+  isLhcWsDuipengConfig,
+  isLhcSwDuipengConfig,
+  LHC_SW_DUIPENG_MAX_PICKS,
+  LHC_SX_DUIPENG_MAX_PICKS,
+  LHC_WS_DUIPENG_MAX_PICKS,
+} from '@/constants/lhcPlay'
 
 function segmentRulePool(subNode?: SubPlayNode): { min: number; max: number } | undefined {
   const rule = subNode?.segmentRule as { numberPoolMin?: number; numberPoolMax?: number } | undefined
@@ -143,9 +152,11 @@ function dxdsGuajiRuleSegment(subId: string): { start: number; len: number } | n
     case '271': // 前三大小单双
     case 'qian3_dxds':
       return { start: 0, len: 3 }
+    case '263': // 五星和值单双（旧 id）
     case '268': // 五星和值单双
+    case '264': // 五星和值大小（旧 id）
     case '269': // 五星和值大小
-      return { start: 0, len: 5 }
+      return { start: 0, len: 1 }
     default:
       return null
   }
@@ -692,11 +703,36 @@ export function resolvePlayConfigFromTree(
 
   if (playTemplate === 'lhc_std') {
     const lhcMode = lhcInputModeFromBetMode(betMode, typeId, typeLabel) as PlayConfig['inputMode']
+    // guajiTeam（如「二全中」）写入 guajiGroup，供二全中拖头/复式识别；目录 group 多为「连码」
+    const lhcGroupHint = guajiTeam || guajiGroup
+    const lhcCfgLike = {
+      playTemplate,
+      betMode,
+      playTypeId: typeId,
+      catalogSubId: subId,
+      subPlayId,
+      playTypeLabel: typeLabel,
+      playMethodLabel: subLabel,
+      guajiGroup: lhcGroupHint,
+    }
+    const sxDp = isLhcSxDuipengConfig(lhcCfgLike)
+    const wsDp = isLhcWsDuipengConfig(lhcCfgLike)
+    const swDp = isLhcSwDuipengConfig(lhcCfgLike)
     return finishConfig({
       playTemplate, typeId, subId, betMode, typeLabel, subLabel,
       subPlayId: betMode || subPlayId, segmentLen: 1,
       segmentLabels: [formatSubPlayLabel(subLabel) || '选号'],
-      inputMode: lhcMode, numberPoolMin: 1, numberPoolMax: 49, guajiGroup,
+      inputMode: sxDp ? 'lhc_zodiac' : wsDp ? 'lhc_tail' : swDp ? 'lhc_attr' : lhcMode,
+      numberPoolMin: 1,
+      numberPoolMax: 49,
+      poolMaxPicks: sxDp
+        ? LHC_SX_DUIPENG_MAX_PICKS
+        : wsDp
+          ? LHC_WS_DUIPENG_MAX_PICKS
+          : swDp
+            ? LHC_SW_DUIPENG_MAX_PICKS
+            : undefined,
+      guajiGroup: lhcGroupHint,
     })
   }
 
@@ -846,9 +882,26 @@ export function resolvePlayConfigFromTree(
     segmentLen = 1
     segmentLabels = ['选号']
   }
+  const sidTrim = String(subId).trim()
+  const isHashWeishuDxds =
+    (typeId === 'g017' || typeLabel === '哈希玩法' || guajiGroup === '哈希玩法') &&
+    (betMode === 'danshuang' || betMode === 'daxiao') &&
+    (/尾数单双|尾数大小/.test(`${subLabel} ${guajiFullName}`) ||
+      ['267', '270', '387', '390'].includes(sidTrim))
+  const isWuxingSumDxds =
+    /和值单双|和值大小/.test(`${subLabel} ${guajiFullName}`) ||
+    (typeId === 'g017' && sidTrim === '389') || // 哈希和值单双
+    (['263', '264', '268', '269'].includes(sidTrim) && typeId !== 'g017' && typeLabel !== '哈希玩法')
+  const isSingleTokenDxds = isWuxingSumDxds || isHashWeishuDxds
+  if (isSingleTokenDxds) {
+    segmentLen = 1
+    segmentLabels = ['选号']
+    poolMaxPicks = 1
+  }
 
   const panelType = typeNode.panelType ?? ''
   let inputMode = inputModeFromPanelType(panelType, betMode, subPlayId, segmentLen) ?? inputModeFromBetMode(betMode, subPlayId, segmentLen)
+  if (isSingleTokenDxds) inputMode = 'pool'
 
   // 任选：除直选复式外一律带选位（renPositionCount=k）；直选复式保持五位逗号定位
   if (guajiGroup === '任选' || typeLabel === '任选' || typeId === 'g011' || typeId === 'renxuan') {
@@ -888,6 +941,25 @@ export function resolvePlayConfigFromTree(
     }
   }
   if (betMode === 'tuotou' || betMode.endsWith('_dp')) inputMode = 'danshi'
+  // 二全中拖头：与复式同为 01–49 逗号输入（落库扁选；下单再合成胆|拖）
+  if (
+    isLhcErquanzhongTuotouConfig({
+      playTemplate,
+      betMode,
+      playTypeId: typeId,
+      catalogSubId: sidTrim,
+      subPlayId,
+      playTypeLabel: typeLabel,
+      playMethodLabel: subLabel,
+      guajiGroup: guajiTeam || guajiGroup,
+    })
+  ) {
+    inputMode = 'lhc_num'
+    segmentLen = 1
+    segmentLabels = ['选号']
+    numberPoolMin = 1
+    numberPoolMax = 49
+  }
   if (typeId === 'longhu' || isLonghuPlayType(typeLabel, typeId) || guajiGroup === '龙虎' || betMode === 'longhu' || betMode === 'longhuhe') {
     segmentLen = 1
     segmentLabels = ['龙虎']
@@ -932,6 +1004,15 @@ export function resolvePlayConfigFromTree(
     segmentLabels = ['包胆']
     poolMaxPicks = 1
   }
+  // 前二/后二/前三/后三大小单双：十/个等每位仅 1 选项（第三方 wire 如 大,小）
+  if (
+    betMode === 'dxds' &&
+    segmentLen > 1 &&
+    inputMode === 'multiline' &&
+    !/和值/.test(`${subLabel} ${guajiFullName} ${guajiGroup}`)
+  ) {
+    poolMaxPicks = 1
+  }
   // 组三/组六/组选N/组选复式/不定位：单行号池（0–9 逗号多选）。
   // 前中后三等区位 resolve 会得到 segmentLen=3，若保留则录入框被当成「三位按位」只能输 3 段。
   if (
@@ -958,7 +1039,23 @@ export function resolvePlayConfigFromTree(
   if (betMode === 'teshu') {
     inputMode = 'pool'
     segmentLen = 1
-    segmentLabels = ['特殊号']
+    // 五星趣味：数字池；前三/PC28 特殊号：文字选项
+    const quwei =
+      /一帆风顺|好事成双|三星报喜|四季发财|yifan|haoshi|sanxing|siji/i.test(
+        `${subLabel} ${guajiFullName} ${subId}`,
+      ) || ['162', '163', '164', '165'].includes(String(subId).trim())
+    if (quwei) {
+      segmentLabels = ['选号']
+      if (numberPoolMin == null) numberPoolMin = 0
+      if (numberPoolMax == null) numberPoolMax = 9
+      // 一帆风顺第三方最多 2 个号（超过 →「投注数字不可超过两位」）
+      const yifan =
+        /一帆风顺|yifan|wuxing_yifan/i.test(`${subLabel} ${guajiFullName} ${subId}`) ||
+        String(subId).trim() === '162'
+      if (yifan) poolMaxPicks = 2
+    } else {
+      segmentLabels = ['特殊号']
+    }
   }
   if (playTemplate === 'pc28_std' && (betMode === 'hezhi' || subLabel === '和值' || subId === 'hezhi')) {
     inputMode = 'pool'

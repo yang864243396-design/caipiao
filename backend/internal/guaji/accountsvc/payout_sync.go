@@ -20,30 +20,29 @@ import (
 
 const payoutSyncBatch = 50
 
-// LocalDrawSettlement 本地开奖表派奖评估结果。
+// LocalDrawSettlement 本地开奖表派奖评估结果（保留类型供历史调用方编译；派奖同步不再使用本地金额）。
 type LocalDrawSettlement struct {
 	Status string
 	Pnl    float64
 	Payout float64
 }
 
-// LocalDrawFallback 第三方注单查不到、但 lottery_draws 已有开奖时的回退评估。
+// LocalDrawFallback 已废弃：真实注单返奖必须以第三方 web_bets 毛派奖为准，禁止本地金额兜底。
 type LocalDrawFallback func(ctx context.Context, orderID int64, orderNo string) (LocalDrawSettlement, bool, error)
 
 // AfterSettleFn 派奖完成后触发（如补齐 lottery_draws 历史）。
 type AfterSettleFn func(ctx context.Context, lotteryCode, issueNo string)
 
 // PayoutSyncWorker 扫描 real 第三方 pending 注单，查第三方结算结果，
-// 以第三方派奖为准结算 bet_orders + 镜像 wallet_ledger + 余额刷新（T5）。
+// 以第三方毛派奖为准结算 bet_orders + 镜像 wallet_ledger + 余额刷新（T5）。
 //
 // 与挂机方案 Worker（事后本地模拟）正交：本 worker 处理 guaji_account_id 非空的
-// 真实第三方注单（手动下注 / 未来 real Worker 接单产生）。
+// 真实第三方注单。查不到 web_bets 时不下本地金额，详情返奖保持 —。
 type PayoutSyncWorker struct {
-	svc               *Service
-	q                 *sqlcdb.Queries
-	hub               *ws.Hub
-	localDrawFallback LocalDrawFallback
-	afterSettle       AfterSettleFn
+	svc         *Service
+	q           *sqlcdb.Queries
+	hub         *ws.Hub
+	afterSettle AfterSettleFn
 }
 
 // SetAfterSettle 注册派奖完成后的回调（如玩法详情开奖补齐）。
@@ -54,12 +53,12 @@ func (w *PayoutSyncWorker) SetAfterSettle(fn AfterSettleFn) {
 	w.afterSettle = fn
 }
 
-// NewPayoutSyncWorker 仅在第三方启用时创建。
-func (s *Service) NewPayoutSyncWorker(hub *ws.Hub, fallback LocalDrawFallback) *PayoutSyncWorker {
+// NewPayoutSyncWorker 仅在第三方启用时创建。fallback 参数已忽略（兼容旧调用方）。
+func (s *Service) NewPayoutSyncWorker(hub *ws.Hub, _ LocalDrawFallback) *PayoutSyncWorker {
 	if s == nil || s.pool == nil || s.guaji == nil || !s.guaji.Enabled() {
 		return nil
 	}
-	return &PayoutSyncWorker{svc: s, q: sqlcdb.New(s.pool), hub: hub, localDrawFallback: fallback}
+	return &PayoutSyncWorker{svc: s, q: sqlcdb.New(s.pool), hub: hub}
 }
 
 func (w *PayoutSyncWorker) Run(ctx context.Context, interval time.Duration) {
@@ -162,14 +161,8 @@ func (w *PayoutSyncWorker) syncOne(ctx context.Context, row sqlcdb.ListPendingGu
 	}
 	res, err := w.svc.guaji.QuerySettlement(ctx, token, betID)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			if settled, serr := w.trySettleFromLocalDraw(ctx, row); serr != nil {
-				slog.Warn("payout sync local draw fallback failed", "orderNo", row.OrderNo, "err", serr)
-			} else if settled {
-				return nil
-			}
-		}
-		return nil // 其它查询失败下轮重试
+		// 查不到/失败：下轮重试。禁止本地开奖金额兜底，避免详情返奖与第三方毛派奖不一致。
+		return nil
 	}
 	if res == nil || !res.Settled {
 		return nil // 第三方尚未结算（C17：一直等待开奖）
@@ -179,7 +172,7 @@ func (w *PayoutSyncWorker) syncOne(ctx context.Context, row sqlcdb.ListPendingGu
 	pnl := res.Pnl
 	payout := res.Payout
 	// 勿用「Payout>0」单独判赢：龙虎和局退本时常 payout=本金、pnl≈0，会误成「中」。
-	// 嵌套小奖：pnl 显著为负但仍有派奖额 / 显式 win → 记 win，再视情况用本地 PrizeNet。
+	// 嵌套小奖：pnl 显著为负但仍有派奖额 / 显式 win → 记 win；返奖金额一律用第三方 payout。
 	switch {
 	case pnl > 1e-6:
 		status = "win"
@@ -192,25 +185,7 @@ func (w *PayoutSyncWorker) syncOne(ctx context.Context, row sqlcdb.ListPendingGu
 	if status == "lose" && row.Amount > 1e-6 && math.Abs(pnl) < 0.01 && payout < 0.01 {
 		pnl = -row.Amount
 	}
-	// 直选组合嵌套小奖：第三方整单净额常为「小奖−全票本金」（pnl≪0 / ≈0 仍标 win）→ 用本地 PrizeNet。
-	// 若第三方已给出扎实派奖额（payout>0），必须以第三方为准——本地组合全中曾误按「整票×三星赔率」放大。
-	if status == "win" {
-		if eval, ok, lerr := w.evalLocalDraw(ctx, row); lerr != nil {
-			slog.Warn("payout sync local prize eval failed", "orderNo", row.OrderNo, "err", lerr)
-		} else if ok && eval.Status == "win" && eval.Pnl > 1 {
-			// 仅当第三方派奖额缺失/近零，且净额近零/负值时采用本地补派奖
-			if payout < 1.0 && pnl < 1.0 && eval.Pnl > pnl+0.5 {
-				slog.Info("payout sync prefer local prize",
-					"orderNo", row.OrderNo, "guajiPnl", pnl, "localPnl", eval.Pnl)
-				pnl = eval.Pnl
-				if eval.Payout > 0 {
-					payout = eval.Payout
-				}
-			}
-		}
-	}
-	// 第三方已结算且明确记挂（payout=0）：必须以第三方为准。
-	// 旧逻辑「本地判中则覆盖」会在组选对子等场景造成「平台=中 第三方=挂」虚高派奖。
+	// 毛派奖严格以第三方 web_bets 为准，禁止本地 PrizeNet / 开奖评估覆盖。
 	currency := row.Currency
 	balanceSnapshot := 0.0
 	if info, ierr := w.svc.guaji.UserInfo(ctx, token); ierr == nil {
@@ -218,30 +193,6 @@ func (w *PayoutSyncWorker) syncOne(ctx context.Context, row sqlcdb.ListPendingGu
 		w.svc.persistGuajiBalances(ctx, row.GuajiAccountID.Int64, multiCurrencyFromInfo(info))
 	}
 	return w.commitSettlement(ctx, row, status, pnl, payout, currency, balanceSnapshot, true)
-}
-
-func (w *PayoutSyncWorker) evalLocalDraw(ctx context.Context, row sqlcdb.ListPendingGuajiBetOrdersRow) (LocalDrawSettlement, bool, error) {
-	if w == nil || w.localDrawFallback == nil {
-		return LocalDrawSettlement{}, false, nil
-	}
-	return w.localDrawFallback(ctx, row.ID, row.OrderNo)
-}
-
-func (w *PayoutSyncWorker) trySettleFromLocalDraw(ctx context.Context, row sqlcdb.ListPendingGuajiBetOrdersRow) (bool, error) {
-	if w.localDrawFallback == nil {
-		return false, nil
-	}
-	eval, ok, err := w.localDrawFallback(ctx, row.ID, row.OrderNo)
-	if err != nil || !ok {
-		return false, err
-	}
-	slog.Info("payout sync local draw fallback",
-		"orderNo", row.OrderNo, "status", eval.Status, "pnl", eval.Pnl)
-	// 本地兜底结算：不写 payout_amount（严格以第三方原值为准）
-	if err := w.commitSettlement(ctx, row, eval.Status, eval.Pnl, eval.Payout, row.Currency, 0, false); err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 func (w *PayoutSyncWorker) commitSettlement(
@@ -278,7 +229,10 @@ func (w *PayoutSyncWorker) commitSettlement(
 	payoutAmount := pgtype.Numeric{}
 	if writePayout {
 		if status == "win" {
-			payoutAmount = member.NumericFromFloat(payout)
+			// 仅落库第三方毛派奖；未回传/近零则保持 NULL，详情展示 —
+			if payout > 1e-9 {
+				payoutAmount = member.NumericFromFloat(payout)
+			}
 		} else {
 			payoutAmount = member.NumericFromFloat(0)
 		}

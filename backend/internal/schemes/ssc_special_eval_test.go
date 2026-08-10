@@ -213,10 +213,17 @@ func TestEvaluateBudingweiBetUnits(t *testing.T) {
 }
 
 func TestEvaluateTeshuWuxingYifan(t *testing.T) {
-	rule := resolveSSCPlayRule("wuxing", "wuxing_yifan", "teshu")
-	ev := evaluatePlayHit(rule, []string{"8", "8", "8", "8", "8"}, "一帆风顺", false, "", 0)
-	if !ev.Hit {
-		t.Fatalf("want yifan hit, ev=%+v", ev)
+	rule := resolveSSCPlayRule("wuxing", "wuxing_yifan", "teshu", "一帆风顺")
+	if !isWuxingQuweiDigitPlay(rule) {
+		t.Fatalf("want quwei digit play, rule=%+v", rule)
+	}
+	ev := evaluatePlayHit(rule, []string{"8", "8", "8", "8", "8"}, "0,3,8", false, "", 0)
+	if !ev.Hit || ev.BetUnits != 3 {
+		t.Fatalf("want yifan hit units=3, ev=%+v", ev)
+	}
+	miss := evaluatePlayHit(rule, []string{"1", "2", "3", "4", "5"}, "0,8,9", false, "", 0)
+	if miss.Hit || miss.BetUnits != 3 {
+		t.Fatalf("want yifan miss units=3, ev=%+v", miss)
 	}
 }
 

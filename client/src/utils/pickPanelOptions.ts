@@ -1,3 +1,21 @@
+import {
+  LHC_ERQUANZHONG_NUM_MAX_PICKS,
+  LHC_ERQUANZHONG_NUM_MIN_PICKS,
+  LHC_SX_DUIPENG_MAX_PICKS,
+  LHC_WS_DUIPENG_MAX_PICKS,
+  LHC_SW_DUIPENG_MAX_PICKS,
+  LHC_TAIL_NUMBERS,
+  LHC_TAIL_OPTIONS,
+  LHC_ZODIAC_NUMBERS,
+  LHC_ZODIACS,
+  isLhcErquanzhongFushiConfig,
+  isLhcErquanzhongNumInputConfig,
+  isLhcErquanzhongTuotouConfig,
+  isLhcSxDuipengConfig,
+  isLhcWsDuipengConfig,
+  isLhcSwDuipengConfig,
+  isLhcTemaPlayConfig,
+} from '@/constants/lhcPlay'
 import type { PlayConfig } from '@/utils/betPayload'
 import {
   dedupeDanshiTokens,
@@ -8,26 +26,52 @@ import {
   isSixingZu6PlayConfig,
   isSscDanshiLikeConfig,
   isYixingDingweiPlayConfig,
+  isZhixuanZuhePlayConfig,
   isZu3DanshiConfig,
   isZu6DanshiConfig,
   isZuxuanDanshiConfig,
+  normalizeLhcTemaContent,
   normalizeZu6DanshiContent,
   normalizeZu3DanshiContent,
   normalizeHunheGroupContent,
   normalizeZuxuanDanshiContent,
-  parseZu12Zones,
+  parseZuDualZones,
   uniqueDigitsFromRun,
+  zuDualMetaOf,
+  isZuDualPlayConfig,
+  zuDualFormatHint,
+  isWuxingQuweiDigitPlayConfig,
+  wuxingQuweiFormatHint,
+  wuxingQuweiMaxPicks,
   YIXING_MAX_PICKS_PER_POS,
 } from '@/utils/betPayload'
+import {
+  isLonghuPlayConfigLike,
+  isPc28ModeConfigLike,
+  isPerPosDxdsPlayConfig,
+  isWuxingSumDxdsPlayConfig,
+} from '@/utils/runTypeMatrix'
+import { longhuPickOptionsForConfig } from '@/utils/longhuPickOptions'
 
-/** 组选12 双区规范化：合法则去重保序；半截输入尽量保留「二重,单号」形态 */
-function normalizeZu12DigitContent(raw: string): string {
+export {
+  isLhcErquanzhongFushiConfig,
+  isLhcErquanzhongNumInputConfig,
+  isLhcErquanzhongTuotouConfig,
+  isLhcSxDuipengConfig,
+  isLhcTemaPlayConfig,
+}
+
+/** 双区组选规范化：合法则去重保序；半截输入尽量保留「头区,尾区」形态 */
+function normalizeZuDualDigitContent(raw: string, config: PlayConfig): string {
   const text = String(raw ?? '')
     .replace(/，/g, ',')
     .trim()
   if (!text) return ''
-  const zones = parseZu12Zones(text)
-  if (zones) return zones.normalized
+  const meta = zuDualMetaOf(config)
+  if (meta) {
+    const zones = parseZuDualZones(text, meta.minHead, meta.minTail, meta.equalCounts)
+    if (zones) return zones.normalized
+  }
   const parts = text.split(',')
   if (parts.length === 2) {
     const a = uniqueDigitsFromRun(parts[0] ?? '').join('')
@@ -36,21 +80,22 @@ function normalizeZu12DigitContent(raw: string): string {
   }
   return uniqueDigitsFromRun(text).join('')
 }
-import {
-  isLonghuPlayConfigLike,
-  isPc28ModeConfigLike,
-} from '@/utils/runTypeMatrix'
-import {
-  longhuPickOptionsForConfig,
-} from '@/utils/longhuPickOptions'
 
 /** 龙虎类玩法（龙/虎 或 龙/虎/和 文字选号，非 0-9） */
 export function isLonghuTextPickConfig(config: PlayConfig): boolean {
   return isLonghuPlayConfigLike(config)
 }
 
+/** 方案内容是否用特码专用面板（19 属性 + 0–49 输入框） */
+export function schemeGroupUsesLhcTemaPanel(config: PlayConfig): boolean {
+  return isLhcTemaPlayConfig(config)
+}
+
 /** 方案内容是否用 chip/选号面板（与 SchemeGroupPickPanel 同源） */
 export function schemeGroupUsesPickPanel(config: PlayConfig): boolean {
+  if (schemeGroupUsesLhcTemaPanel(config)) return false
+  // 二全中复式/拖头：改用逗号分隔输入框，勿点选 01–49
+  if (isLhcErquanzhongNumInputConfig(config)) return false
   const mode = config.inputMode
   if (textPickOptionsForConfig(config).length > 0) return true
   if (isLonghuTextPickConfig(config)) return true
@@ -107,12 +152,16 @@ function isZu24PoolPlay(config: PlayConfig): boolean {
   return /组选24|zu24/i.test(text)
 }
 
-/** 组选12：双区「二重,单号」（如 12,3234），非扁选逗号号池 */
-function isZu12PoolPlay(config: PlayConfig): boolean {
+/** 组选120 号池：至少 5 码，逗号分隔（五星组选120） */
+function isZu120PoolPlay(config: PlayConfig): boolean {
   const bm = (config.betMode ?? '').trim()
-  if (bm === 'zu12') return true
+  if (bm === 'zu120') return true
   const text = `${config.playMethodLabel ?? ''} ${config.catalogSubId ?? ''} ${config.subPlayId ?? ''}`
-  return /组选12|zu12/i.test(text) && !/组选120|zu120/i.test(text)
+  return /组选120|zu120/i.test(text)
+}
+
+function isZuDualPoolPlay(config: PlayConfig): boolean {
+  return isZuDualPlayConfig(config)
 }
 
 /** 投注/方案面板：按玩法号池生成可选号码 */
@@ -129,6 +178,7 @@ export function digitOptionsForConfig(config: PlayConfig): string[] {
 }
 
 function inferTextPickFromLabels(config: PlayConfig): string[] {
+  if (isWuxingQuweiDigitPlayConfig(config)) return []
   const subLabel = config.playMethodLabel?.trim() ?? ''
   if (subLabel === '大小单双' || subLabel.includes('大小单双')) return ['大', '小', '单', '双']
   if (subLabel === '龙虎豹') return ['龙', '虎', '豹']
@@ -146,6 +196,18 @@ export function textPickOptionsForConfig(config: PlayConfig): string[] {
   if (isLonghuTextPickConfig(config)) {
     return longhuPickOptionsForConfig(config)
   }
+  // 生肖对碰：十二生肖（开某投某正/反投与开出同源）
+  if (isLhcSxDuipengConfig(config) || config.betMode === 'sx_dp') {
+    return [...LHC_ZODIACS]
+  }
+  // 尾数对碰：0–9 尾
+  if (isLhcWsDuipengConfig(config) || config.betMode === 'ws_dp') {
+    return [...LHC_TAIL_OPTIONS]
+  }
+  // 生尾对碰：十二生肖 + 0–9 尾（正/反投与开出同源）
+  if (isLhcSwDuipengConfig(config) || config.betMode === 'sw_dp') {
+    return [...LHC_ZODIACS, ...LHC_TAIL_OPTIONS]
+  }
   const bm = config.betMode ?? ''
   switch (bm) {
     case 'longhu':
@@ -160,6 +222,8 @@ export function textPickOptionsForConfig(config: PlayConfig): string[] {
     case 'zhuangxian':
       return ['庄', '闲']
     case 'teshu':
+      // 五星趣味走数字输入框，勿给豹子/对子/顺子点选
+      if (isWuxingQuweiDigitPlayConfig(config)) return []
       return config.playTemplate === 'pc28_std'
         ? ['豹子', '对子', '顺子', '极大', '极小']
         : ['豹子', '对子', '顺子']
@@ -188,6 +252,9 @@ export function useCompactPickChips(config: PlayConfig): boolean {
  * 以及单式（整注按 N 位数字录入，另有面板）。
  */
 export function schemeGroupUsesDigitInput(config: PlayConfig): boolean {
+  if (schemeGroupUsesLhcTemaPanel(config)) return false
+  // 二全中复式/拖头：输入框录入 01–49（即使未走 pick 分支也启用）
+  if (isLhcErquanzhongNumInputConfig(config)) return true
   if (!schemeGroupUsesPickPanel(config)) return false
   if (config.inputMode === 'danshi') return false
   // 直选/组选/混合单式整注：走文本失焦面板，勿当复式按位号池
@@ -232,14 +299,19 @@ export function poolUsesCommaSeparatedInput(config: PlayConfig): boolean {
   if (isKuaduPoolConfig(config)) return true
   // 不定位（前三一码等）：每个数字用逗号分隔（如 1,2），勿连写成 12
   if (isBudingweiPoolConfig(config)) return true
-  // 组选复式 / 组三 / 组六 / 组选24：号池多选须逗号分隔（如 0,1,2），勿连写成 012
+  // 五星趣味（一帆风顺等）：每个数字用逗号分隔（如 0,3,9），勿连写成 039
+  if (isWuxingQuweiDigitPlayConfig(config)) return true
+  // 二全中复式/拖头：01–49 须逗号分隔（如 01,13,25），勿连写成 011325
+  if (isLhcErquanzhongNumInputConfig(config)) return true
+  // 组选复式 / 组三 / 组六 / 组选24 / 组选120：号池多选须逗号分隔（如 0,1,2），勿连写成 012
   // 组选12 为双区连写（12,34），勿按扁选逗号号池拆码
   if (
     isZuxuanFushiPoolPlay(config) ||
     isZu3PoolPlay(config) ||
     isZu6PoolPlay(config) ||
     isSixingZu6PoolPlay(config) ||
-    isZu24PoolPlay(config)
+    isZu24PoolPlay(config) ||
+    isZu120PoolPlay(config)
   ) {
     return true
   }
@@ -315,9 +387,22 @@ function parseDigitSegmentTokens(seg: string, config: PlayConfig): string[] {
 export function schemeGroupInputBoxToContent(box: string, config: PlayConfig): string {
   const segLen = Math.max(1, config.segmentLen || 1)
   const cap = poolMaxPicksForConfig(config)
-  // 组选12：保留「二重,单号」双区（12,3234），勿拆成扁选号池
-  if (isZu12PoolPlay(config)) {
-    return normalizeZu12DigitContent(box)
+  // 组选12/4：保留双区形态，勿拆成扁选号池
+  if (isZuDualPoolPlay(config)) {
+    return normalizeZuDualDigitContent(box, config)
+  }
+  // 直选组合：始终按位拆分（勿因 ruleId 误判组选6 而扁选）
+  if (isZhixuanZuhePlayConfig(config) && segLen > 1) {
+    const segs = String(box ?? '').split(/[,，]/)
+    const lines: string[] = []
+    let any = false
+    for (let i = 0; i < segLen; i++) {
+      let toks = parseDigitSegmentTokens(segs[i] ?? '', config)
+      if (cap != null && cap > 0 && toks.length > cap) toks = toks.slice(0, cap)
+      if (toks.length) any = true
+      lines.push(toks.join(','))
+    }
+    return any ? lines.join('\n') : ''
   }
   // 号池型（组选复式/组三/组六/和值等）：单行逗号多选，勿按 segmentLen 拆成按位
   if (
@@ -352,10 +437,38 @@ export function schemeGroupInputBoxToContent(box: string, config: PlayConfig): s
 export function schemeGroupContentToInputBox(content: string, config: PlayConfig): string {
   const c = String(content ?? '').replace(/\r/g, '')
   // 无有效号码时保持空串，避免 '' → ',,,,' 盖住 placeholder
-  if (c.replace(/[\s,，]/g, '') === '') return ''
+  if (c.replace(/[\s,，|#]/g, '') === '') return ''
+  // 二全中拖头：旧 胆|拖 展成逗号扁选展示
+  if (isLhcErquanzhongTuotouConfig(config)) {
+    const toks = parseDigitSegmentTokens(c.replace(/[|#]/g, ','), config)
+    return toks.join(',')
+  }
   const segLen = Math.max(1, config.segmentLen || 1)
-  if (isZu12PoolPlay(config)) {
-    return normalizeZu12DigitContent(c)
+  if (isZuDualPoolPlay(config)) {
+    return normalizeZuDualDigitContent(c, config)
+  }
+  // 直选组合：按位压缩展示（勿误走组选6 扁选号池）
+  if (isZhixuanZuhePlayConfig(config) && segLen > 1) {
+    if (!c.includes('\n')) {
+      const parts = c.split(/[,，]/)
+      if (parts.some((p) => /[0-9]/.test(p)) && parts.length > 0 && parts.length <= segLen) {
+        return Array.from({ length: segLen }, (_, i) =>
+          (parts[i] ?? '').replace(/[^0-9]/g, ''),
+        ).join(',')
+      }
+    }
+    const lines = c.split('\n')
+    const segs: string[] = []
+    let any = false
+    for (let i = 0; i < segLen; i++) {
+      const toks = (lines[i] ?? '')
+        .split(/[,，\s]+/)
+        .map((t) => t.trim())
+        .filter(Boolean)
+      if (toks.length) any = true
+      segs.push(toks.join(''))
+    }
+    return any ? segs.join(',') : ''
   }
   if (
     segLen <= 1 ||
@@ -420,6 +533,10 @@ export function normalizeSchemeGroupDigitContent(content: string, config: PlayCo
 export function commitSchemeGroupContentOnBlur(raw: string, config: PlayConfig): string {
   const src = String(raw ?? '').replace(/\r/g, '')
   if (!schemeGroupContentHasDigits(src)) return ''
+
+  if (schemeGroupUsesLhcTemaPanel(config)) {
+    return normalizeLhcTemaContent(src)
+  }
 
   // 数字录入玩法（前三直选复式等）：与 SchemeGroupInputPanel 既有失焦一致
   if (schemeGroupUsesDigitInput(config)) {
@@ -551,11 +668,24 @@ function zuxuanFushiMinPickHint(config: PlayConfig): number {
  * 单位定宽可连写；和值等变长号池须逗号分隔。
  */
 export function groupDigitInputHint(config: PlayConfig): string {
+  if (isWuxingQuweiDigitPlayConfig(config)) {
+    return wuxingQuweiFormatHint(config)
+  }
+  if (isLhcErquanzhongTuotouConfig(config)) {
+    return `二全中拖头：输入 ${LHC_ERQUANZHONG_NUM_MIN_PICKS}–${LHC_ERQUANZHONG_NUM_MAX_PICKS} 个 01–49 号码，逗号分隔（首个为胆，其余为拖；如 01,13,25）`
+  }
+  if (isLhcErquanzhongFushiConfig(config)) {
+    return `二全中复式：输入 ${LHC_ERQUANZHONG_NUM_MIN_PICKS}–${LHC_ERQUANZHONG_NUM_MAX_PICKS} 个 01–49 号码，逗号分隔（如 01,13,25）`
+  }
   // 和值须最先匹配：避免「直选和值」被组选复式/组六文案抢提示
   if (isHezhiPoolConfig(config)) {
     const min = config.numberPoolMin ?? 0
     const max = config.numberPoolMax ?? 27
     return `和值：输入 ${min}–${max}，多选用逗号分隔（如 14,15,16）`
+  }
+  // 前后四直选组合：按序 4 位、位与位逗号分隔；每位可多选连写（如 12,2,3,45）
+  if (isZhixuanZuhePlayConfig(config) && isQianhou4PlayConfig(config)) {
+    return '按顺序填 4 个位置的号码（0–9），位与位用逗号分隔；每位可多选连写，如 1,2,3,4 或 12,2,3,45'
   }
   if (isZu3PoolPlay(config)) {
     return '输入两个及以上 0-9 的号码，多选用逗号分隔，如 1,3,5,7'
@@ -567,13 +697,17 @@ export function groupDigitInputHint(config: PlayConfig): string {
   if (isZu6PoolPlay(config)) {
     return '输入三个及以上 0-9 的号码，多选用逗号分隔，如 1,3,5,7'
   }
-  // 组选12：二重/单号双区
-  if (isZu12PoolPlay(config)) {
-    return '从0-9中，输入1个及以上的二重号码，2个及以上的单号，两个位置由逗号分隔，如：12,3234'
+  // 双区组选（12/4/五星60·30·20·10·5）
+  if (isZuDualPoolPlay(config)) {
+    return zuDualFormatHint(config)
   }
   // 组选24：至少 4 码（任四剥位后亦走此提示）
   if (isZu24PoolPlay(config)) {
     return '输入4个及以上0-9的号码，多选用逗号分隔，如：1,3,5,7'
+  }
+  // 组选120：至少 5 码（五星组选120）
+  if (isZu120PoolPlay(config)) {
+    return '输入5个及以上0-9的号码，多选用逗号分隔，如：1,3,5,7,9'
   }
   // 前二/后二/任二组选复式：至少 2 个号；三星/任三组选复式至少 3 个
   if (isZuxuanFushiPoolPlay(config)) {
@@ -683,9 +817,18 @@ function buildRenxuanZhixuanFushiExample(options: string[], pickN: number): stri
 
 /** 跨段组合玩法（前中后三 / 前后二 / 前后三 / 前后四）：位置非连续，提示用「N 个顺序号码」。 */
 function usesSequentialGroupHint(config: PlayConfig): boolean {
-  const text = `${config.playMethodLabel ?? ''} ${config.subPlayId ?? ''} ${config.playTypeId ?? ''} ${config.catalogSubId ?? ''}`
+  if (isQianhou4PlayConfig(config)) return true
+  const text = `${config.playMethodLabel ?? ''} ${config.playTypeLabel ?? ''} ${config.guajiGroup ?? ''} ${config.subPlayId ?? ''} ${config.playTypeId ?? ''} ${config.catalogSubId ?? ''}`
   if (/前中后三|前后二|前后三|前后四/.test(text)) return true
   return /qianzhonghou3|qianhou3|combo24/i.test(text)
+}
+
+/** 前后四（含 typeId=g014 / qianhou4，勿仅靠子玩法文案「直选组合」）。 */
+function isQianhou4PlayConfig(config: PlayConfig): boolean {
+  const tid = String(config.playTypeId ?? '').trim().toLowerCase()
+  if (tid === 'g014' || tid === 'qianhou4') return true
+  const text = `${config.playMethodLabel ?? ''} ${config.playTypeLabel ?? ''} ${config.guajiGroup ?? ''} ${config.subPlayId ?? ''} ${config.catalogSubId ?? ''}`
+  return /前后四|qianhou4/i.test(text)
 }
 
 /** 号池多选上限；一星/定位胆每位最多 9；包胆 / 龙虎（和）对齐第三方仅单选 */
@@ -694,13 +837,46 @@ export function poolMaxPicksForConfig(config: PlayConfig): number | null {
   if (config.betMode === 'baodan') return 1
   if (config.betMode === 'longhu' || config.betMode === 'longhuhe') return 1
   if (isLonghuPlayConfigLike(config)) return 1
+  // 前二/后二/前三/后三大小单双：每位仅 1 个（大/小/单/双）
+  if (isPerPosDxdsPlayConfig(config)) return 1
+  // 五星和值单双/大小、哈希尾数单双/大小：仅 1 个选项
+  if (isWuxingSumDxdsPlayConfig(config)) return 1
   const method = config.playMethodLabel ?? ''
   if (method.includes('包胆')) return 1
   // 一星：0–9 共 10 个号，禁止单位置满号（对齐第三方/既定规则）
   if (isYixingDingweiPlayConfig(config)) return YIXING_MAX_PICKS_PER_POS
   // 一码不定位：最多 2 个号（第三方「投注数字不可超过两位数」）
   if (isYimaBudingweiConfig(config)) return 2
+  // 一帆风顺：最多 2 个号（第三方「投注数字不可超过两位」）
+  if (isWuxingQuweiDigitPlayConfig(config)) {
+    const max = wuxingQuweiMaxPicks(config)
+    if (max > 0 && max < 10) return max
+  }
+  // 二全中复式/拖头：最多 10 个号（失焦截断 / 与保存校验一致）
+  if (isLhcErquanzhongNumInputConfig(config)) return LHC_ERQUANZHONG_NUM_MAX_PICKS
+  // 生肖对碰：最多 2 个生肖
+  if (isLhcSxDuipengConfig(config) || config.betMode === 'sx_dp') return LHC_SX_DUIPENG_MAX_PICKS
+  // 尾数对碰：最多 2 个尾数
+  if (isLhcWsDuipengConfig(config) || config.betMode === 'ws_dp') return LHC_WS_DUIPENG_MAX_PICKS
+  // 生尾对碰：1 肖 + 1 尾
+  if (isLhcSwDuipengConfig(config) || config.betMode === 'sw_dp') return LHC_SW_DUIPENG_MAX_PICKS
   return null
+}
+
+/** 生尾对碰点选：肖/尾各自最多 1 个，点同侧替换 */
+export function toggleSwDuipengPick(selected: string[], digit: string): string[] {
+  const isZodiac = (LHC_ZODIACS as readonly string[]).includes(digit)
+  const isTail = (LHC_TAIL_OPTIONS as readonly string[]).includes(digit.replace(/尾$/, ''))
+  if (!isZodiac && !isTail) return selected
+  const tok = isTail ? digit.replace(/尾$/, '') : digit
+  const curZ = selected.find((s) => (LHC_ZODIACS as readonly string[]).includes(s))
+  const curT = selected.find((s) => (LHC_TAIL_OPTIONS as readonly string[]).includes(s.replace(/尾$/, '')))
+  if (isZodiac) {
+    if (curZ === tok) return curT ? [curT] : []
+    return curT ? [tok, curT] : [tok]
+  }
+  if (curT === tok) return curZ ? [curZ] : []
+  return curZ ? [curZ, tok] : [tok]
 }
 
 function isYimaBudingweiConfig(config: PlayConfig): boolean {
@@ -719,15 +895,38 @@ function isYimaBudingweiConfig(config: PlayConfig): boolean {
 
 /** 在上限内切换号池选中（max=1 时点选替换；达上限时拒绝再加，保留原选） */
 export function togglePoolPick(selected: string[], digit: string, maxPicks: number | null): string[] {
-  const set = new Set(selected)
-  if (set.has(digit)) {
-    set.delete(digit)
-    return [...set].sort((a, b) => Number(a) - Number(b) || a.localeCompare(b))
+  const numericPool =
+    /^\d+$/.test(digit) && selected.every((s) => /^\d+$/.test(s))
+  const sortOrKeep = (arr: string[]) =>
+    numericPool
+      ? [...arr].sort((a, b) => Number(a) - Number(b) || a.localeCompare(b))
+      : arr // 生肖等：保选择序（对碰首个|第二个）
+  if (selected.includes(digit)) {
+    return sortOrKeep(selected.filter((s) => s !== digit))
   }
   if (maxPicks === 1) return [digit]
-  if (maxPicks != null && maxPicks > 0 && set.size >= maxPicks) {
-    return [...set].sort((a, b) => Number(a) - Number(b) || a.localeCompare(b))
+  if (maxPicks != null && maxPicks > 0 && selected.length >= maxPicks) {
+    return sortOrKeep(selected)
   }
-  set.add(digit)
-  return [...set].sort((a, b) => Number(a) - Number(b) || a.localeCompare(b))
+  return sortOrKeep([...selected, digit])
+}
+
+/** 生肖对碰 chip 副文案：马 → 01,13,25,37,49 */
+export function lhcZodiacChipSub(zodiac: string): string {
+  const nums = LHC_ZODIAC_NUMBERS[zodiac]
+  return nums?.length ? nums.join(',') : ''
+}
+
+/** 尾数对碰 chip 主文案：0 → 0尾（落库仍为 0） */
+export function lhcTailChipLabel(tail: string): string {
+  const t = String(tail ?? '')
+    .trim()
+    .replace(/尾$/, '')
+  return t ? `${t}尾` : ''
+}
+
+/** 尾数对碰 chip 副文案：0 → 10,20,30,40 */
+export function lhcTailChipSub(tail: string): string {
+  const nums = LHC_TAIL_NUMBERS[String(tail).replace(/尾$/, '')]
+  return nums?.length ? nums.join(',') : ''
 }

@@ -41,10 +41,11 @@ const amountDisplay = computed(() => {
   return `${d.amount.toFixed(2)} ${sym}`
 })
 
+/** 仅展示第三方毛派奖；未回传则为 —（禁止用本金+盈亏本地推算） */
 const payoutDisplay = computed(() => {
   const d = detail.value
   if (!d) return '—'
-  if (d.payoutAmount == null) return '—'
+  if (d.payoutAmount == null || !(d.payoutAmount > 0)) return '—'
   const sym = currencySymbol(d.currency || 'USDT')
   return `${d.payoutAmount.toFixed(2)} ${sym}`
 })

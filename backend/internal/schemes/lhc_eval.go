@@ -3,6 +3,8 @@ package schemes
 import (
 	"strconv"
 	"strings"
+
+	"caipiao/backend/internal/guajibet"
 )
 
 func evaluateLHCByBetMode(rule playRule, balls []string, content string) (betEvaluation, bool) {
@@ -67,16 +69,32 @@ func evaluateLHCByBetMode(rule playRule, balls []string, content string) (betEva
 
 func evaluateLHCTema(_ playRule, balls []string, content string) betEvaluation {
 	tema := lhcTema(balls)
-	picks := parseLHCNumbers(content)
-	units := len(picks)
+	nums, attrs, waves := guajibet.ParseLHCTemaParts(content)
+	units := len(nums) + len(attrs) + len(waves)
 	if units <= 0 {
 		units = 1
 	}
 	hit := false
-	for _, p := range picks {
-		if p == tema {
+	for _, p := range nums {
+		if n, err := strconv.Atoi(p); err == nil && n == tema {
 			hit = true
 			break
+		}
+	}
+	if !hit {
+		for _, p := range attrs {
+			if lhcTemaSideHit(balls, tema, p) {
+				hit = true
+				break
+			}
+		}
+	}
+	if !hit {
+		for _, p := range waves {
+			if lhcTemaSideHit(balls, tema, p) {
+				hit = true
+				break
+			}
 		}
 	}
 	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsLHCTema}
@@ -94,26 +112,106 @@ func evaluateLHCZhengte(rule playRule, balls []string, content string) betEvalua
 	if idx >= 0 && idx < 6 && len(balls) > idx {
 		target = atoiBall(balls[idx])
 	}
-	picks := parseLHCNumbers(content)
-	units := len(picks)
+	nums, attrs, waves := guajibet.ParseLHCTemaParts(content)
+	units := len(nums) + len(attrs) + len(waves)
 	if units <= 0 {
 		units = 1
 	}
 	hit := false
-	for _, p := range picks {
-		if p == target {
+	for _, p := range nums {
+		if n, err := strconv.Atoi(p); err == nil && n == target {
 			hit = true
 			break
 		}
 	}
+	if !hit {
+		for _, p := range attrs {
+			if lhcTemaSideHit(balls, target, p) {
+				hit = true
+				break
+			}
+		}
+	}
+	if !hit {
+		for _, p := range waves {
+			if lhcTemaSideHit(balls, target, p) {
+				hit = true
+				break
+			}
+		}
+	}
 	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsLHCTema}
+}
+
+// lhcTemaSideHit 特码/正特属性与波色命中（target 为特码或正码位号）。
+// 开 49 时大小/单双/合数/尾数类按行业口径视为和局（不计中）。
+func lhcTemaSideHit(balls []string, target int, pick string) bool {
+	pick = strings.TrimSpace(pick)
+	if pick == "" || target < 1 || target > 49 {
+		return false
+	}
+	switch pick {
+	case "红波", "红":
+		return lhcColorOf(target) == "红"
+	case "蓝波", "蓝":
+		return lhcColorOf(target) == "蓝"
+	case "绿波", "绿":
+		return lhcColorOf(target) == "绿"
+	case "总分大", "总分小", "总分单", "总分双":
+		sum := 0
+		for _, b := range balls {
+			sum += atoiBall(b)
+		}
+		switch pick {
+		case "总分大":
+			return sum >= 175
+		case "总分小":
+			return sum <= 174
+		case "总分单":
+			return sum%2 == 1
+		case "总分双":
+			return sum%2 == 0
+		}
+	}
+	if target == 49 {
+		return false
+	}
+	he := target/10 + target%10
+	wei := target % 10
+	switch pick {
+	case "大":
+		return target >= 25
+	case "小":
+		return target <= 24
+	case "单":
+		return target%2 == 1
+	case "双":
+		return target%2 == 0
+	case "合大":
+		return he >= 7
+	case "合小":
+		return he <= 6
+	case "合单":
+		return he%2 == 1
+	case "合双":
+		return he%2 == 0
+	case "尾大":
+		return wei >= 5
+	case "尾小":
+		return wei <= 4
+	case "尾单":
+		return wei%2 == 1
+	case "尾双":
+		return wei%2 == 0
+	}
+	return false
 }
 
 func evaluateLHCFushi(rule playRule, balls []string, content string) betEvaluation {
 	zheng := lhcZhengma(balls)
 	tema := lhcTema(balls)
 	picks := parseLHCNumbers(content)
-	need, hitFn := lhcFushiRule(rule.PlayTypeID)
+	need, hitFn := lhcFushiRule(lhcSettlePlayType(rule))
 	units := lhcComboUnits(len(picks), need)
 	if units <= 0 {
 		units = 1
@@ -185,12 +283,19 @@ func evaluateLHCTuotou(rule playRule, balls []string, content string) betEvaluat
 	if len(parts) < 2 {
 		parts = strings.Split(content, "#")
 	}
-	if len(parts) < 2 {
-		return evaluateLHCFushi(rule, balls, content)
+	var dan, tuo []int
+	if len(parts) >= 2 {
+		dan = parseLHCNumbers(parts[0])
+		tuo = parseLHCNumbers(parts[1])
+	} else {
+		// 扁选落库：首号胆，其余拖（勿按复式整池组合）
+		nums := parseLHCNumbers(content)
+		if len(nums) >= 2 {
+			dan = nums[:1]
+			tuo = nums[1:]
+		}
 	}
-	dan := parseLHCNumbers(parts[0])
-	tuo := parseLHCNumbers(parts[1])
-	need, hitFn := lhcFushiRule(rule.PlayTypeID)
+	need, hitFn := lhcFushiRule(lhcSettlePlayType(rule))
 	units := len(dan) * lhcComboUnits(len(tuo), need-1)
 	if units <= 0 {
 		units = 1
@@ -217,12 +322,47 @@ func evaluateLHCDuipeng(rule playRule, balls []string, content string) betEvalua
 	if len(parts) < 2 {
 		parts = strings.Split(content, "#")
 	}
+	mode := strings.TrimSpace(rule.BetMode)
+	// 生肖对碰扁选：恰好两个生肖 → 肖A|肖B
+	if len(parts) < 2 && mode == "sx_dp" {
+		zs := parseLHCZodiacs(content)
+		if len(zs) >= 2 {
+			parts = []string{zs[0], zs[1]}
+		}
+	}
+	// 尾数对碰扁选：恰好两个尾数 → 尾A|尾B
+	if len(parts) < 2 && mode == "ws_dp" {
+		tails := parseLHCTailTokens(content)
+		if len(tails) >= 2 {
+			parts = []string{tails[0], tails[1]}
+		}
+	}
+	// 生尾对碰扁选：1 肖 + 1 尾 → 肖|尾
+	if len(parts) < 2 && mode == "sw_dp" {
+		if z, t, ok := guajibet.ParseLHCSwDuipengSides(content); ok {
+			parts = []string{z, strconv.Itoa(t)}
+		}
+	}
 	if len(parts) < 2 {
 		return betEvaluation{BetUnits: 1, Odds: oddsLHCCombo}
 	}
-	groupA := lhcDuipengGroup(rule.BetMode, parts[0])
-	groupB := lhcDuipengGroup(rule.BetMode, parts[1])
+	groupA := lhcDuipengGroup(mode, parts[0])
+	groupB := lhcDuipengGroup(mode, parts[1])
+	// 生肖/尾数对碰：注数=两侧展开号码数之积；生尾另扣两侧共有号码（同号无法成对）
 	units := len(groupA) * len(groupB)
+	if mode == "sw_dp" {
+		bSet := make(map[int]struct{}, len(groupB))
+		for _, b := range groupB {
+			bSet[b] = struct{}{}
+		}
+		overlap := 0
+		for _, a := range groupA {
+			if _, ok := bSet[a]; ok {
+				overlap++
+			}
+		}
+		units -= overlap
+	}
 	if units <= 0 {
 		units = 1
 	}
@@ -230,6 +370,9 @@ func evaluateLHCDuipeng(rule playRule, balls []string, content string) betEvalua
 	hit := false
 	for _, a := range groupA {
 		for _, b := range groupB {
+			if a == b {
+				continue // 生尾两侧共号：开奖球不重复，不成对
+			}
 			if drawnSet[a] && drawnSet[b] {
 				hit = true
 				break

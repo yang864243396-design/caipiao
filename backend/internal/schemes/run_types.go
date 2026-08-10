@@ -141,9 +141,11 @@ func SupportsHotColdWarmSubPlay(guajiGroup, subLabel string) bool {
 			return true
 		}
 	}
-	// 号码池型：组选家族 + 不定位 + 包胆
+	// 号码池型：组选家族 + 不定位 + 包胆 + 五星趣味数字池
 	if strings.Contains(sub, "组三") || strings.Contains(sub, "组六") || strings.Contains(sub, "组选") ||
-		strings.Contains(sub, "不定位") || strings.Contains(sub, "包胆") {
+		strings.Contains(sub, "不定位") || strings.Contains(sub, "包胆") ||
+		strings.Contains(sub, "一帆风顺") || strings.Contains(sub, "好事成双") ||
+		strings.Contains(sub, "三星报喜") || strings.Contains(sub, "四季发财") {
 		return true
 	}
 	return false
@@ -169,9 +171,11 @@ func SupportsRandomDrawSubPlay(guajiGroup, subLabel string) bool {
 		return true
 	}
 	// 属性/聚合家族：大小单双 / 龙虎 / 特殊号 / 庄闲 / 和值 / 跨度 / 不定位 / 包胆
+	// 五星趣味：一帆风顺等（0–9 数字池）
 	for _, kw := range []string{
 		"大小单双", "大小", "单双", "龙虎", "庄闲", "特殊号", "豹子", "对子", "顺子",
 		"和值", "跨度", "不定位", "包胆",
+		"一帆风顺", "好事成双", "三星报喜", "四季发财",
 	} {
 		if strings.Contains(sub, kw) {
 			return true

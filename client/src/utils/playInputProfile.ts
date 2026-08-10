@@ -244,6 +244,13 @@ export function lhcInputModeFromBetMode(betMode: string, typeId: string, typeLab
   if (bm === 'tema' || bm === 'zhengte' || typeId === 'g001' || typeId === 'g002' || label === '特码' || label === '正特码') {
     return 'lhc_num'
   }
+  // 生肖对碰须先于 g003/连码→lhc_num，否则会误出 01–49
+  if (bm === 'sx_dp' || bm === 'texiao' || bm === 'xiao' || bm === 'xiao_z' || bm === 'xiao_bz') {
+    return 'lhc_zodiac'
+  }
+  if (bm === 'zongxiao') {
+    return 'lhc_attr'
+  }
   if (
     ['fushi', 'buzhong', 'xuanyi', 'tuotou', 'renzhong'].includes(bm) ||
     label === '连码' ||
@@ -256,13 +263,12 @@ export function lhcInputModeFromBetMode(betMode: string, typeId: string, typeLab
     return 'lhc_num'
   }
   if (
-    ['texiao', 'xiao', 'xiao_z', 'xiao_bz', 'sx_dp', 'zongxiao'].includes(bm) ||
     label === '生肖' ||
     label === '生肖连' ||
     typeId === 'g005' ||
     typeId === 'g011'
   ) {
-    return bm === 'zongxiao' ? 'lhc_attr' : 'lhc_zodiac'
+    return 'lhc_zodiac'
   }
   if (['weishu', 'wei_bz', 'ws_dp'].includes(bm) || label === '尾数连' || label === '一肖尾数' || typeId === 'g012') {
     if (label === '一肖尾数' || typeId === 'g010') return 'lhc_attr'

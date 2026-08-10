@@ -98,6 +98,9 @@ func (s *Service) startInstance(ctx context.Context, account, instanceID string)
 	if err := validateSchemeMinBetAmount(def.Config, def.Kind, currency, cur.Multiplier); err != nil {
 		return Instance{}, err
 	}
+	if err := validateSchemeMaxBetAmount(def.Config, def.Kind, currency, cur.Multiplier); err != nil {
+		return Instance{}, err
+	}
 	// 真实投注：开启前预检第三方余额，避免先显示「运行中」再因余额不足停投。
 	if !cur.SimBet {
 		need := schemeMinSingleBetAmount(def.Config, def.Kind, cur.Multiplier)

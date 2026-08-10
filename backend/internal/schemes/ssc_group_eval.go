@@ -14,6 +14,12 @@ func evaluateZu3(rule playRule, balls []string, content string) betEvaluation {
 func evaluateZu6(rule playRule, balls []string, content string) betEvaluation {
 	seg := drawSegmentForRule(rule, balls)
 	pool := parseDigitTokens(content)
+	// 四星/前后四/任四「组选6」：号池 C(n,2)，开奖为两对（AABB）；区别于三星组六 C(n,3)
+	if isSixingZu6PlayRule(rule) {
+		units := sixingZu6PoolUnits(pool)
+		hit := units > 0 && isZu6FourPattern(seg) && allDigitsInPool(seg, pool)
+		return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(4, rule.OddsBase)}
+	}
 	units := zu6PoolUnits(pool)
 	hit := units > 0 && len(seg) == 3 && isZu6Pattern(seg) && allDigitsInPool(seg, pool)
 	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(3, rule.OddsBase)}
@@ -30,7 +36,8 @@ func evaluateZuhe(rule playRule, balls []string, content string) betEvaluation {
 	pools, product := zuhePositionPools(rule, content, segLen)
 	units := product * segLen
 	if units <= 0 {
-		units = segLen
+		// 位数不合规（如非「1,2,3,4」按位逗号）→ 0 注，勿回落成 segLen
+		return betEvaluation{BetUnits: 0, Odds: oddsZhixuan(segLen, rule.OddsBase)}
 	}
 	seg := drawSegmentForRule(rule, balls)
 	if len(seg) != segLen || len(pools) != segLen {
@@ -86,29 +93,35 @@ func oddsZuheNestedPrize(hitLen int, base float64) float64 {
 }
 
 // zuhePositionPools 解析直选组合各位号池，并返回位积。
+// 支持多行按位，或单行逗号按位（前后四如 `1,2,3,4`）；位数不对或某位空 → product=0。
 func zuhePositionPools(rule playRule, content string, segLen int) ([][]string, int) {
-	lines := splitGroupLines(content)
 	pools := make([][]string, segLen)
-	if len(lines) >= segLen {
-		for i := 0; i < segLen; i++ {
-			pools[i] = parsePickTokensForRule(rule, lines[i])
+	content = strings.TrimSpace(strings.ReplaceAll(content, "，", ","))
+	if content == "" || segLen <= 0 {
+		return pools, 0
+	}
+	var parts []string
+	if strings.ContainsAny(content, "\n\r") {
+		lines := splitGroupLines(content)
+		if len(lines) < segLen {
+			return pools, 0
 		}
+		parts = lines[:segLen]
 	} else {
-		pool := parsePickTokensForRule(rule, content)
-		if len(pool) == 0 {
-			pool = []string{"0"}
+		parts = strings.Split(content, ",")
+		if len(parts) != segLen {
+			return pools, 0
 		}
-		for i := range pools {
-			pools[i] = pool
-		}
+	}
+	for i := 0; i < segLen; i++ {
+		pools[i] = parseFushiPositionDigits(rule, strings.TrimSpace(parts[i]))
 	}
 	product := 1
 	for _, p := range pools {
-		n := len(p)
-		if n <= 0 {
-			n = 1
+		if len(p) <= 0 {
+			return pools, 0
 		}
-		product *= n
+		product *= len(p)
 	}
 	return pools, product
 }
@@ -245,6 +258,23 @@ func evaluateTeshu(rule playRule, balls []string, content string) betEvaluation 
 	if len(seg) == 0 {
 		seg = balls
 	}
+	odds := oddsZuxuan(len(seg), rule.OddsBase)
+	// 五星趣味：0–9 数字池，每码 1 注；中奖看该码在开奖中出现次数
+	if min := wuxingQuweiDigitMinCount(rule); min > 0 {
+		digits := parseQuweiDigitTokens(content)
+		units := len(digits)
+		if units <= 0 {
+			return betEvaluation{Hit: false, BetUnits: 0, Odds: odds}
+		}
+		hit := false
+		for _, d := range digits {
+			if digitAppearCount(seg, d) >= min {
+				hit = true
+				break
+			}
+		}
+		return betEvaluation{Hit: hit, BetUnits: units, Odds: odds}
+	}
 	sub := strings.ToLower(rule.CatalogSubID)
 	picks := parseTextTokens(content)
 	units := len(picks)
@@ -262,7 +292,7 @@ func evaluateTeshu(rule playRule, balls []string, content string) betEvaluation 
 			}
 		}
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsZuxuan(len(seg), rule.OddsBase)}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: odds}
 }
 
 func evaluateZu24(rule playRule, balls []string, content string) betEvaluation {
@@ -270,15 +300,258 @@ func evaluateZu24(rule playRule, balls []string, content string) betEvaluation {
 }
 
 func evaluateZu12(rule playRule, balls []string, content string) betEvaluation {
+	// 双区「二重,单号」：注数按 countZu12DualZoneBetUnits；扁选号池仍走旧形态
+	if _, _, ok := parseZu12DualZones(content); ok {
+		return evaluateZu12DualZone(rule, balls, content)
+	}
 	return evaluateZuNPattern(rule, balls, content, isZu12Pattern)
 }
 
+// evaluateZu4 四星组选4：双区「三重,单号」，注数=Σ(单号\{三重})；开奖 AAAB 且三重/单号各落对应区。
+func evaluateZu4(rule playRule, balls []string, content string) betEvaluation {
+	seg := drawSegmentForRule(rule, balls)
+	units := countZu4DualZoneBetUnits(content)
+	odds := oddsZuxuan(4, rule.OddsBase)
+	if units <= 0 {
+		return betEvaluation{Hit: false, BetUnits: 0, Odds: odds}
+	}
+	hit := false
+	if isZu4Pattern(seg) {
+		triples, singles, ok := parseZu4DualZones(content)
+		if ok {
+			var tripleDigit, singleDigit string
+			for d, c := range digitCounts(seg) {
+				if c == 3 {
+					tripleDigit = d
+				} else if c == 1 {
+					singleDigit = d
+				}
+			}
+			hit = zoneHasDigit(triples, tripleDigit) && zoneHasDigit(singles, singleDigit)
+		}
+	}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: odds}
+}
+
+func evaluateZu12DualZone(rule playRule, balls []string, content string) betEvaluation {
+	seg := drawSegmentForRule(rule, balls)
+	units := countZu12DualZoneBetUnits(content)
+	odds := oddsZuxuan(4, rule.OddsBase)
+	if units <= 0 {
+		return betEvaluation{Hit: false, BetUnits: 0, Odds: odds}
+	}
+	hit := false
+	if isZu12Pattern(seg) {
+		doubles, singles, ok := parseZu12DualZones(content)
+		if ok {
+			var pairDigit string
+			singleDigits := make([]string, 0, 2)
+			for d, c := range digitCounts(seg) {
+				switch c {
+				case 2:
+					pairDigit = d
+				case 1:
+					singleDigits = append(singleDigits, d)
+				}
+			}
+			if zoneHasDigit(doubles, pairDigit) && len(singleDigits) == 2 &&
+				zoneHasDigit(singles, singleDigits[0]) && zoneHasDigit(singles, singleDigits[1]) {
+				hit = true
+			}
+		}
+	}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: odds}
+}
+
+func zoneHasDigit(zone, digit string) bool {
+	if digit == "" || len(digit) != 1 {
+		return false
+	}
+	return strings.Contains(zone, digit)
+}
+
 func evaluateZu60(rule playRule, balls []string, content string) betEvaluation {
+	// 双区「二重,单号」：注数按 countZu60DualZoneBetUnits；扁选号池仍走旧形态
+	if _, _, ok := parseZu60DualZones(content); ok {
+		return evaluateZu60DualZone(rule, balls, content)
+	}
 	return evaluateZuNPattern(rule, balls, content, isZu60Pattern)
 }
 
+func evaluateZu60DualZone(rule playRule, balls []string, content string) betEvaluation {
+	seg := drawSegmentForRule(rule, balls)
+	units := countZu60DualZoneBetUnits(content)
+	odds := oddsZuxuan(5, rule.OddsBase)
+	if units <= 0 {
+		return betEvaluation{Hit: false, BetUnits: 0, Odds: odds}
+	}
+	hit := false
+	if isZu60Pattern(seg) {
+		doubles, singles, ok := parseZu60DualZones(content)
+		if ok {
+			var pairDigit string
+			singleDigits := make([]string, 0, 3)
+			for d, c := range digitCounts(seg) {
+				switch c {
+				case 2:
+					pairDigit = d
+				case 1:
+					singleDigits = append(singleDigits, d)
+				}
+			}
+			if zoneHasDigit(doubles, pairDigit) && len(singleDigits) == 3 &&
+				zoneHasDigit(singles, singleDigits[0]) &&
+				zoneHasDigit(singles, singleDigits[1]) &&
+				zoneHasDigit(singles, singleDigits[2]) {
+				hit = true
+			}
+		}
+	}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: odds}
+}
+
 func evaluateZu30(rule playRule, balls []string, content string) betEvaluation {
+	// 双区「二重,单号」：注数按 countZu30DualZoneBetUnits；扁选号池仍走旧形态
+	if _, _, ok := parseZu30DualZones(content); ok {
+		return evaluateZu30DualZone(rule, balls, content)
+	}
 	return evaluateZuNPattern(rule, balls, content, isZu30Pattern)
+}
+
+func evaluateZu30DualZone(rule playRule, balls []string, content string) betEvaluation {
+	seg := drawSegmentForRule(rule, balls)
+	units := countZu30DualZoneBetUnits(content)
+	odds := oddsZuxuan(5, rule.OddsBase)
+	if units <= 0 {
+		return betEvaluation{Hit: false, BetUnits: 0, Odds: odds}
+	}
+	hit := false
+	if isZu30Pattern(seg) {
+		doubles, singles, ok := parseZu30DualZones(content)
+		if ok {
+			pairDigits := make([]string, 0, 2)
+			var singleDigit string
+			for d, c := range digitCounts(seg) {
+				switch c {
+				case 2:
+					pairDigits = append(pairDigits, d)
+				case 1:
+					singleDigit = d
+				}
+			}
+			if len(pairDigits) == 2 &&
+				zoneHasDigit(doubles, pairDigits[0]) &&
+				zoneHasDigit(doubles, pairDigits[1]) &&
+				zoneHasDigit(singles, singleDigit) {
+				hit = true
+			}
+		}
+	}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: odds}
+}
+
+func evaluateZu20(rule playRule, balls []string, content string) betEvaluation {
+	if _, _, ok := parseZu20DualZones(content); ok {
+		return evaluateZu20DualZone(rule, balls, content)
+	}
+	return evaluateZuNPattern(rule, balls, content, isZu20Pattern)
+}
+
+func evaluateZu20DualZone(rule playRule, balls []string, content string) betEvaluation {
+	seg := drawSegmentForRule(rule, balls)
+	units := countZu20DualZoneBetUnits(content)
+	odds := oddsZuxuan(5, rule.OddsBase)
+	if units <= 0 {
+		return betEvaluation{Hit: false, BetUnits: 0, Odds: odds}
+	}
+	hit := false
+	if isZu20Pattern(seg) {
+		triples, singles, ok := parseZu20DualZones(content)
+		if ok {
+			var tripleDigit string
+			singleDigits := make([]string, 0, 2)
+			for d, c := range digitCounts(seg) {
+				switch c {
+				case 3:
+					tripleDigit = d
+				case 1:
+					singleDigits = append(singleDigits, d)
+				}
+			}
+			if zoneHasDigit(triples, tripleDigit) && len(singleDigits) == 2 &&
+				zoneHasDigit(singles, singleDigits[0]) &&
+				zoneHasDigit(singles, singleDigits[1]) {
+				hit = true
+			}
+		}
+	}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: odds}
+}
+
+func evaluateZu10(rule playRule, balls []string, content string) betEvaluation {
+	if _, _, ok := parseZuPairDualZones(content); ok {
+		return evaluateZu10DualZone(rule, balls, content)
+	}
+	return evaluateZuNPattern(rule, balls, content, isZu10Pattern)
+}
+
+func evaluateZu10DualZone(rule playRule, balls []string, content string) betEvaluation {
+	seg := drawSegmentForRule(rule, balls)
+	units := countZuPairDualZoneBetUnits(content)
+	odds := oddsZuxuan(5, rule.OddsBase)
+	if units <= 0 {
+		return betEvaluation{Hit: false, BetUnits: 0, Odds: odds}
+	}
+	hit := false
+	if isZu10Pattern(seg) {
+		triples, doubles, ok := parseZuPairDualZones(content)
+		if ok {
+			var tripleDigit, pairDigit string
+			for d, c := range digitCounts(seg) {
+				switch c {
+				case 3:
+					tripleDigit = d
+				case 2:
+					pairDigit = d
+				}
+			}
+			hit = zoneHasDigit(triples, tripleDigit) && zoneHasDigit(doubles, pairDigit)
+		}
+	}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: odds}
+}
+
+func evaluateZu5(rule playRule, balls []string, content string) betEvaluation {
+	if _, _, ok := parseZuPairDualZones(content); ok {
+		return evaluateZu5DualZone(rule, balls, content)
+	}
+	return evaluateZuNPattern(rule, balls, content, isZu5Pattern)
+}
+
+func evaluateZu5DualZone(rule playRule, balls []string, content string) betEvaluation {
+	seg := drawSegmentForRule(rule, balls)
+	units := countZuPairDualZoneBetUnits(content)
+	odds := oddsZuxuan(5, rule.OddsBase)
+	if units <= 0 {
+		return betEvaluation{Hit: false, BetUnits: 0, Odds: odds}
+	}
+	hit := false
+	if isZu5Pattern(seg) {
+		quads, singles, ok := parseZuPairDualZones(content)
+		if ok {
+			var quadDigit, singleDigit string
+			for d, c := range digitCounts(seg) {
+				switch c {
+				case 4:
+					quadDigit = d
+				case 1:
+					singleDigit = d
+				}
+			}
+			hit = zoneHasDigit(quads, quadDigit) && zoneHasDigit(singles, singleDigit)
+		}
+	}
+	return betEvaluation{Hit: hit, BetUnits: units, Odds: odds}
 }
 
 func evaluateZu120(rule playRule, balls []string, content string) betEvaluation {
@@ -370,6 +643,24 @@ func isZu12Pattern(seg []string) bool {
 	return two && ones == 2
 }
 
+// isZu4Pattern 四星组选4：AAAB（一码三重 + 一码单号）。
+func isZu4Pattern(seg []string) bool {
+	counts := digitCounts(seg)
+	if len(seg) != 4 || len(counts) != 2 {
+		return false
+	}
+	three, one := false, false
+	for _, c := range counts {
+		switch c {
+		case 3:
+			three = true
+		case 1:
+			one = true
+		}
+	}
+	return three && one
+}
+
 func isZu60Pattern(seg []string) bool {
 	counts := digitCounts(seg)
 	if len(seg) != 5 || len(counts) != 4 {
@@ -385,6 +676,60 @@ func isZu60Pattern(seg []string) bool {
 		}
 	}
 	return two && ones == 3
+}
+
+// isZu20Pattern 五星组选20：AAABC（一码三重 + 两码单号）。
+func isZu20Pattern(seg []string) bool {
+	counts := digitCounts(seg)
+	if len(seg) != 5 || len(counts) != 3 {
+		return false
+	}
+	three, ones := false, 0
+	for _, c := range counts {
+		switch c {
+		case 3:
+			three = true
+		case 1:
+			ones++
+		}
+	}
+	return three && ones == 2
+}
+
+// isZu10Pattern 五星组选10：AAABB（一码三重 + 一码二重）。
+func isZu10Pattern(seg []string) bool {
+	counts := digitCounts(seg)
+	if len(seg) != 5 || len(counts) != 2 {
+		return false
+	}
+	three, two := false, false
+	for _, c := range counts {
+		switch c {
+		case 3:
+			three = true
+		case 2:
+			two = true
+		}
+	}
+	return three && two
+}
+
+// isZu5Pattern 五星组选5：AAAAB（一码四重 + 一码单号）。
+func isZu5Pattern(seg []string) bool {
+	counts := digitCounts(seg)
+	if len(seg) != 5 || len(counts) != 2 {
+		return false
+	}
+	four, one := false, false
+	for _, c := range counts {
+		switch c {
+		case 4:
+			four = true
+		case 1:
+			one = true
+		}
+	}
+	return four && one
 }
 
 func isZu30Pattern(seg []string) bool {
@@ -471,22 +816,23 @@ func parseZuhePicks(content string) [][2]string {
 }
 
 func teshuPatternHit(subID string, seg []string) bool {
+	// 趣味形态：开奖中是否存在达到次数门槛的任意号码（无选号时的兜底，正常走数字池）
 	switch {
-	case strings.Contains(subID, "yifan"):
-		return len(digitCounts(seg)) == 1 && len(seg) >= 3
-	case strings.Contains(subID, "haoshi"):
+	case strings.Contains(subID, "yifan") || strings.Contains(subID, "一帆风顺"):
+		return len(seg) > 0
+	case strings.Contains(subID, "haoshi") || strings.Contains(subID, "好事成双"):
 		for _, c := range digitCounts(seg) {
 			if c >= 2 {
 				return true
 			}
 		}
-	case strings.Contains(subID, "sanxing"):
+	case strings.Contains(subID, "sanxing") || strings.Contains(subID, "三星报喜"):
 		for _, c := range digitCounts(seg) {
 			if c >= 3 {
 				return true
 			}
 		}
-	case strings.Contains(subID, "siji"):
+	case strings.Contains(subID, "siji") || strings.Contains(subID, "四季发财"):
 		for _, c := range digitCounts(seg) {
 			if c >= 4 {
 				return true
@@ -517,17 +863,18 @@ func teshuPickHit(subID string, seg []string, pick string) bool {
 			return false
 		}
 		return atoiBall(seg[0])+atoiBall(seg[1])+atoiBall(seg[2]) <= 5
-	case "一帆风顺", "yifan":
-		return teshuPatternHit("yifan", seg)
-	case "好事成双", "haoshi":
-		return teshuPatternHit("haoshi", seg)
-	case "三星报喜", "sanxing":
-		return teshuPatternHit("sanxing", seg)
-	case "四季发财", "siji":
-		return teshuPatternHit("siji", seg)
 	}
 	if isAllDigits(pick) && len(pick) == 1 {
-		return containsDigit(seg, pick)
+		min := 1
+		switch {
+		case strings.Contains(subID, "siji") || strings.Contains(subID, "四季发财"):
+			min = 4
+		case strings.Contains(subID, "sanxing") || strings.Contains(subID, "三星报喜"):
+			min = 3
+		case strings.Contains(subID, "haoshi") || strings.Contains(subID, "好事成双"):
+			min = 2
+		}
+		return digitAppearCount(seg, pick) >= min
 	}
 	return teshuPatternHit(subID, seg)
 }

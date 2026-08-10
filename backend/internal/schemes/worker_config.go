@@ -791,6 +791,7 @@ func resolveRandomDraw(cfg map[string]interface{}, rule playRule) *randomDrawCfg
 		maxN = 1
 	}
 	zu12 := isZu12PlayRule(rule)
+	zu4 := isZu4PlayRule(rule)
 	if counts, ok := raw["counts"].([]interface{}); ok {
 		for i, item := range counts {
 			n := toInt(item, 1)
@@ -813,6 +814,14 @@ func resolveRandomDraw(cfg map[string]interface{}, rule playRule) *randomDrawCfg
 			out.Counts = []int{1, 2}
 		} else if len(out.Counts) == 1 {
 			out.Counts = []int{out.Counts[0], 2}
+		}
+	}
+	// 组选4：旧配置仅 [K] 时补默认单号个数 1
+	if zu4 {
+		if len(out.Counts) == 0 {
+			out.Counts = []int{1, 1}
+		} else if len(out.Counts) == 1 {
+			out.Counts = []int{out.Counts[0], 1}
 		}
 	}
 	if arr, ok := raw["positionIdxs"].([]interface{}); ok {
