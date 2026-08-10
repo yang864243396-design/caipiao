@@ -2,6 +2,18 @@ package guajibet
 
 import "testing"
 
+func TestCountLHCBetNums_RenyiDuipengCountsCartesianProduct(t *testing.T) {
+	meta := ParseRuleMeta("lhc_std", "g003", "284", "二全中任意对碰", "连码", nil, "284")
+	meta.ForcedBetMode = "renyi_dp"
+	content := "01,02,03,04,05,06,07,08|09,10"
+	if wire := FormatBetContentForRule(meta, content); wire != content {
+		t.Fatalf("wire=%q want %q", wire, content)
+	}
+	if n := CountBetNums(meta, content); n != 16 {
+		t.Fatalf("bets=%d want 16", n)
+	}
+}
+
 func TestSampleLHCTuotouContent_numberErquanzhong(t *testing.T) {
 	meta := ParseRuleMeta("lhc_std", "g003", "280", "拖头", "连码",
 		[]byte(`{"guajiTeam":"二全中","guajiGroup":"连码","guajiFullName":"二全中拖头"}`), "280")

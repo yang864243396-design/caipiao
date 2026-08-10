@@ -1096,6 +1096,9 @@ export function validateLhcRenyiDuipengContent(
       message: `任意对碰：A区与 B区号码不可重复（重复：${overlap.join(',')}）`,
     }
   }
+  if (sides.a.length + sides.b.length > 10) {
+    return { ok: false, message: '任意对碰：A区和B区合计最多选择 10 个号码' }
+  }
   const normalized = formatLhcRenyiDuipengContent(sides.a, sides.b)
   const betUnits = sides.a.length * sides.b.length
   if (betUnits <= 0) return { ok: false, message: '任意对碰：选号无效' }

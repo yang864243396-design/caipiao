@@ -27,6 +27,22 @@ func roundLottBetAmount(unit float64, betsNums, mult int) float64 {
 	return math.Round(unit*float64(betsNums)*float64(mult)*10000) / 10000
 }
 
+func lottBetContentForRequest(meta guajibet.RuleMeta, content string, unit float64, betsNums, mult int) guaji.LottBetContent {
+	item := guaji.LottBetContent{
+		BetContent: content,
+		AmountUnit: unit,
+		BetsNums:   betsNums,
+		Multiple:   mult,
+		BetAmount:  roundLottBetAmount(unit, betsNums, mult),
+		Solo:       guajibet.ResolveSolo(meta, content, betsNums),
+	}
+	if meta.PlayTemplate == "lhc_std" && guajibet.InferBetMode(meta) == "renyi_dp" && betsNums > 1 && mult > 1 {
+		single := roundLottBetAmount(unit, 1, mult)
+		item.SingleBetAmount = &single
+	}
+	return item
+}
+
 // Enabled 报告第三方对接是否启用（guajibet.Placer）。
 func (s *Service) Enabled() bool {
 	return s != nil && s.guaji != nil && s.guaji.Enabled()
@@ -173,19 +189,11 @@ func (s *Service) placeRealBetWithRow(
 	if betsNums <= 0 {
 		return guajibet.Result{}, fmt.Errorf("%w: %w", guajibet.ErrPlaceRejected, guajibet.ErrZeroBets)
 	}
-	betAmount := roundLottBetAmount(unit, betsNums, mult)
-	solo := guajibet.ResolveSolo(req.RuleMeta, content, betsNums)
+	item := lottBetContentForRequest(req.RuleMeta, content, unit, betsNums, mult)
+	item.RuleID = req.RuleID
 	betRes, err := s.guaji.PlaceLottBet(ctx, token, guaji.LottBetRequest{
-		AutoType: "platform",
-		BetContents: []guaji.LottBetContent{{
-			RuleID:     req.RuleID,
-			BetContent: content,
-			AmountUnit: unit,
-			BetsNums:   betsNums,
-			Multiple:   mult,
-			BetAmount:  betAmount,
-			Solo:       solo,
-		}},
+		AutoType:    "platform",
+		BetContents: []guaji.LottBetContent{item},
 		GameID:      gameID,
 		Currency:    guaji.CurrencyCode(currency),
 		BetMultiple: []guaji.LottBetMultipleOuter{},
@@ -199,7 +207,7 @@ func (s *Service) placeRealBetWithRow(
 			_ = s.markTokenError(ctx, memberID, row.id, row.accessTokenEnc.String, fault.UserMessage)
 			return guajibet.Result{}, guajibet.ErrTokenInvalid
 		}
-		slog.Warn("guaji place bet rejected", "member", memberAccount, "gameId", gameID, "ruleId", req.RuleID, "issue", req.IssueNo, "content", content, "betsNums", betsNums, "solo", solo, "amount", betAmount, "err", err)
+		slog.Warn("guaji place bet rejected", "member", memberAccount, "gameId", gameID, "ruleId", req.RuleID, "issue", req.IssueNo, "content", content, "betsNums", betsNums, "solo", item.Solo, "amount", item.BetAmount, "err", err)
 		return guajibet.Result{}, fmt.Errorf("%w: %w", guajibet.ErrPlaceRejected, err)
 	}
 	periods := strings.TrimSpace(betRes.Periods)

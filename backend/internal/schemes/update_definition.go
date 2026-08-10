@@ -15,12 +15,12 @@ import (
 )
 
 var (
-	ErrDeleteWhileRunning         = errors.New("delete while instance running")
-	ErrPatchWhileRunning          = errors.New("patch bet settings while instance running")
-	ErrPatchSimBetWhileRunning    = errors.New("patch simBet while instance running")
-	ErrPatchCurrencyWhileRunning  = errors.New("patch schemeCurrency while instance running")
-	ErrInvalidUpdatePatch      = errors.New("invalid update patch")
-	ErrFavoriteRequired   = errors.New("favorite required for builtin plan")
+	ErrDeleteWhileRunning        = errors.New("delete while instance running")
+	ErrPatchWhileRunning         = errors.New("patch bet settings while instance running")
+	ErrPatchSimBetWhileRunning   = errors.New("patch simBet while instance running")
+	ErrPatchCurrencyWhileRunning = errors.New("patch schemeCurrency while instance running")
+	ErrInvalidUpdatePatch        = errors.New("invalid update patch")
+	ErrFavoriteRequired          = errors.New("favorite required for builtin plan")
 	// ErrInvalidSchemeContent 投注内容越出该玩法的合法投注空间。
 	ErrInvalidSchemeContent = errors.New("invalid scheme bet content")
 )
@@ -404,7 +404,14 @@ func (s *Service) UpdateDefinition(
 		}
 	}
 
-	row, err := s.q.UpdateSchemeDefinitionConfig(ctx, sqlcdb.UpdateSchemeDefinitionConfigParams{
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Definition{}, err
+	}
+	defer tx.Rollback(ctx)
+	qtx := s.q.WithTx(tx)
+
+	row, err := qtx.UpdateSchemeDefinitionConfig(ctx, sqlcdb.UpdateSchemeDefinitionConfigParams{
 		ID:       definitionID,
 		MemberID: m.ID,
 		Config:   cfgBytes,
@@ -412,14 +419,31 @@ func (s *Service) UpdateDefinition(
 	if err != nil {
 		return Definition{}, err
 	}
+	if patch.HasMultCoeff {
+		inst, instErr := qtx.GetSchemeInstanceByDefinitionID(ctx, definitionID)
+		if instErr == nil {
+			if _, updateErr := qtx.UpdateSchemeInstanceMultiplier(ctx, sqlcdb.UpdateSchemeInstanceMultiplierParams{
+				ID:         inst.ID,
+				MemberID:   m.ID,
+				Multiplier: floatToNumeric(schemeMultiplierFromConfig(cfgBytes)),
+			}); updateErr != nil {
+				return Definition{}, updateErr
+			}
+		} else if !errors.Is(instErr, pgx.ErrNoRows) {
+			return Definition{}, instErr
+		}
+	}
 
 	if newSimBet != oldSimBet {
-		if _, serr := s.q.SyncSchemeInstancesSimBetByDefinition(ctx, sqlcdb.SyncSchemeInstancesSimBetByDefinitionParams{
+		if _, serr := qtx.SyncSchemeInstancesSimBetByDefinition(ctx, sqlcdb.SyncSchemeInstancesSimBetByDefinitionParams{
 			DefinitionID: definitionID,
 			SimBet:       newSimBet,
 		}); serr != nil {
 			return Definition{}, serr
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Definition{}, err
 	}
 
 	hasInstance := false

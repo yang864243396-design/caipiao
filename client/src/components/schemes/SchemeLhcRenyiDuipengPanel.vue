@@ -81,7 +81,7 @@ watch(
 
 <template>
   <div class="srd-panel" :class="{ 'is-disabled': disabled }">
-    <p class="srd-hint">A区、B区分别输入 1–49 号码（区内逗号分隔），两侧号码不可重复；保存格式为 A|B</p>
+    <p class="srd-hint">A区、B区分别输入 1–49 号码（区内逗号分隔），两侧号码不可重复，合计最多 10 个；保存格式为 A|B</p>
     <div class="srd-zones">
       <div class="srd-zone">
         <label class="srd-lbl" for="srd-a">A区</label>
@@ -92,7 +92,7 @@ watch(
           clearable
           placeholder="如 1,13,25"
           class="srd-inp"
-          @update:model-value="(v) => onZoneInput('a', String(v ?? ''))"
+          @update:model-value="(v: unknown) => onZoneInput('a', String(v ?? ''))"
           @blur="emitCombined"
         />
       </div>
@@ -106,7 +106,7 @@ watch(
           clearable
           placeholder="如 2,14,26"
           class="srd-inp"
-          @update:model-value="(v) => onZoneInput('b', String(v ?? ''))"
+          @update:model-value="(v: unknown) => onZoneInput('b', String(v ?? ''))"
           @blur="emitCombined"
         />
       </div>

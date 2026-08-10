@@ -648,7 +648,7 @@ func isAttributeRandom(rule playRule) bool {
 }
 
 // randomDrawCountMax 与编辑页 rdSingleCountMax / rdPerPosMax 对齐：按玩法宇宙定上限。
-	// 整注 200、组选号池=号池长度、属性=选项宇宙、包胆 1、尾数≤9、按位默认 10（一星 9、按位大小单双 1）。
+// 整注 200、组选号池=号池长度、属性=选项宇宙、包胆 1、尾数≤9、按位默认 10（一星 9、按位大小单双 1）。
 func randomDrawCountMax(rule playRule) int {
 	if isWholeTicketRandom(rule) {
 		return 200
@@ -1507,6 +1507,11 @@ func buildHotColdPickContent(cfg parsedSchemeConfig, draws [][]string) string {
 		return ""
 	}
 	pool := playNumberPool(cfg.Play)
+	// 任意对碰：A/B 两行 ranks 共用同一份 01–49 冷热排序，构造成 A号码|B号码。
+	// 配置不完整时由专用分支返回空串，不能回退为单区号码池。
+	if content, handled := buildLHCRenyiDuipengHotColdPickContent(cfg, draws, pool); handled {
+		return content
+	}
 
 	// 前二/后二/前三/后三大小单双：按位大/小/单/双（十\n个），每位至多 1 选项
 	if content, ok := buildPerPosDxdsHcwPickContent(cfg, draws); ok {
@@ -1608,6 +1613,91 @@ func buildHotColdPickContent(cfg parsedSchemeConfig, draws [][]string) string {
 		return ""
 	}
 	return strings.Join(lines, "\n")
+}
+
+// buildLHCRenyiDuipengHotColdPickContent 为任意对碰按同一冷热排序分别取 A/B 区号码。
+// handled=true 表示命中了任意对碰玩法；空串代表 ranks 不完整或会生成非法投注，应跳过本期。
+func buildLHCRenyiDuipengHotColdPickContent(cfg parsedSchemeConfig, draws [][]string, pool []string) (string, bool) {
+	if !isLHCRenyiDuipengPlayRule(cfg.Play) {
+		return "", false
+	}
+	aRanks, bRanks, ok := lhcRenyiDuipengHotColdRanks(cfg.HotCold, len(pool))
+	if !ok {
+		return "", true
+	}
+	hot, cold := lhcRenyiDuipengHotColdTiers(draws, pool)
+	ordered := append(hot, cold...)
+	a := pickHotColdByRanks(ordered, aRanks)
+	b := pickHotColdByRanks(ordered, bRanks)
+	content := strings.Join(formatLHCRenyiDuipengHotColdTokens(a), ",") + "|" + strings.Join(formatLHCRenyiDuipengHotColdTokens(b), ",")
+	if len(validateLHCRenyiDuipengBetContent(content)) != 0 {
+		return "", true
+	}
+	return content, true
+}
+
+func formatLHCRenyiDuipengHotColdTokens(tokens []string) []string {
+	out := sortHotColdBetTokens(tokens)
+	for i, token := range out {
+		n, err := strconv.Atoi(strings.TrimSpace(token))
+		if err != nil || n < 1 || n > 49 {
+			continue
+		}
+		out[i] = strconv.FormatInt(int64(n), 10)
+		if n < 10 {
+			out[i] = "0" + out[i]
+		}
+	}
+	return out
+}
+
+// lhcRenyiDuipengHotColdRanks 读取任意对碰的 A/B 两行名次；禁止缺区、重叠和合计超过十个。
+func lhcRenyiDuipengHotColdRanks(hc *hotColdWarmCfg, orderLen int) (a, b []int, ok bool) {
+	if hc == nil || len(hc.Ranks) < 2 {
+		return nil, nil, false
+	}
+	a = normalizeHotColdRanks(hc.Ranks[0], orderLen)
+	b = normalizeHotColdRanks(hc.Ranks[1], orderLen)
+	if len(a) == 0 || len(b) == 0 || len(a)+len(b) > lhcRenyiDuipengMaxPicks {
+		return nil, nil, false
+	}
+	seen := make(map[int]struct{}, len(a)+len(b))
+	for _, rank := range a {
+		seen[rank] = struct{}{}
+	}
+	for _, rank := range b {
+		if _, exists := seen[rank]; exists {
+			return nil, nil, false
+		}
+	}
+	return a, b, true
+}
+
+// lhcRenyiDuipengHotColdTiers 按六合七码整体频次排序；同频按数值升序，和前端排序口径一致。
+func lhcRenyiDuipengHotColdTiers(draws [][]string, pool []string) (hot, cold []string) {
+	counts := make(map[string]int, len(pool))
+	for _, token := range pool {
+		counts[token] = 0
+	}
+	for _, balls := range draws {
+		for _, ball := range balls {
+			token := strings.TrimSpace(ball)
+			if _, exists := counts[token]; exists {
+				counts[token]++
+			}
+		}
+	}
+	sorted := append([]string(nil), pool...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if counts[sorted[i]] != counts[sorted[j]] {
+			return counts[sorted[i]] > counts[sorted[j]]
+		}
+		left, _ := strconv.Atoi(sorted[i])
+		right, _ := strconv.Atoi(sorted[j])
+		return left < right
+	})
+	half := (len(sorted) + 1) / 2
+	return sorted[:half], sorted[half:]
 }
 
 // buildZu12HcwPickContent 组选12 冷热：ranks[0]→二重号、ranks[1]→单号，拼「二重,单号」。

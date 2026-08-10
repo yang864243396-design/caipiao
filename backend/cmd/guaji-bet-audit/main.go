@@ -79,8 +79,8 @@ func main() {
 					continue
 				}
 				matched++
-				fmt.Printf("id=%v game=%v rule=%s content=%q bets=%v solo=%v amount=%v periods=%v status=%v name=%v\n",
-					row["id"], gid, rid, strVal(item["bet_content"]), item["bets_nums"], item["solo"], item["bet_amount"], row["periods"], row["status"], item["rule_full_name"])
+				fmt.Printf("id=%v game=%v rule=%s content=%q bets=%v unit=%v multiple=%v solo=%v amount=%v periods=%v status=%v name=%v\n",
+					row["id"], gid, rid, strVal(item["bet_content"]), item["bets_nums"], item["amount_unit"], item["multiple"], item["solo"], item["bet_amount"], row["periods"], row["status"], item["rule_full_name"])
 			}
 		}
 		if len(wrap.Data) < *limit {

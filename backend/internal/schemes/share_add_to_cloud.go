@@ -34,29 +34,29 @@ type Definition struct {
 }
 
 type Instance struct {
-	ID           string  `json:"id"`
-	DefinitionID string  `json:"definitionId"`
-	Kind         string  `json:"kind"`
-	SchemeName   string  `json:"schemeName"`
-	LotteryCode  string  `json:"lotteryCode"`
-	LotteryLabel string  `json:"lotteryLabel,omitempty"`
-	Status       string  `json:"status"`
-	StatusReason string  `json:"statusReason,omitempty"`
-	StatusLabel  string  `json:"statusLabel"`
-	RunMode      string  `json:"runMode"`
-	Turnover     float64 `json:"turnover"`
-	PnL          float64 `json:"pnl"`
-	RunTimeSec   int     `json:"runTimeSec"`
-	LookbackPnL  float64 `json:"lookbackPnl"`
-	SessionPnL   float64 `json:"sessionPnl"`
-	Multiplier   float64 `json:"multiplier"`
-	CountdownSec     int     `json:"countdownSec"`
-	CountdownCloseAt string  `json:"countdownCloseAt,omitempty"` // RFC3339，由 countdownEndTime 按 UTC 墙钟解析
-	CountdownEndTime string  `json:"countdownEndTime,omitempty"` // 第三方 periods 原始 end_time（UTC 墙钟）
-	CountdownPeriod  string  `json:"countdownPeriod,omitempty"`  // 倒计时对应期号（第三方 periods）
-	CountdownWindowSec int   `json:"countdownWindowSec,omitempty"` // 单期投注窗口秒数（start→end），展示倒计时封顶
-	CountdownLabel   string  `json:"countdownLabel,omitempty"`
-	SimBet         bool    `json:"simBet"`
+	ID                 string  `json:"id"`
+	DefinitionID       string  `json:"definitionId"`
+	Kind               string  `json:"kind"`
+	SchemeName         string  `json:"schemeName"`
+	LotteryCode        string  `json:"lotteryCode"`
+	LotteryLabel       string  `json:"lotteryLabel,omitempty"`
+	Status             string  `json:"status"`
+	StatusReason       string  `json:"statusReason,omitempty"`
+	StatusLabel        string  `json:"statusLabel"`
+	RunMode            string  `json:"runMode"`
+	Turnover           float64 `json:"turnover"`
+	PnL                float64 `json:"pnl"`
+	RunTimeSec         int     `json:"runTimeSec"`
+	LookbackPnL        float64 `json:"lookbackPnl"`
+	SessionPnL         float64 `json:"sessionPnl"`
+	Multiplier         float64 `json:"multiplier"`
+	CountdownSec       int     `json:"countdownSec"`
+	CountdownCloseAt   string  `json:"countdownCloseAt,omitempty"`   // RFC3339，由 countdownEndTime 按 UTC 墙钟解析
+	CountdownEndTime   string  `json:"countdownEndTime,omitempty"`   // 第三方 periods 原始 end_time（UTC 墙钟）
+	CountdownPeriod    string  `json:"countdownPeriod,omitempty"`    // 倒计时对应期号（第三方 periods）
+	CountdownWindowSec int     `json:"countdownWindowSec,omitempty"` // 单期投注窗口秒数（start→end），展示倒计时封顶
+	CountdownLabel     string  `json:"countdownLabel,omitempty"`
+	SimBet             bool    `json:"simBet"`
 	// 方案币种（来自 definition config.schemeCurrency；缺省 USDT）
 	SchemeCurrency string `json:"schemeCurrency,omitempty"`
 	RunTypeID      string `json:"runTypeId,omitempty"`
@@ -176,16 +176,16 @@ func (s *Service) insertFollowFromSnapshot(
 
 	qtx := s.q.WithTx(tx)
 	defRow, err := qtx.InsertSchemeDefinition(ctx, sqlcdb.InsertSchemeDefinitionParams{
-		ID:                 defID,
-		MemberID:           m.ID,
-		Kind:               "follow",
-		SchemeName:         schemeName,
-		LotteryCode:        lotteryCode,
-		LotteryLabel:       lotteryLabel,
-		ShareStatus:        "private",
-		ShareStatusLocked:  true,
-		SourceSnapshotID:   pgtype.Text{String: snap.ID, Valid: true},
-		Config:             cfgBytes,
+		ID:                defID,
+		MemberID:          m.ID,
+		Kind:              "follow",
+		SchemeName:        schemeName,
+		LotteryCode:       lotteryCode,
+		LotteryLabel:      lotteryLabel,
+		ShareStatus:       "private",
+		ShareStatusLocked: true,
+		SourceSnapshotID:  pgtype.Text{String: snap.ID, Valid: true},
+		Config:            cfgBytes,
 	})
 	if err != nil {
 		return ShareFollowActionResult{}, err
@@ -204,13 +204,25 @@ func (s *Service) insertFollowFromSnapshot(
 	if err != nil {
 		return ShareFollowActionResult{}, err
 	}
+	instanceMultiplier := schemeMultiplierFromConfig(cfgBytes)
+	if _, err := qtx.UpdateSchemeInstanceMultiplier(ctx, sqlcdb.UpdateSchemeInstanceMultiplierParams{
+		ID:         instID,
+		MemberID:   m.ID,
+		Multiplier: floatToNumeric(instanceMultiplier),
+	}); err != nil {
+		return ShareFollowActionResult{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return ShareFollowActionResult{}, err
 	}
 
 	return ShareFollowActionResult{
 		Definition: mapDefinitionRow(defRow, true),
-		Instance:   mapInstanceFromInsertRow(instRow),
+		Instance: func() Instance {
+			inst := mapInstanceFromInsertRow(instRow)
+			inst.Multiplier = instanceMultiplier
+			return inst
+		}(),
 	}, nil
 }
 

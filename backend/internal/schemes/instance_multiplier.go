@@ -34,7 +34,14 @@ func (s *Service) UpdateInstanceMultiplier(ctx context.Context, account, instanc
 		return Instance{}, err
 	}
 
-	row, err := s.q.UpdateSchemeInstanceMultiplier(ctx, sqlcdb.UpdateSchemeInstanceMultiplierParams{
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Instance{}, err
+	}
+	defer tx.Rollback(ctx)
+	qtx := s.q.WithTx(tx)
+
+	row, err := qtx.UpdateSchemeInstanceMultiplier(ctx, sqlcdb.UpdateSchemeInstanceMultiplierParams{
 		ID:         instanceID,
 		MemberID:   m.ID,
 		Multiplier: floatToNumeric(multiplier),
@@ -43,6 +50,30 @@ func (s *Service) UpdateInstanceMultiplier(ctx context.Context, account, instanc
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Instance{}, ErrDefinitionNotFound
 		}
+		return Instance{}, err
+	}
+	def, err := qtx.GetSchemeDefinitionByIDAndMember(ctx, sqlcdb.GetSchemeDefinitionByIDAndMemberParams{
+		ID:       row.DefinitionID,
+		MemberID: m.ID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Instance{}, ErrDefinitionNotFound
+		}
+		return Instance{}, err
+	}
+	cfgBytes, err := setSchemeConfigMultiplier(def.Config, multiplier)
+	if err != nil {
+		return Instance{}, err
+	}
+	if _, err := qtx.UpdateSchemeDefinitionConfig(ctx, sqlcdb.UpdateSchemeDefinitionConfigParams{
+		ID:       row.DefinitionID,
+		MemberID: m.ID,
+		Config:   cfgBytes,
+	}); err != nil {
+		return Instance{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return Instance{}, err
 	}
 	return s.enrichInstanceForDisplay(ctx, sqlcdb.SchemeInstanceFromMultiplierRow(row), time.Now()), nil

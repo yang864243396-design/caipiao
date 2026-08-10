@@ -46,9 +46,18 @@ import {
   isLhcSxDuipengConfig,
   isLhcWsDuipengConfig,
   isLhcSwDuipengConfig,
+  isLhcRenyiDuipengConfig,
   lhcTemaHcwUniverse,
   pickRandomLhcSwDuipengPair,
 } from '@/constants/lhcPlay'
+import {
+  normalizeLhcRenyiDuipengTriggerContent,
+  randomLhcRenyiDuipengContent,
+} from '@/utils/lhcRenyiDuipengRandom'
+import {
+  normalizeLhcRenyiDuipengHotColdRanks,
+  replaceLhcRenyiDuipengHotColdRanks,
+} from '@/utils/lhcRenyiDuipengHotCold'
 import SchemeGroupPickPanel from '@/components/schemes/SchemeGroupPickPanel.vue'
 import SchemeGroupInputPanel from '@/components/schemes/SchemeGroupInputPanel.vue'
 import SchemeLhcTemaPanel from '@/components/schemes/SchemeLhcTemaPanel.vue'
@@ -60,6 +69,7 @@ import {
   countBetUnits,
   expandZhixuanPositionPoolToDanshi,
   expandZhixuanPoolToDanshiWithoutBaozi,
+  formatLhcRenyiDuipengContent,
   groupContentPlaceholder,
   isBaoziDigitTicket,
   isHunhePlayConfig,
@@ -1296,8 +1306,15 @@ function isSchemeSwDuipeng(): boolean {
   )
 }
 
-/** 随机出号个数下限（生尾对碰固定 2=1肖+1尾） */
+/** 任意对碰（高级开某投某全部随机时生成 A区|B区） */
+function isSchemeRenyiDuipeng(): boolean {
+  const cfg = schemePlayConfig.value
+  return isLhcRenyiDuipengConfig(cfg) || String(cfg.betMode ?? '').toLowerCase() === 'renyi_dp'
+}
+
+/** 随机出号个数下限（双区对碰至少两号） */
 const triggerRandomMin = computed(() => {
+  if (isSchemeRenyiDuipeng()) return 2
   if (isSchemeSwDuipeng()) return LHC_SW_DUIPENG_MIN_PICKS
   if (isLhcSxDuipengConfig(schemePlayConfig.value)) return LHC_SX_DUIPENG_MIN_PICKS
   if (isLhcWsDuipengConfig(schemePlayConfig.value)) return LHC_WS_DUIPENG_MIN_PICKS
@@ -1306,6 +1323,8 @@ const triggerRandomMin = computed(() => {
 
 /** 随机出号个数上限 = 正/反投号池大小（至少 1） */
 const triggerRandomMax = computed(() => {
+  // 任意对碰总号数受 A区+B区最多 10 个号码的校验约束。
+  if (isSchemeRenyiDuipeng()) return 10
   // 组选/组三/组六/混合整注：随机「注数」上限（前二≈45；组三 90；组六 120；混合 165）
   if (isTriggerWholeTicketBet.value) {
     if (isZu3DanshiConfig(schemePlayConfig.value)) return ZU3_DANSHI_FORM_COUNT
@@ -1424,6 +1443,7 @@ function randomFillTrigger(): void {
   const zuDual = isZuDualPlayConfig(schemePlayConfig.value)
   const temaPool = isLhcTemaPlayConfig(schemePlayConfig.value) ? temaTriggerRandomPool() : undefined
   const swDp = isSchemeSwDuipeng()
+  const renyiDp = isSchemeRenyiDuipeng()
   for (const row of triggerRows.value) {
     if (showTriggerPerPosColumns.value) {
       row.pos = Array.from({ length: posN }, () => randomTriggerMultiValue(count, betPool)).join('\n')
@@ -1438,6 +1458,9 @@ function randomFillTrigger(): void {
       // 生尾对碰：勿从 22 项混合池 slice → 两肖/两尾；固定各抽 1 肖 + 1 尾
       row.pos = randomSwDuipengTriggerContent()
       row.neg = randomSwDuipengTriggerContent()
+    } else if (renyiDp) {
+      row.pos = randomLhcRenyiDuipengContent(count)
+      row.neg = randomLhcRenyiDuipengContent(count)
     } else {
       const pool = temaPool ?? (isTriggerTextPlay.value ? [...triggerBetOptions.value] : undefined)
       row.pos = randomTriggerMultiValue(count, pool)
@@ -1445,7 +1468,9 @@ function randomFillTrigger(): void {
     }
   }
   ElMessage.success(
-    swDp
+    renyiDp
+      ? `已随机填充正投 / 反投（每格 ${count} 个号，A区/B区各至少 1 个）`
+      : swDp
       ? '已随机填充正投 / 反投（每格 1 生肖 + 1 尾数）'
       : zuDual
         ? `已随机填充正投 / 反投（${zuDualZoneHeadLabel()} + 单号，每格至少 1 注）`
@@ -1511,6 +1536,10 @@ function sanitizeTriggerBetContent(v: string): string {
     .replace(/，/g, ',')
     .trim()
   if (!raw) return ''
+  // 任意对碰的 A|B 是一个完整投注内容，不能按通用逗号号码 token 清洗。
+  if (isLhcRenyiDuipengConfig(schemePlayConfig.value)) {
+    return normalizeLhcRenyiDuipengTriggerContent(raw)
+  }
   // 特码·特码A：正/反投支持「01,02,大,蓝波」混选；下单再合成 号码|属性|波色
   if (isLhcTemaPlayConfig(schemePlayConfig.value)) {
     return normalizeLhcTemaFlatContent(raw)
@@ -2038,6 +2067,9 @@ const hcwDigitOverall = computed(() => {
   return /组三|组六|组选|不定位|包胆/.test(label)
 })
 
+/** 任意对碰冷热：同一份 01–49 排名拆为 A、B 两个名次池。 */
+const isHcwRenyiDuipeng = computed(() => isLhcRenyiDuipengConfig(schemePlayConfig.value))
+
 /**
  * 属性/聚合家族（大小单双/龙虎/庄闲/特殊号/和值/跨度）：单档「选项池」，
  * 分档频次由服务端复用权威判定计算（避免前端重复实现各彩种大小阈值/和值/跨度/龙虎口径）。
@@ -2136,6 +2168,7 @@ function ensureHcwPools(): void {
 
 /** 冷热分档行数：组选12=二重+单号；直选单式=开奖选位数；属性/整体=1；其它=玩法位数 */
 function hcwDimCount(): number {
+  if (isHcwRenyiDuipeng.value) return 2
   if (isHcwZuDual.value) return 2
   if (hcwSingleGroup.value) return 1
   if (isRenxuanHcwDualPosPlay.value) {
@@ -2147,6 +2180,7 @@ function hcwDimCount(): number {
 
 /** 冷热分档分组：属性=选项池；整体=号码池；组选12=二重/单号；直选单式=开奖选位名；按位=每位一档 */
 const hcwGroupLabels = computed(() => {
+  if (isHcwRenyiDuipeng.value) return ['A区', 'B区']
   if (hcwAttribute.value) return ['选项池']
   if (isHcwZuDual.value) return [...triggerZuDualZoneLabels.value]
   if (hcwDigitOverall.value) return ['号码池']
@@ -2459,6 +2493,38 @@ async function loadHcwStats(): Promise<void> {
     if (seq !== hcwLoadSeq) return
     const items = Array.isArray(res?.items) ? res.items : []
     const pool = numberPoolTokens.value
+    // 任意对碰：七个开奖球合并计频，A/B 两区共享完全相同的冷热排序。
+    if (isHcwRenyiDuipeng.value) {
+      const counts: Record<string, number> = {}
+      let counted = 0
+      for (const it of items) {
+        const balls = Array.isArray(it?.balls) ? it.balls : []
+        for (const ball of balls) {
+          const token = normalizePoolToken(String(ball ?? ''))
+          if (!token) continue
+          counts[token] = (counts[token] ?? 0) + 1
+          counted += 1
+        }
+      }
+      if (!counted) {
+        if (hcwStatsReady.value && hcwFreq.value.length) return
+        hcwStatsReady.value = false
+        hcwFreq.value = []
+        return
+      }
+      const sorted = [...pool].sort((a, b) => {
+        const diff = (counts[b] ?? 0) - (counts[a] ?? 0)
+        return diff !== 0 ? diff : Number(a) - Number(b)
+      })
+      const half = Math.ceil(pool.length / 2)
+      const mkTier = (): HcwTier => ({ hot: sorted.slice(0, half), warm: [], cold: sorted.slice(half) })
+      hcwTiers.value = [mkTier(), mkTier()]
+      hcwFreq.value = [{ ...counts }, { ...counts }]
+      hcwStatsReady.value = true
+      hcwStatsGen.value += 1
+      refreshHcwEstimatePools()
+      return
+    }
     // 组选12：任选按投注选位、四星等按玩法位合并计频；二重/单号两池共用同一排序
     if (isHcwZuDual.value) {
       const betIdxs = schemeUsesRenxuanRunPos.value
@@ -2766,7 +2832,16 @@ function applyHcwQuick(pos: number, kind: 'cold' | 'hot' | 'all' | 'clear'): voi
   if (cap != null && ranks.length > cap) {
     ranks = ranks.slice(0, cap)
   }
-  hcwRanks.value[pos] = ranks
+  if (isHcwRenyiDuipeng.value) {
+    hcwRanks.value = replaceLhcRenyiDuipengHotColdRanks(
+      hcwRanks.value,
+      pos as 0 | 1,
+      ranks,
+      ordered.length,
+    )
+  } else {
+    hcwRanks.value[pos] = ranks
+  }
   // 仅改当前位；其它位的冷/热/全保持各自选择
   refreshHcwEstimatePools()
 }
@@ -2782,6 +2857,17 @@ function toggleHcwDigit(pos: number, digit: string): void {
   if (at >= 0) {
     ranks.splice(at, 1)
   } else {
+    if (isHcwRenyiDuipeng.value) {
+      const other = hcwRanks.value[pos === 0 ? 1 : 0] ?? []
+      if (other.includes(rank)) {
+        ElMessage.warning('任意对碰：A区与B区号码不可重复')
+        return
+      }
+      if (ranks.length + other.length >= 10) {
+        ElMessage.warning('任意对碰：A区和B区合计最多选择 10 个号码')
+        return
+      }
+    }
     const cap = hcwPosPickCap()
     if (cap != null && ranks.length >= cap) {
       ElMessage.warning(hcwPosPickCapMsg())
@@ -2789,12 +2875,25 @@ function toggleHcwDigit(pos: number, digit: string): void {
     }
     ranks.push(rank)
   }
-  hcwRanks.value[pos] = ranks
+  if (isHcwRenyiDuipeng.value) {
+    hcwRanks.value = replaceLhcRenyiDuipengHotColdRanks(
+      hcwRanks.value,
+      pos as 0 | 1,
+      ranks,
+      ordered.length,
+    )
+  } else {
+    hcwRanks.value[pos] = ranks
+  }
   // 预览映射（统计未就绪时用兜底序）
   const picked = ranks
     .filter((r) => r >= 0 && r < ordered.length)
     .map((r) => ordered[r]!)
-  hcwPools.value[pos] = sortHcwTokens(picked)
+  if (isHcwRenyiDuipeng.value) {
+    refreshHcwEstimatePools()
+  } else {
+    hcwPools.value[pos] = sortHcwTokens(picked)
+  }
 }
 
 /** 快捷钮高亮：当前名次集与该快捷目标完全一致 */
@@ -3930,6 +4029,7 @@ function runTypeDraftFields(): Partial<UpdateSchemeInput> {
       const sxDp = isLhcSxDuipengConfig(schemePlayConfig.value)
       const wsDp = isLhcWsDuipengConfig(schemePlayConfig.value)
       const swDp = isLhcSwDuipengConfig(schemePlayConfig.value)
+      const renyiDp = isLhcRenyiDuipengConfig(schemePlayConfig.value)
       const normalizeDp = (raw: string) =>
         sxDp
           ? normalizeSxDuipengTriggerContent(raw)
@@ -3937,7 +4037,9 @@ function runTypeDraftFields(): Partial<UpdateSchemeInput> {
             ? normalizeWsDuipengTriggerContent(raw)
             : swDp
               ? normalizeSwDuipengTriggerContent(raw)
-              : ''
+              : renyiDp
+                ? normalizeLhcRenyiDuipengTriggerContent(raw)
+                : ''
       const triggerBet: SchemeTriggerBet = {
         rows: triggerRows.value.map((r) => ({
           ...r,
@@ -3945,7 +4047,7 @@ function runTypeDraftFields(): Partial<UpdateSchemeInput> {
             ? perPosText
               ? sanitizeTriggerPerPosTextField(r.pos)
               : sanitizeTriggerPerPosField(r.pos)
-            : sxDp || wsDp || swDp
+            : sxDp || wsDp || swDp || renyiDp
               ? normalizeDp(r.pos)
               : textPlay
                 ? triggerTextTokens(r.pos)
@@ -3959,7 +4061,7 @@ function runTypeDraftFields(): Partial<UpdateSchemeInput> {
             ? perPosText
               ? sanitizeTriggerPerPosTextField(r.neg)
               : sanitizeTriggerPerPosField(r.neg)
-            : sxDp || wsDp || swDp
+            : sxDp || wsDp || swDp || renyiDp
               ? normalizeDp(r.neg)
               : textPlay
                 ? triggerTextTokens(r.neg)
@@ -4536,7 +4638,19 @@ async function onSaveCloud() {
   } else if (rt === 'hot_cold_warm') {
     ensureHcwPools()
     ensureRenxuanRunPositions()
-    if (isHcwZuDual.value) {
+    if (isHcwRenyiDuipeng.value) {
+      const ranks = normalizeLhcRenyiDuipengHotColdRanks(hcwRanks.value, numberPoolTokens.value.length)
+      if (!ranks.valid) {
+        await warn('冷热任意对碰：A区、B区均须至少选择 1 个名次，且不可重复、合计最多 10 个')
+        return
+      }
+      const content = formatLhcRenyiDuipengContent(hcwPools.value[0] ?? [], hcwPools.value[1] ?? [])
+      if (!content) {
+        await warn('冷热任意对碰：请等待冷热统计就绪后再提交')
+        return
+      }
+      schemeGroups.value = [content]
+    } else if (isHcwZuDual.value) {
       const headN = (hcwRanks.value[0] ?? []).length
       const singlesN = (hcwRanks.value[1] ?? []).length
       const headLabel = zuDualZoneHeadLabel()
@@ -4598,7 +4712,7 @@ async function onSaveCloud() {
     }
     // schemeGroups 仅占位：直选单式勿塞按位号池（会被校验成「N 个单式组合不合法」）。
     // 真正出号看 hotColdWarm；这里写一注合法样例即可。
-    if (!isHcwZuDual.value) {
+    if (!isHcwZuDual.value && !isHcwRenyiDuipeng.value) {
       const seg = schemePlayConfig.value.segmentLen
       if (
         !hcwSingleGroup.value &&

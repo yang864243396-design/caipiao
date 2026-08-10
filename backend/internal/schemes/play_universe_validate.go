@@ -246,6 +246,21 @@ func ValidateSchemeBetContent(kind string, config []byte, content string, maxUni
 		}
 		return out
 	}
+	// 任意对碰：A区|B区，区内逗号分隔的 1–49 号码，两区不可重复且合计最多 10 个。
+	if isLHCRenyiDuipengPlayRule(rule) {
+		out = append(out, validateLHCRenyiDuipengBetContent(content)...)
+		units := countLHCRenyiDuipengBetUnits(content)
+		if len(out) == 0 && units <= 0 {
+			out = append(out, Violation{Code: ViolationZeroUnits, Detail: "任意对碰：A区、B区均须至少填写 1 个 01–49 号码"})
+		}
+		if maxUnits > 0 && units > maxUnits {
+			out = append(out, Violation{
+				Code:   ViolationUnitsOverLimit,
+				Detail: errMaxBetUnitsExceeded(maxUnits).Error(),
+			})
+		}
+		return out
+	}
 	// 生肖对碰：肖A|肖B（勿按 1–49 号池把「马」「蛇」拒掉）
 	if isLHCSxDuipengPlayRule(rule) {
 		out = append(out, validateLHCSxDuipengBetContent(content)...)
@@ -399,7 +414,7 @@ func ValidateSchemeBetContent(kind string, config []byte, content string, maxUni
 		out = append(out, Violation{Code: ViolationZeroUnits, Detail: detail})
 	case known && maxUnits > 0 && units > maxUnits:
 		out = append(out, Violation{
-			Code:   ViolationUnitsOverLimit,
+			Code: ViolationUnitsOverLimit,
 			// 与前端 / errMaxBetUnitsExceeded 文案一致，便于弹窗原样展示
 			Detail: errMaxBetUnitsExceeded(maxUnits).Error(),
 		})
@@ -720,6 +735,107 @@ func isLHCSwDuipengPlayRule(rule playRule) bool {
 		sub = strings.TrimSpace(rule.SubPlayID)
 	}
 	return sub == "283" || sub == "289" || sub == "295"
+}
+
+// isLHCRenyiDuipengPlayRule 二全中/二中特/特串任意对碰（目录 284/290/296）。
+func isLHCRenyiDuipengPlayRule(rule playRule) bool {
+	if strings.TrimSpace(rule.PlayTemplate) != "" && strings.TrimSpace(rule.PlayTemplate) != "lhc_std" {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(rule.BetMode), "renyi_dp") {
+		return true
+	}
+	sub := strings.TrimSpace(rule.CatalogSubID)
+	if sub == "" {
+		sub = strings.TrimSpace(rule.SubPlayID)
+	}
+	return sub == "284" || sub == "290" || sub == "296"
+}
+
+const lhcRenyiDuipengMaxPicks = 10
+
+// validateLHCRenyiDuipengBetContent 校验任意对碰的 A区|B区号码格式与总数上限。
+func validateLHCRenyiDuipengBetContent(content string) []Violation {
+	content = strings.TrimSpace(content)
+	sep := ""
+	switch {
+	case strings.Count(content, "|") == 1:
+		sep = "|"
+	case strings.Count(content, "#") == 1:
+		sep = "#"
+	default:
+		return []Violation{{Code: ViolationZeroUnits, Detail: "任意对碰：请用 | 分隔 A区 与 B区（如 01,13|02,14）"}}
+	}
+
+	parts := strings.Split(content, sep)
+	left, leftInvalid := parseLHCRenyiDuipengNumbers(parts[0])
+	right, rightInvalid := parseLHCRenyiDuipengNumbers(parts[1])
+	invalid := append(leftInvalid, rightInvalid...)
+	if len(invalid) > 0 {
+		return []Violation{{
+			Code:   ViolationTokenOutOfPool,
+			Detail: fmt.Sprintf("任意对碰：无效号码 %s（请选择 01–49）", strings.Join(invalid, ",")),
+		}}
+	}
+	if len(left) == 0 || len(right) == 0 {
+		return []Violation{{Code: ViolationZeroUnits, Detail: "任意对碰：A区、B区均须至少填写 1 个 01–49 号码"}}
+	}
+
+	rightSet := make(map[int]struct{}, len(right))
+	for _, n := range right {
+		rightSet[n] = struct{}{}
+	}
+	overlap := make([]string, 0)
+	for _, n := range left {
+		if _, ok := rightSet[n]; ok {
+			overlap = append(overlap, fmt.Sprintf("%02d", n))
+		}
+	}
+	if len(overlap) > 0 {
+		return []Violation{{
+			Code:   ViolationZeroUnits,
+			Detail: fmt.Sprintf("任意对碰：A区与B区号码不可重复（重复：%s）", strings.Join(overlap, ",")),
+		}}
+	}
+	if len(left)+len(right) > lhcRenyiDuipengMaxPicks {
+		return []Violation{{Code: ViolationZeroUnits, Detail: "任意对碰：A区和B区合计最多选择 10 个号码"}}
+	}
+	return nil
+}
+
+func countLHCRenyiDuipengBetUnits(content string) int {
+	content = strings.TrimSpace(content)
+	sep := "|"
+	if !strings.Contains(content, sep) {
+		sep = "#"
+	}
+	if strings.Count(content, sep) != 1 {
+		return 0
+	}
+	parts := strings.Split(content, sep)
+	left, leftInvalid := parseLHCRenyiDuipengNumbers(parts[0])
+	right, rightInvalid := parseLHCRenyiDuipengNumbers(parts[1])
+	if len(leftInvalid) > 0 || len(rightInvalid) > 0 || len(left) == 0 || len(right) == 0 {
+		return 0
+	}
+	return len(left) * len(right)
+}
+
+func parseLHCRenyiDuipengNumbers(raw string) (numbers []int, invalid []string) {
+	seen := make(map[int]struct{})
+	for _, token := range parseTextTokens(raw) {
+		n, err := strconv.Atoi(token)
+		if err != nil || n < 1 || n > 49 {
+			invalid = append(invalid, token)
+			continue
+		}
+		if _, ok := seen[n]; ok {
+			continue
+		}
+		seen[n] = struct{}{}
+		numbers = append(numbers, n)
+	}
+	return numbers, invalid
 }
 
 // validateLHCSwDuipengBetContent 生尾对碰：恰好 1 生肖 + 1 尾（马|0 / 0|马 / 马,0）。

@@ -149,6 +149,14 @@ func (s *Service) AddDefinitionToCloud(
 		}
 		return AddToCloudResult{}, err
 	}
+	instanceMultiplier := schemeMultiplierFromConfig(cfgBytes)
+	if _, err := qtx.UpdateSchemeInstanceMultiplier(ctx, sqlcdb.UpdateSchemeInstanceMultiplierParams{
+		ID:         instID,
+		MemberID:   m.ID,
+		Multiplier: floatToNumeric(instanceMultiplier),
+	}); err != nil {
+		return AddToCloudResult{}, err
+	}
 
 	var shareSnapshotID string
 	if def.Kind == "custom" && resolvedShare == "public" {
@@ -174,6 +182,7 @@ func (s *Service) AddDefinitionToCloud(
 	}
 
 	inst := mapInstanceFromInsertRow(instRow)
+	inst.Multiplier = instanceMultiplier
 	inst.SchemeCurrency = schemeCurrencyFromConfig(cfgBytes)
 	return AddToCloudResult{
 		Definition:      mapDefinitionFromUpdateRow(defRow, true),

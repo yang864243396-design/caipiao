@@ -1253,16 +1253,16 @@ func countLHCBetNums(meta RuleMeta, wireContent string) int {
 		}
 		return left * right
 	case "renyi_dp":
-		if strings.Contains(wireContent, "|") {
-			parts := strings.SplitN(wireContent, "|", 2)
-			left := strings.TrimSpace(parts[0])
-			right := strings.TrimSpace(parts[1])
-			if left == "" || right == "" {
-				return 0
-			}
-			return 1
+		if !strings.Contains(wireContent, "|") {
+			return 0
 		}
-		return 0
+		parts := strings.SplitN(wireContent, "|", 2)
+		left := parseLHCWireNumberSide(parts[0])
+		right := parseLHCWireNumberSide(parts[1])
+		if len(left) == 0 || len(right) == 0 {
+			return 0
+		}
+		return len(left) * len(right)
 	case "sw_dp":
 		// 注数=左×右 − 两侧共有号码数（第三方：狗|5 → 4×5−1=19；无交集如鼠|0=16）
 		return countLHCSwDuipengBetNums(wireContent)

@@ -41,6 +41,9 @@ func main() {
 		PeriodNo         string  `json:"periodNo"`
 		ThirdPartyPeriod string  `json:"thirdPartyPeriod"`
 		Status           string  `json:"status"`
+		BetContent       string  `json:"betContent"`
+		BetUnits         int     `json:"betUnits"`
+		Multiplier       string  `json:"multiplier"`
 		ThirdPartyBetID  string  `json:"thirdPartyBetId"`
 		BetOrderNo       string  `json:"betOrderNo"`
 		Amount           float64 `json:"amount"`
@@ -49,6 +52,7 @@ func main() {
 	}
 	rows, err := pool.Query(ctx, `
 SELECT COALESCE(period_no,''), COALESCE(third_party_period,''), status,
+       COALESCE(bet_content,''), COALESCE(bet_units,0), COALESCE(multiplier,''),
        COALESCE(third_party_bet_id,''), COALESCE(bet_order_no,''),
        amount::float8, COALESCE(pnl,0)::float8, placed_at::text
 FROM cloud_bet_records
@@ -63,7 +67,7 @@ LIMIT 10`, schemeID)
 	var cloud []cloudRow
 	for rows.Next() {
 		var r cloudRow
-		if err := rows.Scan(&r.PeriodNo, &r.ThirdPartyPeriod, &r.Status, &r.ThirdPartyBetID, &r.BetOrderNo, &r.Amount, &r.Pnl, &r.PlacedAt); err != nil {
+		if err := rows.Scan(&r.PeriodNo, &r.ThirdPartyPeriod, &r.Status, &r.BetContent, &r.BetUnits, &r.Multiplier, &r.ThirdPartyBetID, &r.BetOrderNo, &r.Amount, &r.Pnl, &r.PlacedAt); err != nil {
 			fmt.Println("scan:", err)
 			os.Exit(1)
 		}
@@ -144,10 +148,10 @@ LIMIT 1`, schemeID, c.ThirdPartyBetID).Scan(&tokenEnc)
 			continue
 		}
 		b, _ := json.MarshalIndent(map[string]any{
-			"thirdPartyBetId": c.ThirdPartyBetID,
-			"periodNo":        c.PeriodNo,
+			"thirdPartyBetId":  c.ThirdPartyBetID,
+			"periodNo":         c.PeriodNo,
 			"thirdPartyPeriod": c.ThirdPartyPeriod,
-			"upstream":        res,
+			"upstream":         res,
 		}, "", "  ")
 		fmt.Fprintln(os.Stderr, string(b))
 	}

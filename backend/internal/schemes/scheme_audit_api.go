@@ -144,6 +144,15 @@ func validateHotColdWarmConfig(kind string, config []byte, cfg parsedSchemeConfi
 	if cfg.HotCold == nil {
 		return nil
 	}
+	if isLHCRenyiDuipengPlayRule(cfg.Play) {
+		if _, _, ok := lhcRenyiDuipengHotColdRanks(cfg.HotCold, 49); !ok {
+			return []Violation{{
+				Code:   ViolationZeroUnits,
+				Detail: "冷热任意对碰：A区、B区均须至少选择 1 个名次，且不可重复、合计最多 10 个",
+			}}
+		}
+		return nil
+	}
 	u, ok := UniverseForScheme(kind, config)
 	if !ok {
 		return nil
