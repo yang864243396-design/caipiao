@@ -105,12 +105,18 @@ func (w *Worker) evaluateGuajiBetDedup(
 	if hasPending {
 		unsettled = strings.TrimSpace(unsettled)
 		if unsettled != "" && unsettled != currentOpen {
-			return betPeriodDedup{
-				Skip:        true,
-				CurrentOpen: currentOpen,
-				LastBet:     unsettled,
-				Reason:      "prior_third_party_pending",
-			}, nil
+			accepted, err := q.SchemeHasAcceptedUnsettledGuajiBet(ctx, inst.ID)
+			if err != nil {
+				return betPeriodDedup{}, err
+			}
+			if accepted {
+				return betPeriodDedup{
+					Skip:        true,
+					CurrentOpen: currentOpen,
+					LastBet:     unsettled,
+					Reason:      "prior_third_party_pending",
+				}, nil
+			}
 		}
 	}
 	return betPeriodDedup{CurrentOpen: currentOpen, LastBet: lastBet}, nil
@@ -233,9 +239,16 @@ func (w *Worker) hasUnsettledGuajiBet(ctx context.Context, inst sqlcdb.SchemeIns
 	if unsettled == "" {
 		return false
 	}
+	if unsettled == currentOpen {
+		return true
+	}
 	// 任一笔已接单未派奖都阻塞再投：
 	// - unsettled == currentOpen：与 CloudBetPeriodHandled 双保险；
 	// - unsettled != currentOpen：本地期号超前，再 Place 会叠单到旧第三方期，
 	//   投注记录按 third_party_period 展示会变成「同一期两条」。
-	return true
+	accepted, err := w.q.SchemeHasAcceptedUnsettledGuajiBet(ctx, inst.ID)
+	if err != nil {
+		return true
+	}
+	return accepted
 }

@@ -177,7 +177,8 @@ WHERE id = $1
 	return err
 }
 
-// SchemeUnsettledGuajiPeriod 方案是否有待开奖第三方注单（已接单未派奖）。
+// SchemeUnsettledGuajiPeriod 方案是否有未完成的第三方投注（占位中或已接单未派奖）。
+// 第三方请求发出到回写 third_party_bet_id 之间也必须拦截下一笔，避免期号缓存跳动时同一期连投。
 func (q *Queries) SchemeUnsettledGuajiPeriod(ctx context.Context, schemeID string) (string, bool, error) {
 	var period string
 	err := q.db.QueryRow(ctx, `
@@ -185,7 +186,7 @@ SELECT COALESCE(NULLIF(TRIM(c.third_party_period), ''), c.period_no)
 FROM cloud_bet_records c
 WHERE c.scheme_id = $1
   AND c.status = 'pending'
-  AND NULLIF(TRIM(c.third_party_bet_id), '') IS NOT NULL
+  AND c.sim_bet = FALSE
 ORDER BY c.placed_at DESC, c.id DESC
 LIMIT 1`, schemeID).Scan(&period)
 	if err != nil {
@@ -199,6 +200,24 @@ LIMIT 1`, schemeID).Scan(&period)
 		return "", false, nil
 	}
 	return period, true, nil
+}
+
+// SchemeHasAcceptedUnsettledGuajiBet reports whether a real pending record has
+// already been confirmed by the third party. Confirmed bets keep blocking
+// subsequent periods until settlement; old unconfirmed claims only guard the
+// period in which they were created.
+func (q *Queries) SchemeHasAcceptedUnsettledGuajiBet(ctx context.Context, schemeID string) (bool, error) {
+	var exists bool
+	err := q.db.QueryRow(ctx, `
+SELECT EXISTS(
+    SELECT 1
+    FROM cloud_bet_records c
+    WHERE c.scheme_id = $1
+      AND c.status = 'pending'
+      AND c.sim_bet = FALSE
+      AND NULLIF(TRIM(c.third_party_bet_id), '') IS NOT NULL
+)`, schemeID).Scan(&exists)
+	return exists, err
 }
 
 // TryClaimCloudBetPeriod 事务内占位 (scheme_id, period_no)；冲突返回 false。
