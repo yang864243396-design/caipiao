@@ -12,11 +12,20 @@ import {
   isRenxuanPerPosTriggerPlay,
   isRenxuanZhixuanDanshiTriggerPlay,
   isZhixuanDanshiPerPosPlay,
+  isTailParityPlayConfig,
   lotteryHasAdvTriggerPlay,
   supportsAdvTriggerBet,
   supportsAdvTriggerPerPosColumns,
   supportsAdvTriggerPositionPicker,
 } from './runTypeMatrix'
+
+describe('isTailParityPlayConfig', () => {
+  it('recognizes tail parity but not sum parity', () => {
+    expect(isTailParityPlayConfig({ playMethodLabel: '尾数单双' })).toBe(true)
+    expect(isTailParityPlayConfig({ playMethodLabel: '和值单双' })).toBe(false)
+    expect(isTailParityPlayConfig({ playTypeId: 'g017', subPlayId: '267' })).toBe(true)
+  })
+})
 
 describe('supportsAdvTriggerPerPosColumns', () => {
   it('中三直选单式按千/百/十三位分列', () => {

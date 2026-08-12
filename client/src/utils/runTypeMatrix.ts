@@ -716,6 +716,14 @@ type AdvTriggerPosConfig = {
   segmentLabels?: string[]
 }
 
+export function isTailParityPlayConfig(config: AdvTriggerPosConfig): boolean {
+  const label = `${config.playMethodLabel ?? ''} ${config.playTypeLabel ?? ''} ${config.guajiGroup ?? ''}`
+  if (label.includes('尾数单双')) return true
+  if (label.includes('和值单双')) return false
+  const sid = String(config.catalogSubId ?? config.subPlayId ?? '').trim()
+  return String(config.playTypeId ?? '').trim() === 'g017' && ['267', '387'].includes(sid)
+}
+
 function isAdvTriggerTextLikePlay(config: AdvTriggerPosConfig): boolean {
   if (isLonghuPlayConfigLike(config) || isPc28ModeConfigLike(config)) return true
   const bm = String(config.betMode ?? '')
