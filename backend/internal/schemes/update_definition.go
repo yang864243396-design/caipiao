@@ -485,6 +485,7 @@ func validateDefinitionContentOnSave(kind string, cfgBytes []byte, patch UpdateD
 }
 
 func mergeUpdateDefinitionConfig(existing []byte, patch UpdateDefinitionPatch, planOverlay map[string]interface{}) ([]byte, error) {
+	builtinPlan := isBuiltinPlanDefinitionConfig(existing)
 	base := AddToCloudConfigPatch{
 		RunMode:        patch.RunMode,
 		SchemeFunds:    patch.SchemeFunds,
@@ -520,7 +521,7 @@ func mergeUpdateDefinitionConfig(existing []byte, patch UpdateDefinitionPatch, p
 			delete(cfg, "endTime")
 		}
 	}
-	if patch.HasBetUnit {
+	if !builtinPlan && patch.HasBetUnit {
 		if strings.TrimSpace(patch.BetUnit) != "" {
 			cfg["betUnit"] = strings.TrimSpace(patch.BetUnit)
 		} else {
@@ -534,7 +535,7 @@ func mergeUpdateDefinitionConfig(existing []byte, patch UpdateDefinitionPatch, p
 			delete(cfg, "multCoeff")
 		}
 	}
-	if patch.HasBetMode {
+	if !builtinPlan && patch.HasBetMode {
 		if isBetUnitArtifact(patch.BetMode) {
 			cfg["betUnit"] = patch.BetMode
 			delete(cfg, "betMode")

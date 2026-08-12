@@ -4273,15 +4273,15 @@ function buildRemoteDraftPatch(): UpdateSchemeInput {
     multCoeff: normalizeSchemeMultiplier(multCoeff.value),
     startTime: startTime.value,
     endTime: endTime.value,
-    // 内置计画配置只读（服务端物化），不回写 schemeGroups；固定取码仅保存单元素数组
+    // 内置计划的玩法、投注单位和选号内容均由收藏快照物化，不能携带编辑页残留字段回写。
     ...(runTypeId.value === 'builtin_plan'
       ? {}
       : {
         schemeGroups:
           runTypeId.value === 'fixed_number' ? [schemeGroups.value[0] ?? ''] : [...schemeGroups.value],
+        betUnit: betUnit.value,
+        ...catalogFieldsFromPlayConfig(schemePlayConfig.value),
       }),
-    betUnit: betUnit.value,
-    ...catalogFieldsFromPlayConfig(schemePlayConfig.value),
     stopLoss: stopLoss.value,
     takeProfit: takeProfit.value,
     ...runTypeDraftFields(),
@@ -5154,11 +5154,15 @@ async function onSaveCloud() {
     schemeCurrency: schemeCurrency.value,
     startTime: startTime.value,
     endTime: endTime.value,
-    schemeGroups: [...schemeGroups.value],
     stopLoss: stopLoss.value,
     takeProfit: takeProfit.value,
-    betUnit: betUnit.value,
-    ...catalogFieldsFromPlayConfig(schemePlayConfig.value),
+    ...(isBuiltinPlan.value
+      ? {}
+      : {
+        schemeGroups: [...schemeGroups.value],
+        betUnit: betUnit.value,
+        ...catalogFieldsFromPlayConfig(schemePlayConfig.value),
+      }),
   }
 
   try {

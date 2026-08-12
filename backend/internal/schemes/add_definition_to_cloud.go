@@ -214,13 +214,16 @@ func mergeDefinitionConfig(existing []byte, patch AddToCloudConfigPatch) ([]byte
 	if len(existing) > 0 {
 		_ = json.Unmarshal(existing, &cfg)
 	}
+	// 内置计划的玩法与选号内容只能来自已物化的收藏快照。添加云端时，
+	// 新建页残留的玩法字段不得再次覆盖该快照配置。
+	builtinPlan := isBuiltinPlanDefinitionConfig(existing)
 	if patch.StartTime != "" {
 		cfg["startTime"] = patch.StartTime
 	}
 	if patch.EndTime != "" {
 		cfg["endTime"] = patch.EndTime
 	}
-	if len(patch.SchemeGroups) > 0 {
+	if !builtinPlan && len(patch.SchemeGroups) > 0 {
 		cfg["schemeGroups"] = patch.SchemeGroups
 	}
 	if patch.RunMode != "" {
@@ -238,26 +241,34 @@ func mergeDefinitionConfig(existing []byte, patch AddToCloudConfigPatch) ([]byte
 	if patch.TakeProfit != "" {
 		cfg["takeProfit"] = patch.TakeProfit
 	}
-	if patch.BetUnit != "" {
+	if !builtinPlan && patch.BetUnit != "" {
 		cfg["betUnit"] = patch.BetUnit
-	} else if patch.BetMode != "" && isBetUnitArtifact(patch.BetMode) {
+	} else if !builtinPlan && patch.BetMode != "" && isBetUnitArtifact(patch.BetMode) {
 		cfg["betUnit"] = patch.BetMode
-	} else if patch.BetMode != "" {
+	} else if !builtinPlan && patch.BetMode != "" {
 		cfg["betMode"] = patch.BetMode
 	}
-	if patch.PlayTemplate != "" {
+	if !builtinPlan && patch.PlayTemplate != "" {
 		cfg["playTemplate"] = patch.PlayTemplate
 	}
-	if patch.TypeID != "" {
+	if !builtinPlan && patch.TypeID != "" {
 		cfg["typeId"] = patch.TypeID
 		cfg["playTypeId"] = patch.TypeID
 	}
-	if patch.SubID != "" {
+	if !builtinPlan && patch.SubID != "" {
 		cfg["subId"] = patch.SubID
 		cfg["subPlayId"] = patch.SubID
 	}
 	normalizeSchemeConfigBetFields(cfg)
 	return json.Marshal(cfg)
+}
+
+func isBuiltinPlanDefinitionConfig(config []byte) bool {
+	cfg := map[string]interface{}{}
+	if err := json.Unmarshal(config, &cfg); err != nil {
+		return false
+	}
+	return NormalizeRunTypeID(fmt.Sprint(cfg["runTypeId"])) == RunTypeBuiltinPlan
 }
 
 func parseSchemeFunds(raw string, cfgBytes []byte) pgtype.Numeric {

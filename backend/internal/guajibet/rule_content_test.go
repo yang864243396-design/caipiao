@@ -581,7 +581,11 @@ func TestResolveSolo_ren3ZhixuanFushiByBets(t *testing.T) {
 	if !ResolveSolo(meta, wire10, 10) {
 		t.Fatal("任三直选复式 10 注须 solo=true（实测 solo=false→单挑参数错误）")
 	}
-	wire56 := FormatBetContentForRule(meta, "3,4,5\n5,4,3\n2,1\n\n")
+	// 任选三从四个已选位置中任取三位：2×2×2 + 3×(2×2×4) = 56 注。
+	wire56 := FormatBetContentForRule(meta, "0,1\n2,3\n4,5\n6,7,8,9\n")
+	if wire56 != "01,23,45,6789," {
+		t.Fatalf("wire=%q want 01,23,45,6789,", wire56)
+	}
 	if n := CountBetNums(meta, wire56); n != 56 {
 		t.Fatalf("bets=%d want 56", n)
 	}
