@@ -177,6 +177,7 @@ import {
   isRenxuanHcwOpenPosPlay,
   isHcwZuDualPlay,
   isRenxuanHcwZuDualPlay,
+  isTailParityPlayConfig,
   defaultRenxuanTriggerPositionIdxs,
   defaultRenxuanHcwOpenPositionIdxs,
   supportsAdvTriggerPerPosColumns,
@@ -2908,7 +2909,10 @@ function toggleHcwDigit(pos: number, digit: string): void {
       }
     }
     const cap = hcwPosPickCap()
-    if (isHcwLhcGuoguan.value && cap === 1) {
+    if (
+      cap === 1 &&
+      (isHcwLhcGuoguan.value || isTailParityPlayConfig(schemePlayConfig.value))
+    ) {
       ranks.splice(0, ranks.length, ...toggleSingleHcwRank(ranks, rank))
     } else if (cap != null && ranks.length >= cap) {
       ElMessage.warning(hcwPosPickCapMsg())

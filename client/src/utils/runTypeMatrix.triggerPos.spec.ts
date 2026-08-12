@@ -24,6 +24,7 @@ describe('isTailParityPlayConfig', () => {
     expect(isTailParityPlayConfig({ playMethodLabel: '尾数单双' })).toBe(true)
     expect(isTailParityPlayConfig({ playMethodLabel: '和值单双' })).toBe(false)
     expect(isTailParityPlayConfig({ playTypeId: 'g017', subPlayId: '267' })).toBe(true)
+    expect(isTailParityPlayConfig({ playTypeId: 'g017', subPlayId: '387' })).toBe(true)
   })
 })
 
