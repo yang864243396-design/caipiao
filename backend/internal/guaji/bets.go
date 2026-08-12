@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -432,9 +433,15 @@ func (c *Client) findBetIDByPeriod(ctx context.Context, accessToken string, game
 func floatNear(a, b float64) bool {
 	const eps = 0.001
 	if a > b {
-		return a-b <= eps
+		if a-b <= eps {
+			return true
+		}
+	} else if b-a <= eps {
+		return true
 	}
-	return b-a <= eps
+	// Guaji 对 USDT 实际按两位小数截断落账：例如请求 0.176，列表返回 0.17。
+	// POST 已明确成功且再按期号、游戏过滤后，按该落账口径回查可避免重复下单。
+	return a > 0 && b > 0 && int64(math.Floor(a*100+1e-9)) == int64(math.Floor(b*100+1e-9))
 }
 
 // FetchWebBetsRaw 拉取 GET /api/web_bets/ 原始 JSON（含 bet_contents）。

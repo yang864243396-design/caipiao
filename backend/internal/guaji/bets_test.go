@@ -98,3 +98,10 @@ func TestDecodeWebBetListDataArray(t *testing.T) {
 		t.Fatalf("items=%+v", items)
 	}
 }
+
+func TestFloatNear_MatchesGuajiCentTruncatedAmount(t *testing.T) {
+	// 第三方会把 0.176 USDT 按两位小数截断为 0.17；回查下注记录时二者应视为同额。
+	if !floatNear(0.176, 0.17) {
+		t.Fatal("0.176 request amount should match Guaji's 0.17 stored amount")
+	}
+}
