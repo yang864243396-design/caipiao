@@ -42,13 +42,10 @@ describe('任四组选24 · 开某投某正反投', () => {
     expect(countBetUnits(ren4Zu24, wrapped)).toBe(1)
   })
 
-  it('未补选位的裸号池也至少 4 码通过内层计注口径', () => {
-    // 开某投某格子本身无位名；若未 wrap 会在选位校验处失败，但不应误报「至少 4 码」
+  it('已有任四选位上下文时，裸号池 4 码可直接计注', () => {
+    // 方案界面始终保留万/千/百/十选位；开某投某格子无需重复写入位名前缀。
     const r = validateGroupContent(ren4Zu24, '1,2,3,4')
-    expect(r.ok).toBe(false)
-    if (!r.ok) {
-      expect(r.message).not.toContain('组选24至少选择')
-      expect(r.message).toMatch(/勾选|位置/)
-    }
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.betUnits).toBeGreaterThan(0)
   })
 })

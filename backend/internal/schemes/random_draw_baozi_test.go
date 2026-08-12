@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestSanitizeRandomDrawContent_qianhou3DanshiFiltersBaozi(t *testing.T) {
+func TestSanitizeRandomDrawContent_qianhou3DanshiKeepsBaoziWhenOtherTicketsExist(t *testing.T) {
 	t.Parallel()
 	rule := playRule{
 		PlayTemplate: "ssc_std",
@@ -19,22 +19,10 @@ func TestSanitizeRandomDrawContent_qianhou3DanshiFiltersBaozi(t *testing.T) {
 	if !isSoloBaoziRestrictedRule(rule) {
 		t.Fatal("前后三直选单式应受豹子约束")
 	}
-	// 按位号池展开含 111/222
+	// 按位号池展开含 111/222；只要同组还含非豹子票，完整笛卡尔积均保留。
 	got := sanitizeRandomDrawContent(rule, "1,2\n1,2\n1,2")
-	if got == "" {
-		t.Fatal("expected non-empty after filter")
-	}
-	for _, tok := range strings.Split(got, ",") {
-		tok = strings.TrimSpace(tok)
-		if tok == "" {
-			continue
-		}
-		if isBaoziToken(tok) {
-			t.Fatalf("unexpected baozi ticket %q in %q", tok, got)
-		}
-		if len(tok) != 3 {
-			t.Fatalf("token %q want 3 digits", tok)
-		}
+	if want := "111,112,121,122,211,212,221,222"; got != want {
+		t.Fatalf("mixed pool=%q want %q", got, want)
 	}
 	if sanitizeRandomDrawContent(rule, "5\n5\n5") != "" {
 		t.Fatal("solo baozi pool should sanitize to empty")

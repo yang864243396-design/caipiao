@@ -121,7 +121,7 @@ func validateGroupContent(rule playRule, content string) error {
 		return nil
 	}
 	// 六合须先于「直选复式/单式」分支：betMode=fushi 时勿按时时彩按位校验。
-	if rule.PlayTemplate == "lhc_std" || isLHCPlayRule(rule) {
+	if rule.PlayTemplate == "lhc_std" || (rule.PlayTemplate == "" && isLHCPlayRule(rule)) {
 		if validateLHCGroupContent(rule, content) {
 			return nil
 		}

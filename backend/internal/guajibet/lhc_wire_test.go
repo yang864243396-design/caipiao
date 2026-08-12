@@ -266,8 +266,9 @@ func TestSampleLHCGroupContent_duipeng(t *testing.T) {
 	meta := ParseRuleMeta("lhc_std", "g003", "280", "尾数对碰", "连码",
 		[]byte(`{"guajiTeam":"二全中","guajiGroup":"连码","guajiFullName":"二全中尾数对碰"}`), "280")
 	got := SampleGroupContent(meta)
-	if got != "01|02" {
-		t.Fatalf("sample=%q want 01|02", got)
+	want := "10,20,30,40|01,11,21,31,41"
+	if got != want {
+		t.Fatalf("sample=%q want %q", got, want)
 	}
 	if got := MatrixSkipReason(meta); got != "" {
 		t.Fatalf("280 should not skip: %q", got)

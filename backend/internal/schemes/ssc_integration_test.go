@@ -34,7 +34,7 @@ func TestSSCNormalizeAndEvaluate(t *testing.T) {
 		},
 		{
 			name: "ssc_dxds", template: "ssc_std", typeID: "dxds", subID: "qian2_dxds",
-			betMode: "dxds", content: "大", balls: []string{"3", "9", "2", "7", "5"}, wantHit: true,
+			betMode: "dxds", content: "小\n大", balls: []string{"3", "9", "2", "7", "5"}, wantHit: true,
 		},
 		{
 			name: "ssc_budingwei", template: "ssc_std", typeID: "budingwei", subID: "qian3_2ma",

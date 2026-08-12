@@ -413,7 +413,8 @@ func sanitizeRandomDrawContent(rule playRule, content string) string {
 		}
 		return content
 	}
-	// 直选单式：展开后剔除豹子票
+	// 直选单式：只有整组候选全为豹子时才跳过本期。混有非豹子时必须
+	// 保留完整笛卡尔积（例如 7,8 / 7,8 / 3,8 仍是 8 注，含 888）。
 	seg := rule.SegmentLen
 	if seg <= 0 {
 		seg = playPositionCount(rule)
@@ -425,17 +426,10 @@ func sanitizeRandomDrawContent(rule playRule, content string) string {
 		}
 		return content
 	}
-	out := make([]string, 0, len(tokens))
-	for _, t := range tokens {
-		if isBaoziToken(t) {
-			continue
-		}
-		out = append(out, t)
-	}
-	if len(out) == 0 {
+	if isZhixuanDanshiAllBaozi(rule, normalized) {
 		return ""
 	}
-	return strings.Join(out, ",")
+	return normalized
 }
 
 func isZhixuanDanshiAllBaozi(rule playRule, content string) bool {
@@ -2349,9 +2343,13 @@ func hotColdWarmTiersOverallForPositions(draws [][]string, rule playRule, pool [
 	return sorted[:half], sorted[half:]
 }
 
-// renxuanOverallPositionIdxs 任选整体号池冷热的投注选位；非任选选位玩法返回 nil。
+// renxuanOverallPositionIdxs returns the configured betting positions for
+// overall digit pools, including 任四组选12's dual-zone hot/cold branch.
 func renxuanOverallPositionIdxs(rule playRule, positionIdxs []int) []int {
-	if !isRenxuanNeedsPositionRule(rule) || !isHotColdDigitOverall(rule) {
+	if !isRenxuanNeedsPositionRule(rule) {
+		return nil
+	}
+	if !isHotColdDigitOverall(rule) && !isZu12PlayRule(rule) {
 		return nil
 	}
 	k := rule.SegmentLen

@@ -47,7 +47,7 @@ func TestLHCSubPlayCoverage(t *testing.T) {
 		if rule.PlayTemplate != "lhc_std" {
 			t.Fatalf("template for %s/%s: %+v", typeID, subID, rule)
 		}
-		ev, ok := evaluateLHCByBetMode(rule, balls, "01,13,49")
+		ev, ok := evaluateLHCByBetMode(rule, balls, lhcCoverageContent(rule))
 		if !ok {
 			t.Fatalf("evaluateLHCByBetMode not handled: %s/%s betMode=%s inferred=%s", typeID, subID, betMode, inferred)
 		}
@@ -74,6 +74,16 @@ func TestLHCSubPlayCoverage(t *testing.T) {
 //
 // 验奖那条路只数 token 不查号池（见 TestLHCSubPlayCoverage 的注释），
 // 所以号池闭包只能靠合法投注空间这一层兜住。这条测的就是那一层还在不在。
+// lhcCoverageContent returns a valid representative content for each LHC rule
+// family. 过关 uses six positional attributes, so a normal number pool is not
+// a valid test fixture for this branch.
+func lhcCoverageContent(rule playRule) string {
+	if rule.BetMode == "guoguan" {
+		return "大,单,,大,,双"
+	}
+	return "01,13,49"
+}
+
 func TestLHCContentPoolClosure(t *testing.T) {
 	u := playNumberPool(playRule{PlayTemplate: "lhc_std"})
 	if len(u) != 49 || u[0] != "1" || u[48] != "49" {

@@ -155,7 +155,7 @@ describe('和值最大注数', () => {
     expect(countBetUnits(cfg, '0,1,2,3,4,5,6,7,8,9')).toBe(660)
   })
 
-  it('仅 playTypeId=g007 时仍按三星计注', () => {
+  it('仅 playTypeId=g007 时按前中后三计注', () => {
     const cfg = {
       playTemplate: 'ssc_std',
       playTypeId: 'g007',
@@ -165,7 +165,7 @@ describe('和值最大注数', () => {
       numberPoolMin: 0,
       numberPoolMax: 27,
     } as PlayConfig
-    // 无区位文案时无 ×3；单区三星 0–9 = 220
-    expect(countBetUnits(cfg, '0,1,2,3,4,5,6,7,8,9')).toBe(220)
+    // g007 是前中后三，三段均计入：220 × 3 = 660。
+    expect(countBetUnits(cfg, '0,1,2,3,4,5,6,7,8,9')).toBe(660)
   })
 })

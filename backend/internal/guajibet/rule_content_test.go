@@ -1622,7 +1622,7 @@ func TestFormatBetContentForRule_pk10RankPlays(t *testing.T) {
 	}
 }
 
-func TestFormatBetContentForRule_lhcFushi(t *testing.T) {
+func TestFormatBetContentForRule_lhcFushiAndDuipeng(t *testing.T) {
 	meta277 := ParseRuleMeta("lhc_std", "g003", "277", "复式", "二全中", nil, "277")
 	content := SampleGroupContent(meta277)
 	if content != "01,02" {
@@ -1636,10 +1636,14 @@ func TestFormatBetContentForRule_lhcFushi(t *testing.T) {
 		t.Fatalf("betsNums=%d want 1", n)
 	}
 
-	meta295 := ParseRuleMeta("lhc_std", "g003", "295", "复式", "三全中", nil, "295")
+	// 295 是特串生尾对碰，不是三全中复式。
+	meta295 := ParseRuleMeta("lhc_std", "techuan", "295", "生尾对碰", "特串", nil, "295")
 	content295 := SampleGroupContent(meta295)
-	if n := CountBetNums(meta295, FormatBetContentForRule(meta295, content295)); n != 1 {
-		t.Fatalf("295 betsNums=%d want 1", n)
+	if content295 != "07,19,31,43|10,20,30,40" {
+		t.Fatalf("295 content=%q want expanded 生尾对碰内容", content295)
+	}
+	if n := CountBetNums(meta295, FormatBetContentForRule(meta295, content295)); n != 16 {
+		t.Fatalf("295 betsNums=%d want 16", n)
 	}
 
 	meta376 := ParseRuleMeta("lhc_std", "g015", "376", "复式", "三中二", nil, "376")

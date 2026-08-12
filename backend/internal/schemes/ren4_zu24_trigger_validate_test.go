@@ -22,9 +22,9 @@ func TestValidateSchemeBetContent_ren4Zu24TriggerCell(t *testing.T) {
 	if vs := ValidateSchemeBetContent("custom", raw, "1,2,3", 0); !hasDetail(vs, "组选24至少选择 4 个号码") {
 		t.Fatalf("3 digits: %+v", vs)
 	}
-	// 误展后的整注串仍不足 4 个号池码
-	if vs := ValidateSchemeBetContent("custom", raw, "1234", 0); !hasDetail(vs, "组选24至少选择 4 个号码") {
-		t.Fatalf("1234 as one token should fail minPick: %+v", vs)
+	// 单个四位 token 不是逗号分隔的号池，按 0 注拒绝。
+	if vs := ValidateSchemeBetContent("custom", raw, "1234", 0); !hasViolation(vs, ViolationZeroUnits) {
+		t.Fatalf("1234 as one token should fail zero_units: %+v", vs)
 	}
 
 	cfg := parseSchemeConfig("custom", raw, 0, 0)

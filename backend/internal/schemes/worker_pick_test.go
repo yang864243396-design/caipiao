@@ -570,6 +570,17 @@ func TestHotColdWarmAttributeTiers(t *testing.T) {
 	}
 }
 
+func TestSanitizeRandomDrawContent_zhixuanDanshiKeepsBaoziWhenOtherTicketsExist(t *testing.T) {
+	rule := resolveSSCPlayRule("g001", "2", "danshi", "前三直选单式")
+	content := "7,8\n7,8\n3,8"
+	if got := sanitizeRandomDrawContent(rule, content); got != "773,778,783,788,873,878,883,888" {
+		t.Fatalf("mixed pool=%q want all 8 tickets including 888", got)
+	}
+	if got := sanitizeRandomDrawContent(rule, "8\n8\n8"); got != "" {
+		t.Fatalf("all-baozi pool=%q want empty", got)
+	}
+}
+
 func TestPickRandomDrawHunhe(t *testing.T) {
 	// 混合组选：与直选复式同按位随机（千/百/十），展开后排除豹子、形态去重。
 	cfg := pickTestConfig(t, `{
@@ -965,7 +976,7 @@ func TestHotColdWarmDigitPoolFamilies(t *testing.T) {
 		raw   string
 		balls []string
 	}{
-		{"组选复式", `{"runTypeId":"hot_cold_warm","playTypeId":"qian3","subPlayId":"zuxuan_fs","betMode":"zu6","hotColdWarm":{"totalPeriods":50,"pool":["1,3,5,7"],"winRotate":true}}`, []string{"1", "3", "5", "7", "9"}},
+		{"组选复式", `{"runTypeId":"hot_cold_warm","playTypeId":"qian3","subPlayId":"zuxuan_fs","betMode":"zuxuan_fs","hotColdWarm":{"totalPeriods":50,"pool":["1,3,5,7"],"winRotate":true}}`, []string{"1", "3", "5", "7", "9"}},
 		{"不定位", `{"runTypeId":"hot_cold_warm","playTypeId":"budingwei","subPlayId":"qian3_2ma","betMode":"budingwei","hotColdWarm":{"totalPeriods":50,"pool":["1,3,5,7"],"winRotate":false}}`, []string{"1", "3", "5", "7", "9"}},
 		{"包胆", `{"runTypeId":"hot_cold_warm","playTypeId":"baodan","subPlayId":"qian3_baodan","betMode":"baodan","hotColdWarm":{"totalPeriods":50,"pool":["3,6"],"winRotate":false}}`, []string{"1", "3", "5", "7", "9"}},
 	}
