@@ -483,6 +483,23 @@ func generateRandomDrawContent(cfg parsedSchemeConfig, scale int) string {
 	if scale < 0 {
 		scale = 0
 	}
+	if isLHCGuoguanPlayRule(cfg.Play) {
+		count := shrinkCount(randomDrawCountAt(cfg, 0, 2), scale, 2)
+		if count > 6 {
+			count = 6
+		}
+		return randomLHCGuoguanContent(count)
+	}
+	// 任意对碰：A/B 从同一个 01-49 洗牌池依次取号，禁止跨区重复。
+	if isLHCRenyiDuipengPlayRule(cfg.Play) {
+		counts := normalizeLHCRenyiDuipengRandomCounts(nil)
+		if cfg.Random != nil {
+			counts = normalizeLHCRenyiDuipengRandomCounts(cfg.Random.Counts)
+		}
+		aCount := shrinkCount(counts[0], scale, 1)
+		bCount := shrinkCount(counts[1], scale, 1)
+		return randomLHCRenyiDuipengContent(aCount, bCount)
+	}
 	// 单式/组选单式：整注随机
 	if isWholeTicketRandom(cfg.Play) {
 		n := randomDrawCountAt(cfg, 0, 1)
@@ -650,6 +667,9 @@ func isAttributeRandom(rule playRule) bool {
 // randomDrawCountMax 与编辑页 rdSingleCountMax / rdPerPosMax 对齐：按玩法宇宙定上限。
 // 整注 200、组选号池=号池长度、属性=选项宇宙、包胆 1、尾数≤9、按位默认 10（一星 9、按位大小单双 1）。
 func randomDrawCountMax(rule playRule) int {
+	if isLHCGuoguanPlayRule(rule) {
+		return 6
+	}
 	if isWholeTicketRandom(rule) {
 		return 200
 	}
@@ -750,6 +770,21 @@ func randomDrawCountMax(rule playRule) int {
 		return 9
 	}
 	return 10
+}
+
+func randomLHCGuoguanContent(selected int) string {
+	if selected < 2 {
+		selected = 2
+	}
+	if selected > 6 {
+		selected = 6
+	}
+	positions := make([]string, 6)
+	options := []string{"大", "小", "单", "双", "红波", "蓝波", "绿波"}
+	for _, position := range rand.Perm(len(positions))[:selected] {
+		positions[position] = options[rand.Intn(len(options))]
+	}
+	return strings.Join(positions, ",")
 }
 
 // isPerPosDxdsRandom 前二/后二/前三/后三大小单双：按位随机（十\n个），非整期单档。
@@ -1512,6 +1547,11 @@ func buildHotColdPickContent(cfg parsedSchemeConfig, draws [][]string) string {
 	if content, handled := buildLHCRenyiDuipengHotColdPickContent(cfg, draws, pool); handled {
 		return content
 	}
+	// 过关不是 01–49 号码池：正码 1–6 各自从 大/小/单/双/红蓝绿波 的冷热排名取一项，
+	// 并保留六个位置的逗号空位。
+	if content, handled := buildLHCGuoguanHotColdPickContent(cfg, draws); handled {
+		return content
+	}
 
 	// 前二/后二/前三/后三大小单双：按位大/小/单/双（十\n个），每位至多 1 选项
 	if content, ok := buildPerPosDxdsHcwPickContent(cfg, draws); ok {
@@ -1613,6 +1653,61 @@ func buildHotColdPickContent(cfg parsedSchemeConfig, draws [][]string) string {
 		return ""
 	}
 	return strings.Join(lines, "\n")
+}
+
+// buildLHCGuoguanHotColdPickContent 按正码 1–6 分别统计七个过关属性，
+// 每个已启用位置只取一个名次；少于两个位置时不生成下注内容。
+func buildLHCGuoguanHotColdPickContent(cfg parsedSchemeConfig, draws [][]string) (string, bool) {
+	if !isLHCGuoguanPlayRule(cfg.Play) {
+		return "", false
+	}
+	hc := cfg.HotCold
+	if hc == nil {
+		return "", true
+	}
+	options := []string{"大", "小", "单", "双", "红波", "蓝波", "绿波"}
+	lines := make([]string, 6)
+	filled := 0
+	for pos := 0; pos < len(lines); pos++ {
+		if !hotColdLineEnabled(hc, pos) {
+			continue
+		}
+		counts := make(map[string]int, len(options))
+		for _, option := range options {
+			counts[option] = 0
+		}
+		for _, balls := range draws {
+			if pos >= len(balls) {
+				continue
+			}
+			n := atoiBall(balls[pos])
+			for _, option := range options {
+				if lhcTemaSideHit(balls, n, option) {
+					counts[option]++
+				}
+			}
+		}
+		ordered := append([]string(nil), options...)
+		sort.SliceStable(ordered, func(i, j int) bool {
+			if counts[ordered[i]] != counts[ordered[j]] {
+				return counts[ordered[i]] > counts[ordered[j]]
+			}
+			return i < j
+		})
+		ranks := resolveHotColdRanksForOrder(hc, pos, len(ordered))
+		if len(ranks) > 1 {
+			ranks = ranks[:1]
+		}
+		picked := pickHotColdByRanks(ordered, ranks)
+		if len(picked) > 0 {
+			lines[pos] = picked[0]
+			filled++
+		}
+	}
+	if filled < 2 {
+		return "", true
+	}
+	return strings.Join(lines, ","), true
 }
 
 // buildLHCRenyiDuipengHotColdPickContent 为任意对碰按同一冷热排序分别取 A/B 区号码。

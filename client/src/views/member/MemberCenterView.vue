@@ -85,7 +85,6 @@ const systemFeatures: FeatureItem[] = [
   { id: 'faq', icon: 'help', label: '常见问题', tone: 'amber' },
   { id: 'notice', icon: 'campaign', label: '公告', tone: 'magenta' },
   { id: 'contact-service', icon: 'headset_mic', label: '联系客服', tone: 'magenta' },
-  { id: 'feedback', icon: 'forum', label: '意见回馈', tone: 'cyan' },
 ]
 
 const activeGuajiUsername = ref('')
@@ -267,10 +266,6 @@ function onPickFeature(item: FeatureItem): void {
   }
   if (item.id === 'notice') {
     void router.push({ name: 'member-announcements' })
-    return
-  }
-  if (item.id === 'feedback') {
-    void router.push({ name: 'member-feedback' })
     return
   }
   if (item.id === 'faq') {

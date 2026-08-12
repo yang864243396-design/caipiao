@@ -7,9 +7,9 @@ import (
 
 // advTriggerPC28Subs PC28 支持高级开某投某的子玩法。
 var advTriggerPC28Subs = map[string]bool{
-	"hezhi":      true,
-	"dxds":       true,
-	"longhubao":  true,
+	"hezhi":     true,
+	"dxds":      true,
+	"longhubao": true,
 }
 
 // SupportsAdvTriggerBet 高级开某投某玩法关联矩阵（定位胆/龙虎 + PC28 和值/大小单双/龙虎豹）。
@@ -31,12 +31,12 @@ func isLHCErquanzhongFushiRule(rule playRule) bool {
 	if sid == "" {
 		sid = strings.TrimSpace(rule.SubPlayID)
 	}
-	// 目录：二全中复式 279（兼容旧误写 277）
-	if sid == "279" || sid == "277" {
+	// 目录：二全中/二中特复式 279/285（兼容旧误写 277）
+	if sid == "279" || sid == "285" || sid == "291" || sid == "297" || sid == "299" || sid == "277" {
 		return true
 	}
 	tid := strings.ToLower(strings.TrimSpace(rule.PlayTypeID))
-	if tid == "erquanzhong" {
+	if tid == "erquanzhong" || tid == "erzhongte" {
 		return bm == "fushi" || bm == ""
 	}
 	return false
@@ -55,6 +55,10 @@ func triggerOpenMatches(rule playRule, balls []string, open string, watchPositio
 	// 六合：特码/二全中复式开出=特码（第 7 球）；生肖对碰开出=特码生肖；正特=对应正码位
 	if rule.PlayTemplate == "lhc_std" {
 		switch strings.TrimSpace(rule.BetMode) {
+		case "guoguan":
+			// 过关开某投某的开出条件是上一期正码 1 的球号；正/反投内容本身仍为
+			// 正码 1–6 的六位置属性格式。
+			return normalizeTriggerToken(strconv.Itoa(lhcZhengteBall(rule, balls))) == open
 		case "tema":
 			return normalizeTriggerToken(strconv.Itoa(lhcTema(balls))) == open
 		case "zhengte":

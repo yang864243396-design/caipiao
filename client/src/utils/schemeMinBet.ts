@@ -5,6 +5,8 @@
 
 import { betUnitFromSchemeConfig } from '@/constants/betModeOptions'
 import { countBetUnits, resolvePlayConfig } from '@/utils/betPayload'
+import { resolvePlayConfigFromTree } from '@/utils/playConfig'
+import type { PlayTypeNode, SubPlayNode } from '@/types/playCatalog'
 
 export const MIN_SINGLE_BET_AMOUNT_USDT = 0.1
 export const MIN_SINGLE_BET_AMOUNT_OTHER = 1
@@ -101,11 +103,7 @@ export function schemeMinModeMultiplier(cfg: Record<string, unknown> | undefined
 /** 方案各组中的最低注数；无有效内容时按 1 */
 export function schemeMinBetUnits(cfg: Record<string, unknown> | undefined | null): number {
   if (!cfg) return 1
-  const playConfig = resolvePlayConfig({
-    playTypeId: String(cfg.typeId ?? cfg.playTypeId ?? ''),
-    subPlayId: String(cfg.subId ?? cfg.subPlayId ?? ''),
-    betMode: isBetModeLike(cfg.betMode) ? String(cfg.betMode) : '',
-  })
+  const playConfig = resolveSchemeMinBetPlayConfig(cfg)
   const groups = Array.isArray(cfg.schemeGroups)
     ? cfg.schemeGroups.map((g) => String(g ?? ''))
     : []
@@ -116,6 +114,33 @@ export function schemeMinBetUnits(cfg: Record<string, unknown> | undefined | nul
     if (minUnits === 0 || u < minUnits) minUnits = u
   }
   return minUnits > 0 ? minUnits : 1
+}
+
+export function resolveSchemeMinBetPlayConfig(cfg: Record<string, unknown>) {
+  const playTypeId = String(cfg.typeId ?? cfg.playTypeId ?? '').trim()
+  const subPlayId = String(cfg.subId ?? cfg.subPlayId ?? '').trim()
+  const betMode = isBetModeLike(cfg.betMode) ? String(cfg.betMode) : ''
+  const playTemplate = String(cfg.playTemplate ?? '').trim()
+  if (playTemplate && playTypeId && subPlayId) {
+    const typeNode: PlayTypeNode = {
+      typeId: playTypeId,
+      label: String(cfg.playTypeLabel ?? cfg.guajiGroup ?? playTypeId),
+      sortOrder: 0,
+      subPlays: [],
+    }
+    const subNode: SubPlayNode = {
+      subId: subPlayId,
+      label: String(cfg.playMethodLabel ?? cfg.playMethod ?? subPlayId),
+      sortOrder: 0,
+      betMode,
+      outboundPlayCode: subPlayId,
+      segmentRule: typeof cfg.segmentRule === 'object' && cfg.segmentRule !== null
+        ? cfg.segmentRule as Record<string, unknown>
+        : undefined,
+    }
+    return resolvePlayConfigFromTree(playTemplate, typeNode, subNode)
+  }
+  return resolvePlayConfig({ playTypeId, subPlayId, betMode })
 }
 
 function isBetModeLike(raw: unknown): boolean {

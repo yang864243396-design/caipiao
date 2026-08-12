@@ -94,6 +94,13 @@ func ValidateSchemeBetContent(kind string, config []byte, content string, maxUni
 	content = stripPositionLabelPrefix(rule, content)
 
 	var out []Violation
+	if isLHCGuoguanPlayRule(rule) {
+		out = append(out, validateLHCGuoguanBetContent(content)...)
+		if len(out) == 0 && maxUnits > 0 && 1 > maxUnits {
+			out = append(out, Violation{Code: ViolationUnitsOverLimit, Detail: errMaxBetUnitsExceeded(maxUnits).Error()})
+		}
+		return out
+	}
 	// 五星趣味：0–9 数字池（勿当豹子/对子/顺子文字特殊号）；一帆风顺最多 2 码
 	if isWuxingQuweiDigitPlay(rule) {
 		out = append(out, validateWuxingQuweiDigitContent(rule, content)...)
@@ -597,6 +604,13 @@ func outOfPoolViolation(bad, pool []string) []Violation {
 }
 
 func countBetUnits(u PlayUniverse, rule playRule, content string) (int, bool) {
+	if isLHCGuoguanPlayRule(rule) {
+		_, ok := parseLHCGuoguanPositions(content)
+		if !ok {
+			return 0, true
+		}
+		return 1, true
+	}
 	switch u.Kind {
 	case UniverseAttribute:
 		return len(splitContentTokens(content)), true
@@ -635,6 +649,48 @@ func countBetUnits(u PlayUniverse, rule playRule, content string) (int, bool) {
 		// 组选/不定位/包胆的注数是组合数，需子玩法选码数，这里不猜
 		return 0, false
 	}
+}
+
+func isLHCGuoguanPlayRule(rule playRule) bool {
+	if strings.TrimSpace(rule.PlayTemplate) != "" && strings.TrimSpace(rule.PlayTemplate) != "lhc_std" {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(rule.BetMode), "guoguan")
+}
+
+var lhcGuoguanAllowedPicks = map[string]struct{}{
+	"大": {}, "小": {}, "单": {}, "双": {}, "红波": {}, "蓝波": {}, "绿波": {},
+}
+
+func parseLHCGuoguanPositions(content string) ([6]string, bool) {
+	var positions [6]string
+	parts := strings.Split(strings.ReplaceAll(strings.TrimSpace(content), "，", ","), ",")
+	if len(parts) > len(positions) {
+		return positions, false
+	}
+	selected := 0
+	for index, raw := range parts {
+		pick := strings.TrimSpace(raw)
+		if pick == "" {
+			continue
+		}
+		if _, ok := lhcGuoguanAllowedPicks[pick]; !ok {
+			return positions, false
+		}
+		positions[index] = pick
+		selected++
+	}
+	return positions, selected >= 2
+}
+
+func validateLHCGuoguanBetContent(content string) []Violation {
+	if strings.TrimSpace(content) == "" {
+		return []Violation{{Code: ViolationEmptyContent, Detail: "过关：投注内容为空"}}
+	}
+	if _, ok := parseLHCGuoguanPositions(content); !ok {
+		return []Violation{{Code: ViolationZeroUnits, Detail: "过关：正码1–6每位只能选择大/小/单/双/红波/蓝波/绿波，且至少选择 2 个正码位置"}}
+	}
+	return nil
 }
 
 // isFushiBaoziContent 直选复式各位只选同一个号 → 第三方注数为 0。
@@ -851,7 +907,7 @@ func validateLHCSwDuipengBetContent(content string) []Violation {
 }
 
 // countLHCSwDuipengBetUnits 注数=生肖展开数 × 尾数展开数 − 两侧共有号码数
-//（与 guajibet.CountBetNums / 第三方一致：狗|5 → 19）。
+// （与 guajibet.CountBetNums / 第三方一致：狗|5 → 19）。
 func countLHCSwDuipengBetUnits(content string) int {
 	z, t, ok := guajibet.ParseLHCSwDuipengSides(content)
 	if !ok {

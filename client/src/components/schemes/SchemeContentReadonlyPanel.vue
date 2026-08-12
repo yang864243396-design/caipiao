@@ -5,6 +5,8 @@ import { fetchHotColdWarmTiers } from '@/api/schemes/definitions'
 import SchemeGroupInputPanel from '@/components/schemes/SchemeGroupInputPanel.vue'
 import SchemeGroupPickPanel from '@/components/schemes/SchemeGroupPickPanel.vue'
 import SchemeLhcTemaPanel from '@/components/schemes/SchemeLhcTemaPanel.vue'
+import SchemeLhcRenyiDuipengPanel from '@/components/schemes/SchemeLhcRenyiDuipengPanel.vue'
+import SchemeLhcGuoguanPanel from '@/components/schemes/SchemeLhcGuoguanPanel.vue'
 import SchemeRenxuanDanshiPanel from '@/components/schemes/SchemeRenxuanDanshiPanel.vue'
 import type { PlayConfig } from '@/utils/betPayload'
 import {
@@ -12,6 +14,7 @@ import {
   countBetUnits,
   groupContentPlaceholder,
   isRenxuanNeedsPositionConfig,
+  isLhcGuoguanConfig,
   isZuDualPlayConfig,
   isZuxuanDanshiConfig,
   maxHezhiKuaduRandomCount,
@@ -20,12 +23,14 @@ import {
   zuDualMetaOf,
   SSC_POSITION_LABELS,
   WEISHU_MAX_BET_UNITS,
-  isLhcErquanzhongFushiConfig,
+  isLhcLianmaFushiConfig,
   isLhcTemaPlayConfig,
   zuxuanPoolMinPick,
 } from '@/utils/betPayload'
 import {
   LHC_SX_DUIPENG_MAX_PICKS,
+  LHC_GUOGUAN_OPTIONS,
+  LHC_GUOGUAN_POSITION_LABELS,
   LHC_SW_DUIPENG_MAX_PICKS,
   LHC_SW_DUIPENG_OPTIONS,
   LHC_WS_DUIPENG_MAX_PICKS,
@@ -35,6 +40,7 @@ import {
   isLhcSwDuipengConfig,
   isLhcWsDuipengConfig,
   lhcTemaHcwUniverse,
+  lhcGuoguanAttrsForNumber,
   pickRandomLhcSwDuipengPair,
 } from '@/constants/lhcPlay'
 import {
@@ -44,9 +50,13 @@ import {
   schemeGroupContentToInputBox,
   schemeGroupUsesDigitInput,
   schemeGroupUsesLhcTemaPanel,
+  schemeGroupUsesLhcRenyiDuipengPanel,
   schemeGroupUsesTextInputPanel,
   schemeGroupUsesPickPanel,
 } from '@/utils/pickPanelOptions'
+import {
+  normalizeLhcRenyiDuipengRandomCounts,
+} from '@/utils/lhcRenyiDuipengRandom'
 import {
   defaultRenxuanHcwOpenPositionIdxs,
   defaultRenxuanTriggerPositionIdxs,
@@ -81,6 +91,8 @@ const props = defineProps<{
   hotColdWarm: SchemeHotColdWarm | null
   randomDraw: SchemeRandomDraw | null
   builtinPlanSnapshotId?: string
+  /** 内置计划所跟随收藏方案的名称（服务端物化时写入 builtinPlan.schemeName） */
+  builtinPlanSchemeName?: string
   schemeName?: string
   /** 冷热出号拉统计用 */
   lotteryCode?: string
@@ -289,7 +301,9 @@ const TRIGGER_OPEN_POS_HINT = '开奖选位：上期该位球号查开出映射�
 const TRIGGER_TEMA_OPEN_HINT = '以上期开奖特码为开号标准'
 
 const showTriggerTemaOpenHint = computed(
-  () => isLhcTemaPlayConfig(props.playConfig) || isLhcErquanzhongFushiConfig(props.playConfig),
+  () =>
+    isLhcTemaPlayConfig(props.playConfig) ||
+    isLhcLianmaFushiConfig(props.playConfig),
 )
 
 const triggerBetPosHint = computed(() => {
@@ -437,10 +451,12 @@ const hcwDigitOverall = computed(() => {
   return /组三|组六|组选|不定位|包胆/.test(label)
 })
 
+const isHcwLhcGuoguan = computed(() => isLhcGuoguanConfig(props.playConfig))
 const hcwPerPosDxds = computed(() => isPerPosDxdsPlayConfig(props.playConfig))
 
 const hcwAttribute = computed(() => {
   const label = String(props.playConfig.playMethodLabel ?? '')
+  if (isHcwLhcGuoguan.value) return false
   if (/一帆风顺|好事成双|三星报喜|四季发财/i.test(label)) return false
   // 按位大小单双：十/个分列展示，勿进单档「选项池」
   if (isPerPosDxdsPlayConfig(props.playConfig)) return false
@@ -456,6 +472,7 @@ const hcwSingleGroup = computed(() => hcwDigitOverall.value || hcwAttribute.valu
 
 /** 按位展示档数：组选12/4=2；直选单式=开奖选位数；其余以玩法位数与 ranks 为准 */
 const hcwPosCount = computed(() => {
+  if (isHcwLhcGuoguan.value) return 6
   if (isHcwZuDual.value) return 2
   if (hcwSingleGroup.value) return 1
   if (isRenxuanHcwDualPosPlay.value) {
@@ -573,6 +590,10 @@ function hcwOrderedTokens(pos: number): string[] {
 
 /** 统计未就绪时用配置占位号池，避免详情先按位频次、树就绪后重入被挡导致 90/98 漂移 */
 function hcwSavedPoolLine(pos: number): string[] {
+  if (isHcwLhcGuoguan.value && !props.hotColdWarm?.pool?.[pos]) {
+    const parts = String(props.schemeGroups[0] ?? '').replace(/，/g, ',').split(',')
+    return parts[pos]?.trim() ? [parts[pos]!.trim()] : []
+  }
   const raw = props.hotColdWarm?.pool?.[pos] ?? props.schemeGroups[pos] ?? ''
   return String(raw)
     .split(/[,，\s]+/)
@@ -596,6 +617,7 @@ const hcwEstimatePools = computed(() => {
 })
 
 const hcwFallbackOptions = computed(() => {
+  if (isHcwLhcGuoguan.value) return [...LHC_GUOGUAN_OPTIONS]
   if (hcwPerPosDxds.value) return [...PER_POS_DXDS_OPTIONS]
   if (hcwAttribute.value) {
     if (hcwAttrUniverse.value.length) return hcwAttrUniverse.value
@@ -609,6 +631,7 @@ const hcwFallbackOptions = computed(() => {
 })
 
 const hcwGroupLabels = computed(() => {
+  if (isHcwLhcGuoguan.value) return [...LHC_GUOGUAN_POSITION_LABELS]
   if (hcwAttribute.value) return ['选项池']
   if (isHcwZuDual.value) return [...zuDualZoneLabels.value]
   if (hcwDigitOverall.value) return ['号码池']
@@ -726,9 +749,10 @@ async function loadHcwAttrStats(seq: number): Promise<void> {
 }
 
 async function loadHcwPerPosDxdsStats(seq: number, code: string): Promise<void> {
-  const uni = [...PER_POS_DXDS_OPTIONS]
-  const ballIdxs = hcwFixedSegmentBallIdxs()
-  const dims = Math.max(1, ballIdxs.length || hcwPosCount.value)
+  const guoguan = isHcwLhcGuoguan.value
+  const uni = guoguan ? [...LHC_GUOGUAN_OPTIONS] : [...PER_POS_DXDS_OPTIONS]
+  const ballIdxs = guoguan ? [0, 1, 2, 3, 4, 5] : hcwFixedSegmentBallIdxs()
+  const dims = guoguan ? 6 : Math.max(1, ballIdxs.length || hcwPosCount.value)
   const res = await fetchGameDraws(code, undefined, hcwTotalPeriods.value)
   if (seq !== hcwLoadSeq) return
   const items = Array.isArray(res?.items) ? res.items : []
@@ -745,7 +769,7 @@ async function loadHcwPerPosDxdsStats(seq: number, code: string): Promise<void> 
       const ballIdx = ballIdxs[p] ?? p
       const n = Number(balls[ballIdx])
       if (!Number.isFinite(n)) continue
-      for (const opt of sscDigitDxdsAttrs(n)) {
+      for (const opt of guoguan ? lhcGuoguanAttrsForNumber(n) : sscDigitDxdsAttrs(n)) {
         freq[p]![opt] = (freq[p]![opt] ?? 0) + 1
         counted += 1
       }
@@ -791,7 +815,7 @@ async function loadHcwStats(): Promise<void> {
       hcwFreq.value = []
       return
     }
-    if (hcwPerPosDxds.value) {
+    if (hcwPerPosDxds.value || isHcwLhcGuoguan.value) {
       await loadHcwPerPosDxdsStats(seq, code)
       return
     }
@@ -983,6 +1007,10 @@ function hcwZuDualPicks(): string {
 
 const hcwEstimatedUnits = computed(() => {
   // 与编辑页一致：和值/跨度等走 countBetUnits（组合数×段倍乘），勿按选项个数计注
+  if (isHcwLhcGuoguan.value) {
+    const content = Array.from({ length: 6 }, (_, i) => (hcwEstimatePools.value[i] ?? [])[0] ?? '').join(',')
+    return countBetUnits(props.playConfig, content)
+  }
   if (hcwAttribute.value) {
     const line = (hcwEstimatePools.value[0] ?? []).filter((t) => t.trim() !== '').join(',')
     return line ? countBetUnits(props.playConfig, line) : 0
@@ -1025,6 +1053,8 @@ watch(
 
 const schemeUsesPickPanel = computed(() => schemeGroupUsesPickPanel(props.playConfig))
 const schemeUsesLhcTemaPanel = computed(() => schemeGroupUsesLhcTemaPanel(props.playConfig))
+const schemeUsesLhcRenyiDuipengPanel = computed(() => schemeGroupUsesLhcRenyiDuipengPanel(props.playConfig))
+const schemeUsesLhcGuoguanPanel = computed(() => isLhcGuoguanConfig(props.playConfig))
 const schemeUsesTextInputPanel = computed(() => schemeGroupUsesTextInputPanel(props.playConfig))
 const schemeUsesRenxuanDanshi = computed(() => isRenxuanNeedsPositionConfig(props.playConfig))
 const groupInputPlaceholder = computed(() => groupContentPlaceholder(props.playConfig))
@@ -1036,10 +1066,14 @@ const displayedGroupIndexes = computed(() => {
 
 const rdCounts = computed(() => {
   const raw = props.randomDraw?.counts ?? []
+  const renyiDuipeng = schemeUsesLhcRenyiDuipengPanel.value
+  const guoguan = isLhcGuoguanConfig(props.playConfig)
   const dual = isZuDualPlayConfig(props.playConfig)
   const minH = zuDualHeadMin.value
   const minS = zuDualSingleMin.value
   if (raw.length) {
+    if (renyiDuipeng) return normalizeLhcRenyiDuipengRandomCounts(raw)
+    if (guoguan) return [Math.max(2, Math.min(6, Math.trunc(Number(raw[0]) || 2)))]
     const counts = raw.map((n) => Math.max(1, Math.trunc(Number(n) || 1)))
     // 双区组选：旧配置仅 [K] 时展示补默认尾区个数
     if (dual && counts.length < 2) {
@@ -1057,9 +1091,15 @@ const rdCounts = computed(() => {
     }
     return counts
   }
+  if (renyiDuipeng) return [1, 1]
+  if (guoguan) return [2]
   if (dual) return [minH, minS]
   return [1]
 })
+
+const isRdLhcRenyiDuipeng = computed(() => schemeUsesLhcRenyiDuipengPanel.value)
+const rdLhcRenyiDuipengAMax = computed(() => 10 - (rdCounts.value[1] ?? 1))
+const rdLhcRenyiDuipengBMax = computed(() => 10 - (rdCounts.value[0] ?? 1))
 
 const rdStrategy = computed(() => {
   const st = props.randomDraw?.strategy
@@ -1109,6 +1149,7 @@ const rdZuxuanPool = computed(() => {
 
 const rdAttribute = computed(() => {
   if (rdWholeTicket.value || rdZuxuanPool.value || isRdZuDual.value) return false
+  if (isLhcGuoguanConfig(props.playConfig)) return true
   // 前二/后二/前三/后三大小单双：按位展示，不走单档「选项个数」
   if (isPerPosDxdsPlayConfig(props.playConfig)) return false
   // 特码/正特：01–49 + 属性 + 波色，单档「选项个数」上限 68
@@ -1144,6 +1185,7 @@ const rdSingleCountMode = computed(
 const rdSingleCountLabel = computed(() => {
   if (rdWholeTicket.value) return '注数'
   if (rdZuxuanPool.value) return '选码个数'
+  if (isLhcGuoguanConfig(props.playConfig)) return '随机正码位置数'
   return '选项个数'
 })
 const rdSingleCountMax = computed(() => {
@@ -1156,6 +1198,7 @@ const rdSingleCountMax = computed(() => {
   }
   if (rdAttribute.value) {
     const cfg = props.playConfig
+    if (isLhcGuoguanConfig(cfg)) return 6
     const bm = String(cfg.betMode ?? '').toLowerCase()
     if (bm === 'baodan') return 1
     // 特码/正特：宇宙 68，勿用号池 49 当上限
@@ -1194,10 +1237,16 @@ const rdSingleCountMin = computed(() => {
     // 组三≥2、组六≥3；勿用 positionCount/segmentLen（任选回退常为 5，会把已存 2 显示成 5）
     return zuxuanPoolMinPick(props.playConfig) ?? 2
   }
+  if (isLhcGuoguanConfig(props.playConfig)) return 2
   return 1
 })
 
 const rdEstimatedUnits = computed(() => {
+  if (isRdLhcRenyiDuipeng.value) {
+    const aCount = Math.max(1, rdCounts.value[0] ?? 1)
+    const bCount = Math.max(1, rdCounts.value[1] ?? 1)
+    return aCount * bCount
+  }
   if (rdWholeTicket.value) {
     const n = Math.min(200, Math.max(1, rdCounts.value[0] ?? 1))
     if (isRenxuanNeedsPositionConfig(props.playConfig)) {
@@ -1226,6 +1275,10 @@ const rdEstimatedUnits = computed(() => {
   }
   if (rdAttribute.value) {
     const k = Math.max(1, rdCounts.value[0] ?? 1)
+    if (isLhcGuoguanConfig(props.playConfig)) {
+      const content = Array.from({ length: 6 }, (_, i) => (i < Math.max(2, Math.min(6, k)) ? '大' : '')).join(',')
+      return countBetUnits(props.playConfig, content)
+    }
     const sxDp = isLhcSxDuipengConfig(props.playConfig)
     const wsDp = isLhcWsDuipengConfig(props.playConfig)
     const swDp =
@@ -1348,6 +1401,18 @@ function formatGroupContent(content: string): string {
           />
           <SchemeLhcTemaPanel
             v-else-if="schemeUsesLhcTemaPanel"
+            :model-value="schemeGroups[idx] ?? ''"
+            :config="playConfig"
+            disabled
+          />
+          <SchemeLhcRenyiDuipengPanel
+            v-else-if="schemeUsesLhcRenyiDuipengPanel"
+            :model-value="schemeGroups[idx] ?? ''"
+            :config="playConfig"
+            disabled
+          />
+          <SchemeLhcGuoguanPanel
+            v-else-if="schemeUsesLhcGuoguanPanel"
             :model-value="schemeGroups[idx] ?? ''"
             :config="playConfig"
             disabled
@@ -1773,7 +1838,29 @@ function formatGroupContent(content: string): string {
           >{{ label }}</span>
         </div>
       </div>
-      <div v-if="isRdZuDual" class="scr-rd-pos-grid">
+      <div v-if="isRdLhcRenyiDuipeng" class="scr-rd-pos-grid">
+        <div class="scr-rd-row">
+          <span class="scr-rd-pos">A区随机</span>
+          <el-input-number
+            :model-value="rdCounts[0] ?? 1"
+            :min="1"
+            :max="rdLhcRenyiDuipengAMax"
+            size="small"
+            disabled
+          />
+        </div>
+        <div class="scr-rd-row">
+          <span class="scr-rd-pos">B区随机</span>
+          <el-input-number
+            :model-value="rdCounts[1] ?? 1"
+            :min="1"
+            :max="rdLhcRenyiDuipengBMax"
+            size="small"
+            disabled
+          />
+        </div>
+      </div>
+      <div v-else-if="isRdZuDual" class="scr-rd-pos-grid">
         <div class="scr-rd-row">
           <span class="scr-rd-pos">{{ zuDualHeadLabel }}</span>
           <el-input-number
@@ -1838,7 +1925,7 @@ function formatGroupContent(content: string): string {
       <div class="scr-bp-summary">
         <div class="scr-bp-summary-main">
           <p class="scr-bp-summary-title">
-            已跟随：{{ schemeName || '内置计划' }} · {{ playModeSummary }}
+            已跟随：{{ builtinPlanSchemeName || schemeName || '内置计划' }} · {{ playModeSummary }}
           </p>
           <p class="scr-run-tip">内置计划配置只读，与收藏计划保持一致</p>
         </div>

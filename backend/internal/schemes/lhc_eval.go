@@ -627,34 +627,19 @@ func evaluateLHCXuanyi(rule playRule, balls []string, content string) betEvaluat
 }
 
 func evaluateLHCGuguan(balls []string, content string) betEvaluation {
-	tema := lhcTema(balls)
-	picks := parseTextTokens(content)
-	units := len(picks)
-	if units <= 0 {
-		units = 1
+	positions, ok := parseLHCGuoguanPositions(content)
+	if !ok {
+		return betEvaluation{BetUnits: 0, Odds: oddsLHCAttr}
 	}
-	hit := false
-	for _, pick := range picks {
-		if lhcGuoguanPickHit(tema, pick) {
-			hit = true
-			break
+	for index, pick := range positions {
+		if pick == "" {
+			continue
+		}
+		if index >= len(balls) || !lhcTemaSideHit(balls, atoiBall(balls[index]), pick) {
+			return betEvaluation{Hit: false, BetUnits: 1, Odds: oddsLHCAttr}
 		}
 	}
-	return betEvaluation{Hit: hit, BetUnits: units, Odds: oddsLHCAttr}
-}
-
-func lhcGuoguanPickHit(tema int, pick string) bool {
-	switch pick {
-	case "大":
-		return tema >= 25
-	case "小":
-		return tema <= 24
-	case "单":
-		return tema%2 == 1
-	case "双":
-		return tema%2 == 0
-	}
-	return false
+	return betEvaluation{Hit: true, BetUnits: 1, Odds: oddsLHCAttr}
 }
 
 func evaluateLHCTematouwei(balls []string, content string) betEvaluation {

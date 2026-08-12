@@ -22,6 +22,7 @@ import {
 } from '@/utils/runTypeMatrix'
 import {
   isLhcErquanzhongTuotouConfig,
+  isLhcErzhongteTuotouConfig,
   isLhcSxDuipengConfig,
   isLhcWsDuipengConfig,
   isLhcSwDuipengConfig,
@@ -943,7 +944,7 @@ export function resolvePlayConfigFromTree(
   if (betMode === 'tuotou' || betMode.endsWith('_dp')) inputMode = 'danshi'
   // 二全中拖头：与复式同为 01–49 逗号输入（落库扁选；下单再合成胆|拖）
   if (
-    isLhcErquanzhongTuotouConfig({
+    (isLhcErquanzhongTuotouConfig({
       playTemplate,
       betMode,
       playTypeId: typeId,
@@ -952,7 +953,16 @@ export function resolvePlayConfigFromTree(
       playTypeLabel: typeLabel,
       playMethodLabel: subLabel,
       guajiGroup: guajiTeam || guajiGroup,
-    })
+    }) || isLhcErzhongteTuotouConfig({
+      playTemplate,
+      betMode,
+      playTypeId: typeId,
+      catalogSubId: sidTrim,
+      subPlayId,
+      playTypeLabel: typeLabel,
+      playMethodLabel: subLabel,
+      guajiGroup: guajiTeam || guajiGroup,
+    }))
   ) {
     inputMode = 'lhc_num'
     segmentLen = 1

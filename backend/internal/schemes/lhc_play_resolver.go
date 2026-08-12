@@ -42,16 +42,26 @@ func mapLHCCatalogPlay(typeID, subID, betMode string) (semanticType, semanticMod
 		return "erquanzhong", "ws_dp"
 	case "283": // 二全中生尾对碰
 		return "erquanzhong", "sw_dp"
+	case "284": // 二全中任意对碰
+		return "erquanzhong", "renyi_dp"
 	case "285": // 二中特复式
 		return "erzhongte", "fushi"
+	case "287": // 二中特生肖对碰
+		return "erzhongte", "sx_dp"
 	case "288": // 二中特尾数对碰
 		return "erzhongte", "ws_dp"
 	case "289": // 二中特生尾对碰
 		return "erzhongte", "sw_dp"
+	case "290": // 二中特任意对碰
+		return "erzhongte", "renyi_dp"
+	case "293": // 特串生肖对碰
+		return "techuan", "sx_dp"
 	case "294": // 特串尾数对碰
 		return "techuan", "ws_dp"
 	case "295": // 特串生尾对碰
 		return "techuan", "sw_dp"
+	case "296": // 特串任意对碰
+		return "techuan", "renyi_dp"
 	case "286": // 二中特拖头
 		return "erzhongte", "tuotou"
 	case "291": // 特串复式

@@ -1,6 +1,5 @@
 import {
   LHC_ERQUANZHONG_NUM_MAX_PICKS,
-  LHC_ERQUANZHONG_NUM_MIN_PICKS,
   LHC_SX_DUIPENG_MAX_PICKS,
   LHC_WS_DUIPENG_MAX_PICKS,
   LHC_SW_DUIPENG_MAX_PICKS,
@@ -11,6 +10,9 @@ import {
   isLhcErquanzhongFushiConfig,
   isLhcErquanzhongNumInputConfig,
   isLhcErquanzhongTuotouConfig,
+  isLhcLianmaNumInputConfig,
+  lhcLianmaNumInputLabel,
+  lhcLianmaNumInputMinPicks,
   isLhcRenyiDuipengConfig,
   isLhcSxDuipengConfig,
   isLhcWsDuipengConfig,
@@ -58,6 +60,7 @@ export {
   isLhcErquanzhongFushiConfig,
   isLhcErquanzhongNumInputConfig,
   isLhcErquanzhongTuotouConfig,
+  isLhcLianmaNumInputConfig,
   isLhcRenyiDuipengConfig,
   isLhcSxDuipengConfig,
   isLhcTemaPlayConfig,
@@ -103,7 +106,7 @@ export function schemeGroupUsesPickPanel(config: PlayConfig): boolean {
   if (schemeGroupUsesLhcTemaPanel(config)) return false
   if (schemeGroupUsesLhcRenyiDuipengPanel(config)) return false
   // 二全中复式/拖头：改用逗号分隔输入框，勿点选 01–49
-  if (isLhcErquanzhongNumInputConfig(config)) return false
+	if (isLhcLianmaNumInputConfig(config)) return false
   const mode = config.inputMode
   if (textPickOptionsForConfig(config).length > 0) return true
   if (isLonghuTextPickConfig(config)) return true
@@ -263,7 +266,7 @@ export function schemeGroupUsesDigitInput(config: PlayConfig): boolean {
   if (schemeGroupUsesLhcTemaPanel(config)) return false
   if (schemeGroupUsesLhcRenyiDuipengPanel(config)) return false
   // 二全中复式/拖头：输入框录入 01–49（即使未走 pick 分支也启用）
-  if (isLhcErquanzhongNumInputConfig(config)) return true
+	if (isLhcLianmaNumInputConfig(config)) return true
   if (!schemeGroupUsesPickPanel(config)) return false
   if (config.inputMode === 'danshi') return false
   // 直选/组选/混合单式整注：走文本失焦面板，勿当复式按位号池
@@ -311,7 +314,7 @@ export function poolUsesCommaSeparatedInput(config: PlayConfig): boolean {
   // 五星趣味（一帆风顺等）：每个数字用逗号分隔（如 0,3,9），勿连写成 039
   if (isWuxingQuweiDigitPlayConfig(config)) return true
   // 二全中复式/拖头：01–49 须逗号分隔（如 01,13,25），勿连写成 011325
-  if (isLhcErquanzhongNumInputConfig(config)) return true
+	if (isLhcLianmaNumInputConfig(config)) return true
   // 组选复式 / 组三 / 组六 / 组选24 / 组选120：号池多选须逗号分隔（如 0,1,2），勿连写成 012
   // 组选12 为双区连写（12,34），勿按扁选逗号号池拆码
   if (
@@ -448,7 +451,7 @@ export function schemeGroupContentToInputBox(content: string, config: PlayConfig
   // 无有效号码时保持空串，避免 '' → ',,,,' 盖住 placeholder
   if (c.replace(/[\s,，|#]/g, '') === '') return ''
   // 二全中拖头：旧 胆|拖 展成逗号扁选展示
-  if (isLhcErquanzhongTuotouConfig(config)) {
+	if (isLhcErquanzhongTuotouConfig(config) || /拖头$/.test(lhcLianmaNumInputLabel(config))) {
     const toks = parseDigitSegmentTokens(c.replace(/[|#]/g, ','), config)
     return toks.join(',')
   }
@@ -680,11 +683,11 @@ export function groupDigitInputHint(config: PlayConfig): string {
   if (isWuxingQuweiDigitPlayConfig(config)) {
     return wuxingQuweiFormatHint(config)
   }
-  if (isLhcErquanzhongTuotouConfig(config)) {
-    return `二全中拖头：输入 ${LHC_ERQUANZHONG_NUM_MIN_PICKS}–${LHC_ERQUANZHONG_NUM_MAX_PICKS} 个 01–49 号码，逗号分隔（首个为胆，其余为拖；如 01,13,25）`
-  }
-  if (isLhcErquanzhongFushiConfig(config)) {
-    return `二全中复式：输入 ${LHC_ERQUANZHONG_NUM_MIN_PICKS}–${LHC_ERQUANZHONG_NUM_MAX_PICKS} 个 01–49 号码，逗号分隔（如 01,13,25）`
+	if (isLhcLianmaNumInputConfig(config)) {
+	  const label = lhcLianmaNumInputLabel(config)
+	  return /拖头$/.test(label)
+	    ? `${label}：输入 ${lhcLianmaNumInputMinPicks(config)}–${LHC_ERQUANZHONG_NUM_MAX_PICKS} 个 01–49 号码，逗号分隔（首个为胆，其余为拖；如 01,13,25）`
+	    : `${label}：输入 ${lhcLianmaNumInputMinPicks(config)}–${LHC_ERQUANZHONG_NUM_MAX_PICKS} 个 01–49 号码，逗号分隔（如 01,13,25）`
   }
   // 和值须最先匹配：避免「直选和值」被组选复式/组六文案抢提示
   if (isHezhiPoolConfig(config)) {
@@ -862,7 +865,7 @@ export function poolMaxPicksForConfig(config: PlayConfig): number | null {
     if (max > 0 && max < 10) return max
   }
   // 二全中复式/拖头：最多 10 个号（失焦截断 / 与保存校验一致）
-  if (isLhcErquanzhongNumInputConfig(config)) return LHC_ERQUANZHONG_NUM_MAX_PICKS
+	if (isLhcLianmaNumInputConfig(config)) return LHC_ERQUANZHONG_NUM_MAX_PICKS
   // 生肖对碰：最多 2 个生肖
   if (isLhcSxDuipengConfig(config) || config.betMode === 'sx_dp') return LHC_SX_DUIPENG_MAX_PICKS
   // 尾数对碰：最多 2 个尾数

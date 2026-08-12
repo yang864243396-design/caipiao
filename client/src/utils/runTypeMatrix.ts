@@ -261,14 +261,14 @@ function isLhcErquanzhongFushiAdvTrigger(
   const subLbl = String(subLabel ?? '').trim()
   if (/拖头|对碰/.test(subLbl)) return false
   // 目录：二全中复式 279（兼容旧误写 277）
-  if (sub === '279' || sub === '277') return true
-  if (pt === 'erquanzhong' || label === '二全中') {
+	if (sub === '279' || sub === '277' || sub === '285' || sub === '291' || sub === '297' || sub === '299') return true
+	if (pt === 'erquanzhong' || pt === 'erzhongte' || label === '二全中' || label === '二中特') {
     return sub === 'fushi' || sub === '' || /复式/.test(subLbl) || subLbl === ''
   }
   if (label === '连码' || pt === 'g003') {
-    return /二全中/.test(subLbl) && /复式/.test(subLbl)
+	  return /二全中|二中特|特串|三中二|三全中/.test(subLbl) && /复式/.test(subLbl)
   }
-  return /二全中/.test(`${label}${subLbl}`) && /复式/.test(subLbl)
+	return /二全中|二中特|特串|三中二|三全中/.test(`${label}${subLbl}`) && /复式/.test(subLbl)
 }
 
 /** 二全中生肖对碰：高级开某投某（开出=特码生肖，正/反投=两个生肖） */
@@ -282,14 +282,16 @@ export function isLhcSxDuipengAdvTrigger(
   const sub = String(subPlayId ?? '').trim()
   const label = String(typeLabel ?? '').trim()
   const subLbl = String(subLabel ?? '').trim()
-  if (sub === '281' || sub === 'sx_dp') return true
+	if (sub === '281' || sub === '287' || sub === '293' || sub === 'sx_dp') return true
   if (/生肖对碰/.test(subLbl)) {
     return (
-      pt === 'erquanzhong' ||
+		pt === 'erquanzhong' ||
+		pt === 'erzhongte' ||
       pt === 'g003' ||
-      label === '二全中' ||
+		label === '二全中' ||
+		label === '二中特' ||
       label === '连码' ||
-      /二全中|连码/.test(`${label}${subLbl}`)
+		/二全中|二中特|连码/.test(`${label}${subLbl}`)
     )
   }
   return false

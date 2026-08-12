@@ -59,6 +59,28 @@ func TestValidateSchemeMinBetAmountIncludesBetUnits(t *testing.T) {
 	}
 }
 
+// 回归：后二组选单式的逗号分隔号码每个都是一注；启动前校验必须与实际下单的 wire 注数一致。
+func TestValidateSchemeMinBetAmountUsesWireUnitsForZuxuanDanshi(t *testing.T) {
+	cfg := []byte(`{
+		"betUnit":"0.02",
+		"schemeCurrency":"USDT",
+		"playTemplate":"ssc_std",
+		"typeId":"g005",
+		"subId":"51",
+		"playTypeId":"g005",
+		"subPlayId":"51",
+		"betMode":"zuxuan_ds",
+		"schemeGroups":["01,02,03,04,05,06,07,08,09,12,13,14,15,16,17,18,19,23,24,25,26,27,28,29,34,35,36,37,38,39,45,46,47,48,49,56,57,58,59,67,68,69,78"],
+		"rounds":[{"mult":1,"afterHit":0,"afterMiss":0}]
+	}`)
+	if got := schemeMinSingleBetAmount(cfg, "custom", numericFromFloat(1)); got != 0.86 {
+		t.Fatalf("43 注 × 0.02 应为 0.86，got %.2f", got)
+	}
+	if err := validateSchemeMinBetAmount(cfg, "custom", "USDT", numericFromFloat(1)); err != nil {
+		t.Fatalf("0.86 USDT 应通过最低投注校验：%v", err)
+	}
+}
+
 func TestSchemeMinModeMultiplierFromSimpleBetMultiplier(t *testing.T) {
 	cfg := map[string]interface{}{
 		"betMultiplier": map[string]interface{}{

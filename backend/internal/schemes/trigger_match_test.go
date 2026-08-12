@@ -28,6 +28,9 @@ func TestSupportsAdvTriggerBetPC28(t *testing.T) {
 		{"g002", "273", "正特码", "正一特", true},
 		{"erquanzhong", "fushi", "二全中", "复式", true},
 		{"g003", "279", "连码", "二全中复式", true},
+		{"erzhongte", "fushi", "二中特", "复式", true},
+		{"g003", "285", "连码", "二中特复式", true},
+		{"erzhongte", "tuotou", "二中特", "拖头", false},
 		{"erquanzhong", "tuotou", "二全中", "拖头", false},
 	}
 	for _, c := range cases {
@@ -64,6 +67,13 @@ func TestTriggerOpenMatchesLHCTema(t *testing.T) {
 	}
 	if triggerOpenMatches(er2, balls, "01") {
 		t.Fatal("二全中复式 must not match zhengma1 as open")
+	}
+	erte := playRule{PlayTemplate: "lhc_std", BetMode: "fushi", PlayTypeID: "erzhongte", CatalogSubID: "285"}
+	if !triggerOpenMatches(erte, balls, "07") {
+		t.Fatal("二中特复式 open should match tema")
+	}
+	if triggerOpenMatches(erte, balls, "01") {
+		t.Fatal("二中特复式 must not match zhengma1 as open")
 	}
 }
 

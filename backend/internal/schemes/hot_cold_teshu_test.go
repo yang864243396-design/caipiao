@@ -40,13 +40,19 @@ func TestHotColdWarmTiersServiceResolve_qian3Teshu(t *testing.T) {
 }
 
 func TestZZZHezhiUniverseQzh3Zuxuan(t *testing.T) {
-	// 复现 service：前端 qzh3_zuxuan_hz 发送 pool=1..26, segmentLen=1
+	// 前端该玩法的展示 segmentLen 为 1；服务端必须保留三星实际位数，候选和值为 1..26。
 	rule := resolveSSCPlayRule("qianzhonghou3", "qzh3_zuxuan_hz", "hezhi", "组选和值")
-	t.Logf("resolved rule=%+v", rule)
-	rule.NumberPoolMin, rule.NumberPoolMax = 1, 26
-	if attributeUsesInputSegmentLen(rule.BetMode) {
-		rule.SegmentLen = 1
-	}
+	rule = applyHotColdWarmInputOverrides(rule, HotColdWarmTiersInput{
+		PlayTemplate:    "ssc_std",
+		PlayTypeID:      "qianzhonghou3",
+		SubPlayID:       "qzh3_zuxuan_hz",
+		BetMode:         "hezhi",
+		CatalogSubID:    "qzh3_zuxuan_hz",
+		PlayMethodLabel: "前中后三组选和值",
+		NumberPoolMin:   1,
+		NumberPoolMax:   26,
+		SegmentLen:      1,
+	})
 	uni := attributeUniverse(rule)
 	t.Logf("universe=%v", uni)
 	if len(uni) != 26 || uni[0] != "1" || uni[len(uni)-1] != "26" {

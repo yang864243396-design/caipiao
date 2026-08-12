@@ -215,6 +215,11 @@ func planPickBetUnits(cfg parsedSchemeConfig, pick string) int {
 	if pick == "" {
 		return 1
 	}
+	// 启动前资金/最低额预检必须与实际下单的 bets_nums 一致。
+	// 组选单式等玩法的通用命中评估可能只得到 1 注，而 wire 统计能正确识别每条单式号码。
+	if wire := countPlayWireBetUnits(cfg.Play, pick); wire > 0 {
+		return wire
+	}
 	eval := evaluatePlayHit(cfg.Play, nil, pick, false, "", cfg.Play.PositionIdx)
 	if eval.BetUnits > 0 {
 		return eval.BetUnits

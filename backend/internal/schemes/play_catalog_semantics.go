@@ -16,7 +16,7 @@ var advTriggerPC28SubLabels = map[string]bool{
 var advTriggerPlayGroups = map[string]bool{
 	"一星": true, "龙虎": true,
 	"特码": true, "正特码": true,
-	"二全中": true, "连码": true,
+	"二全中": true, "二中特": true, "连码": true,
 }
 
 var advTriggerPC28Groups = map[string]bool{
@@ -55,35 +55,35 @@ func SupportsAdvTriggerBet(playTypeID, subPlayID, guajiGroup, subLabel string) b
 		return true
 	case "tema", "zhengte", "g001", "g002":
 		return true
-	case "erquanzhong":
+	case "erquanzhong", "erzhongte":
 		// 二全中复式 / 生肖对碰 / 尾数对碰（拖头及其它对碰另论）
 		if subPlayID == "tuotou" || strings.Contains(subLabel, "拖头") {
 			return false
 		}
-		if subPlayID == "sx_dp" || subPlayID == "281" || strings.Contains(subLabel, "生肖对碰") {
+		if subPlayID == "sx_dp" || subPlayID == "281" || subPlayID == "287" || strings.Contains(subLabel, "生肖对碰") {
 			return true
 		}
-		if subPlayID == "ws_dp" || subPlayID == "282" || strings.Contains(subLabel, "尾数对碰") {
+		if subPlayID == "ws_dp" || subPlayID == "282" || subPlayID == "288" || strings.Contains(subLabel, "尾数对碰") {
 			return true
 		}
-		if subPlayID == "sw_dp" || subPlayID == "283" || strings.Contains(subLabel, "生尾对碰") {
+		if subPlayID == "sw_dp" || subPlayID == "283" || subPlayID == "289" || strings.Contains(subLabel, "生尾对碰") {
 			return true
 		}
 		if strings.Contains(subLabel, "对碰") {
 			return false
 		}
-		return subPlayID == "fushi" || subPlayID == "279" || subPlayID == "277" || subPlayID == "" || strings.Contains(subLabel, "复式") || subLabel == ""
+		return subPlayID == "fushi" || subPlayID == "279" || subPlayID == "285" || subPlayID == "277" || subPlayID == "" || strings.Contains(subLabel, "复式") || subLabel == ""
 	case "pc28_20", "pc28_28":
 		return advTriggerPC28Subs[subPlayID]
 	}
 	// 目录数字 id：二全中复式 279（兼容旧误写 277）、生肖 281、尾数 282、生尾 283
-	if subPlayID == "279" || subPlayID == "277" || subPlayID == "281" || subPlayID == "sx_dp" ||
-		subPlayID == "282" || subPlayID == "ws_dp" ||
-		subPlayID == "283" || subPlayID == "sw_dp" ||
-		(guajiGroup == "二全中" && (subLabel == "复式" || strings.Contains(subLabel, "复式") || strings.Contains(subLabel, "生肖对碰") || strings.Contains(subLabel, "尾数对碰") || strings.Contains(subLabel, "生尾对碰"))) {
+	if subPlayID == "279" || subPlayID == "285" || subPlayID == "291" || subPlayID == "297" || subPlayID == "299" || subPlayID == "277" || subPlayID == "281" || subPlayID == "287" || subPlayID == "293" || subPlayID == "sx_dp" ||
+		subPlayID == "282" || subPlayID == "288" || subPlayID == "ws_dp" ||
+		subPlayID == "283" || subPlayID == "289" || subPlayID == "sw_dp" ||
+		((guajiGroup == "二全中" || guajiGroup == "二中特") && (subLabel == "复式" || strings.Contains(subLabel, "复式") || strings.Contains(subLabel, "生肖对碰") || strings.Contains(subLabel, "尾数对碰") || strings.Contains(subLabel, "生尾对碰"))) {
 		return true
 	}
-	if guajiGroup == "连码" && (subLabel == "二全中复式" ||
+	if guajiGroup == "连码" && (subLabel == "二全中复式" || subLabel == "二中特复式" || subLabel == "特串复式" || subLabel == "三中二复式" || subLabel == "三全中复式" ||
 		(strings.Contains(subLabel, "二全中") && strings.Contains(subLabel, "复式")) ||
 		(strings.Contains(subLabel, "二全中") && strings.Contains(subLabel, "生肖对碰")) ||
 		(strings.Contains(subLabel, "二全中") && strings.Contains(subLabel, "尾数对碰")) ||

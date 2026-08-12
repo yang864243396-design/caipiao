@@ -173,7 +173,7 @@ const lhcDanshiPlaceholder = computed(() => {
   const mode = playConfig.value.betMode ?? ''
   if (mode === 'tuotou') return '拖头：胆码|拖码，如 01,02|03,04,05'
   if (mode.endsWith('_dp')) return '对碰：A组|B组，生肖如 马|龙 或号码如 01,02|03,04'
-  if (mode === 'guoguan') return '过关：大,单,双 等，逗号分隔'
+  if (mode === 'guoguan') return '过关：正码1–6各选一个属性，保留空位，如 大,大,,大,,大'
   if (isLhcTemplate.value) return '输入选号，逗号分隔'
   return '每行或逗号分隔，如 392,123'
 })

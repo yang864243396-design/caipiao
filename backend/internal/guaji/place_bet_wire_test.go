@@ -118,8 +118,8 @@ func TestPlaceLottBetSendsExpectedWireFormat(t *testing.T) {
 	if got := body["currency"]; got != float64(3) {
 		t.Errorf("currency = %v，期望 3(cny)", got)
 	}
-	if got := body["auto_type"]; got != "platform" {
-		t.Errorf("auto_type = %v", got)
+	if got := body["auto_type"]; got != "hash" {
+		t.Errorf("auto_type = %v，期望按当前 V6 前端协议规范为 hash", got)
 	}
 
 	contents, ok := body["bet_contents"].([]any)
@@ -169,8 +169,8 @@ func TestPlaceLottBetFillsDefaults(t *testing.T) {
 	if strings.Contains(raw, `"bet_multiple":null`) {
 		t.Error("bet_multiple 发成了 null——第三方按数组解析会直接拒单")
 	}
-	if got := cap.body(t)["auto_type"]; got != "platform" {
-		t.Errorf("auto_type 缺省值 = %v，期望 platform", got)
+	if got := cap.body(t)["auto_type"]; got != "hash" {
+		t.Errorf("auto_type 缺省值 = %v，期望 hash", got)
 	}
 }
 

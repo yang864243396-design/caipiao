@@ -22,6 +22,17 @@ func normalizeBetFailedDetail(detail string) string {
 	return detail
 }
 
+// ensureBetFailedDetail prevents a local preflight stop from being rendered as
+// the unhelpful bare label "投注失败". No upstream request has been made in
+// this case, so it must not be mistaken for a third-party rejection.
+func ensureBetFailedDetail(detail string) string {
+	detail = normalizeBetFailedDetail(detail)
+	if detail == "" {
+		return "本地预检失败，第三方投注请求未发送"
+	}
+	return detail
+}
+
 func guajiBetFailedDetail(err error) string {
 	if err == nil {
 		return ""

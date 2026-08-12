@@ -239,7 +239,9 @@ func countPlayWireBetUnits(rule playRule, content string) int {
 		return 0
 	}
 	// 六合：勿走时时彩直选复式位积（SegmentLen=1 时恒为 0）
-	if rule.PlayTemplate == "lhc_std" || isLHCPlayRule(rule) {
+	// fushi 等 betMode 同时被时时彩和六合彩使用。仅当模板明确为六合彩，
+	// 或历史配置未写模板但可按旧规则识别为六合彩时，才进入六合彩计数。
+	if rule.PlayTemplate == "lhc_std" || (rule.PlayTemplate == "" && isLHCPlayRule(rule)) {
 		if n := countLHCPlayWireBetUnits(rule, content); n > 0 {
 			return n
 		}

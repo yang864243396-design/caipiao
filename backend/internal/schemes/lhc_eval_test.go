@@ -181,6 +181,39 @@ func TestInferLHCBetModeSubIDs(t *testing.T) {
 	}
 }
 
+func TestEvaluateLHCGuguanUsesSixZhengmaPositionsAsOneBet(t *testing.T) {
+	rule := resolveLHCPlayRule("g004", "guoguan", "guoguan")
+	balls := []string{"26", "11", "06", "37", "22", "08", "12"}
+
+	matched := evaluatePlayHit(rule, balls, "大,单,,大,,双", false, "", 0)
+	if !matched.Hit || matched.BetUnits != 1 {
+		t.Fatalf("six-position guoguan should be one matched bet, ev=%+v", matched)
+	}
+
+	missed := evaluatePlayHit(rule, balls, "大,单,,小,,双", false, "", 0)
+	if missed.Hit || missed.BetUnits != 1 {
+		t.Fatalf("a selected zhengma position must all match, ev=%+v", missed)
+	}
+}
+
+func TestResolveLHCPlayRule_erzhongteSubPlayModes(t *testing.T) {
+	cases := []struct{ subID, want string }{
+		{"285", "fushi"},
+		{"286", "tuotou"},
+		{"287", "sx_dp"},
+		{"288", "ws_dp"},
+		{"289", "sw_dp"},
+		{"290", "renyi_dp"},
+		{"293", "sx_dp"},
+		{"296", "renyi_dp"},
+	}
+	for _, c := range cases {
+		if got := resolveLHCPlayRule("erzhongte", c.subID, "").BetMode; got != c.want {
+			t.Fatalf("erzhongte/%s betMode=%s want %s", c.subID, got, c.want)
+		}
+	}
+}
+
 func TestSynthLHCDrawBalls(t *testing.T) {
 	a := synthLHCDrawBalls("tron_lhc_1m", "20260608001")
 	b := synthLHCDrawBalls("tron_lhc_1m", "20260608001")

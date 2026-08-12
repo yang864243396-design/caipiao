@@ -15,6 +15,12 @@ admin/dist
 backend/**/node_modules
 backend/**/dist
 
+# npm local caches
+.npm-cache/
+client/.npm-cache/
+admin/.npm-cache/
+*.exe~
+
 # ui-ux-pro-max 本地 Python
 **/__pycache__/
 *.pyc

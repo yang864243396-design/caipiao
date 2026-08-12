@@ -5,8 +5,8 @@ import {
   LHC_ZODIAC_NUMBERS,
   LHC_TAIL_NUMBERS,
   LHC_TAIL_OPTIONS,
+  LHC_GUOGUAN_OPTIONS,
   LHC_ERQUANZHONG_NUM_MAX_PICKS,
-  LHC_ERQUANZHONG_NUM_MIN_PICKS,
   LHC_SX_DUIPENG_MAX_PICKS,
   LHC_SX_DUIPENG_MIN_PICKS,
   LHC_WS_DUIPENG_MAX_PICKS,
@@ -14,8 +14,14 @@ import {
   LHC_SW_DUIPENG_MAX_PICKS,
   LHC_SW_DUIPENG_MIN_PICKS,
   isLhcErquanzhongFushiConfig,
+  isLhcGuoguanConfig,
+  isLhcErzhongteFushiConfig,
+  isLhcLianmaFushiConfig,
   isLhcErquanzhongNumInputConfig,
   isLhcErquanzhongTuotouConfig,
+  isLhcLianmaNumInputConfig,
+  lhcLianmaNumInputLabel,
+  lhcLianmaNumInputMinPicks,
   isLhcSxDuipengConfig,
   isLhcWsDuipengConfig,
   isLhcSwDuipengConfig,
@@ -24,12 +30,17 @@ import {
   isLhcTemaPlayConfig,
   isLhcTemaWaveOption,
   lhcMinPickCount,
+  parseLhcGuoguanPositions,
 } from '@/constants/lhcPlay'
 
 export {
   isLhcErquanzhongFushiConfig,
+  isLhcGuoguanConfig,
+  isLhcErzhongteFushiConfig,
+  isLhcLianmaFushiConfig,
   isLhcErquanzhongNumInputConfig,
   isLhcErquanzhongTuotouConfig,
+  isLhcLianmaNumInputConfig,
   isLhcSxDuipengConfig,
   isLhcWsDuipengConfig,
   isLhcSwDuipengConfig,
@@ -1389,8 +1400,9 @@ function lhcDuipengGroupSize(betMode: string, raw: string): number {
 function countLhcDanshiUnits(config: PlayConfig, content: string): number {
   const betMode = config.betMode ?? ''
   if (betMode === 'guoguan') {
-    const parts = content.split(/[,，]/).map((s) => s.trim()).filter(Boolean)
-    return parts.length || (content ? 1 : 0)
+    const positions = parseLhcGuoguanPositions(content)
+    const selected = positions?.filter(Boolean).length ?? 0
+    return selected >= 2 ? 1 : 0
   }
   if (betMode === 'tuotou') {
     const sep = content.includes('|') ? '|' : content.includes('#') ? '#' : ''
@@ -1617,6 +1629,10 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
   const content = groupContent.trim()
   if (!content) return 0
 
+  if (isLhcGuoguanConfig(config)) {
+    return countLhcDanshiUnits(config, content)
+  }
+
   // 任选非直选复式：须先剥位再计注（和值/号池勿误吃「万,千\n…」）
   if (isRenxuanNeedsPositionConfig(config)) {
     return countRenxuanNeedsPositionUnits(config, content)
@@ -1754,7 +1770,7 @@ export function countBetUnits(config: PlayConfig, groupContent: string): number 
     return applySegmentBetMultiplier(config, units)
   }
 
-  if (config.inputMode === 'danshi' && isLhcDanshiBetMode(config.betMode ?? '')) {
+	if (config.inputMode === 'danshi' && isLhcDanshiBetMode(config.betMode ?? '')) {
     return countLhcDanshiUnits(config, content)
   }
 
@@ -3453,6 +3469,24 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
   const content = raw.trim()
   if (!content) return { ok: false, message: '方案内容不能为空' }
 
+  if (isLhcGuoguanConfig(config)) {
+    const positions = parseLhcGuoguanPositions(content)
+    if (!positions) return { ok: false, message: '过关：必须按正码1–6保留 6 个位置' }
+    for (let index = 0; index < positions.length; index++) {
+      const pick = positions[index] ?? ''
+      if (pick && !(LHC_GUOGUAN_OPTIONS as readonly string[]).includes(pick)) {
+        return {
+          ok: false,
+          message: `过关：第 ${index + 1} 个位置只能选择大/小/单/双/红波/蓝波/绿波`,
+        }
+      }
+    }
+    if (positions.filter(Boolean).length < 2) {
+      return { ok: false, message: '过关：至少选择 2 个正码位置' }
+    }
+    return { ok: true, normalized: positions.join(','), betUnits: 1 }
+  }
+
   // 双区组选：须在任选剥位 / 通用号池校验之前拦截（「12,34」不是扁选 0-9 号池）
   if (isZuDualPlayConfig(config) && !isRenxuanNeedsPositionConfig(config)) {
     const dual = validateZuDualContent(config, content)
@@ -3466,7 +3500,10 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
 
   // 组三/组六/组选6/组选24 号池：保存时强制最低选号；粘连「12」「1234567890」按位展开后落库
   // 任选带位名前缀时先剥位再数码（万,千,百,十\n1,2,3）
-  const zuxuanMin = zuxuanPoolMinPick(config)
+  // 任三组三/组六单式须保留三位整注，不能先被当成组选号码池压缩为单个号码。
+  const isRenxuanZuDanshi =
+    isRenxuanNeedsPositionConfig(config) && (isZu3DanshiConfig(config) || isZu6DanshiConfig(config))
+  const zuxuanMin = isRenxuanZuDanshi ? null : zuxuanPoolMinPick(config)
   if (zuxuanMin != null) {
     let poolLine = content
     let renPrefix = ''
@@ -3812,26 +3849,27 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
       return validateLhcRenyiDuipengContent(content)
     }
     // 二全中拖头：允许扁选 01,13,25（与复式同口径）；勿强制要求 |
-    if (isLhcErquanzhongTuotouConfig(config)) {
+	  if (isLhcErquanzhongTuotouConfig(config) || isLhcLianmaNumInputConfig(config)) {
       const flat = content.includes('|') || content.includes('#')
         ? content.replace(/[|#]/g, ',')
         : content
       const nums = [...new Set(parseLhcNumberTokens(flat))]
-      if (nums.length < LHC_ERQUANZHONG_NUM_MIN_PICKS) {
+		const minPicks = lhcLianmaNumInputMinPicks(config)
+		if (nums.length < minPicks) {
         return {
           ok: false,
-          message: `二全中拖头：请输入 ${LHC_ERQUANZHONG_NUM_MIN_PICKS}–${LHC_ERQUANZHONG_NUM_MAX_PICKS} 个 01–49 号码，逗号分隔（首个为胆，其余为拖；如 01,13）`,
+		  message: `${lhcLianmaNumInputLabel(config)}：请输入 ${minPicks}–${LHC_ERQUANZHONG_NUM_MAX_PICKS} 个 01–49 号码，逗号分隔（首个为胆，其余为拖；如 01,13）`,
         }
       }
       if (nums.length > LHC_ERQUANZHONG_NUM_MAX_PICKS) {
         return {
           ok: false,
-          message: `二全中拖头：最多 ${LHC_ERQUANZHONG_NUM_MAX_PICKS} 个 01–49 号码，逗号分隔`,
+		  message: `${lhcLianmaNumInputLabel(config)}：最多 ${LHC_ERQUANZHONG_NUM_MAX_PICKS} 个 01–49 号码，逗号分隔`,
         }
       }
       const normalized = nums.join(',')
       const betUnits = countBetUnits(config, normalized)
-      if (betUnits <= 0) return { ok: false, message: '二全中拖头：选号无效' }
+	  if (betUnits <= 0) return { ok: false, message: `${lhcLianmaNumInputLabel(config)}：选号无效` }
       return { ok: true, normalized, betUnits }
     }
     if (
@@ -3922,17 +3960,18 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
     if (isLhcRenyiDuipengConfig(config) || config.betMode === 'renyi_dp') {
       return validateLhcRenyiDuipengContent(content)
     }
-    if (config.inputMode === 'lhc_num' && isLhcErquanzhongNumInputConfig(config)) {
+	if (config.inputMode === 'lhc_num' && isLhcLianmaNumInputConfig(config)) {
       // 兼容旧拖头 胆|拖：展成扁选再校验
       const flat = content.includes('|') || content.includes('#')
         ? content.replace(/[|#]/g, ',')
         : content
       const nums = [...new Set(parseLhcNumberTokens(flat))]
-      const label = isLhcErquanzhongTuotouConfig(config) ? '二全中拖头' : '二全中复式'
-      if (nums.length < LHC_ERQUANZHONG_NUM_MIN_PICKS) {
+	  const label = lhcLianmaNumInputLabel(config)
+	  const minPicks = lhcLianmaNumInputMinPicks(config)
+	  if (nums.length < minPicks) {
         return {
           ok: false,
-          message: `${label}：请输入 ${LHC_ERQUANZHONG_NUM_MIN_PICKS}–${LHC_ERQUANZHONG_NUM_MAX_PICKS} 个 01–49 号码，逗号分隔（如 01,13）`,
+		message: `${label}：请输入 ${minPicks}–${LHC_ERQUANZHONG_NUM_MAX_PICKS} 个 01–49 号码，逗号分隔（如 01,13）`,
         }
       }
       if (nums.length > LHC_ERQUANZHONG_NUM_MAX_PICKS) {
@@ -4500,12 +4539,11 @@ export function groupContentPlaceholder(config: PlayConfig): string {
     if (isLhcTemaPlayConfig(config)) {
       return '特码：点选上方属性；号码在下方输入 1–49，逗号分隔（提交格式：号码|属性|波色）'
     }
-    if (isLhcErquanzhongTuotouConfig(config)) {
-      return `二全中拖头：输入 ${LHC_ERQUANZHONG_NUM_MIN_PICKS}–${LHC_ERQUANZHONG_NUM_MAX_PICKS} 个 01–49 号码，逗号分隔（首个为胆，其余为拖；如 01,13,25）`
-    }
-    if (isLhcErquanzhongFushiConfig(config)) {
-      return `二全中复式：输入 ${LHC_ERQUANZHONG_NUM_MIN_PICKS}–${LHC_ERQUANZHONG_NUM_MAX_PICKS} 个 01–49 号码，逗号分隔（如 01,13,25）`
-    }
+	if (isLhcLianmaNumInputConfig(config)) {
+	  const label = lhcLianmaNumInputLabel(config)
+	  const isTuotou = /拖头$/.test(label)
+	  return `${label}：输入 ${lhcLianmaNumInputMinPicks(config)}–${LHC_ERQUANZHONG_NUM_MAX_PICKS} 个 01–49 号码，逗号分隔${isTuotou ? '（首个为胆，其余为拖；如 01,13,25）' : '（如 01,13,25）'}`
+	}
     return '六合彩：选 1–49 号码，逗号分隔（如 01,13,25）'
   }
   if (config.inputMode === 'lhc_zodiac') {

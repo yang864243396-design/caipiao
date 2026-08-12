@@ -140,10 +140,9 @@ const routes: RouteRecordRaw[] = [
     redirect: '/member',
   },
   {
+    // 用户端意见回馈入口下线，保留旧地址兼容并返回会员中心
     path: '/member/feedback',
-    name: 'member-feedback',
-    component: () => import('@/views/member/MemberFeedbackView.vue'),
-    meta: { title: '意见回馈' },
+    redirect: '/member',
   },
   {
     path: '/member/announcements',

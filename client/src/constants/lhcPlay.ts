@@ -49,7 +49,25 @@ export const LHC_BANBANBO_OPTIONS = [
   '绿大单', '绿大双', '绿小单', '绿小双',
 ] as const
 
-export const LHC_GUOGUAN_OPTIONS = ['大', '小', '单', '双'] as const
+export const LHC_GUOGUAN_OPTIONS = ['大', '小', '单', '双', '红波', '蓝波', '绿波'] as const
+export const LHC_GUOGUAN_POSITION_LABELS = ['正码1', '正码2', '正码3', '正码4', '正码5', '正码6'] as const
+/** 过关高级开某投某：开出条件沿用数字 0–49。 */
+export const LHC_GUOGUAN_TRIGGER_OPEN_VALUES = Array.from({ length: 50 }, (_, i) => String(i))
+
+const LHC_RED_NUMBERS = new Set([1, 2, 7, 8, 12, 13, 18, 19, 23, 24, 29, 30, 34, 35, 40, 45, 46])
+const LHC_BLUE_NUMBERS = new Set([3, 4, 9, 10, 14, 15, 20, 25, 26, 31, 36, 37, 41, 42, 47, 48])
+const LHC_GREEN_NUMBERS = new Set([5, 6, 11, 16, 17, 21, 22, 27, 28, 32, 33, 38, 39, 43, 44, 49])
+
+/** 过关冷热统计用：返回某个正码同时命中的大小、单双、波色属性。 */
+export function lhcGuoguanAttrsForNumber(raw: unknown): string[] {
+  const n = Math.trunc(Number(raw))
+  if (!Number.isFinite(n) || n < 1 || n > 49) return []
+  const out = [n >= 25 ? '大' : '小', n % 2 === 1 ? '单' : '双']
+  if (LHC_RED_NUMBERS.has(n)) out.push('红波')
+  else if (LHC_BLUE_NUMBERS.has(n)) out.push('蓝波')
+  else if (LHC_GREEN_NUMBERS.has(n)) out.push('绿波')
+  return out
+}
 
 export const LHC_ZONGXIAO_OPTIONS = ['二肖', '三肖', '四肖', '五肖', '六肖', '七肖'] as const
 
@@ -211,6 +229,103 @@ export function isLhcErquanzhongNumInputConfig(config: LhcErquanzhongConfigLike)
   return isLhcErquanzhongFushiConfig(config) || isLhcErquanzhongTuotouConfig(config)
 }
 
+/** 过关：固定正码1–6，各位可选一个属性，保存为六段逗号内容。 */
+export function isLhcGuoguanConfig(config: LhcErquanzhongConfigLike): boolean {
+  const { tpl, bm, text } = lhcErquanzhongContext(config)
+  if (tpl && tpl !== 'lhc_std') return false
+  return bm === 'guoguan' || /过关/.test(text)
+}
+
+/** 将过关内容补足为正码1–6 的六个固定位置；超过六段返回 null。 */
+export function parseLhcGuoguanPositions(raw: string): string[] | null {
+  const parts = String(raw ?? '').replace(/，/g, ',').split(',')
+  if (parts.length > LHC_GUOGUAN_POSITION_LABELS.length) return null
+  return Array.from(
+    { length: LHC_GUOGUAN_POSITION_LABELS.length },
+    (_, index) => (parts[index] ?? '').trim(),
+  )
+}
+
+/** 高级开某投某随机：从六个正码位置中选择 1–6 个，每个位置填一个过关属性。 */
+export function randomLhcGuoguanContent(count: number, random: () => number = Math.random): string {
+  const positions = Array(LHC_GUOGUAN_POSITION_LABELS.length).fill('') as string[]
+  const indexes = Array.from({ length: positions.length }, (_, index) => index)
+  for (let index = indexes.length - 1; index > 0; index--) {
+    const swapIndex = Math.floor(random() * (index + 1))
+    ;[indexes[index], indexes[swapIndex]] = [indexes[swapIndex]!, indexes[index]!]
+  }
+  const selected = Math.min(indexes.length, Math.max(1, Math.trunc(count) || 1))
+  for (const index of indexes.slice(0, selected)) {
+    positions[index] = LHC_GUOGUAN_OPTIONS[Math.floor(random() * LHC_GUOGUAN_OPTIONS.length)] ?? ''
+  }
+  return positions.join(',')
+}
+
+/** 二中特复式：与二全中复式共用 01–49 号码池，中奖结算规则由后端按二中特处理。 */
+export function isLhcErzhongteFushiConfig(config: LhcErquanzhongConfigLike): boolean {
+  const { tpl, bm, typeId, typeLabel, method, group, sid, text } = lhcErquanzhongContext(config)
+  if (tpl && tpl !== 'lhc_std') return false
+  if (bm === 'tuotou' || bm.endsWith('_dp')) return false
+  if (/拖头|对碰/.test(text)) return false
+  if (sid === '285') return true
+  if (typeId === 'erzhongte' || typeLabel === '二中特' || group === '二中特') {
+    return bm === 'fushi' || bm === '' || /复式/.test(method)
+  }
+  return /二中特/.test(text) && /复式/.test(method)
+}
+
+/** 二中特拖头：与二全中拖头同样以扁选号码池录入，下单时再合成胆|拖。 */
+export function isLhcErzhongteTuotouConfig(config: LhcErquanzhongConfigLike): boolean {
+  const { tpl, bm, typeId, typeLabel, method, group, sid, text } = lhcErquanzhongContext(config)
+  if (tpl && tpl !== 'lhc_std') return false
+  if (bm.endsWith('_dp') || /对碰/.test(text)) return false
+  if (sid === '286') return true
+  if (bm === 'tuotou') {
+	return typeId === 'erzhongte' || typeLabel === '二中特' || group === '二中特' || /二中特/.test(text)
+  }
+  return /二中特/.test(text) && /拖头/.test(method + text)
+}
+
+/** 二全中/二中特的复式与拖头共用号码池输入。 */
+export function isLhcLianmaNumInputConfig(config: LhcErquanzhongConfigLike): boolean {
+  const { tpl, bm, sid, text } = lhcErquanzhongContext(config)
+  if (tpl && tpl !== 'lhc_std') return false
+  if (['279', '280', '285', '286', '291', '292', '297', '298', '299', '300'].includes(sid)) return true
+  if (bm !== 'fushi' && bm !== 'tuotou') return false
+  return /二全中|二中特|特串|三中二|三全中/.test(text)
+}
+
+export function isLhcLianmaFushiConfig(config: LhcErquanzhongConfigLike): boolean {
+  if (!isLhcLianmaNumInputConfig(config)) return false
+  const { bm, sid, text } = lhcErquanzhongContext(config)
+  if (['280', '286', '292', '298', '300'].includes(sid)) return false
+  if (bm === 'tuotou' || /拖头/.test(text)) return false
+  return bm === 'fushi' || ['279', '285', '291', '297', '299'].includes(sid) || /复式/.test(text)
+}
+
+/** 二全中/二中特号码池输入在文案中的准确玩法名称。 */
+export function lhcLianmaNumInputLabel(config: LhcErquanzhongConfigLike): string {
+	const { sid, text } = lhcErquanzhongContext(config)
+	const bySubID: Record<string, string> = {
+	  '279': '二全中复式', '280': '二全中拖头',
+	  '285': '二中特复式', '286': '二中特拖头',
+	  '291': '特串复式', '292': '特串拖头',
+	  '297': '三中二复式', '298': '三中二拖头',
+	  '299': '三全中复式', '300': '三全中拖头',
+	}
+	if (bySubID[sid]) return bySubID[sid]!
+	const matched = text.match(/(二全中|二中特|特串|三中二|三全中)(复式|拖头)/)
+	if (matched) return matched[0]
+	if (isLhcErzhongteTuotouConfig(config)) return '二中特拖头'
+	if (isLhcErzhongteFushiConfig(config)) return '二中特复式'
+  if (isLhcErquanzhongTuotouConfig(config)) return '二全中拖头'
+  return '二全中复式'
+}
+
+export function lhcLianmaNumInputMinPicks(config: LhcErquanzhongConfigLike): number {
+  return /^(三中二|三全中)/.test(lhcLianmaNumInputLabel(config)) ? 3 : 2
+}
+
 /** 生肖对碰最多同时选 2 个生肖（落库/下单 肖A|肖B） */
 export const LHC_SX_DUIPENG_MAX_PICKS = 2
 export const LHC_SX_DUIPENG_MIN_PICKS = 2
@@ -237,15 +352,18 @@ export function pickRandomLhcSwDuipengPair(): [string, string] {
 export function isLhcSxDuipengConfig(config: LhcErquanzhongConfigLike): boolean {
   const { tpl, bm, typeId, typeLabel, method, group, sid, text } = lhcErquanzhongContext(config)
   if (tpl && tpl !== 'lhc_std') return false
-  if (sid === '281') return true
+	if (sid === '281' || sid === '287' || sid === '293') return true
   if (bm === 'sx_dp') {
     return (
-      typeId === 'erquanzhong' ||
+		typeId === 'erquanzhong' ||
+		typeId === 'erzhongte' ||
       typeId === 'g003' ||
-      typeLabel === '二全中' ||
+		typeLabel === '二全中' ||
+		typeLabel === '二中特' ||
       typeLabel === '连码' ||
-      group === '二全中' ||
-      /二全中|连码/.test(text)
+		group === '二全中' ||
+		group === '二中特' ||
+		/二全中|二中特|连码/.test(text)
     )
   }
   return /二全中/.test(text) && /生肖对碰/.test(method + text)
@@ -258,12 +376,15 @@ export function isLhcWsDuipengConfig(config: LhcErquanzhongConfigLike): boolean 
   if (sid === '282' || sid === '288' || sid === '294') return true
   if (bm === 'ws_dp') {
     return (
-      typeId === 'erquanzhong' ||
+		typeId === 'erquanzhong' ||
+		typeId === 'erzhongte' ||
       typeId === 'g003' ||
-      typeLabel === '二全中' ||
+		typeLabel === '二全中' ||
+		typeLabel === '二中特' ||
       typeLabel === '连码' ||
-      group === '二全中' ||
-      /二全中|连码/.test(text)
+		group === '二全中' ||
+		group === '二中特' ||
+		/二全中|二中特|连码/.test(text)
     )
   }
   return /二全中/.test(text) && /尾数对碰/.test(method + text)
@@ -358,7 +479,11 @@ export function isLhcQimaOption(value: string): boolean {
 export function lhcMinPickCount(betMode: string, subId: string): number {
   const s = subId.toLowerCase()
   if (betMode === 'fushi') {
-    if (s.includes('san')) return 3
+	if (s.includes('san') || ['297', '299'].includes(s)) return 3
+	return 2
+	}
+	if (betMode === 'tuotou') {
+	if (s.includes('san') || ['298', '300'].includes(s)) return 3
     return 2
   }
   if (betMode === 'buzhong') {

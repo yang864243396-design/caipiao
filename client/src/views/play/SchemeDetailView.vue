@@ -102,6 +102,7 @@ const triggerBet = ref<SchemeTriggerBet | null>(null)
 const hotColdWarm = ref<SchemeHotColdWarm | null>(null)
 const randomDraw = ref<SchemeRandomDraw | null>(null)
 const builtinPlanSnapshotId = ref('')
+const builtinPlanSchemeName = ref('')
 const cachedPlayTypeLabel = ref('')
 const cachedSubPlayLabel = ref('')
 const cachedBetMode = ref('')
@@ -386,6 +387,8 @@ async function load(): Promise<void> {
       const bp = cfg.builtinPlan
       builtinPlanSnapshotId.value =
         bp && typeof bp === 'object' ? asString((bp as Record<string, unknown>).snapshotId) : ''
+      builtinPlanSchemeName.value =
+        bp && typeof bp === 'object' ? asString((bp as Record<string, unknown>).schemeName).trim() : ''
     }
     const times = normalizeSchemeTimePairFromConfig(cfg.startTime, cfg.endTime)
     startTime.value = times.start
@@ -545,6 +548,7 @@ onMounted(() => {
         :hot-cold-warm="hotColdWarm"
         :random-draw="randomDraw"
         :builtin-plan-snapshot-id="builtinPlanSnapshotId"
+        :builtin-plan-scheme-name="builtinPlanSchemeName"
         :scheme-name="schemeName"
         :lottery-code="lotteryCode"
       />

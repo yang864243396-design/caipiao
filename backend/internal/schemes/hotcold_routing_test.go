@@ -16,16 +16,17 @@ import (
 // 和值尾数（weishu）就是这么漏了很久——给「后三和值尾数」选出 "180,280,380,680,780,880"，
 // 而合法内容是 0-9 的单个数字，第三方直接拒单，注单永远卡在 pending。
 
-// attributeBetModes universeKindForRule 认定为属性盘的全部 betMode。
-var attributeBetModes = []string{
-	"daxiao", "danshuang", "dxds", "zhuangxian",
+// flatAttributeBetModes 是冷热出号按单一属性池统计的 betMode。
+// 前二/后二/前三/后三大小单双虽也使用属性 token，但须逐位统计，不能放入此列表。
+var flatAttributeBetModes = []string{
+	"daxiao", "danshuang", "zhuangxian",
 	"longhu", "longhuhe", "longhubao",
 	"hezhi", "kuadu", "weishu",
 }
 
 // TestHotColdAttributeListsAgree 属性盘名单两侧必须一致，且都能给出非空候选宇宙。
 func TestHotColdAttributeListsAgree(t *testing.T) {
-	for _, mode := range attributeBetModes {
+	for _, mode := range flatAttributeBetModes {
 		t.Run(mode, func(t *testing.T) {
 			// 用后三：多数属性玩法都要一个有长度的区位才算得出和值/跨度
 			rule := playRule{
@@ -46,9 +47,22 @@ func TestHotColdAttributeListsAgree(t *testing.T) {
 	}
 }
 
+func TestHotColdPerPositionDxdsKeepsDedicatedBranch(t *testing.T) {
+	rule := playRule{
+		PlayTemplate: "ssc_std", PlayTypeID: "hou3", BetMode: "dxds",
+		SegmentStart: 2, SegmentLen: 3,
+	}
+	if !isPerPosDxdsRandom(rule) {
+		t.Fatalf("后三大小单双应使用按位分支，rule=%+v", rule)
+	}
+	if isHotColdAttributePlay(rule) {
+		t.Fatal("后三大小单双不得落入单一属性池分支")
+	}
+}
+
 // TestHotColdRoutingConsistent 每个属性玩法的实际分支都要与应走分支一致。
 func TestHotColdRoutingConsistent(t *testing.T) {
-	for _, mode := range attributeBetModes {
+	for _, mode := range flatAttributeBetModes {
 		t.Run(mode, func(t *testing.T) {
 			raw, err := json.Marshal(map[string]interface{}{
 				"playTemplate": "ssc_std", "playTypeId": "hou3",

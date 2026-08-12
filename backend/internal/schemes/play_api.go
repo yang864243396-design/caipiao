@@ -386,6 +386,10 @@ func validateLHCGroupContent(rule playRule, content string) bool {
 	if content == "" {
 		return false
 	}
+	if isLHCGuoguanPlayRule(rule) {
+		_, ok := parseLHCGuoguanPositions(content)
+		return ok
+	}
 	if rule.BetMode == "sx_dp" {
 		zs := parseLHCZodiacs(strings.NewReplacer("|", ",", "#", ",").Replace(content))
 		return len(zs) >= 2

@@ -43,6 +43,9 @@ func refuseRandomDrawMaxUnitsPause(ctx context.Context, q *sqlcdb.Queries, insta
 
 func (w *Worker) pauseRunningInstance(ctx context.Context, inst sqlcdb.SchemeInstance, reason, detail string) bool {
 	detail = normalizeBetFailedDetail(detail)
+	if reason == StatusReasonBetFailed {
+		detail = ensureBetFailedDetail(detail)
+	}
 	if refuseRandomDrawMaxUnitsPause(ctx, w.q, inst.ID, reason, detail) {
 		slog.Info("scheme worker refuse pause: random_draw over max",
 			"instanceId", inst.ID, "reason", reason, "detail", detail)

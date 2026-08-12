@@ -115,6 +115,11 @@ export function formatCloudStatAmount(n: number): string {
   return Number(n ?? 0).toFixed(1)
 }
 
+/** 方案卡片投注流水固定保留两位小数，详情页复用该显示值。 */
+export function formatCloudSchemeTurnover(n: number): string {
+  return Number(n ?? 0).toFixed(2)
+}
+
 export async function fetchCloudCenterStats(): Promise<CloudCenterStatsDto> {
   await ensureClientSession()
   const raw = await requestApi<CloudCenterStatsDto>('/client/cloud/schemes/stats')
@@ -608,7 +613,7 @@ export function instanceToDisplay(row: CloudRunningScheme) {
     statusReason: row.statusReason,
     statusLabel: row.statusLabel,
 
-    turnover: row.turnover.toFixed(1),
+    turnover: formatCloudSchemeTurnover(row.turnover),
 
     countdownSec: display.countdownSec,
 

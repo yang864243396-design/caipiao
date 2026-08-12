@@ -84,7 +84,6 @@ type randomDrawCfg struct {
 	PositionIdxs []int `json:"positionIdxs,omitempty"`
 }
 
-
 type parsedSchemeConfig struct {
 	Kind          string
 	RunTypeID     string
@@ -100,9 +99,9 @@ type parsedSchemeConfig struct {
 	Rounds        []schemeRound
 	GroupCount    int
 	Jushu         []jushuRow
-	Trigger *triggerBetCfg
-	HotCold *hotColdWarmCfg
-	Random  *randomDrawCfg
+	Trigger       *triggerBetCfg
+	HotCold       *hotColdWarmCfg
+	Random        *randomDrawCfg
 }
 
 func parseSchemeConfig(kind string, raw []byte, roundIndex, groupIndex int) parsedSchemeConfig {
@@ -824,6 +823,23 @@ func resolveRandomDraw(cfg map[string]interface{}, rule playRule) *randomDrawCfg
 			out.Counts = []int{out.Counts[0], 1}
 		}
 	}
+	// 任意对碰：持久化为 A/B 双区数量。兼容旧 counts=[总数]，并兜底合计最多 10。
+	if isLHCRenyiDuipengPlayRule(rule) {
+		out.Counts = normalizeLHCRenyiDuipengRandomCounts(out.Counts)
+	}
+	if isLHCGuoguanPlayRule(rule) {
+		count := 2
+		if len(out.Counts) > 0 && out.Counts[0] > 0 {
+			count = out.Counts[0]
+		}
+		if count < 2 {
+			count = 2
+		}
+		if count > 6 {
+			count = 6
+		}
+		out.Counts = []int{count}
+	}
 	if arr, ok := raw["positionIdxs"].([]interface{}); ok {
 		for _, item := range arr {
 			idx := toInt(item, -1)
@@ -1093,7 +1109,6 @@ func parseDigitTokens(raw string) []string {
 	}
 	return out
 }
-
 
 func resolveRounds(cfg map[string]interface{}) []schemeRound {
 	return normalizeSchemeRounds(parseSchemeRoundsFromRaw(cfg["rounds"]))

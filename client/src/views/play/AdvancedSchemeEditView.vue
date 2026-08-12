@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { confirmDialog } from '@/utils/confirmDialog'
+import { validateBuiltinPlanSave } from '@/utils/builtinPlanSave'
 import { ApiError } from '@/api/client'
 import { addSchemeToCloud } from '@/api/schemes/addToCloud'
 import {
@@ -34,6 +35,9 @@ import type { OptionPickerItem } from '@/components/ui/OptionPickerModal.vue'
 import { BET_MODE_OPTIONS, betUnitFromSchemeConfig, normalizeBetUnitValue } from '@/constants/betModeOptions'
 import {
   LHC_SX_DUIPENG_MAX_PICKS,
+  LHC_GUOGUAN_OPTIONS,
+  LHC_GUOGUAN_POSITION_LABELS,
+  LHC_GUOGUAN_TRIGGER_OPEN_VALUES,
   LHC_SX_DUIPENG_MIN_PICKS,
   LHC_WS_DUIPENG_MAX_PICKS,
   LHC_WS_DUIPENG_MIN_PICKS,
@@ -48,20 +52,28 @@ import {
   isLhcSwDuipengConfig,
   isLhcRenyiDuipengConfig,
   lhcTemaHcwUniverse,
+  lhcGuoguanAttrsForNumber,
+  parseLhcGuoguanPositions,
   pickRandomLhcSwDuipengPair,
+  randomLhcGuoguanContent,
 } from '@/constants/lhcPlay'
 import {
+  isRandomDrawLhcRenyiDuipengConfig,
+  normalizeLhcRenyiDuipengRandomCounts,
   normalizeLhcRenyiDuipengTriggerContent,
   randomLhcRenyiDuipengContent,
+  randomLhcRenyiDuipengContentForCounts,
 } from '@/utils/lhcRenyiDuipengRandom'
 import {
   normalizeLhcRenyiDuipengHotColdRanks,
   replaceLhcRenyiDuipengHotColdRanks,
 } from '@/utils/lhcRenyiDuipengHotCold'
+import { toggleSingleHcwRank } from '@/utils/hcwRankSelection'
 import SchemeGroupPickPanel from '@/components/schemes/SchemeGroupPickPanel.vue'
 import SchemeGroupInputPanel from '@/components/schemes/SchemeGroupInputPanel.vue'
 import SchemeLhcTemaPanel from '@/components/schemes/SchemeLhcTemaPanel.vue'
 import SchemeLhcRenyiDuipengPanel from '@/components/schemes/SchemeLhcRenyiDuipengPanel.vue'
+import SchemeLhcGuoguanPanel from '@/components/schemes/SchemeLhcGuoguanPanel.vue'
 import SchemeRenxuanDanshiPanel from '@/components/schemes/SchemeRenxuanDanshiPanel.vue'
 import {
   adaptSchemeGroupContentForPlay,
@@ -107,7 +119,8 @@ import {
   playConfigSummary,
   validateGroupContent,
   validateSchemeGroups,
-  isLhcErquanzhongFushiConfig,
+  isLhcLianmaFushiConfig,
+  isLhcGuoguanConfig,
   isLhcTemaPlayConfig,
   normalizeLhcTemaFlatContent,
   normalizeLhcTemaContent,
@@ -267,6 +280,7 @@ const schemeUsesLhcTemaPanel = computed(() => schemeGroupUsesLhcTemaPanel(scheme
 const schemeUsesLhcRenyiDuipengPanel = computed(() =>
   schemeGroupUsesLhcRenyiDuipengPanel(schemePlayConfig.value),
 )
+const schemeUsesLhcGuoguanPanel = computed(() => isLhcGuoguanConfig(schemePlayConfig.value))
 /** 数字玩法方案内容改用输入框录入（对齐第三方，不点选） */
 const schemeUsesDigitInput = computed(() => schemeGroupUsesDigitInput(schemePlayConfig.value))
 /** 复式数字框或非任选单式整注框（带失焦校验） */
@@ -883,7 +897,7 @@ const TRIGGER_SW_DP_OPEN_HINT = '以上期开奖特码对应生肖或尾数为�
 const showTriggerTemaOpenHint = computed(
   () =>
     isLhcTemaPlayConfig(schemePlayConfig.value) ||
-    isLhcErquanzhongFushiConfig(schemePlayConfig.value) ||
+    isLhcLianmaFushiConfig(schemePlayConfig.value) ||
     isLhcSxDuipengConfig(schemePlayConfig.value) ||
     isLhcWsDuipengConfig(schemePlayConfig.value) ||
     isLhcSwDuipengConfig(schemePlayConfig.value),
@@ -1047,6 +1061,7 @@ function ensureTriggerPositions(): void {
 }
 
 function triggerOpenValues(): string[] {
+  if (isLhcGuoguanConfig(schemePlayConfig.value)) return [...LHC_GUOGUAN_TRIGGER_OPEN_VALUES]
   if (isLonghuPlay.value) return longhuPickValues.value
   // 生肖对碰：开出=特码生肖（十二生肖）
   if (isLhcSxDuipengConfig(schemePlayConfig.value)) {
@@ -1314,6 +1329,7 @@ function isSchemeRenyiDuipeng(): boolean {
 
 /** 随机出号个数下限（双区对碰至少两号） */
 const triggerRandomMin = computed(() => {
+  if (isLhcGuoguanConfig(schemePlayConfig.value)) return 1
   if (isSchemeRenyiDuipeng()) return 2
   if (isSchemeSwDuipeng()) return LHC_SW_DUIPENG_MIN_PICKS
   if (isLhcSxDuipengConfig(schemePlayConfig.value)) return LHC_SX_DUIPENG_MIN_PICKS
@@ -1323,6 +1339,7 @@ const triggerRandomMin = computed(() => {
 
 /** 随机出号个数上限 = 正/反投号池大小（至少 1） */
 const triggerRandomMax = computed(() => {
+  if (isLhcGuoguanConfig(schemePlayConfig.value)) return 6
   // 任意对碰总号数受 A区+B区最多 10 个号码的校验约束。
   if (isSchemeRenyiDuipeng()) return 10
   // 组选/组三/组六/混合整注：随机「注数」上限（前二≈45；组三 90；组六 120；混合 165）
@@ -1444,6 +1461,7 @@ function randomFillTrigger(): void {
   const temaPool = isLhcTemaPlayConfig(schemePlayConfig.value) ? temaTriggerRandomPool() : undefined
   const swDp = isSchemeSwDuipeng()
   const renyiDp = isSchemeRenyiDuipeng()
+  const guoguan = isLhcGuoguanConfig(schemePlayConfig.value)
   for (const row of triggerRows.value) {
     if (showTriggerPerPosColumns.value) {
       row.pos = Array.from({ length: posN }, () => randomTriggerMultiValue(count, betPool)).join('\n')
@@ -1461,6 +1479,9 @@ function randomFillTrigger(): void {
     } else if (renyiDp) {
       row.pos = randomLhcRenyiDuipengContent(count)
       row.neg = randomLhcRenyiDuipengContent(count)
+    } else if (guoguan) {
+      row.pos = randomLhcGuoguanContent(count)
+      row.neg = randomLhcGuoguanContent(count)
     } else {
       const pool = temaPool ?? (isTriggerTextPlay.value ? [...triggerBetOptions.value] : undefined)
       row.pos = randomTriggerMultiValue(count, pool)
@@ -1476,8 +1497,16 @@ function randomFillTrigger(): void {
         ? `已随机填充正投 / 反投（${zuDualZoneHeadLabel()} + 单号，每格至少 1 注）`
         : isTriggerWholeTicketBet.value
           ? `已随机填充正投 / 反投（每格 ${count} 注，每注 ${triggerWholeTicketLen.value} 位）`
-          : `已随机填充正投 / 反投号码（每格 ${count} 个号）`,
+          : guoguan
+            ? `已随机填充正投 / 反投（每格 ${count} 个正码位置）`
+            : `已随机填充正投 / 反投号码（每格 ${count} 个号）`,
   )
+}
+
+function normalizeLhcGuoguanTriggerContent(raw: string): string {
+  const normalized = String(raw ?? '').replace(/，/g, ',')
+  const positions = parseLhcGuoguanPositions(normalized)
+  return positions ? positions.join(',') : normalized
 }
 
 /** 规范化按位正投/反投（换行分位，每位内可逗号多号） */
@@ -2075,10 +2104,12 @@ const isHcwRenyiDuipeng = computed(() => isLhcRenyiDuipengConfig(schemePlayConfi
  * 分档频次由服务端复用权威判定计算（避免前端重复实现各彩种大小阈值/和值/跨度/龙虎口径）。
  */
 /** 前二/后二/前三/后三大小单双：冷热按位（十/个…），每位大/小/单/双单选 */
+const isHcwLhcGuoguan = computed(() => isLhcGuoguanConfig(schemePlayConfig.value))
 const hcwPerPosDxds = computed(() => isPerPosDxdsPlayConfig(schemePlayConfig.value))
 
 const hcwAttribute = computed(() => {
   const cfg = schemePlayConfig.value
+  if (isHcwLhcGuoguan.value) return false
   const label = String(cfg.playMethodLabel ?? '')
   // 五星趣味：走号码池整体频次，勿当豹子/对子/顺子属性选项
   if (/一帆风顺|好事成双|三星报喜|四季发财/i.test(label)) return false
@@ -2168,6 +2199,7 @@ function ensureHcwPools(): void {
 
 /** 冷热分档行数：组选12=二重+单号；直选单式=开奖选位数；属性/整体=1；其它=玩法位数 */
 function hcwDimCount(): number {
+  if (isHcwLhcGuoguan.value) return 6
   if (isHcwRenyiDuipeng.value) return 2
   if (isHcwZuDual.value) return 2
   if (hcwSingleGroup.value) return 1
@@ -2180,6 +2212,7 @@ function hcwDimCount(): number {
 
 /** 冷热分档分组：属性=选项池；整体=号码池；组选12=二重/单号；直选单式=开奖选位名；按位=每位一档 */
 const hcwGroupLabels = computed(() => {
+  if (isHcwLhcGuoguan.value) return [...LHC_GUOGUAN_POSITION_LABELS]
   if (isHcwRenyiDuipeng.value) return ['A区', 'B区']
   if (hcwAttribute.value) return ['选项池']
   if (isHcwZuDual.value) return [...triggerZuDualZoneLabels.value]
@@ -2198,6 +2231,7 @@ function hcwZuDualPicks(): string {
 
 /** 无统计时的兜底可选项：属性优先本地宇宙（豹子/对子/顺子），再回退服务端回填 */
 const hcwFallbackOptions = computed(() => {
+  if (isHcwLhcGuoguan.value) return [...LHC_GUOGUAN_OPTIONS]
   if (hcwPerPosDxds.value) return [...PER_POS_DXDS_OPTIONS]
   if (!hcwAttribute.value) return numberPoolTokens.value
   const local = hcwLocalAttrUniverse()
@@ -2314,9 +2348,11 @@ let lastHcwStatsKey = ''
 
 function hcwStatsKey(): string {
   const cfg = schemePlayConfig.value
-  const family = hcwPerPosDxds.value
-    ? 'dxds_pos'
-    : hcwAttribute.value
+  const family = isHcwLhcGuoguan.value
+    ? 'lhc_guoguan'
+    : hcwPerPosDxds.value
+      ? 'dxds_pos'
+      : hcwAttribute.value
       ? 'attr'
       : isHcwZuDual.value
         ? 'zu12'
@@ -2427,9 +2463,10 @@ async function loadHcwAttrStats(seq: number): Promise<void> {
 
 /** 按位大小单双：每位按该位球号计大/小/单/双频次 */
 async function loadHcwPerPosDxdsStats(seq: number): Promise<void> {
-  const uni = [...PER_POS_DXDS_OPTIONS]
-  const ballIdxs = hcwFixedSegmentBallIdxs()
-  const dims = Math.max(1, ballIdxs.length || positionCount.value)
+  const guoguan = isHcwLhcGuoguan.value
+  const uni = guoguan ? [...LHC_GUOGUAN_OPTIONS] : [...PER_POS_DXDS_OPTIONS]
+  const ballIdxs = guoguan ? [0, 1, 2, 3, 4, 5] : hcwFixedSegmentBallIdxs()
+  const dims = guoguan ? 6 : Math.max(1, ballIdxs.length || positionCount.value)
   const res = await fetchGameDraws(lotteryCode.value, undefined, hcwTotalPeriods.value)
   if (seq !== hcwLoadSeq) return
   const items = Array.isArray(res?.items) ? res.items : []
@@ -2446,7 +2483,7 @@ async function loadHcwPerPosDxdsStats(seq: number): Promise<void> {
       const ballIdx = ballIdxs[p] ?? p
       const n = Number(balls[ballIdx])
       if (!Number.isFinite(n)) continue
-      for (const opt of sscDigitDxdsAttrs(n)) {
+      for (const opt of guoguan ? lhcGuoguanAttrsForNumber(n) : sscDigitDxdsAttrs(n)) {
         freq[p]![opt] = (freq[p]![opt] ?? 0) + 1
         counted += 1
       }
@@ -2485,7 +2522,7 @@ async function loadHcwStats(): Promise<void> {
       await loadHcwAttrStats(seq)
       return
     }
-    if (hcwPerPosDxds.value) {
+    if (hcwPerPosDxds.value || isHcwLhcGuoguan.value) {
       await loadHcwPerPosDxdsStats(seq)
       return
     }
@@ -2743,6 +2780,7 @@ function poolHasToken(arr: string[] | undefined, token: string): boolean {
 
 function hcwPosPickCap(): number | null {
   const cfg = schemePlayConfig.value
+  if (isHcwLhcGuoguan.value) return 1
   // 后二大小单双等：每位仅 1 个大/小/单/双
   if (hcwPerPosDxds.value) return 1
   // 五星和值单双/大小、包胆等：走 poolMaxPicks（优先于属性池「不设上限」）
@@ -2756,6 +2794,7 @@ function hcwPosPickCap(): number | null {
 
 function hcwPosPickCapMsg(): string {
   const cfg = schemePlayConfig.value
+  if (isHcwLhcGuoguan.value) return '过关：每个正码位置只能选择一个选项'
   if (hcwPerPosDxds.value) return '仅能选择一个选项（大/小/单/双）'
   if (isWuxingSumDxdsPlayConfig(cfg)) {
     return /和值大小|尾数大小/.test(cfg.playMethodLabel ?? '') || cfg.betMode === 'daxiao'
@@ -2869,11 +2908,14 @@ function toggleHcwDigit(pos: number, digit: string): void {
       }
     }
     const cap = hcwPosPickCap()
-    if (cap != null && ranks.length >= cap) {
+    if (isHcwLhcGuoguan.value && cap === 1) {
+      ranks.splice(0, ranks.length, ...toggleSingleHcwRank(ranks, rank))
+    } else if (cap != null && ranks.length >= cap) {
       ElMessage.warning(hcwPosPickCapMsg())
       return
+    } else {
+      ranks.push(rank)
     }
-    ranks.push(rank)
   }
   if (isHcwRenyiDuipeng.value) {
     hcwRanks.value = replaceLhcRenyiDuipengHotColdRanks(
@@ -2965,6 +3007,10 @@ const hcwEstimatedUnits = computed(() => {
   // 属性/聚合家族（和值/跨度/大小单双/龙虎等）：统一走 countBetUnits
   // 和值/跨度按组合数×段倍乘（前中后三组选和值 2,6,13,17,24 → 38×3=114），勿按「选几个算几注」
   let picks = ''
+  if (isHcwLhcGuoguan.value) {
+    const content = Array.from({ length: 6 }, (_, i) => (hcwPools.value[i] ?? [])[0] ?? '').join(',')
+    return countBetUnits(schemePlayConfig.value, content)
+  }
   if (hcwAttribute.value) {
     picks = (hcwPools.value[0] ?? []).filter((t) => t.trim() !== '').join(',')
   } else if (isHcwZuDual.value) {
@@ -3016,8 +3062,24 @@ const rdWholePreview = ref<string[]>([])
 
 /** 组选12/4 随机：头区/单号两个选码个数（勿走扁选「选码个数」） */
 const isRdZuDual = computed(() => isZuDualPlayConfig(schemePlayConfig.value) && !rdWholeTicket.value)
+/** 任选二全中任意对碰随机：A/B 两区各自配置随机个数。 */
+const isRdLhcRenyiDuipeng = computed(
+  () =>
+    isLhcRenyiDuipengConfig(schemePlayConfig.value) ||
+    isRandomDrawLhcRenyiDuipengConfig(schemePlayConfig.value),
+)
+const rdLhcRenyiDuipengCounts = computed(() => normalizeLhcRenyiDuipengRandomCounts(rdCounts.value))
+const rdLhcRenyiDuipengAMax = computed(() => 10 - rdLhcRenyiDuipengCounts.value[1])
+const rdLhcRenyiDuipengBMax = computed(() => 10 - rdLhcRenyiDuipengCounts.value[0])
 
 function ensureRdCounts(): void {
+  if (isRdLhcRenyiDuipeng.value) {
+    const counts = normalizeLhcRenyiDuipengRandomCounts(rdCounts.value)
+    if (rdCounts.value.length !== 2 || rdCounts.value[0] !== counts[0] || rdCounts.value[1] !== counts[1]) {
+      rdCounts.value = counts
+    }
+    return
+  }
   // 双区组选：counts=[头区个数, 尾区个数]
   if (isRdZuDual.value) {
     const minH = zuDualMinHeadCount()
@@ -3061,6 +3123,7 @@ const rdZuxuanPool = computed(() => {
 /** 属性/聚合家族（大小单双/龙虎/特殊号/庄闲/和值/跨度/不定位/包胆/特码）：从选项宇宙随机抽 K 个 */
 const rdAttribute = computed(() => {
   if (rdWholeTicket.value || rdZuxuanPool.value || isRdZuDual.value) return false
+  if (isLhcGuoguanConfig(schemePlayConfig.value)) return true
   // 前二/后二/前三/后三大小单双：按位（十/个…），不走单档「选项个数」
   if (isPerPosDxdsPlayConfig(schemePlayConfig.value)) return false
   // 特码/正特：01–49 + 属性 + 波色，单档「选项个数」上限 68
@@ -3084,12 +3147,14 @@ const rdSingleCountMode = computed(
 const rdSingleCountLabel = computed(() => {
   if (rdWholeTicket.value) return '注数'
   if (rdZuxuanPool.value) return '选码个数'
+  if (isLhcGuoguanConfig(schemePlayConfig.value)) return '随机正码位置数'
   return '选项个数'
 })
 
 /** 属性/聚合玩法选项宇宙（特殊号=豹子/对子/顺子，大小单双=大/小/单/双，和值=号池等） */
 function rdAttributeUniverse(): string[] {
   const cfg = schemePlayConfig.value
+  if (isLhcGuoguanConfig(cfg)) return [...LHC_GUOGUAN_OPTIONS]
   if (isLhcTemaPlayConfig(cfg)) return lhcTemaHcwUniverse()
   if (isLhcSxDuipengConfig(cfg)) return [...LHC_ZODIACS]
   if (isLhcWsDuipengConfig(cfg)) return [...LHC_TAIL_OPTIONS]
@@ -3107,6 +3172,7 @@ function rdAttributeUniverse(): string[] {
 /** 属性/聚合玩法选项宇宙大小（特殊号=3、大小单双=4、和值=号池长度等） */
 function rdAttributeUniverseMax(): number {
   const cfg = schemePlayConfig.value
+  if (isLhcGuoguanConfig(cfg)) return 6
   // 特码/正特：01–49+属性+波色=68（勿被号池 49 / 按位默认 10 夹住）
   if (isLhcTemaPlayConfig(cfg)) return lhcTemaHcwUniverse().length
   // 生肖/尾数对碰：恰好 2 个属性
@@ -3144,6 +3210,7 @@ const rdSingleCountMin = computed(() => {
     // 组三≥2、组六≥3；其它组选号池默认 ≥2（勿用 segmentLen/positionCount，任选回退五位会把下限抬成 5）
     return zuxuanPoolMinPick(schemePlayConfig.value) ?? 2
   }
+  if (isLhcGuoguanConfig(schemePlayConfig.value)) return 2
   // 生肖/尾数对碰：恰好 2 个属性
   if (rdAttribute.value && isLhcSxDuipengConfig(schemePlayConfig.value)) {
     return LHC_SX_DUIPENG_MIN_PICKS
@@ -3164,9 +3231,9 @@ const rdSingleCountMin = computed(() => {
 
 /** 玩法切换后把选项个数钳到当前宇宙上下限（避免特殊号仍显示 >3） */
 watch(
-  [rdSingleCountMax, rdSingleCountMin, rdSingleCountMode, isRdZuDual],
-  ([max, min, single, zu12]) => {
-    if (zu12) {
+  [rdSingleCountMax, rdSingleCountMin, rdSingleCountMode, isRdZuDual, isRdLhcRenyiDuipeng],
+  ([max, min, single, zu12, renyiDuipeng]) => {
+    if (zu12 || renyiDuipeng) {
       ensureRdCounts()
       return
     }
@@ -3268,15 +3335,24 @@ function applyRandomDrawFromConfig(raw: unknown): void {
   if (!raw || typeof raw !== 'object') return
   const c = raw as Record<string, unknown>
   if (Array.isArray(c.counts) && c.counts.length) {
-    // 灌入时只保底 ≥1，勿用尚未稳定的 max 把已存选码个数夹小（详情 5 / 编辑变 2）
-    rdCounts.value = c.counts.map((n) => Math.max(1, Math.trunc(Number(n)) || 1))
-    // 组选12/4：旧配置仅 [K] 时补默认单号个数
-    if (isZuDualPlayConfig(schemePlayConfig.value) && rdCounts.value.length < 2) {
-      rdCounts.value = [
-        Math.max(zuDualMinHeadCount(), rdCounts.value[0] ?? zuDualMinHeadCount()),
-        zuDualMinSinglesCount(),
-      ]
+    if (isRdLhcRenyiDuipeng.value) {
+      // 兼容旧版 counts=[总数]，按 A=floor(总数/2)、B=其余回填。
+      rdCounts.value = normalizeLhcRenyiDuipengRandomCounts(c.counts)
+    } else {
+      // 灌入时只保底 ≥1，勿用尚未稳定的 max 把已存选码个数夹小（详情 5 / 编辑变 2）
+      rdCounts.value = c.counts.map((n) => Math.max(1, Math.trunc(Number(n)) || 1))
+      // 组选12/4：旧配置仅 [K] 时补默认单号个数
+      if (isZuDualPlayConfig(schemePlayConfig.value) && rdCounts.value.length < 2) {
+        rdCounts.value = [
+          Math.max(zuDualMinHeadCount(), rdCounts.value[0] ?? zuDualMinHeadCount()),
+          zuDualMinSinglesCount(),
+        ]
+      }
     }
+  }
+  if (isLhcGuoguanConfig(schemePlayConfig.value)) {
+    const count = Math.max(2, Math.min(6, rdCounts.value[0] ?? 2))
+    rdCounts.value = [count]
   }
   const s = String(c.strategy ?? '')
   if (s === 'every' || s === 'keep' || s === 'after_hit' || s === 'after_miss') rdStrategy.value = s
@@ -3307,6 +3383,12 @@ const rdPerPosMax = computed(() => {
 /** 本地生成预览号码（含属性家族选项抽样） */
 function generateRdPreview(): void {
   ensureRdCounts()
+  if (isRdLhcRenyiDuipeng.value) {
+    const [aCount, bCount] = rdLhcRenyiDuipengCounts.value
+    rdWholePreview.value = [randomLhcRenyiDuipengContentForCounts(aCount, bCount)]
+    rdPreview.value = []
+    return
+  }
   if (rdWholeTicket.value) {
     const n = Math.min(200, Math.max(1, rdCounts.value[0] ?? 1))
     // 组三单式：须两同+一异（勿生成 012/111）
@@ -3395,6 +3477,16 @@ function generateRdPreview(): void {
       Math.max(rdSingleCountMin.value, rdCounts.value[0] ?? rdSingleCountMin.value),
     )
     let picks = universe.slice(0, k)
+    if (isLhcGuoguanConfig(cfg)) {
+      const positions = Array(6).fill('') as string[]
+      const positionIndexes = shuffleInPlace([0, 1, 2, 3, 4, 5]).slice(0, k)
+      for (const positionIndex of positionIndexes) {
+        positions[positionIndex] = universe[Math.floor(Math.random() * universe.length)] ?? ''
+      }
+      rdWholePreview.value = [positions.join(',')]
+      rdPreview.value = []
+      return
+    }
     // 生尾对碰：必须各 1 肖 + 1 尾（勿从混合宇宙 slice k → 两肖/两尾）
     if (isLhcSwDuipengConfig(cfg) || String(cfg.betMode ?? '').toLowerCase() === 'sw_dp') {
       picks = [...pickRandomLhcSwDuipengPair()]
@@ -3494,6 +3586,17 @@ function rdZuDualPreviewWire(): string {
  * - 单式整注 / 组选号池：一注或号池条目一枚
  */
 const rdPreviewTags = computed<RdPreviewTag[]>(() => {
+  if (isRdLhcRenyiDuipeng.value) {
+    const ticket = String(rdWholePreview.value[0] ?? '')
+    const [a = '', b = ''] = ticket.split('|')
+    if (!a || !b) return []
+    return [{
+      key: `renyi-duipeng-${ticket}`,
+      label: `A区 ${a.split(',').join('\u2009')}  |  B区 ${b.split(',').join('\u2009')}`,
+      kind: 'whole',
+      index: 0,
+    }]
+  }
   if (isRdZuDual.value) {
     const labels = [...triggerZuDualZoneLabels.value]
     const out: RdPreviewTag[] = []
@@ -3508,6 +3611,16 @@ const rdPreviewTags = computed<RdPreviewTag[]>(() => {
       })
     }
     return out
+  }
+  if (isLhcGuoguanConfig(schemePlayConfig.value)) {
+    const ticket = String(rdWholePreview.value[0] ?? '')
+    const parts = ticket.replace(/，/g, ',').split(',')
+    const label = parts
+      .slice(0, 6)
+      .map((pick, index) => (pick ? `${LHC_GUOGUAN_POSITION_LABELS[index]} ${pick}` : ''))
+      .filter(Boolean)
+      .join(' · ')
+    return label ? [{ key: `guoguan-${ticket}`, label, kind: 'whole' as const, index: 0 }] : []
   }
   // 单式整注 / 组选号池：整注预览
   if (rdSingleCountMode.value) {
@@ -3566,6 +3679,11 @@ function removeRdPreviewTag(tag: RdPreviewTag): void {
 
 /** 预估注数：按预览（或每位数量占位）走同一套 countBetUnits，含直选组合×段长 */
 const rdEstimatedUnits = computed(() => {
+  if (isRdLhcRenyiDuipeng.value) {
+    const [aCount, bCount] = rdLhcRenyiDuipengCounts.value
+    const sample = rdWholePreview.value[0] || randomLhcRenyiDuipengContentForCounts(aCount, bCount)
+    return countBetUnits(schemePlayConfig.value, sample)
+  }
   // 单式整注随机：有预览则按选位×注数计；否则先按注数（选位倍率在保存/出号时生效）
   if (rdWholeTicket.value) {
     const n = Math.min(200, Math.max(1, rdCounts.value[0] ?? 1))
@@ -3643,11 +3761,6 @@ const favoritesLoadError = ref('')
 const favSelectedSnapshotId = ref('')
 const builtinSnapshotId = ref('')
 const builtinApplying = ref(false)
-const builtinReselecting = ref(false)
-
-const builtinChosenFavorite = computed(
-  () => favorites.value.find((f) => f.snapshotId === builtinSnapshotId.value) ?? null,
-)
 
 /** 内置计划仅展示当前关联彩种下的收藏 */
 const favoritesForLottery = computed(() => {
@@ -3681,14 +3794,11 @@ function formatFavoredAt(raw: string): string {
   return t.toLocaleString('zh-CN', { hour12: false })
 }
 
-function startBuiltinReselect(): void {
-  builtinReselecting.value = true
-  favSelectedSnapshotId.value = builtinSnapshotId.value
-  void loadFavorites(true)
-}
-
-async function confirmBuiltinPlan(): Promise<void> {
+/** 点击收藏方案即应用，不再额外要求确认。 */
+async function selectBuiltinPlan(snapshotId: string): Promise<void> {
   if (builtinApplying.value) return
+  const previousSnapshotId = builtinSnapshotId.value
+  favSelectedSnapshotId.value = snapshotId
   if (!lotteryCode.value.trim()) {
     ElMessage.warning('请先选择彩种')
     return
@@ -3705,7 +3815,6 @@ async function confirmBuiltinPlan(): Promise<void> {
   if (isDraftScheme.value) {
     builtinSnapshotId.value = favSelectedSnapshotId.value
     ElMessage.success('已选择收藏方案')
-    builtinReselecting.value = false
     persistDraft()
     return
   }
@@ -3714,10 +3823,11 @@ async function confirmBuiltinPlan(): Promise<void> {
     await updateSchemeDefinition(schemeId.value, {
       builtinPlan: { snapshotId: favSelectedSnapshotId.value },
     })
+    builtinSnapshotId.value = favSelectedSnapshotId.value
     ElMessage.success('已复制该方案配置')
-    builtinReselecting.value = false
     await loadRemoteDefinition()
   } catch (err) {
+    favSelectedSnapshotId.value = previousSnapshotId
     const message = err instanceof ApiError ? err.message : err instanceof Error ? err.message : '选择失败'
     ElMessage.warning(message)
   } finally {
@@ -3780,7 +3890,10 @@ function applyDraftSnapshot(draft: SchemeDraftSnapshot): void {
   subPlayId.value = draft.meta.subPlayId || subPlayId.value
   if (draft.betMultiplierKind) betMultiplierKind.value = draft.betMultiplierKind
   if (draft.betMultiplier) applyBetMultiplierFromConfig(draft.betMultiplier)
-  if (draft.builtinSnapshotId) builtinSnapshotId.value = draft.builtinSnapshotId
+  if (draft.builtinSnapshotId) {
+    builtinSnapshotId.value = draft.builtinSnapshotId
+    favSelectedSnapshotId.value = draft.builtinSnapshotId
+  }
   if (draft.jushuList?.length) applyJushuFromConfig(draft.jushuList)
   if (draft.triggerBet) applyTriggerBetFromConfig(draft.triggerBet)
   if (draft.hotColdWarm) applyHotColdWarmFromConfig(draft.hotColdWarm)
@@ -3975,6 +4088,7 @@ async function loadRemoteDefinition() {
       const bp = cfg.builtinPlan
       if (bp && typeof bp === 'object' && typeof (bp as { snapshotId?: unknown }).snapshotId === 'string') {
         builtinSnapshotId.value = (bp as { snapshotId: string }).snapshotId
+        favSelectedSnapshotId.value = builtinSnapshotId.value
       }
       if (runTypeId.value === 'adv_fixed_rotate' && !jushuList.value.length) {
         seedJushuFromGroups()
@@ -4030,6 +4144,7 @@ function runTypeDraftFields(): Partial<UpdateSchemeInput> {
       const wsDp = isLhcWsDuipengConfig(schemePlayConfig.value)
       const swDp = isLhcSwDuipengConfig(schemePlayConfig.value)
       const renyiDp = isLhcRenyiDuipengConfig(schemePlayConfig.value)
+      const guoguan = isLhcGuoguanConfig(schemePlayConfig.value)
       const normalizeDp = (raw: string) =>
         sxDp
           ? normalizeSxDuipengTriggerContent(raw)
@@ -4047,7 +4162,9 @@ function runTypeDraftFields(): Partial<UpdateSchemeInput> {
             ? perPosText
               ? sanitizeTriggerPerPosTextField(r.pos)
               : sanitizeTriggerPerPosField(r.pos)
-            : sxDp || wsDp || swDp || renyiDp
+            : guoguan
+              ? normalizeLhcGuoguanTriggerContent(String(r.pos ?? ''))
+              : sxDp || wsDp || swDp || renyiDp
               ? normalizeDp(r.pos)
               : textPlay
                 ? triggerTextTokens(r.pos)
@@ -4061,7 +4178,9 @@ function runTypeDraftFields(): Partial<UpdateSchemeInput> {
             ? perPosText
               ? sanitizeTriggerPerPosTextField(r.neg)
               : sanitizeTriggerPerPosField(r.neg)
-            : sxDp || wsDp || swDp || renyiDp
+            : guoguan
+              ? normalizeLhcGuoguanTriggerContent(String(r.neg ?? ''))
+              : sxDp || wsDp || swDp || renyiDp
               ? normalizeDp(r.neg)
               : textPlay
                 ? triggerTextTokens(r.neg)
@@ -4110,7 +4229,9 @@ function runTypeDraftFields(): Partial<UpdateSchemeInput> {
       // 单式=注数 / 组选=选码个数 → counts=[K]；组选12 → [二重,单号]；按位型 → 每位号码/选项数量
       ensureRenxuanRunPositions()
       const perPosMax = rdPerPosMax.value
-      const counts = isRdZuDual.value
+      const counts = isRdLhcRenyiDuipeng.value
+        ? [...rdLhcRenyiDuipengCounts.value]
+        : isRdZuDual.value
         ? [
             Math.min(10, Math.max(1, Math.trunc(Number(rdCounts.value[0]) || 1))),
             Math.min(10, Math.max(2, Math.trunc(Number(rdCounts.value[1]) || 2))),
@@ -4517,7 +4638,14 @@ async function onSaveCloud() {
   }
 
   const rt = runTypeId.value
-  if (rt === 'adv_fixed_rotate') {
+  const builtinPlanSave = validateBuiltinPlanSave(rt, builtinSnapshotId.value)
+  if (!builtinPlanSave.ok) {
+    await warn(builtinPlanSave.message ?? '内置计划配置不完整')
+    return
+  }
+  if (builtinPlanSave.skipManualContentValidation) {
+    // 内置计划的方案内容由收藏快照在服务端物化，勿按空 schemeGroups 拦截。
+  } else if (rt === 'adv_fixed_rotate') {
     if (!jushuList.value.length) {
       await warn('请至少添加一局投注号码')
       return
@@ -4571,6 +4699,18 @@ async function onSaveCloud() {
       } else if (!triggerPositionIdxs.value.length) {
         await warn('请至少选择一个投注位')
         return
+      }
+    }
+    if (isLhcGuoguanConfig(schemePlayConfig.value)) {
+      for (const row of triggerRows.value) {
+        if (!row.enabled) continue
+        for (const [name, raw] of [['正投', row.pos], ['反投', row.neg]] as const) {
+          const check = validateGroupContent(schemePlayConfig.value, String(raw ?? ''))
+          if (!check.ok) {
+            await warn(`开出 ${row.open} 的${name}：${check.message}`)
+            return
+          }
+        }
       }
     }
     // 组三/组六号池下限；组选/组三单式整注合法性（每注 N 位、组三须两同+一异）
@@ -4638,7 +4778,20 @@ async function onSaveCloud() {
   } else if (rt === 'hot_cold_warm') {
     ensureHcwPools()
     ensureRenxuanRunPositions()
-    if (isHcwRenyiDuipeng.value) {
+    if (isHcwLhcGuoguan.value) {
+      const selected = hcwRanks.value.filter((r) => r.length > 0).length
+      if (selected < 2) {
+        await warn('过关冷热：请至少选择两个正码位置')
+        return
+      }
+      const content = Array.from({ length: 6 }, (_, i) => (hcwPools.value[i] ?? [])[0] ?? '').join(',')
+      const check = validateGroupContent(schemePlayConfig.value, content)
+      if (!check.ok) {
+        await warn(check.message)
+        return
+      }
+      schemeGroups.value = [content]
+    } else if (isHcwRenyiDuipeng.value) {
       const ranks = normalizeLhcRenyiDuipengHotColdRanks(hcwRanks.value, numberPoolTokens.value.length)
       if (!ranks.valid) {
         await warn('冷热任意对碰：A区、B区均须至少选择 1 个名次，且不可重复、合计最多 10 个')
@@ -4712,7 +4865,7 @@ async function onSaveCloud() {
     }
     // schemeGroups 仅占位：直选单式勿塞按位号池（会被校验成「N 个单式组合不合法」）。
     // 真正出号看 hotColdWarm；这里写一注合法样例即可。
-    if (!isHcwZuDual.value && !isHcwRenyiDuipeng.value) {
+    if (!isHcwLhcGuoguan.value && !isHcwZuDual.value && !isHcwRenyiDuipeng.value) {
       const seg = schemePlayConfig.value.segmentLen
       if (
         !hcwSingleGroup.value &&
@@ -4752,7 +4905,13 @@ async function onSaveCloud() {
   } else if (rt === 'random_draw') {
     ensureRdCounts()
     ensureRenxuanRunPositions()
-    if (isRdZuDual.value) {
+    if (isRdLhcRenyiDuipeng.value) {
+      const [aCount, bCount] = rdLhcRenyiDuipengCounts.value
+      if (!rdWholePreview.value.length) generateRdPreview()
+      const sample =
+        rdWholePreview.value[0] || randomLhcRenyiDuipengContentForCounts(aCount, bCount)
+      schemeGroups.value = [sample]
+    } else if (isRdZuDual.value) {
       const d = Math.trunc(Number(rdCounts.value[0]) || 0)
       const minH = zuDualMinHeadCount()
       const minS = zuDualMinSinglesCount()
@@ -5580,6 +5739,11 @@ function onTimeDialogOpened() {
                 v-model="schemeGroups[idx]"
                 :config="schemePlayConfig"
               />
+              <SchemeLhcGuoguanPanel
+                v-else-if="schemeUsesLhcGuoguanPanel"
+                v-model="schemeGroups[idx]"
+                :config="schemePlayConfig"
+              />
               <SchemeGroupInputPanel
                 v-else-if="schemeUsesTextInputPanel"
                 v-model="schemeGroups[idx]"
@@ -6010,22 +6174,22 @@ function onTimeDialogOpened() {
                 <el-input
                   :model-value="row.pos"
                   size="small"
-                  :placeholder="triggerInputPlaceholder"
+                  :placeholder="isLhcGuoguanConfig(schemePlayConfig) ? '如 大,大,,大,,大' : triggerInputPlaceholder"
                   :inputmode="isTriggerSinglePickBet ? 'numeric' : 'text'"
                   :maxlength="isTriggerSinglePickBet ? 1 : undefined"
                   :disabled="!row.enabled"
                   @update:model-value="(v: string | number) => { row.pos = isTriggerSinglePickBet ? sanitizeTriggerBetContent(String(v ?? '')) : String(v ?? '') }"
-                  @change="isLhcTemaPlayConfig(schemePlayConfig) ? commitTriggerTemaField(row, 'pos') : (row.pos = sanitizeTriggerBetContent(row.pos))"
+                  @change="isLhcGuoguanConfig(schemePlayConfig) ? (row.pos = normalizeLhcGuoguanTriggerContent(row.pos)) : isLhcTemaPlayConfig(schemePlayConfig) ? commitTriggerTemaField(row, 'pos') : (row.pos = sanitizeTriggerBetContent(row.pos))"
                 />
                 <el-input
                   :model-value="row.neg"
                   size="small"
-                  :placeholder="triggerInputPlaceholder"
+                  :placeholder="isLhcGuoguanConfig(schemePlayConfig) ? '如 大,大,,大,,大' : triggerInputPlaceholder"
                   :inputmode="isTriggerSinglePickBet ? 'numeric' : 'text'"
                   :maxlength="isTriggerSinglePickBet ? 1 : undefined"
                   :disabled="!row.enabled"
                   @update:model-value="(v: string | number) => { row.neg = isTriggerSinglePickBet ? sanitizeTriggerBetContent(String(v ?? '')) : String(v ?? '') }"
-                  @change="isLhcTemaPlayConfig(schemePlayConfig) ? commitTriggerTemaField(row, 'neg') : (row.neg = sanitizeTriggerBetContent(row.neg))"
+                  @change="isLhcGuoguanConfig(schemePlayConfig) ? (row.neg = normalizeLhcGuoguanTriggerContent(row.neg)) : isLhcTemaPlayConfig(schemePlayConfig) ? commitTriggerTemaField(row, 'neg') : (row.neg = sanitizeTriggerBetContent(row.neg))"
                 />
               </template>
             </div>
@@ -6264,8 +6428,31 @@ function onTimeDialogOpened() {
               >{{ label }}</button>
             </div>
           </div>
+          <!-- 任选二全中任意对碰：A/B 两区独立配置，合计最多 10 个号 -->
+          <div v-if="isRdLhcRenyiDuipeng" class="scf-rd-pos-grid">
+            <div class="scf-rd-row">
+              <span class="scf-rd-pos">A区随机</span>
+              <el-input-number
+                v-model="rdCounts[0]"
+                :min="1"
+                :max="rdLhcRenyiDuipengAMax"
+                size="small"
+                @change="ensureRdCounts"
+              />
+            </div>
+            <div class="scf-rd-row">
+              <span class="scf-rd-pos">B区随机</span>
+              <el-input-number
+                v-model="rdCounts[1]"
+                :min="1"
+                :max="rdLhcRenyiDuipengBMax"
+                size="small"
+                @change="ensureRdCounts"
+              />
+            </div>
+          </div>
           <!-- 双区组选：头区 + 尾区两个选码个数 -->
-          <div v-if="isRdZuDual" class="scf-rd-pos-grid">
+          <div v-else-if="isRdZuDual" class="scf-rd-pos-grid">
             <div class="scf-rd-row">
               <span class="scf-rd-pos">{{ zuDualZoneHeadLabel() }}</span>
               <el-input-number v-model="rdCounts[0]" :min="zuDualMinHeadCount()" :max="10" size="small" />
@@ -6300,8 +6487,10 @@ function onTimeDialogOpened() {
             </div>
           </div>
           <div class="scf-rd-toolbar">
-            <el-button type="primary" plain size="small" @click="generateRdPreview">生成预览</el-button>
-            <span class="scf-rd-units">预估 {{ rdEstimatedUnits }} 注</span>
+            <div class="scf-rd-toolbar-summary">
+              <el-button type="primary" plain size="small" @click="generateRdPreview">生成预览</el-button>
+              <span class="scf-rd-units">预估 {{ rdEstimatedUnits }} 注</span>
+            </div>
             <el-radio-group v-model="rdStrategy" class="scf-rd-strategy" aria-label="换号策略">
               <el-radio v-for="o in RD_STRATEGY_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</el-radio>
             </el-radio-group>
@@ -6325,77 +6514,53 @@ function onTimeDialogOpened() {
 
         <!-- 7. 内置计画 -->
         <div v-else-if="runTypeId === 'builtin_plan'" class="scf-content-card scf-panel">
-          <template v-if="builtinSnapshotId && !builtinReselecting">
-            <div class="scf-bp-summary">
-              <div class="scf-bp-summary-main">
-                <p class="scf-bp-summary-title">
-                  已跟随：{{ builtinChosenFavorite?.schemeName ?? schemeName }} ·
-                  {{ builtinChosenFavorite?.playMethod ?? playModeSummary }}
-                </p>
-                <p class="scf-run-tip">内置计划配置只读，与收藏计划保持一致</p>
-              </div>
-              <el-button size="small" plain @click="startBuiltinReselect">重新选择</el-button>
-            </div>
-          </template>
+          <div v-if="favoritesLoading" class="scf-run-tip" style="padding: 1rem 0">正在加载收藏方案…</div>
+          <el-empty
+            v-else-if="favoritesLoadError"
+            :description="favoritesLoadError"
+            :image-size="64"
+          >
+            <el-button type="primary" @click="loadFavorites(true)">重新加载</el-button>
+          </el-empty>
+          <el-empty
+            v-else-if="!lotteryCode.trim()"
+            description="请先选择彩种，再选择同彩种的收藏方案"
+            :image-size="64"
+          />
+          <el-empty
+            v-else-if="favoritesLoaded && !favorites.length"
+            description="暂无收藏方案，先去跟单大厅收藏方案"
+            :image-size="64"
+          />
+          <el-empty
+            v-else-if="favoritesLoaded && !favoritesForLottery.length"
+            description="当前彩种下暂无收藏方案，请切换彩种或去跟单大厅收藏"
+            :image-size="64"
+          />
           <template v-else>
-            <div v-if="favoritesLoading" class="scf-run-tip" style="padding: 1rem 0">正在加载收藏方案…</div>
-            <el-empty
-              v-else-if="favoritesLoadError"
-              :description="favoritesLoadError"
-              :image-size="64"
-            >
-              <el-button type="primary" @click="loadFavorites(true)">重新加载</el-button>
-            </el-empty>
-            <el-empty
-              v-else-if="!lotteryCode.trim()"
-              description="请先选择彩种，再选择同彩种的收藏方案"
-              :image-size="64"
-            />
-            <el-empty
-              v-else-if="favoritesLoaded && !favorites.length"
-              description="暂无收藏方案，先去跟单大厅收藏方案"
-              :image-size="64"
-            />
-            <el-empty
-              v-else-if="favoritesLoaded && !favoritesForLottery.length"
-              description="当前彩种下暂无收藏方案，请切换彩种或去跟单大厅收藏"
-              :image-size="64"
-            />
-            <template v-else>
-              <div class="scf-bp-list">
-                <button
-                  v-for="f in favoritesForLottery"
-                  :key="f.snapshotId"
-                  type="button"
-                  class="scf-bp-item"
-                  :class="{ 'is-sel': favSelectedSnapshotId === f.snapshotId }"
-                  @click="favSelectedSnapshotId = f.snapshotId"
-                >
-                  <span
-                    class="scf-bp-radio"
-                    :class="{ 'is-on': favSelectedSnapshotId === f.snapshotId }"
-                    aria-hidden="true"
-                  />
-                  <span class="scf-bp-info">
-                    <span class="scf-bp-name">{{ f.schemeName }}</span>
-                    <span class="scf-bp-meta">
-                      {{ f.lotteryLabel }} · {{ f.playMethod }} · 收藏于 {{ formatFavoredAt(f.favoredAt) }}
-                    </span>
+            <div class="scf-bp-list">
+              <button
+                v-for="f in favoritesForLottery"
+                :key="f.snapshotId"
+                type="button"
+                class="scf-bp-item"
+                :class="{ 'is-sel': favSelectedSnapshotId === f.snapshotId }"
+                :disabled="builtinApplying"
+                @click="selectBuiltinPlan(f.snapshotId)"
+              >
+                <span
+                  class="scf-bp-radio"
+                  :class="{ 'is-on': favSelectedSnapshotId === f.snapshotId }"
+                  aria-hidden="true"
+                />
+                <span class="scf-bp-info">
+                  <span class="scf-bp-name">{{ f.schemeName }}</span>
+                  <span class="scf-bp-meta">
+                    {{ f.lotteryLabel }} · {{ f.playMethod }} · 收藏于 {{ formatFavoredAt(f.favoredAt) }}
                   </span>
-                </button>
-              </div>
-              <div class="scf-bp-actions">
-                <el-button
-                  type="primary"
-                  :loading="builtinApplying"
-                  :disabled="!favSelectedSnapshotId"
-                  @click="confirmBuiltinPlan"
-                >
-                  确认选择
-                </el-button>
-                <el-button v-if="builtinReselecting" plain @click="builtinReselecting = false">取消</el-button>
-              </div>
-            </template>
+                </span>
+              </button>
+            </div>
           </template>
         </div>
       </section>
@@ -6504,6 +6669,11 @@ function onTimeDialogOpened() {
           />
           <SchemeLhcRenyiDuipengPanel
             v-else-if="schemeUsesLhcRenyiDuipengPanel"
+            v-model="jushuForm.content"
+            :config="schemePlayConfig"
+          />
+          <SchemeLhcGuoguanPanel
+            v-else-if="schemeUsesLhcGuoguanPanel"
             v-model="jushuForm.content"
             :config="schemePlayConfig"
           />
@@ -8130,11 +8300,17 @@ function onTimeDialogOpened() {
 
 .scf-rd-toolbar {
   display: flex;
-  align-items: center;
-  gap: 0.65rem 0.85rem;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.55rem;
   margin: 0.65rem 0 0.75rem;
   width: 100%;
+}
+
+.scf-rd-toolbar-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
 }
 
 .scf-rd-units {
@@ -8148,7 +8324,7 @@ function onTimeDialogOpened() {
   flex-wrap: nowrap;
   align-items: center;
   gap: 0.1rem 0.35rem;
-  flex: 1 1 12rem;
+  width: 100%;
   min-width: 0;
 }
 
@@ -8213,33 +8389,6 @@ function onTimeDialogOpened() {
 .scf-rd-tag :deep(.el-tag__close:hover) {
   background: rgba(255, 255, 255, 0.28);
   color: #fff;
-}
-
-/* 内置计画 */
-.scf-bp-summary {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.85rem 1rem;
-  border-radius: 0.75rem;
-  background: rgba(0, 80, 203, 0.06);
-}
-
-.scf-bp-summary-main {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  min-width: 0;
-}
-
-.scf-bp-summary-title {
-  margin: 0;
-  font-size: 0.875rem;
-  font-weight: 400;
-  line-height: 1.6;
-  color: var(--scf-primary);
-  word-break: break-all;
 }
 
 .scf-bp-list {
@@ -8310,10 +8459,6 @@ function onTimeDialogOpened() {
   color: var(--scf-on-variant);
 }
 
-.scf-bp-actions {
-  display: flex;
-  gap: 0.5rem;
-}
 </style>
 
 <style>

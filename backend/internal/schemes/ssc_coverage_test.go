@@ -68,18 +68,33 @@ func sampleSSCContent(rule playRule) string {
 	case "kuadu":
 		return "3,5"
 	case "budingwei":
-		return "1,3,7"
+		return "1,3,5,7"
 	case "dxds", "daxiao", "danshuang":
 		return "大,单"
-	case "zu3", "zu6", "zuhe":
+	case "zu3", "zu6":
 		return "1,3,5"
-	case "baodan", "hunhe":
+	case "zuhe":
+		n := rule.SegmentLen
+		if n <= 0 {
+			n = 3
+		}
+		return strings.TrimSuffix(strings.Repeat("1,3\n", n), "\n")
+	case "baodan":
 		return "1,3"
+	case "hunhe":
+		return "123"
 	case "weishu":
 		return "1,3,5"
 	case "teshu":
+		// 五星趣味号（如一帆风顺）走数字选号，不能使用常规特殊号文本。
+		if isWuxingQuweiDigitPlay(rule) {
+			return "6"
+		}
 		return "顺子"
-	case "zu24", "zu12", "zu60", "zu30", "zu120", "zu4", "zu5", "zu10", "zu20":
+	case "zu4":
+		// 组选4为「三重号,单号」双区格式，扁平号码池会算成 0 注。
+		return "1,2"
+	case "zu24", "zu12", "zu60", "zu30", "zu120", "zu5", "zu10", "zu20":
 		return "1,2,3,4,5"
 	default:
 		if rule.SubPlayID == "zhixuan_ds" || rule.BetMode == "danshi" {
@@ -93,5 +108,17 @@ func sampleSSCContent(rule playRule) string {
 			return "1,3,5,7"
 		}
 		return "1,3,7"
+	}
+}
+
+func TestSampleSSCContentUsesDigitsForWuxingQuwei(t *testing.T) {
+	rule := playRule{
+		PlayTemplate: "ssc_std",
+		PlayTypeID:   "g015",
+		SubPlayID:    "wuxing_yifan",
+		BetMode:      "teshu",
+	}
+	if got := sampleSSCContent(rule); got != "6" {
+		t.Fatalf("sampleSSCContent() = %q, want numeric content for 五星趣味", got)
 	}
 }

@@ -82,8 +82,10 @@ func (c *Client) PlaceLottBet(ctx context.Context, accessToken string, req LottB
 	if req.BetMultiple == nil {
 		req.BetMultiple = []LottBetMultipleOuter{}
 	}
-	if req.AutoType == "" {
-		req.AutoType = "platform"
+	// 当前 V6 前端以 hash 标识网页彩票投注来源。历史调用仍可能传
+	// platform；在统一出站边界归一化，避免任意对碰等玩法走到不同的校验分支。
+	if req.AutoType == "" || req.AutoType == "platform" {
+		req.AutoType = "hash"
 	}
 	env, raw, err := c.doJSONRaw(ctx, "POST", c.cfg.HTTPBase, "/api/web_bets/lott", accessToken, req)
 	if err != nil {

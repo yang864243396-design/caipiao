@@ -2,6 +2,34 @@ package rulessync
 
 import "testing"
 
+func TestBuildPlan_lhcKeepsTwoZhongFamiliesUnderLianma(t *testing.T) {
+	tpl := RulesTemplate{
+		Name: "六合彩",
+		Groups: []RulesGroup{{
+			Name: "连码",
+			Team: []RulesTeam{
+				{Name: "二全中", Rule: []RulesRule{{ID: "279", Name: "复式", FullName: "二全中复式", Active: true}}},
+				{Name: "二中特", Rule: []RulesRule{{ID: "285", Name: "复式", FullName: "二中特复式", Active: true}}},
+			},
+		}},
+	}
+
+	plan, err := BuildPlan("lhc_std", "8", tpl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]SubPlayRow{}
+	for _, sub := range plan.SubPlays {
+		got[sub.SubID] = sub
+	}
+	if sub := got["279"]; sub.TypeID != "g001" || sub.Label != "二全中复式" {
+		t.Fatalf("279 = %+v, want g001/二全中复式", sub)
+	}
+	if sub := got["285"]; sub.TypeID != "g001" || sub.Label != "二中特复式" {
+		t.Fatalf("285 = %+v, want g001/二中特复式", sub)
+	}
+}
+
 func TestBuildPlan_sscFirstGroup(t *testing.T) {
 	tpl := RulesTemplate{
 		Name: "时时彩",

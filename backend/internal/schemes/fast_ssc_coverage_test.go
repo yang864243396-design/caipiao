@@ -37,6 +37,32 @@ var hashPlayBetModes = map[string]string{
 	"390": "daxiao",    // 尾数大小
 }
 
+// 组选4的覆盖样例必须是「三重号,单号」双区内容；扁平号码池会被算成 0 注。
+func TestFastSSCCoverageSampleForZu4HasBetUnits(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name, typeID, subID string
+	}{
+		{name: "四星组选4", typeID: "g013", subID: "133"},
+		{name: "前后四组选4", typeID: "g014", subID: "140"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rule := playRule{
+				PlayTemplate: "fast_ssc_std",
+				PlayTypeID:   tc.typeID,
+				SubPlayID:    tc.subID,
+				BetMode:      "zu4",
+				SegmentLen:   4,
+			}
+			ev := evaluatePlayHit(rule, []string{"1", "3", "5", "7", "9"}, sampleSSCContent(rule), false, "", rule.PositionIdx)
+			if ev.BetUnits <= 0 {
+				t.Fatalf("sample=%q betUnits=%d, want a valid 组选4 dual-zone sample", sampleSSCContent(rule), ev.BetUnits)
+			}
+		})
+	}
+}
+
 // TestFastSSCSubPlayCoverage 遍历 fast_ssc_std 全部启用子玩法，
 // 逐个断言号池解析得出、验奖算得出正注数。
 func TestFastSSCSubPlayCoverage(t *testing.T) {
@@ -51,7 +77,7 @@ func TestFastSSCSubPlayCoverage(t *testing.T) {
 	var unresolved, zeroUnits, noOracle []string
 	modes := map[string]int{}
 	for _, sp := range rows {
-		betMode, ok := env.betModeFor(sp)
+		betMode, ok := env.betModeFor("fast_ssc_std", sp)
 		if !ok {
 			noOracle = append(noOracle, sp.String())
 			continue
@@ -107,7 +133,7 @@ func TestFastSSCMatchesSSCForSharedSubPlays(t *testing.T) {
 		if !sscKeys[sp.key()] {
 			continue // g017 哈希玩法：ssc_std 没有，无从比对
 		}
-		betMode, ok := env.betModeFor(sp)
+		betMode, ok := env.betModeFor("fast_ssc_std", sp)
 		if !ok {
 			continue
 		}
@@ -174,7 +200,7 @@ func TestFastSSCUniverseWellFormed(t *testing.T) {
 	var bad []string
 	kinds := map[string]int{}
 	for _, sp := range env.subPlays("fast_ssc_std") {
-		betMode, ok := env.betModeFor(sp)
+		betMode, ok := env.betModeFor("fast_ssc_std", sp)
 		if !ok {
 			continue
 		}
@@ -248,14 +274,14 @@ func newSubPlayEnv(t *testing.T) *subPlayEnv {
 	return env
 }
 
-// loadBetModeOracle 从历史方案配置里取 (typeId/subId) → betMode。
+// loadBetModeOracle 从历史方案配置里取 (playTemplate/typeId/subId) → betMode。
 //
 // 同一个玩法对应多个 betMode 说明有人存进了自相矛盾的配置，
 // 那么后续所有以它为前提的断言都不可信，直接判失败。
 func (e *subPlayEnv) loadBetModeOracle(t *testing.T) {
 	t.Helper()
 	rows, err := e.pool.Query(context.Background(), `
-SELECT config->>'typeId', config->>'subId', config->>'betMode', count(*)::int
+SELECT config->>'playTemplate', config->>'typeId', config->>'subId', config->>'betMode', count(*)::int
 FROM scheme_definitions
 WHERE config->>'playTemplate' IN ('ssc_std', 'fast_ssc_std')
   AND coalesce(config->>'typeId', '') <> ''
@@ -270,12 +296,12 @@ GROUP BY 1, 2, 3`)
 	e.oracle = map[string]string{}
 	conflicts := map[string][]string{}
 	for rows.Next() {
-		var typeID, subID, betMode string
+		var template, typeID, subID, betMode string
 		var n int
-		if err := rows.Scan(&typeID, &subID, &betMode, &n); err != nil {
+		if err := rows.Scan(&template, &typeID, &subID, &betMode, &n); err != nil {
 			t.Fatalf("scan: %v", err)
 		}
-		key := typeID + "/" + subID
+		key := template + "/" + typeID + "/" + subID
 		if prev, ok := e.oracle[key]; ok && prev != betMode {
 			conflicts[key] = append(conflicts[key], prev, betMode)
 			continue
@@ -297,8 +323,8 @@ GROUP BY 1, 2, 3`)
 }
 
 // betModeFor 该子玩法的 betMode：先查历史配置，g017 哈希玩法回退到登记表。
-func (e *subPlayEnv) betModeFor(sp templateSubPlay) (string, bool) {
-	if mode, ok := e.oracle[sp.key()]; ok {
+func (e *subPlayEnv) betModeFor(template string, sp templateSubPlay) (string, bool) {
+	if mode, ok := e.oracle[template+"/"+sp.key()]; ok {
 		return mode, true
 	}
 	mode, ok := hashPlayBetModes[sp.SubID]
