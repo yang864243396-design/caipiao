@@ -849,6 +849,12 @@ func sixingZu6PoolUnits(pool []string) int {
 func zuxuanPoolUnitsForRule(rule playRule, pool []string) int {
 	mode := strings.ToLower(strings.TrimSpace(rule.BetMode))
 	cat := strings.ToLower(rule.CatalogSubID + " " + rule.SubPlayID)
+	if mode == "zu24" || strings.Contains(cat, "zu24") || strings.Contains(rule.CatalogSubID, "组选24") {
+		return combinInt(len(pool), 4)
+	}
+	if mode == "zu120" || strings.Contains(cat, "zu120") || strings.Contains(rule.CatalogSubID, "组选120") {
+		return combinInt(len(pool), 5)
+	}
 	if mode == "zu6" || (strings.Contains(cat, "zu6") && !strings.Contains(cat, "zu60") && !strings.Contains(cat, "zu120")) ||
 		strings.Contains(rule.CatalogSubID, "组选6") {
 		if isSixingZu6PlayRule(rule) {

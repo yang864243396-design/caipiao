@@ -1925,7 +1925,7 @@ function formatGroupContent(content: string): string {
       <div class="scr-bp-summary">
         <div class="scr-bp-summary-main">
           <p class="scr-bp-summary-title">
-            已跟随：{{ builtinPlanSchemeName || schemeName || '内置计划' }} · {{ playModeSummary }}
+            已跟随：{{ builtinPlanSchemeName || schemeName || '内置计划' }}
           </p>
           <p class="scr-run-tip">内置计划配置只读，与收藏计划保持一致</p>
         </div>

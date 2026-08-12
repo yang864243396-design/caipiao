@@ -26,6 +26,8 @@ func sscBetModeEvaluator(mode string, rule playRule) (func(playRule, []string, s
 	switch mode {
 	case "longhu", "longhuhe":
 		return evaluateLonghu, true
+	case "zhuangxian":
+		return evaluateLuckyZhuangXian, true
 	case "danshi", "zhixuan_ds":
 		return evaluateZhixuanDanshi, true
 	case "fushi", "zhixuan_fs":
@@ -78,6 +80,39 @@ func sscBetModeEvaluator(mode string, rule playRule) (func(playRule, []string, s
 	default:
 		return nil, false
 	}
+}
+
+func luckyZhuangXianPicks(content string) []string {
+	allowed := map[string]bool{"庄": true, "和": true, "闲": true}
+	out := make([]string, 0, 1)
+	for _, pick := range parseTextTokens(content) {
+		if allowed[pick] {
+			out = append(out, pick)
+		}
+	}
+	return out
+}
+
+// evaluateLuckyZhuangXian follows the existing hash play convention: 庄/闲
+// compare the first and last draw balls, while 和 wins when they are equal.
+func evaluateLuckyZhuangXian(rule playRule, balls []string, content string) betEvaluation {
+	mapped := make([]string, 0, 1)
+	for _, pick := range luckyZhuangXianPicks(content) {
+		switch pick {
+		case "庄":
+			mapped = append(mapped, "龙")
+		case "闲":
+			mapped = append(mapped, "虎")
+		case "和":
+			mapped = append(mapped, "和")
+		}
+	}
+	if len(mapped) == 0 {
+		return betEvaluation{}
+	}
+	longhuRule := rule
+	longhuRule.BetMode = "longhuhe"
+	return evaluateLonghu(longhuRule, balls, strings.Join(mapped, ","))
 }
 
 // evaluateMultiZone 对前中后三/前后三/前后二等多区位：逐区判中，注数×区数，

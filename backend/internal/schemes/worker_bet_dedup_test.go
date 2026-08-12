@@ -46,3 +46,14 @@ func TestThirdPartyOpenPeriodChangesAfterCountdown(t *testing.T) {
 		t.Fatal("after countdown ends, new period should allow next bet")
 	}
 }
+
+func TestClearDuplicateThirdPartyBetReferenceKeepsReservedAmount(t *testing.T) {
+	tid, orderNo, amount := clearDuplicateThirdPartyBetReference("126145087", "BO-old", 4, true)
+
+	if tid != "" || orderNo != "" {
+		t.Fatalf("duplicate reference should be cleared, got tid=%q order=%q", tid, orderNo)
+	}
+	if amount != 4 {
+		t.Fatalf("reserved amount must remain positive, got %v", amount)
+	}
+}

@@ -19,6 +19,7 @@ import { redirectToGuajiAuthIfNeeded, isGuajiAuthRequiredError } from '@/composa
 import {
   fetchCloudGlobalSettings,
   fetchCloudCenterStats,
+  formatCloudBetTurnover,
   formatCloudStatAmount,
   emptyCloudCenterStats,
   fetchLookbackSettings,
@@ -969,7 +970,7 @@ function statusBadgeClass(s: CloudSchemeCard): string {
           <div class="cc-stat-rows">
             <div class="cc-stat-row">
               <span>总投注</span>
-              <span>{{ formatCloudStatAmount(centerStats.formal.totalTurnover) }}</span>
+              <span>{{ formatCloudBetTurnover(centerStats.formal.totalTurnover) }}</span>
             </div>
             <div class="cc-stat-row">
               <span>总盈亏</span>
@@ -989,7 +990,7 @@ function statusBadgeClass(s: CloudSchemeCard): string {
           <div class="cc-stat-rows">
             <div class="cc-stat-row">
               <span>总投注</span>
-              <span>{{ formatCloudStatAmount(centerStats.sim.totalTurnover) }}</span>
+              <span>{{ formatCloudBetTurnover(centerStats.sim.totalTurnover) }}</span>
             </div>
             <div class="cc-stat-row">
               <span>总盈亏</span>

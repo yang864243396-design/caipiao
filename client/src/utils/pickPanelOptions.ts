@@ -197,7 +197,7 @@ function inferTextPickFromLabels(config: PlayConfig): string[] {
     if (config.playTemplate === 'pc28_std') return ['豹子', '对子', '顺子', '极大', '极小']
     return ['豹子', '对子', '顺子']
   }
-  if (subLabel.includes('幸运庄闲') || subLabel.includes('庄闲')) return ['庄', '闲']
+  if (subLabel.includes('幸运庄闲') || subLabel.includes('庄闲')) return ['庄', '和', '闲']
   if (subLabel === '和值' && isPc28ModeConfigLike(config)) return []
   return []
 }
@@ -231,7 +231,7 @@ export function textPickOptionsForConfig(config: PlayConfig): string[] {
     case 'dxds':
       return ['大', '小', '单', '双']
     case 'zhuangxian':
-      return ['庄', '闲']
+      return ['庄', '和', '闲']
     case 'teshu':
       // 五星趣味走数字输入框，勿给豹子/对子/顺子点选
       if (isWuxingQuweiDigitPlayConfig(config)) return []
@@ -847,6 +847,7 @@ function isQianhou4PlayConfig(config: PlayConfig): boolean {
 export function poolMaxPicksForConfig(config: PlayConfig): number | null {
   if (config.poolMaxPicks != null && config.poolMaxPicks > 0) return config.poolMaxPicks
   if (config.betMode === 'baodan') return 1
+  if (config.betMode === 'zhuangxian') return 1
   if (config.betMode === 'longhu' || config.betMode === 'longhuhe') return 1
   if (isLonghuPlayConfigLike(config)) return 1
   // 前二/后二/前三/后三大小单双：每位仅 1 个（大/小/单/双）

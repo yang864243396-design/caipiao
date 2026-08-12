@@ -3,7 +3,7 @@ import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
-import { fetchShareCatalogRows } from '@/api/schemes/shareCatalog'
+import { fetchShareCatalog, toDownloadRow } from '@/api/schemes/shareCatalog'
 import { shareAddToCloud } from '@/api/schemes/shareAddToCloud'
 import { ApiError } from '@/api/client'
 import type { SchemeDownloadRow } from '@/api/schemes/shareCatalog'
@@ -14,6 +14,10 @@ const schemeIdInput = ref('')
 const loading = ref(false)
 const downloadingId = ref<string | null>(null)
 const rows = ref<SchemeDownloadRow[]>([])
+const hasMore = ref(false)
+const nextCursor = ref('')
+
+const pageSize = 20
 
 const successVisible = ref(false)
 const successMessage = ref('')
@@ -23,16 +27,28 @@ function goBack() {
   else void router.push({ name: 'lobby' })
 }
 
-async function loadRows(keyword = ''): Promise<void> {
+async function loadRows(keyword = '', cursor = '', append = false): Promise<void> {
   loading.value = true
   try {
-    rows.value = await fetchShareCatalogRows(keyword)
+    const result = await fetchShareCatalog({
+      ...(keyword ? { keyword } : {}),
+      ...(cursor ? { cursor } : {}),
+      limit: pageSize,
+    })
+    const nextRows = result.items.map(toDownloadRow)
+    rows.value = append ? [...rows.value, ...nextRows] : nextRows
+    hasMore.value = Boolean(result.page.hasMore && result.page.nextCursor)
+    nextCursor.value = result.page.nextCursor ?? ''
     if (keyword && rows.value.length === 0) {
       ElMessage.info('未找到匹配方案')
     }
   } catch {
     ElMessage.error('加载方案列表失败')
-    rows.value = []
+    if (!append) {
+      rows.value = []
+      hasMore.value = false
+      nextCursor.value = ''
+    }
   } finally {
     loading.value = false
   }
@@ -47,8 +63,13 @@ function onReset() {
   void loadRows()
 }
 
-function formatFund(yuan: number) {
-  return `${yuan.toLocaleString('zh-CN', { maximumFractionDigits: 1 })} 元`
+function onLoadMore() {
+  if (loading.value || !hasMore.value || !nextCursor.value) return
+  void loadRows(schemeIdInput.value.trim(), nextCursor.value, true)
+}
+
+function formatFund(yuan: number, currency: SchemeDownloadRow['schemeCurrency']) {
+  return `${yuan.toLocaleString('zh-CN', { maximumFractionDigits: 1 })} ${currency}`
 }
 
 function onSuccessGoCloud(): void {
@@ -122,7 +143,7 @@ onMounted(() => {
           <el-table-column prop="playMethod" label="玩法" min-width="88" class-name="sdw-td-wrap" />
           <el-table-column label="方案资金" min-width="72" align="right">
             <template #default="{ row }">
-              <span class="sdw-fund">{{ formatFund(row.fundYuan) }}</span>
+              <span class="sdw-fund">{{ formatFund(row.fundYuan, row.schemeCurrency) }}</span>
             </template>
           </el-table-column>
           <el-table-column label="操作" min-width="56" align="center" fixed="right">
@@ -149,6 +170,17 @@ onMounted(() => {
         <p v-if="rows.length > 0" class="sdw-hint">
           共 {{ rows.length }} 条；下载将创建跟单方案并添加至云端（待开启）。
         </p>
+        <div v-if="hasMore" class="sdw-more">
+          <el-button
+            type="primary"
+            plain
+            :loading="loading"
+            data-testid="scheme-download-load-more"
+            @click="onLoadMore"
+          >
+            加载更多
+          </el-button>
+        </div>
       </section>
     </main>
 
@@ -353,5 +385,11 @@ onMounted(() => {
   font-size: 11px;
   line-height: 1.45;
   color: #727687;
+}
+
+.sdw-more {
+  display: flex;
+  justify-content: center;
+  padding-top: 0.5rem;
 }
 </style>

@@ -1,3 +1,5 @@
+import { truncateBetAmount } from '@/utils/betAmount'
+
 /** 倍投计划表行（与 BetMultiplierSettingsView 表格列一致） */
 export interface PlanTableRow {
   period: string
@@ -50,7 +52,7 @@ export function buildPlanRowsFromTimes(
   const unit = money * number
   for (let i = 0; i < mults.length; i++) {
     const mult = clampMult(mults[i]!)
-    const curBet = unit * mult
+    const curBet = truncateBetAmount(unit * mult)
     totalBet += curBet
     const prize = mode * mult
     const profit = prize - totalBet

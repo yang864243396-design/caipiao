@@ -52,6 +52,13 @@ func budingweiMinPoolForRule(rule playRule) int {
 	if n := budingweiNeedCount(rule.SubPlayID); n > need {
 		need = n
 	}
+	isWuxingTwoCode := playRuleHasSubID(rule, "151")
+	isWuxingThreeCode := playRuleHasSubID(rule, "152")
+	if isWuxingThreeCode {
+		need = 3
+	} else if isWuxingTwoCode {
+		need = 2
+	}
 	if need <= 1 {
 		return 0
 	}
@@ -59,10 +66,44 @@ func budingweiMinPoolForRule(rule playRule) int {
 	if sid == "" {
 		sid = strings.TrimSpace(rule.SubPlayID)
 	}
-	if sid == "151" || sid == "152" || strings.Contains(sub, "wuxing") || strings.Contains(sub, "五星") {
+	if isWuxingTwoCode || isWuxingThreeCode || sid == "151" || sid == "152" ||
+		strings.Contains(sub, "wuxing") || strings.Contains(sub, "五星") {
 		return 4
 	}
 	return need
+}
+
+// isSSCWuxingBudingweiRule identifies only the two audited SSC rules.  Do not
+// infer this safety-critical four-number minimum from a display label: catalog
+// labels may be absent or collide across templates.
+func isSSCWuxingBudingweiRule(rule playRule, ruleID string) bool {
+	return strings.TrimSpace(rule.PlayTemplate) == "ssc_std" &&
+		strings.TrimSpace(rule.PlayTypeID) == "g009" &&
+		playRuleHasSubID(rule, ruleID)
+}
+
+func budingweiMinPickDetail(rule playRule, content string) string {
+	minPick := budingweiMinPoolForRule(rule)
+	if minPick < 2 {
+		return ""
+	}
+	n := len(digitPoolTokensForValidate(rule, content))
+	if n == 0 || n >= minPick {
+		return ""
+	}
+	detail := fmt.Sprintf("不定位至少选择 %d 个号码", minPick)
+	if minPick == 2 {
+		detail = "投注数字不能低于两个"
+	} else if minPick == 4 {
+		if !isSSCWuxingBudingweiRule(rule, "151") && !isSSCWuxingBudingweiRule(rule, "152") {
+			return ""
+		}
+		detail = "五星二码不定位：至少选择 4 个号码"
+		if isSSCWuxingBudingweiRule(rule, "152") {
+			detail = "五星三码不定位：至少选择 4 个号码"
+		}
+	}
+	return detail
 }
 
 // ValidateSchemeBetContent 校验投注内容是否落在该玩法的合法投注空间内。
@@ -375,22 +416,9 @@ func ValidateSchemeBetContent(kind string, config []byte, content string, maxUni
 		}
 	}
 	// 二码/三码不定位：最少选号（二码第三方「投注数字不能低于两个」）
-	if minPick := budingweiMinPoolForRule(rule); minPick >= 2 && u.Kind == UniverseTokenList {
-		n := len(digitPoolTokensForValidate(rule, content))
-		if n > 0 && n < minPick {
-			detail := fmt.Sprintf("不定位至少选择 %d 个号码", minPick)
-			if minPick == 2 {
-				detail = "投注数字不能低于两个"
-			} else if minPick == 4 {
-				detail = "五星二码不定位：至少选择 4 个号码"
-				if budingweiNeedCount(rule.CatalogSubID) >= 3 || budingweiNeedCount(rule.SubPlayID) >= 3 {
-					detail = "五星三码不定位：至少选择 4 个号码"
-				}
-			}
-			out = append(out, Violation{
-				Code:   ViolationZeroUnits,
-				Detail: detail,
-			})
+	if u.Kind == UniverseTokenList {
+		if detail := budingweiMinPickDetail(rule, content); detail != "" {
+			out = append(out, Violation{Code: ViolationZeroUnits, Detail: detail})
 		}
 	}
 

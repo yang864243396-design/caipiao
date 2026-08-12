@@ -21,16 +21,16 @@ import (
 )
 
 var (
-	ErrUnavailable   = errors.New("games service unavailable")
-	ErrInvalidQuery  = errors.New("invalid games query")
-	ErrInvalidBet    = errors.New("invalid bet request")
+	ErrUnavailable     = errors.New("games service unavailable")
+	ErrInvalidQuery    = errors.New("invalid games query")
+	ErrInvalidBet      = errors.New("invalid bet request")
 	ErrLotteryNotFound = errors.New("lottery not found")
 )
 
 type Service struct {
-	q         *sqlcdb.Queries
-	pool      *db.Pool
-	guajiBets GuajiBetPlacer
+	q          *sqlcdb.Queries
+	pool       *db.Pool
+	guajiBets  GuajiBetPlacer
 	detailSync *detailDisplaySync
 }
 
@@ -51,13 +51,13 @@ type BettingExecutionRow struct {
 }
 
 type GameBetRecordRow struct {
-	Period      string  `json:"period"`
-	PlayMethod  string  `json:"playMethod"`
-	Multiplier  string  `json:"multiplier"`
-	Round       string  `json:"round"`
-	Amount      string  `json:"amount"`
-	ProfitLoss  float64 `json:"profitLoss"`
-	Status      string  `json:"status"`
+	Period     string  `json:"period"`
+	PlayMethod string  `json:"playMethod"`
+	Multiplier string  `json:"multiplier"`
+	Round      string  `json:"round"`
+	Amount     string  `json:"amount"`
+	ProfitLoss float64 `json:"profitLoss"`
+	Status     string  `json:"status"`
 }
 
 type PlanTrendRow struct {
@@ -82,22 +82,22 @@ type DetailQuery struct {
 }
 
 type GameDetail struct {
-	LotteryCode         string                `json:"lotteryCode"`
-	LotteryLabel        string                `json:"lotteryLabel"`
-	SchemeTitle         string                `json:"schemeTitle"`
-	PlayMethod          string                `json:"playMethod"`
-	CurrentIssue        string                `json:"currentIssue"`
-	NextIssue           string                `json:"nextIssue"`
-	CountdownSec         int                   `json:"countdownSec"`
-	CountdownEndTime     string                `json:"countdownEndTime,omitempty"`
-	CountdownCloseAt     string                `json:"countdownCloseAt,omitempty"`
-	CountdownPeriod      string                `json:"countdownPeriod,omitempty"`
-	CountdownWindowSec   int                   `json:"countdownWindowSec,omitempty"`
-	CountdownLabel       string                `json:"countdownLabel,omitempty"`
-	DrawPhase           string                `json:"drawPhase"`
-	DrawnNumbers        []string              `json:"drawnNumbers"`
-	PlanInverseDigits      string                `json:"planInverseDigits"`
-	PlanInverseBetCount    int                   `json:"planInverseBetCount"`
+	LotteryCode         string   `json:"lotteryCode"`
+	LotteryLabel        string   `json:"lotteryLabel"`
+	SchemeTitle         string   `json:"schemeTitle"`
+	PlayMethod          string   `json:"playMethod"`
+	CurrentIssue        string   `json:"currentIssue"`
+	NextIssue           string   `json:"nextIssue"`
+	CountdownSec        int      `json:"countdownSec"`
+	CountdownEndTime    string   `json:"countdownEndTime,omitempty"`
+	CountdownCloseAt    string   `json:"countdownCloseAt,omitempty"`
+	CountdownPeriod     string   `json:"countdownPeriod,omitempty"`
+	CountdownWindowSec  int      `json:"countdownWindowSec,omitempty"`
+	CountdownLabel      string   `json:"countdownLabel,omitempty"`
+	DrawPhase           string   `json:"drawPhase"`
+	DrawnNumbers        []string `json:"drawnNumbers"`
+	PlanInverseDigits   string   `json:"planInverseDigits"`
+	PlanInverseBetCount int      `json:"planInverseBetCount"`
 	// PlanContrarySupported 是否展示「计划反集」Tab：玩法支持且当前有可展示反集号码
 	PlanContrarySupported  bool                  `json:"planContrarySupported"`
 	SchemeBetUnit          float64               `json:"schemeBetUnit,omitempty"`
@@ -108,10 +108,10 @@ type GameDetail struct {
 	EstimatedPrize         float64               `json:"estimatedPrize,omitempty"`
 	ContraryEstimatedPrize float64               `json:"contraryEstimatedPrize,omitempty"`
 	BettingRows            []BettingExecutionRow `json:"bettingRows"`
-	BetRecords          []GameBetRecordRow    `json:"betRecords"`
-	PlanTrendGroupBets  int                   `json:"planTrendGroupBets"`
-	PlanTrendHistory    []PlanTrendRow        `json:"planTrendHistory"`
-	PlanTrendChart      []PlanTrendChartPoint `json:"planTrendChart"`
+	BetRecords             []GameBetRecordRow    `json:"betRecords"`
+	PlanTrendGroupBets     int                   `json:"planTrendGroupBets"`
+	PlanTrendHistory       []PlanTrendRow        `json:"planTrendHistory"`
+	PlanTrendChart         []PlanTrendChartPoint `json:"planTrendChart"`
 }
 
 type DrawItem struct {
@@ -392,7 +392,8 @@ func (s *Service) PlaceBet(ctx context.Context, account, lotteryCode string, in 
 		return PlaceBetResult{}, ErrLotteryNotFound
 	}
 
-	amount := member.RoundMoney(in.Amount)
+	// 实际下注金额与 Guaji 账单一致：第三位小数起直接截断。
+	amount := schemes.TruncateBetAmount(in.Amount)
 	orderNo := fmt.Sprintf("BO%d%d", m.ID, time.Now().UnixMilli())
 	in.BetPayload.PlayMethod = strings.TrimSpace(in.PlayMethod)
 	if in.BetPayload.PlayMethod == "" {
@@ -490,16 +491,16 @@ func (s *Service) PlaceBet(ctx context.Context, account, lotteryCode string, in 
 		}
 		betRes, betErr := s.guajiBets.PlaceRealBet(ctx, account, GuajiBetRequest{
 			LotteryCode: lotteryCode,
-			GameID:     gameID,
-			RuleID:     ruleID,
-			IssueNo:    issueNo,
-			Content:    guajiContent,
-			PlayMethod: in.BetPayload.PlayMethod,
-			Amount:     amount,
-			Multiplier: in.Multiplier,
-			AmountUnit: amountUnit,
-			BetsNums:   betsNums,
-			RuleMeta:   ruleMeta,
+			GameID:      gameID,
+			RuleID:      ruleID,
+			IssueNo:     issueNo,
+			Content:     guajiContent,
+			PlayMethod:  in.BetPayload.PlayMethod,
+			Amount:      amount,
+			Multiplier:  in.Multiplier,
+			AmountUnit:  amountUnit,
+			BetsNums:    betsNums,
+			RuleMeta:    ruleMeta,
 		})
 		if betErr != nil {
 			return PlaceBetResult{}, betErr

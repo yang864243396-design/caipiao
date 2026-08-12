@@ -81,6 +81,53 @@ func TestValidateSchemeMinBetAmountUsesWireUnitsForZuxuanDanshi(t *testing.T) {
 	}
 }
 
+func TestValidateSchemeMinBetAmountUsesZu24CombinationUnits(t *testing.T) {
+	cfg := []byte(`{
+		"betUnit":"0.001",
+		"schemeCurrency":"USDT",
+		"playTemplate":"ssc_std",
+		"typeId":"g013",
+		"subId":"130",
+		"playTypeId":"g013",
+		"subPlayId":"zu24",
+		"catalogSubId":"130",
+		"betMode":"zu24",
+		"schemeGroups":["0,1,2,3,4,5,6,7,8,9"],
+		"rounds":[{"mult":1,"afterHit":0,"afterMiss":0}]
+	}`)
+	if got := schemeMinSingleBetAmount(cfg, "custom", numericFromFloat(1)); got != 0.21 {
+		t.Fatalf("组选24 10 个号码应为 C(10,4)×0.001=0.21，got %.2f", got)
+	}
+	if err := validateSchemeMinBetAmount(cfg, "custom", "USDT", numericFromFloat(1)); err != nil {
+		t.Fatalf("0.21 USDT 应通过最低投注校验: %v", err)
+	}
+}
+
+func TestValidateSchemeMinBetAmountUsesZu120CombinationUnits(t *testing.T) {
+	cfg := []byte(`{
+		"betUnit":"0.001",
+		"schemeCurrency":"USDT",
+		"playTemplate":"ssc_std",
+		"typeId":"g015",
+		"subId":"156",
+		"playTypeId":"g015",
+		"subPlayId":"zu120",
+		"catalogSubId":"156",
+		"betMode":"zu120",
+		"schemeGroups":["0,1,2,3,4,5,6,7,8,9"],
+		"rounds":[{"mult":1,"afterHit":0,"afterMiss":0}]
+	}`)
+	if got := schemeMinBetUnits("custom", cfg); got != 252 {
+		t.Fatalf("组选120 10 个号码应为 C(10,5)=252 注，got %d", got)
+	}
+	if got := schemeMinSingleBetAmount(cfg, "custom", numericFromFloat(1)); got != 0.25 {
+		t.Fatalf("252 注×0.001 应从第三位小数截断为 0.25，got %.2f", got)
+	}
+	if err := validateSchemeMinBetAmount(cfg, "custom", "USDT", numericFromFloat(1)); err != nil {
+		t.Fatalf("0.25 USDT 应通过最低投注校验: %v", err)
+	}
+}
+
 func TestSchemeMinModeMultiplierFromSimpleBetMultiplier(t *testing.T) {
 	cfg := map[string]interface{}{
 		"betMultiplier": map[string]interface{}{

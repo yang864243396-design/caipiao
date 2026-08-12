@@ -1,6 +1,7 @@
 import { requestApi } from '@/api/client'
 
 import { ensureClientSession } from '@/api/auth'
+import { formatBetAmountFixed2 } from '@/utils/betAmount'
 
 import type { MoneySummary, Paginated, RunMode } from '@/api/types'
 
@@ -191,7 +192,7 @@ export function toDisplayRow(item: BetRecordItem): BetRecordDisplayRow {
     period: betRecordDisplayPeriod(item),
     multiplier: formatBetMultiplierDisplay(item.multiplier),
     round: formatBetRoundDisplay(item.round),
-    amount: item.amount.toFixed(2),
+    amount: formatBetAmountFixed2(item.amount),
     pnl: item.pnl >= 0 ? `+${abs}` : `-${abs}`,
     pnlPositive: item.pnl >= 0,
     status: item.status,

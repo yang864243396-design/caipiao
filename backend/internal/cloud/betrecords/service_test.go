@@ -27,6 +27,16 @@ func TestGroupsSimEmpty(t *testing.T) {
 	}
 }
 
+func TestSummarize_truncatesEachActualBetAmount(t *testing.T) {
+	got := summarize([]Row{
+		{Amount: 0.176},
+		{Amount: 0.179},
+	})
+	if got.TotalBet != 0.34 {
+		t.Fatalf("totalBet=%v want 0.34", got.TotalBet)
+	}
+}
+
 func TestGroupsPagination(t *testing.T) {
 	s := NewService(nil)
 	first, err := s.GroupsWithFilter(context.Background(), 0, GroupsFilter{

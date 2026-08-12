@@ -827,6 +827,12 @@ func renxuanNeedsSoloTrue(meta RuleMeta, mode string, betsNums int) bool {
 		// 同方案 35 注 solo=false 可过（>guajiSoloMaxBets）。
 		return betsNums > 0
 	case "fushi":
+		// 任二直选复式（rule 74）实测仅 1 注可带 solo=true；2 注起带
+		// solo=true 会被第三方以「单挑参数错误」拒绝。不可按通用 18 注
+		// 阈值处理。
+		if renxuanSegmentLen(meta) == 2 && isRen2ZhixuanFushiMeta(meta) {
+			return betsNums == 1
+		}
 		// 任二/任三/任四直选复式：有注即须 solo=true，再由 ResolveSolo 按 guajiSoloMaxBets 钳制。
 		// 实测 rule80 content=1,1,1,1,2 bets=10 solo=false → 单挑参数错误（def-1-1785814730739）；
 		// 同实例 56 注 solo=false 可过（>guajiSoloMaxBets）。
@@ -849,6 +855,17 @@ func renxuanNeedsSoloTrue(meta RuleMeta, mode string, betsNums int) bool {
 	default:
 		return false
 	}
+}
+
+func isRen2ZhixuanFushiMeta(meta RuleMeta) bool {
+	if !isRenxuanMeta(meta) || renxuanSegmentLen(meta) != 2 || InferBetMode(meta) != "fushi" {
+		return false
+	}
+	if strings.TrimSpace(meta.RuleID) == "74" || strings.TrimSpace(meta.SubID) == "74" {
+		return true
+	}
+	text := meta.Label + " " + meta.FullName + " " + meta.TeamLabel
+	return strings.Contains(text, "任二") && strings.Contains(text, "直选复式")
 }
 
 // renxuanErxingZuxuanHezhi 任二组选和值（rule79）：任意注数须 solo=false。

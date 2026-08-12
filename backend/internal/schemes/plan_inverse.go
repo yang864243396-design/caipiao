@@ -220,6 +220,9 @@ func planPickBetUnits(cfg parsedSchemeConfig, pick string) int {
 	if wire := countPlayWireBetUnits(cfg.Play, pick); wire > 0 {
 		return wire
 	}
+	if isExplicitZeroWireContent(cfg.Play, pick) {
+		return 0
+	}
 	eval := evaluatePlayHit(cfg.Play, nil, pick, false, "", cfg.Play.PositionIdx)
 	if eval.BetUnits > 0 {
 		return eval.BetUnits

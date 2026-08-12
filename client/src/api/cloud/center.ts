@@ -1,6 +1,7 @@
 import { requestApi } from '@/api/client'
 
 import { ensureClientSession } from '@/api/auth'
+import { formatBetAmountFixed2 } from '@/utils/betAmount'
 
 import type { CloudLookbackSettings, CloudRunningScheme } from '@/api/types'
 
@@ -115,9 +116,14 @@ export function formatCloudStatAmount(n: number): string {
   return Number(n ?? 0).toFixed(1)
 }
 
+/** 云端中心的总投注仅按第三方实际扣款金额显示。 */
+export function formatCloudBetTurnover(n: number): string {
+  return formatBetAmountFixed2(Number(n ?? 0))
+}
+
 /** 方案卡片投注流水固定保留两位小数，详情页复用该显示值。 */
 export function formatCloudSchemeTurnover(n: number): string {
-  return Number(n ?? 0).toFixed(2)
+  return formatBetAmountFixed2(Number(n ?? 0))
 }
 
 export async function fetchCloudCenterStats(): Promise<CloudCenterStatsDto> {

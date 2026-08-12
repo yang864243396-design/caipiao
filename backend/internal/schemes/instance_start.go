@@ -3,6 +3,7 @@ package schemes
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -94,6 +95,9 @@ func (s *Service) startInstance(ctx context.Context, account, instanceID string)
 	if err := validateSchemeEndTimeNotReached(def.Config, now); err != nil {
 		return Instance{}, err
 	}
+	if err := validateFixedRotateConfigForStart(def.Kind, def.Config); err != nil {
+		return Instance{}, err
+	}
 	currency := schemeCurrencyFromConfig(def.Config)
 	if err := validateSchemeMinBetAmount(def.Config, def.Kind, currency, cur.Multiplier); err != nil {
 		return Instance{}, err
@@ -164,6 +168,18 @@ func (s *Service) startInstance(ctx context.Context, account, instanceID string)
 		}
 	}
 	return s.enrichInstanceForDisplay(ctx, displayRow, time.Now()), nil
+}
+
+func validateFixedRotateConfigForStart(kind string, config []byte) error {
+	cfg := parseSchemeConfig(kind, config, 0, 0)
+	if cfg.RunTypeID != RunTypeFixedRotate ||
+		(!isSSCWuxingBudingweiRule(cfg.Play, "151") && !isSSCWuxingBudingweiRule(cfg.Play, "152")) {
+		return nil
+	}
+	if violations := ValidateSchemeConfig(kind, config); len(violations) > 0 {
+		return fmt.Errorf("方案内容无效: %s", violations[0].Detail)
+	}
+	return nil
 }
 
 func validateSchemeStartTimeAfterNow(cfgBytes []byte, now time.Time) error {

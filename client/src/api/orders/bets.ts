@@ -1,6 +1,7 @@
 import { requestApi } from '@/api/client'
 
 import { ensureClientSession } from '@/api/auth'
+import { formatBetAmountFixed2 } from '@/utils/betAmount'
 
 export interface BetOrderItem {
   time: string
@@ -77,7 +78,7 @@ export function toBetDisplayRow(item: BetOrderItem): {
     game: item.game,
     orderId: item.orderId,
     recordNo: (item.recordNo || '').trim(),
-    amount: formatMoney(item.amount),
+    amount: formatBetAmountFixed2(item.amount),
     returnAmount: formatMoney(item.returnAmount),
     status: item.status,
   }
@@ -92,5 +93,5 @@ export function formatBetPnl(n: number): string {
 export function formatBetAmount(n: number): string {
   if (!Number.isFinite(n)) return '0'
   if (Number.isInteger(n)) return String(n)
-  return formatMoney(n)
+  return formatBetAmountFixed2(n)
 }

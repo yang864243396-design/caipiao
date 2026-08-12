@@ -685,7 +685,7 @@ func randomDrawCountMax(rule playRule) int {
 			return 2
 		}
 		switch bm {
-		case "baodan":
+		case "baodan", "zhuangxian":
 			return 1
 		case "daxiao", "danshuang", "dxds":
 			// 五星和值单双/大小、哈希尾数单双/大小：仅 1 选项
@@ -876,7 +876,7 @@ func attributeUniverse(rule playRule) []string {
 	case "dxds":
 		return []string{"大", "小", "单", "双"}
 	case "zhuangxian":
-		return []string{"庄", "闲"}
+		return []string{"庄", "和", "闲"}
 	case "longhu":
 		return []string{"龙", "虎"}
 	case "longhuhe":

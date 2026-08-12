@@ -31,10 +31,10 @@ import (
 // hashPlayBetModes g017 哈希玩法的内容形态。
 // 这 4 个是 fast_ssc_std 独有的，生产里未必有人配过，兜底显式写死。
 var hashPlayBetModes = map[string]string{
-	"387": "danshuang", // 尾数单双
-	"388": "longhu",    // 幸运庄闲（庄/闲，与龙虎同形）
-	"389": "danshuang", // 和值单双
-	"390": "daxiao",    // 尾数大小
+	"387": "danshuang",  // 尾数单双
+	"388": "zhuangxian", // 幸运庄闲（庄/和/闲，单选）
+	"389": "danshuang",  // 和值单双
+	"390": "daxiao",     // 尾数大小
 }
 
 // 组选4的覆盖样例必须是「三重号,单号」双区内容；扁平号码池会被算成 0 注。

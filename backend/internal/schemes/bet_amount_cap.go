@@ -75,7 +75,7 @@ func schemeMaxSingleBetAmount(cfgBytes []byte, kind string, instanceMult pgtype.
 	if betUnits <= 0 {
 		betUnits = 1
 	}
-	return round2(unit * coef * maxModeMult * float64(betUnits))
+	return TruncateBetAmount(unit * coef * maxModeMult * float64(betUnits))
 }
 
 // schemeMaxBetUnits 取方案各组中的最高注数；无有效内容时按 1。

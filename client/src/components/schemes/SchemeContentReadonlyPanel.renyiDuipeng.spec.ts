@@ -107,5 +107,6 @@ describe('SchemeContentReadonlyPanel 内置计划展示', () => {
 
     expect(wrapper.text()).toContain('已跟随：原收藏方案')
     expect(wrapper.text()).not.toContain('已跟随：我的内置计划')
+    expect(wrapper.find('.scr-bp-summary-title').text()).toBe('已跟随：原收藏方案')
   })
 })

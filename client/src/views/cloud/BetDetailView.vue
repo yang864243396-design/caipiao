@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { formatBetAmountFixed2 } from '@/utils/betAmount'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { fetchBetRecordItem, type BetRecordItemDetail } from '@/api/cloud/betRecords'
@@ -38,7 +39,7 @@ const amountDisplay = computed(() => {
   const d = detail.value
   if (!d) return '—'
   const sym = currencySymbol(d.currency || 'USDT')
-  return `${d.amount.toFixed(2)} ${sym}`
+  return `${formatBetAmountFixed2(d.amount)} ${sym}`
 })
 
 /** 仅展示第三方毛派奖；未回传则为 —（禁止用本金+盈亏本地推算） */

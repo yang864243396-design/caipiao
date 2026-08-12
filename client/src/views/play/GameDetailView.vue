@@ -42,6 +42,7 @@ import {
   buildGameBetPayload,
   buildGroupContent,
   buildRenxuanPositionContent,
+  calcBetAmount,
   countBetUnits,
   defaultRenxuanPositions,
   isRenxuanNeedsPositionConfig,
@@ -49,6 +50,7 @@ import {
   seedDigitsFromNumbers,
   type PlayConfig,
 } from '@/utils/betPayload'
+import { formatBetAmountFixed2 } from '@/utils/betAmount'
 import {
   digitOptionsForConfig,
   lhcTailChipLabel,
@@ -916,7 +918,7 @@ function formatBetRecordAmount(amount: string) {
   const n = Number(amount)
   if (!Number.isFinite(n))
     return amount
-  return String(Math.trunc(n))
+  return formatBetAmountFixed2(n)
 }
 
 function formatBetRecordPl(n: number) {
@@ -944,7 +946,7 @@ const selectedBetCount = computed(() => {
 })
 
 const estimatedBetAmount = computed(() =>
-  Math.round(betUnitAmount.value * effectiveMultiplier.value * selectedBetCount.value * 100) / 100,
+  calcBetAmount(selectedBetCount.value, effectiveMultiplier.value, betUnitAmount.value),
 )
 
 const dockEstimatedPrize = computed(() => {

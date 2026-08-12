@@ -17,8 +17,8 @@ import (
 	"caipiao/backend/internal/db"
 	"caipiao/backend/internal/db/sqlcdb"
 	"caipiao/backend/internal/guaji"
-	"caipiao/backend/internal/guajibet"
 	"caipiao/backend/internal/guaji/periodsync"
+	"caipiao/backend/internal/guajibet"
 	"caipiao/backend/internal/lottery"
 	"caipiao/backend/internal/member"
 	"caipiao/backend/internal/ws"
@@ -821,8 +821,7 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 				slog.Error("scheme worker skip duplicate third-party bet id on claim",
 					"instanceId", inst.ID, "tid", metaTID, "prevPeriod", prevPeriod, "claimPeriod", metaPeriod,
 					"accepted", acceptedPeriod)
-				metaTID, metaOrder = "", ""
-				metaAmount = 0
+				metaTID, metaOrder, metaAmount = clearDuplicateThirdPartyBetReference(metaTID, metaOrder, metaAmount, true)
 				metaPeriod = guajiTargetPeriodNo
 			}
 		}

@@ -1264,7 +1264,15 @@ func calcBetAmount(betUnits int, mult float64, unitYuan float64) float64 {
 	if unitYuan <= 0 {
 		unitYuan = baseBetUnitYuan
 	}
-	return round2(unitYuan * float64(betUnits) * mult)
+	return TruncateBetAmount(unitYuan * float64(betUnits) * mult)
+}
+
+// truncateBetAmount 与第三方 Guaji 对齐：实际下注金额从第三位小数直接截断。
+func TruncateBetAmount(v float64) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) || v <= 0 {
+		return 0
+	}
+	return math.Floor(v*100+1e-9) / 100
 }
 
 // instanceBaseCoef 单方案卡片上的倍数系数。

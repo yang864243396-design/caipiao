@@ -7,6 +7,7 @@ import { fetchBetRecordGroups } from '@/api/cloud/betRecords'
 import { fetchMemberLotteryFilterOptions, fetchPublicLotteries } from '@/api/games/lotteries'
 import { fetchRunningSchemes } from '@/api/cloud/center'
 import { buildLotteryNameMap, lotteryFilterLabel } from '@/utils/lotteryDisplayName'
+import { formatBetAmountFixed2 } from '@/utils/betAmount'
 
 /** 会员中心 · 方案盈亏（§22.2 丙） */
 
@@ -85,7 +86,7 @@ const metricRows = computed(() => {
   const s = summary.value
   if (!s) return []
   return [
-    { key: 'bet', label: '投注', value: money(s.totalBet), tone: '' },
+    { key: 'bet', label: '投注', value: formatBetAmountFixed2(s.totalBet), tone: '' },
     { key: 'prize', label: '奖金', value: money(s.totalPrize), tone: '' },
     { key: 'pnl', label: '盈亏', value: signed(s.dayPnl), tone: s.dayPnl > 0 ? 'up' : s.dayPnl < 0 ? 'down' : '' },
   ]

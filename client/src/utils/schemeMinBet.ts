@@ -5,6 +5,7 @@
 
 import { betUnitFromSchemeConfig } from '@/constants/betModeOptions'
 import { countBetUnits, resolvePlayConfig } from '@/utils/betPayload'
+import { truncateBetAmount } from '@/utils/betAmount'
 import { resolvePlayConfigFromTree } from '@/utils/playConfig'
 import type { PlayTypeNode, SubPlayNode } from '@/types/playCatalog'
 
@@ -158,7 +159,7 @@ export function schemeMinSingleBetAmount(
   const coef = toPositiveNumber(multiplierCoef, 1)
   const modeMult = schemeMinModeMultiplier(cfg)
   const betUnits = schemeMinBetUnits(cfg)
-  return Math.round(unit * coef * modeMult * betUnits * 100) / 100
+  return truncateBetAmount(unit * coef * modeMult * betUnits)
 }
 
 /** 开启前校验；通过返回 null，否则返回提示文案 */

@@ -2,57 +2,28 @@ package schemes_test
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"testing"
-
-	"github.com/joho/godotenv"
-
-	"caipiao/backend/internal/config"
-	"caipiao/backend/internal/db"
-	"caipiao/backend/internal/schemes"
+	"time"
 )
 
 func TestStopAndStartInstanceIntegration(t *testing.T) {
-	_ = godotenv.Load("../../.env")
-	cfg := config.Load()
-	if cfg.DatabaseURL == "" {
-		t.Skip("DATABASE_URL not set")
+	if os.Getenv("RUN_SCHEME_LIFECYCLE_INTEGRATION") != "1" {
+		t.Skip("set RUN_SCHEME_LIFECYCLE_INTEGRATION=1 to run the isolated simulated-scheme lifecycle check")
 	}
-	pool, err := db.Connect(context.Background(), cfg.DatabaseURL, cfg.DBMaxConns, cfg.DBMinConns)
-	if err != nil {
-		t.Skip(err)
+	ctx := context.Background()
+	env := newE2EEnv(t)
+	targetID := env.createRunningInstance(t, fmt.Sprintf("E2E-resume-%d", time.Now().UnixNano()), map[string]interface{}{
+		"runTypeId":    "fixed_rotate",
+		"betMode":      "dingwei",
+		"schemeGroups": []string{"1,2", "3,4"},
+	})
+	t.Logf("created isolated simulated instance %s", targetID)
+	if _, err := env.svc.StopInstance(ctx, env.account, targetID); err != nil {
+		t.Fatalf("StopInstance: %v", err)
 	}
-	defer pool.Close()
-
-	svc := schemes.NewService(pool, nil)
-	rows, err := svc.ListInstances(context.Background(), cfg.ClientDemoAccount, "")
-	if err != nil {
-		t.Fatalf("ListInstances: %v", err)
-	}
-	var targetID string
-	var targetStatus string
-	for _, item := range rows.Items {
-		if item.ID == "inst-1-1781164314120" {
-			targetID = item.ID
-			targetStatus = item.Status
-			break
-		}
-	}
-	if targetID == "" && len(rows.Items) > 0 {
-		targetID = rows.Items[0].ID
-		targetStatus = rows.Items[0].Status
-	}
-	if targetID == "" {
-		t.Skip("no instances for demo account")
-	}
-	t.Logf("instance %s status=%s", targetID, targetStatus)
-	if targetStatus == "running" {
-		if _, err = svc.StopInstance(context.Background(), cfg.ClientDemoAccount, targetID); err != nil {
-			t.Fatalf("StopInstance: %v", err)
-		}
-	} else if targetStatus != "pending" && targetStatus != "paused" {
-		t.Skipf("instance %s status=%s not startable", targetID, targetStatus)
-	}
-	inst, err := svc.StartInstance(context.Background(), cfg.ClientDemoAccount, targetID)
+	inst, err := env.svc.StartInstance(ctx, env.account, targetID)
 	if err != nil {
 		t.Fatalf("StartInstance(%s): %v", targetID, err)
 	}

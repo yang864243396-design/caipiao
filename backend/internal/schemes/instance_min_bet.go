@@ -69,7 +69,7 @@ func schemeMinSingleBetAmount(cfgBytes []byte, kind string, instanceMult pgtype.
 	if betUnits <= 0 {
 		betUnits = 1
 	}
-	return round2(unit * coef * minModeMult * float64(betUnits))
+	return TruncateBetAmount(unit * coef * minModeMult * float64(betUnits))
 }
 
 // schemeMinBetUnits 取方案各组中的最低注数；无有效内容时按 1。

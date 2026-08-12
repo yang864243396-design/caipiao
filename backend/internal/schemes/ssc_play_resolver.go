@@ -385,7 +385,7 @@ func legacySubMode(subID, betMode string) string {
 		return "zuxuan_fs"
 	case betMode == "dingwei", strings.HasPrefix(s, "dingwei_"):
 		return "dingwei"
-	case betMode == "longhu", betMode == "longhuhe", betMode == "hezhi", betMode == "kuadu",
+	case betMode == "longhu", betMode == "longhuhe", betMode == "zhuangxian", betMode == "hezhi", betMode == "kuadu",
 		betMode == "budingwei", betMode == "dxds", betMode == "daxiao", betMode == "danshuang",
 		betMode == "zuhe", betMode == "baodan", betMode == "hunhe", betMode == "weishu", betMode == "teshu",
 		betMode == "zu24", betMode == "zu12", betMode == "zu60", betMode == "zu30", betMode == "zu120":

@@ -48,6 +48,7 @@ export {
   isLhcTemaPlayConfig,
 }
 import { isBetUnitValue } from '@/constants/betModeOptions'
+import { truncateBetAmount } from '@/utils/betAmount'
 import {
   isCatalogPlayTypeId,
   mapGuajiTypeIdToCatalog,
@@ -1492,7 +1493,7 @@ export function parseGroupPicks(
           ? ['豹子', '对子', '顺子', '极大', '极小']
           : ['豹子', '对子', '顺子'],
       longhubao: ['龙', '虎', '豹'],
-      zhuangxian: ['庄', '闲'],
+      zhuangxian: ['庄', '和', '闲'],
     }
     const allowed = opts[config.betMode] ?? []
     if (config.inputMode === 'multiline' && config.segmentLen > 1) {
@@ -3260,7 +3261,7 @@ export function calcBetAmount(betUnits: number, mult: number, unitYuan: number):
   const units = betUnits > 0 ? betUnits : 1
   const m = mult > 0 ? mult : 1
   const unit = unitYuan > 0 ? unitYuan : 2
-  return Math.round(unit * units * m * 100) / 100
+  return truncateBetAmount(unit * units * m)
 }
 
 export function betAmountExceedsMax(amount: number): boolean {
@@ -4165,6 +4166,17 @@ export function validateGroupContent(config: PlayConfig, raw: string): GroupCont
     }
     if (toks.length > 1) {
       return { ok: false, message: `仅能选择一个选项（${hint}）` }
+    }
+    return { ok: true, normalized: toks[0]!, betUnits: 1 }
+  }
+
+  if (config.betMode === 'zhuangxian') {
+    const toks = parseTextPickTokens(content, ['庄', '和', '闲'])
+    if (!toks.length) {
+      return { ok: false, message: '须选择一个选项（庄/和/闲）' }
+    }
+    if (toks.length > 1) {
+      return { ok: false, message: '仅能选择一个选项（庄/和/闲）' }
     }
     return { ok: true, normalized: toks[0]!, betUnits: 1 }
   }

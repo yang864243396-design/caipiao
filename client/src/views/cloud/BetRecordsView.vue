@@ -9,6 +9,7 @@ import {
   type BetRecordSchemeGroup,
 } from '@/api/cloud/betRecords'
 import type { MoneySummary } from '@/api/types'
+import { formatBetAmountFixed2 } from '@/utils/betAmount'
 
 const router = useRouter()
 const route = useRoute()
@@ -50,6 +51,10 @@ function formatMoney(n: number, signed = false): string {
   if (n > 0) return `+¥${abs}`
   if (n < 0) return `-¥${abs}`
   return `¥${abs}`
+}
+
+function formatBetMoney(n: number): string {
+  return `¥${formatBetAmountFixed2(n)}`
 }
 
 function resetPagination(): void {
@@ -326,7 +331,7 @@ function onRefresh() {
 
             <span class="br-sum-lbl">总投注额</span>
 
-            <span class="br-sum-val">{{ formatMoney(summary.totalBet) }}</span>
+            <span class="br-sum-val">{{ formatBetMoney(summary.totalBet) }}</span>
 
           </div>
 
@@ -416,7 +421,7 @@ function onRefresh() {
 
                   <span class="br-scheme-stat-lbl">投注金额</span>
 
-                  <span class="br-scheme-stat-val">{{ formatMoney(group.totalBet) }}</span>
+                  <span class="br-scheme-stat-val">{{ formatBetMoney(group.totalBet) }}</span>
 
                 </div>
 

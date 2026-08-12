@@ -21,14 +21,14 @@ import (
 )
 
 const (
-	itemDetailDays           = 3
-	drawSyncMinGap           = 5 * time.Second
-	drawSyncTimeout          = 2 * time.Second
-	drawSyncPlacedWithin     = 2 * time.Hour
+	itemDetailDays       = 3
+	drawSyncMinGap       = 5 * time.Second
+	drawSyncTimeout      = 2 * time.Second
+	drawSyncPlacedWithin = 2 * time.Hour
 )
 
 var (
-	ErrItemNotFound = errors.New("bet record not found")
+	ErrItemNotFound    = errors.New("bet record not found")
 	ErrItemOutOfWindow = errors.New("bet record out of query window")
 )
 
@@ -196,7 +196,7 @@ func (s *Service) Detail(
 			PlayType:   r.PlayType,
 			Multiplier: formatMultiplierDisplay(r.Multiplier),
 			Round:      formatRoundDisplay(r.Round),
-			Amount:     round2(r.Amount),
+			Amount:     truncateBetAmount(r.Amount),
 			PnL:        round2(r.PnL),
 			Status:     r.Status,
 			BetContent: r.BetContent,
@@ -348,12 +348,12 @@ func rowsFromDB(in []sqlcdb.ListCloudBetRecordsRow) []Row {
 			Period:           r.PeriodNo,
 			ThirdPartyPeriod: pgtextString(r.ThirdPartyPeriod),
 			PlayType:         r.PlayType,
-			Multiplier:      r.Multiplier,
-			Round:           r.RoundLabel,
-			Amount:          r.Amount,
-			PnL:             r.Pnl,
-			Status:          Status(r.Status),
-			BetContent:      r.BetContent,
+			Multiplier:       r.Multiplier,
+			Round:            r.RoundLabel,
+			Amount:           r.Amount,
+			PnL:              r.Pnl,
+			Status:           Status(r.Status),
+			BetContent:       r.BetContent,
 		}
 	}
 	return out
@@ -371,12 +371,12 @@ func rowsFromDBFiltered(in []sqlcdb.ListCloudBetRecordsFilteredRow) []Row {
 			Period:           r.PeriodNo,
 			ThirdPartyPeriod: pgtextString(r.ThirdPartyPeriod),
 			PlayType:         r.PlayType,
-			Multiplier:      r.Multiplier,
-			Round:           r.RoundLabel,
-			Amount:          r.Amount,
-			PnL:             r.Pnl,
-			Status:          Status(r.Status),
-			BetContent:      r.BetContent,
+			Multiplier:       r.Multiplier,
+			Round:            r.RoundLabel,
+			Amount:           r.Amount,
+			PnL:              r.Pnl,
+			Status:           Status(r.Status),
+			BetContent:       r.BetContent,
 		}
 	}
 	return out
@@ -396,7 +396,7 @@ func summarize(rows []Row) Summary {
 	var totalBet, dayPnL, totalPrize float64
 	hits := 0
 	for _, r := range rows {
-		totalBet += r.Amount
+		totalBet += truncateBetAmount(r.Amount)
 		dayPnL += r.PnL
 		if r.Status == StatusHit {
 			hits++
@@ -448,6 +448,14 @@ func filterScheme(rows []Row, schemeID string) []Row {
 
 func round2(v float64) float64 {
 	return math.Round(v*100) / 100
+}
+
+// truncateBetAmount 对齐第三方实际下注金额：第三位小数起直接截断。
+func truncateBetAmount(v float64) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) || v <= 0 {
+		return 0
+	}
+	return math.Floor(v*100+1e-9) / 100
 }
 
 func round1(v float64) float64 {
@@ -567,7 +575,7 @@ func (s *Service) ItemByRecordNo(ctx context.Context, memberID int64, recordNo s
 		BetUnits:     betUnits,
 		Multiplier:   formatMultiplierDisplay(row.Multiplier),
 		Round:        formatRoundDisplay(row.RoundLabel),
-		Amount:       round2(row.Amount),
+		Amount:       truncateBetAmount(row.Amount),
 		Currency:     currency,
 		PayoutAmount: payoutAmount,
 		PlacedAt:     timeutil.FormatDisplayCST(placed),

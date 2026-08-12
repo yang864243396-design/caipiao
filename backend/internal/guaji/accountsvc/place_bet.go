@@ -12,8 +12,8 @@ import (
 	"caipiao/backend/internal/guajibet"
 )
 
-// roundLottBetAmount 计算第三方 bet_amount（unit×注数×倍数），保留最多 4 位小数（覆盖厘 0.001）。
-// 避免 float 乘积变成 0.449999…，被上游校验为「投注金额错误」。
+// roundLottBetAmount 计算第三方 bet_amount（unit×注数×倍数）。
+// Guaji 实际按两位小数向下截断，必须在请求、账本与回查前采用同一口径。
 func roundLottBetAmount(unit float64, betsNums, mult int) float64 {
 	if unit <= 0 {
 		unit = 2
@@ -24,7 +24,7 @@ func roundLottBetAmount(unit float64, betsNums, mult int) float64 {
 	if mult <= 0 {
 		mult = 1
 	}
-	return math.Round(unit*float64(betsNums)*float64(mult)*10000) / 10000
+	return math.Floor(unit*float64(betsNums)*float64(mult)*100+1e-9) / 100
 }
 
 func lottBetContentForRequest(meta guajibet.RuleMeta, content string, unit float64, betsNums, mult int) guaji.LottBetContent {

@@ -65,16 +65,21 @@ func (s *Service) GetCloudCenterStats(ctx context.Context, account string) (Clou
 
 func mapCloudCenterChannelStats(row sqlcdb.MemberCloudCenterStatsRow) CloudCenterChannelStats {
 	return CloudCenterChannelStats{
-		TotalTurnover:     statsNumericToFloat(row.TotalTurnover),
+		// 投注流水必须按第三方实际扣款金额返回，不能先按一位小数四舍五入。
+		TotalTurnover:     TruncateBetAmount(statsNumericToFloatRaw(row.TotalTurnover)),
 		TotalSessionPnl:   statsNumericToFloat(row.TotalSessionPnl),
 		RunningSessionPnl: statsNumericToFloat(row.RunningSessionPnl),
 	}
 }
 
 func statsNumericToFloat(n pgtype.Numeric) float64 {
+	return math.Round(statsNumericToFloatRaw(n)*10) / 10
+}
+
+func statsNumericToFloatRaw(n pgtype.Numeric) float64 {
 	f, err := n.Float64Value()
 	if err != nil || !f.Valid {
 		return 0
 	}
-	return math.Round(f.Float64*10) / 10
+	return f.Float64
 }

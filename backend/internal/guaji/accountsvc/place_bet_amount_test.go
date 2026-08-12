@@ -27,7 +27,7 @@ func TestRoundLottBetAmount_commonUnits(t *testing.T) {
 		mult int
 		want float64
 	}{
-		{0.001, 3, 15, 0.045},
+		{0.001, 3, 15, 0.04},
 		{0.02, 3, 15, 0.9},
 		{0.1, 3, 15, 4.5},
 		{0.2, 3, 15, 9},
@@ -37,5 +37,14 @@ func TestRoundLottBetAmount_commonUnits(t *testing.T) {
 		if got := roundLottBetAmount(tc.unit, tc.bets, tc.mult); got != tc.want {
 			t.Fatalf("unit=%v bets=%d mult=%d got %v want %v", tc.unit, tc.bets, tc.mult, got, tc.want)
 		}
+	}
+}
+
+func TestRoundLottBetAmount_truncatesToGuajiCents(t *testing.T) {
+	if got := roundLottBetAmount(0.001, 176, 1); got != 0.17 {
+		t.Fatalf("got %v want 0.17", got)
+	}
+	if got := roundLottBetAmount(0.001, 179, 1); got != 0.17 {
+		t.Fatalf("got %v want 0.17", got)
 	}
 }

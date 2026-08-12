@@ -172,8 +172,7 @@ func (w *Worker) finalizeCloudBetAfterGuaji(
 		if prev, ok, err := w.q.SchemePeriodForThirdPartyBetID(ctx, inst.ID, tid); err == nil && ok && prev != periodNo {
 			slog.Error("finalize skip duplicate third-party bet id",
 				"instanceId", inst.ID, "tid", tid, "prevPeriod", prev, "claimPeriod", periodNo)
-			tid = ""
-			amount = 0
+			tid, _, amount = clearDuplicateThirdPartyBetReference(tid, meta.OrderNo, amount, true)
 		}
 	}
 	guajiID := activeGuajiAccountIDForInst(ctx, w.q, inst)
@@ -206,6 +205,16 @@ func (w *Worker) finalizeCloudBetAfterGuaji(
 	}
 	// 游标推进本地占位期，挡住同开放期重投。
 	w.syncPeriodBetCursor(ctx, w.q, inst, periodNo)
+}
+
+// clearDuplicateThirdPartyBetReference keeps the positive amount of the committed
+// period claim. cloud_bet_records requires amount > 0, while the duplicate third
+// party reference itself must not be associated with a second period.
+func clearDuplicateThirdPartyBetReference(tid, orderNo string, amount float64, duplicate bool) (string, string, float64) {
+	if !duplicate {
+		return tid, orderNo, amount
+	}
+	return "", "", amount
 }
 
 func guajiPeriodsPgtext(periods string) pgtype.Text {

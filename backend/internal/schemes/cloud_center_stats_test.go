@@ -175,6 +175,7 @@ UPDATE scheme_instances SET sim_bet=true, status='pending', turnover=50, session
 	t.Logf("seeded e2e ok formal=%+v sim=%+v", statsEnv.Data.Formal, statsEnv.Data.Sim)
 }
 
+
 func assertChannelStats(t *testing.T, name string, got, want schemes.CloudCenterChannelStats) {
 	t.Helper()
 	if !approxStat(got.TotalTurnover, want.TotalTurnover) {

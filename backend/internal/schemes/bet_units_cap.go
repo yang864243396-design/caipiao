@@ -234,6 +234,7 @@ func countLHCPlayWireBetUnits(rule playRule, content string) int {
 // countPlayWireBetUnits 按第三方 bets_nums 口径统计注数（用已解析的 SegmentLen，
 // 不依赖 guajibet 对 typeId 文案的区位推断）。
 func countPlayWireBetUnits(rule playRule, content string) int {
+	rawContent := strings.TrimSpace(content)
 	content = strings.TrimSpace(normalizeZhixuanDanshiContent(rule, content))
 	if content == "" {
 		return 0
@@ -262,11 +263,15 @@ func countPlayWireBetUnits(rule playRule, content string) int {
 	}
 	// 任选选位类：C(选位数,k)×内层注数（单式/号池/和值）
 	if isRenxuanNeedsPositionRule(rule) {
-		return countRenxuanNeedsPositionBetUnits(rule, content)
+		// 混合组选的通用归一会将「选位\n票面」展平为票面，
+		// 必须保留原选位行才能按 C(n,3) 计算。
+		return countRenxuanNeedsPositionBetUnits(rule, rawContent)
 	}
 	switch bm {
 	case "fushi", "zhixuan_fs":
 		base = countZhixuanFushiBetUnits(content, seg)
+	case "zhuangxian":
+		base = len(luckyZhuangXianPicks(content))
 	case "kuadu":
 		base = countKuaduCombinatorialUnits(content, seg)
 	case "hezhi":
@@ -293,9 +298,15 @@ func countPlayWireBetUnits(rule playRule, content string) int {
 		base = countZu4DualZoneBetUnits(content)
 	case "zu60":
 		// 双区「二重,单号」：对每个二重 d 计 C(|单号\{d}|, 3)
+		if isWuxingZuFlatPoolRule(rule, "157") {
+			content = normalizeWuxingZu60ForPrecheck(content)
+		}
 		base = countZu60DualZoneBetUnits(content)
 	case "zu30":
 		// 双区「二重≥3,单号≥1」：对每个二重对计 |单号\{d1,d2}|
+		if isWuxingZuFlatPoolRule(rule, "158") {
+			content = normalizeWuxingZu30ForPrecheck(content)
+		}
 		base = countZu30DualZoneBetUnits(content)
 	case "zu20":
 		// 双区「三重,单号」个数相同且各≥2：对每个三重 t 计 C(|单号\{t}|, 2)
@@ -314,6 +325,61 @@ func countPlayWireBetUnits(rule playRule, content string) int {
 		return 0
 	}
 	return base * z
+}
+
+func isWuxingZuFlatPoolRule(rule playRule, ruleID string) bool {
+	playType := strings.ToLower(strings.TrimSpace(rule.PlayTypeID))
+	if playType != "g015" && playType != "wuxing" {
+		return false
+	}
+	return playRuleHasSubID(rule, ruleID)
+}
+
+func playRuleHasSubID(rule playRule, ruleID string) bool {
+	for _, raw := range []string{rule.SubPlayID, rule.CatalogSubID} {
+		for _, token := range strings.Fields(raw) {
+			if token == ruleID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// normalizeWuxingZu60ForPrecheck aligns flat five-star pools with Guaji's
+// two-zone wire format while leaving a valid two-zone selection untouched.
+func normalizeWuxingZu60ForPrecheck(content string) string {
+	if _, _, ok := parseZu60DualZones(content); ok {
+		return content
+	}
+	pool := uniqueStringTokens(parseDigitTokens(content))
+	if len(pool) < 4 {
+		return content
+	}
+	return pool[0] + "," + strings.Join(pool[1:], "")
+}
+
+// normalizeWuxingZu30ForPrecheck aligns flat five-star pools with Guaji's
+// two-zone wire format while leaving a valid two-zone selection untouched.
+func normalizeWuxingZu30ForPrecheck(content string) string {
+	if _, _, ok := parseZu30DualZones(content); ok {
+		return content
+	}
+	pool := uniqueStringTokens(parseDigitTokens(content))
+	if len(pool) < 4 {
+		return content
+	}
+	return strings.Join(pool[:3], "") + "," + strings.Join(pool[3:], "")
+}
+
+// isExplicitZeroWireContent identifies the five-star two/three-code
+// budingwei pools that Guaji rejects. Keep this narrower than general input
+// validation so unknown rule shapes preserve planPickBetUnits' legacy fallback.
+func isExplicitZeroWireContent(rule playRule, content string) bool {
+	if !isSSCWuxingBudingweiRule(rule, "151") && !isSSCWuxingBudingweiRule(rule, "152") {
+		return false
+	}
+	return len(uniqueStringTokens(parseDigitTokens(content))) < 4
 }
 
 // countRenxuanNeedsPositionBetUnits 任选选位注数：C(选位数,k)×剥位后内层注数。

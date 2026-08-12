@@ -16,6 +16,8 @@ export interface SchemeDownloadRow {
 
   fundYuan: number
 
+  schemeCurrency: 'USDT' | 'TRX' | 'CNY'
+
 }
 
 
@@ -88,8 +90,16 @@ export function toDownloadRow(item: SchemeShareSnapshot): SchemeDownloadRow {
 
     fundYuan: item.fundYuan ?? 0,
 
+    schemeCurrency: normalizeDownloadCurrency(item.config?.schemeCurrency),
+
   }
 
+}
+
+function normalizeDownloadCurrency(raw: unknown): 'USDT' | 'TRX' | 'CNY' {
+  const currency = String(raw ?? '').trim().toUpperCase()
+  if (currency === 'TRX' || currency === 'CNY') return currency
+  return 'USDT'
 }
 
 

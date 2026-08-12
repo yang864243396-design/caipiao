@@ -528,17 +528,15 @@ func TestCountBetNums_renxuanRen2(t *testing.T) {
 	if n := CountBetNums(meta, "1,2,3,4,5"); n != 10 {
 		t.Fatalf("ren2 betsNums=%d want 10", n)
 	}
-	// ≤guajiSoloMaxBets：NeedsSolo true，ResolveSolo true
-	if !NeedsSoloForRule(meta, "1,2,3,4,5") || !ResolveSolo(meta, "1,2,3,4,5", 10) {
-		t.Fatal("任二直选复式 10 注须 solo=true")
+	// 第三方实测 rule74 仅 1 注可单挑；2 注及以上带 solo=true 会报
+	// 「单挑参数错误」，不可套用通用 18 注阈值。
+	if NeedsSoloForRule(meta, "1,2,3,4,5") || ResolveSolo(meta, "1,2,3,4,5", 10) {
+		t.Fatal("任二直选复式 10 注须 solo=false")
 	}
-	// 单注（两位各 1 码 → C 位组合后 1 注）须 solo=true
-	if !NeedsSoloForRule(meta, "1,,,,2") && !NeedsSoloForRule(meta, "0,1") {
-		// wire 形态因 Format 而异；以 CountBetNums==1 的样本为准
-		wire := FormatBetContentForRule(meta, "1\n\n\n\n2")
-		if CountBetNums(meta, wire) == 1 && !NeedsSoloForRule(meta, wire) {
-			t.Fatalf("任二直选复式单注应 solo, wire=%q", wire)
-		}
+	// 单注（两位各 1 码）仍须 solo=true。
+	wire := FormatBetContentForRule(meta, "1\n\n\n\n2")
+	if CountBetNums(meta, wire) != 1 || !NeedsSoloForRule(meta, wire) || !ResolveSolo(meta, wire, 1) {
+		t.Fatalf("任二直选复式单注须 solo=true, wire=%q", wire)
 	}
 }
 

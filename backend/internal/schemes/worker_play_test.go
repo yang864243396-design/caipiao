@@ -194,6 +194,15 @@ func TestCalcBetAmount(t *testing.T) {
 	}
 }
 
+func TestCalcBetAmount_truncatesToGuajiCents(t *testing.T) {
+	if got := calcBetAmount(176, 1, 0.001); got != 0.17 {
+		t.Fatalf("got %v want 0.17", got)
+	}
+	if got := calcBetAmount(179, 1, 0.001); got != 0.17 {
+		t.Fatalf("got %v want 0.17", got)
+	}
+}
+
 func TestEffectiveBetMultiple(t *testing.T) {
 	base := numericFromFloat(2)
 	rounds := []schemeRound{

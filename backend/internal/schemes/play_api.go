@@ -101,6 +101,9 @@ func validateGroupContent(rule playRule, content string) error {
 		return fmt.Errorf("groupContent 不能为空")
 	}
 	content = normalizeZhixuanDanshiContent(rule, content)
+	if detail := budingweiMinPickDetail(rule, content); detail != "" {
+		return fmt.Errorf("%s", detail)
+	}
 	// 任选选位类：位名+号码，上限/注数走任选口径（任二=900，C(n,k)×内层）
 	if isRenxuanNeedsPositionRule(rule) {
 		units := countRenxuanNeedsPositionBetUnits(rule, content)
@@ -228,6 +231,9 @@ func validateGroupContent(rule playRule, content string) error {
 		if err := validateWuxingSumDxdsContent(rule, content); err != nil {
 			return err
 		}
+		if err := validateLuckyZhuangXianContent(rule, content); err != nil {
+			return err
+		}
 		// 和值/跨度：组合注数上限（前二=90、前三=900…）
 		bm := strings.TrimSpace(rule.BetMode)
 		if bm == "hezhi" || bm == "kuadu" {
@@ -317,7 +323,7 @@ func resolvePlayRuleFromBetPayload(p BetPayload) playRule {
 
 func isSpecialBetMode(mode string) bool {
 	switch strings.TrimSpace(mode) {
-	case "longhu", "daxiao", "danshuang", "dxds", "teshu", "longhubao",
+	case "longhu", "daxiao", "danshuang", "dxds", "zhuangxian", "teshu", "longhubao",
 		"hezhi", "lianhao", "sanlian", "shoudong", "tonghao", "butong", "dantiao":
 		return true
 	default:
@@ -378,6 +384,20 @@ func validateWuxingSumDxdsContent(rule playRule, content string) error {
 	}
 	if len(picks) > 1 {
 		return fmt.Errorf("仅能选择一个选项（%s）", hint)
+	}
+	return nil
+}
+
+func validateLuckyZhuangXianContent(rule playRule, content string) error {
+	if strings.TrimSpace(rule.BetMode) != "zhuangxian" {
+		return nil
+	}
+	picks := luckyZhuangXianPicks(content)
+	if len(picks) == 0 {
+		return fmt.Errorf("须选择一个选项（庄/和/闲）")
+	}
+	if len(picks) > 1 {
+		return fmt.Errorf("仅能选择一个选项（庄/和/闲）")
 	}
 	return nil
 }
