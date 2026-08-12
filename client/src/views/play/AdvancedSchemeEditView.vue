@@ -68,7 +68,7 @@ import {
   normalizeLhcRenyiDuipengHotColdRanks,
   replaceLhcRenyiDuipengHotColdRanks,
 } from '@/utils/lhcRenyiDuipengHotCold'
-import { toggleSingleHcwRank } from '@/utils/hcwRankSelection'
+import { shouldDirectSwitchHcwRank, toggleSingleHcwRank } from '@/utils/hcwRankSelection'
 import SchemeGroupPickPanel from '@/components/schemes/SchemeGroupPickPanel.vue'
 import SchemeGroupInputPanel from '@/components/schemes/SchemeGroupInputPanel.vue'
 import SchemeLhcTemaPanel from '@/components/schemes/SchemeLhcTemaPanel.vue'
@@ -2910,8 +2910,11 @@ function toggleHcwDigit(pos: number, digit: string): void {
     }
     const cap = hcwPosPickCap()
     if (
-      cap === 1 &&
-      (isHcwLhcGuoguan.value || isTailParityPlayConfig(schemePlayConfig.value))
+      shouldDirectSwitchHcwRank(
+        cap,
+        isHcwLhcGuoguan.value,
+        isTailParityPlayConfig(schemePlayConfig.value),
+      )
     ) {
       ranks.splice(0, ranks.length, ...toggleSingleHcwRank(ranks, rank))
     } else if (cap != null && ranks.length >= cap) {
