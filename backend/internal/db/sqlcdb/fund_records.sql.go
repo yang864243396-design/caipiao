@@ -11,6 +11,60 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countAdminFundRecords = `-- name: CountAdminFundRecords :one
+SELECT COUNT(*)::bigint
+FROM wallet_ledger l
+INNER JOIN members m ON m.id = l.member_id
+WHERE l.txn_type IN ('bet_debit', 'payout')
+  AND l.created_at >= $1
+  AND l.created_at < $2
+  AND (
+    $3::text IS NULL
+    OR $3::text = ''
+    OR m.account ILIKE '%' || $3::text || '%'
+  )
+  AND (
+    $4::text IS NULL
+    OR $4::text = ''
+    OR l.ledger_no ILIKE '%' || $4::text || '%'
+  )
+  AND (
+    $5::text IS NULL
+    OR $5::text = ''
+    OR $5::text = 'all'
+    OR ($5::text = 'income' AND l.delta_amount > 0)
+    OR ($5::text = 'expense' AND l.delta_amount < 0)
+  )
+  AND (
+    $6::text IS NULL
+    OR $6::text = ''
+    OR COALESCE(l.currency, 'CNY') = $6::text
+  )
+`
+
+type CountAdminFundRecordsParams struct {
+	TimeFrom      pgtype.Timestamptz `json:"time_from"`
+	TimeTo        pgtype.Timestamptz `json:"time_to"`
+	MemberAccount pgtype.Text        `json:"member_account"`
+	LedgerNo      pgtype.Text        `json:"ledger_no"`
+	FlowDir       pgtype.Text        `json:"flow_dir"`
+	Currency      pgtype.Text        `json:"currency"`
+}
+
+func (q *Queries) CountAdminFundRecords(ctx context.Context, arg CountAdminFundRecordsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countAdminFundRecords,
+		arg.TimeFrom,
+		arg.TimeTo,
+		arg.MemberAccount,
+		arg.LedgerNo,
+		arg.FlowDir,
+		arg.Currency,
+	)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countMemberFundRecords = `-- name: CountMemberFundRecords :one
 SELECT COUNT(*)::bigint AS count
 FROM wallet_ledger l
@@ -56,6 +110,164 @@ func (q *Queries) CountMemberFundRecords(ctx context.Context, arg CountMemberFun
 	return count, err
 }
 
+const listAdminFundRecordsPaged = `-- name: ListAdminFundRecordsPaged :many
+WITH ledger_page AS MATERIALIZED (
+SELECT
+    l.id,
+    l.ledger_no,
+    m.account,
+    l.txn_type,
+    l.delta_amount::float8 AS delta_amount,
+    l.balance_after::float8 AS balance_after,
+    COALESCE(l.currency, 'CNY') AS currency,
+    l.created_at,
+    l.member_id,
+    l.order_ref,
+    l.guaji_account_id
+FROM wallet_ledger l
+INNER JOIN members m ON m.id = l.member_id
+WHERE l.txn_type IN ('bet_debit', 'payout')
+  AND l.created_at >= $1
+  AND l.created_at < $2
+  AND (
+    $3::text IS NULL
+    OR $3::text = ''
+    OR m.account ILIKE '%' || $3::text || '%'
+  )
+  AND (
+    $4::text IS NULL
+    OR $4::text = ''
+    OR l.ledger_no ILIKE '%' || $4::text || '%'
+  )
+  AND (
+    $5::text IS NULL
+    OR $5::text = ''
+    OR $5::text = 'all'
+    OR ($5::text = 'income' AND l.delta_amount > 0)
+    OR ($5::text = 'expense' AND l.delta_amount < 0)
+  )
+  AND (
+    $6::text IS NULL
+    OR $6::text = ''
+    OR COALESCE(l.currency, 'CNY') = $6::text
+  )
+ORDER BY l.created_at DESC, l.id DESC
+LIMIT $8 OFFSET $7
+)
+SELECT
+    p.id,
+    p.ledger_no,
+    p.account,
+    p.txn_type,
+    p.delta_amount,
+    p.balance_after,
+    p.currency,
+    p.created_at,
+    COALESCE(by_order.scheme_name, by_legacy.scheme_name, '') AS scheme_name,
+    COALESCE(by_order.play_method, by_legacy.play_method, '') AS play_method,
+    COALESCE(by_order.lottery_name, by_legacy.lottery_name, '') AS lottery_name
+FROM ledger_page p
+LEFT JOIN LATERAL (
+    SELECT
+        c.scheme_name,
+        COALESCE(bo.play_method, '') AS play_method,
+        COALESCE(bo.lottery_name, '') AS lottery_name
+    FROM cloud_bet_records c
+    LEFT JOIN bet_orders bo
+      ON bo.member_id = c.member_id
+     AND bo.order_no = c.bet_order_no
+    WHERE NULLIF(TRIM(p.order_ref), '') IS NOT NULL
+      AND c.member_id = p.member_id
+      AND c.bet_order_no = NULLIF(TRIM(p.order_ref), '')
+    LIMIT 1
+) by_order ON true
+LEFT JOIN LATERAL (
+    SELECT
+        c.scheme_name,
+        COALESCE(bo.play_method, '') AS play_method,
+        COALESCE(bo.lottery_name, '') AS lottery_name
+    FROM cloud_bet_records c
+    LEFT JOIN bet_orders bo
+      ON bo.member_id = c.member_id
+     AND bo.order_no = c.bet_order_no
+    WHERE NULLIF(TRIM(p.order_ref), '') IS NULL
+      AND c.member_id = p.member_id
+      AND c.placed_at >= p.created_at - INTERVAL '5 seconds'
+      AND c.placed_at <= p.created_at + INTERVAL '5 seconds'
+      AND ABS(c.amount - ABS(p.delta_amount)) < 0.001
+      AND c.guaji_account_id IS NOT DISTINCT FROM p.guaji_account_id
+    ORDER BY c.placed_at DESC
+    LIMIT 1
+) by_legacy ON true
+ORDER BY p.created_at DESC, p.id DESC
+`
+
+type ListAdminFundRecordsPagedParams struct {
+	TimeFrom      pgtype.Timestamptz `json:"time_from"`
+	TimeTo        pgtype.Timestamptz `json:"time_to"`
+	MemberAccount pgtype.Text        `json:"member_account"`
+	LedgerNo      pgtype.Text        `json:"ledger_no"`
+	FlowDir       pgtype.Text        `json:"flow_dir"`
+	Currency      pgtype.Text        `json:"currency"`
+	RowOffset     int32              `json:"row_offset"`
+	RowLimit      int32              `json:"row_limit"`
+}
+
+type ListAdminFundRecordsPagedRow struct {
+	ID           int64              `json:"id"`
+	LedgerNo     string             `json:"ledger_no"`
+	Account      string             `json:"account"`
+	TxnType      string             `json:"txn_type"`
+	DeltaAmount  float64            `json:"delta_amount"`
+	BalanceAfter float64            `json:"balance_after"`
+	Currency     string             `json:"currency"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	SchemeName   string             `json:"scheme_name"`
+	PlayMethod   string             `json:"play_method"`
+	LotteryName  string             `json:"lottery_name"`
+}
+
+func (q *Queries) ListAdminFundRecordsPaged(ctx context.Context, arg ListAdminFundRecordsPagedParams) ([]ListAdminFundRecordsPagedRow, error) {
+	rows, err := q.db.Query(ctx, listAdminFundRecordsPaged,
+		arg.TimeFrom,
+		arg.TimeTo,
+		arg.MemberAccount,
+		arg.LedgerNo,
+		arg.FlowDir,
+		arg.Currency,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAdminFundRecordsPagedRow{}
+	for rows.Next() {
+		var i ListAdminFundRecordsPagedRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.LedgerNo,
+			&i.Account,
+			&i.TxnType,
+			&i.DeltaAmount,
+			&i.BalanceAfter,
+			&i.Currency,
+			&i.CreatedAt,
+			&i.SchemeName,
+			&i.PlayMethod,
+			&i.LotteryName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMemberFundRecords = `-- name: ListMemberFundRecords :many
 SELECT
     l.id,
@@ -65,11 +277,19 @@ SELECT
     l.balance_after::float8 AS balance_after,
     COALESCE(l.currency, 'CNY') AS currency,
     l.created_at,
-    COALESCE(sch.scheme_name, '') AS scheme_name
+    COALESCE(sch.scheme_name, '') AS scheme_name,
+    COALESCE(sch.play_method, '') AS play_method,
+    COALESCE(sch.lottery_name, '') AS lottery_name
 FROM wallet_ledger l
 LEFT JOIN LATERAL (
-    SELECT c.scheme_name
+    SELECT
+        c.scheme_name,
+        COALESCE(bo.play_method, '') AS play_method,
+        COALESCE(bo.lottery_name, '') AS lottery_name
     FROM cloud_bet_records c
+    LEFT JOIN bet_orders bo
+      ON bo.member_id = c.member_id
+     AND bo.order_no = c.bet_order_no
     WHERE c.member_id = l.member_id
       AND (
         (NULLIF(TRIM(l.order_ref), '') IS NOT NULL AND c.bet_order_no = l.order_ref)
@@ -125,6 +345,8 @@ type ListMemberFundRecordsRow struct {
 	Currency     string             `json:"currency"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	SchemeName   string             `json:"scheme_name"`
+	PlayMethod   string             `json:"play_method"`
+	LotteryName  string             `json:"lottery_name"`
 }
 
 func (q *Queries) ListMemberFundRecords(ctx context.Context, arg ListMemberFundRecordsParams) ([]ListMemberFundRecordsRow, error) {
@@ -153,6 +375,8 @@ func (q *Queries) ListMemberFundRecords(ctx context.Context, arg ListMemberFundR
 			&i.Currency,
 			&i.CreatedAt,
 			&i.SchemeName,
+			&i.PlayMethod,
+			&i.LotteryName,
 		); err != nil {
 			return nil, err
 		}
@@ -173,11 +397,19 @@ SELECT
     l.balance_after::float8 AS balance_after,
     COALESCE(l.currency, 'CNY') AS currency,
     l.created_at,
-    COALESCE(sch.scheme_name, '') AS scheme_name
+    COALESCE(sch.scheme_name, '') AS scheme_name,
+    COALESCE(sch.play_method, '') AS play_method,
+    COALESCE(sch.lottery_name, '') AS lottery_name
 FROM wallet_ledger l
 LEFT JOIN LATERAL (
-    SELECT c.scheme_name
+    SELECT
+        c.scheme_name,
+        COALESCE(bo.play_method, '') AS play_method,
+        COALESCE(bo.lottery_name, '') AS lottery_name
     FROM cloud_bet_records c
+    LEFT JOIN bet_orders bo
+      ON bo.member_id = c.member_id
+     AND bo.order_no = c.bet_order_no
     WHERE c.member_id = l.member_id
       AND (
         (NULLIF(TRIM(l.order_ref), '') IS NOT NULL AND c.bet_order_no = l.order_ref)
@@ -239,6 +471,8 @@ type ListMemberFundRecordsAfterCursorRow struct {
 	Currency     string             `json:"currency"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	SchemeName   string             `json:"scheme_name"`
+	PlayMethod   string             `json:"play_method"`
+	LotteryName  string             `json:"lottery_name"`
 }
 
 func (q *Queries) ListMemberFundRecordsAfterCursor(ctx context.Context, arg ListMemberFundRecordsAfterCursorParams) ([]ListMemberFundRecordsAfterCursorRow, error) {
@@ -269,6 +503,8 @@ func (q *Queries) ListMemberFundRecordsAfterCursor(ctx context.Context, arg List
 			&i.Currency,
 			&i.CreatedAt,
 			&i.SchemeName,
+			&i.PlayMethod,
+			&i.LotteryName,
 		); err != nil {
 			return nil, err
 		}
@@ -289,11 +525,19 @@ SELECT
     l.balance_after::float8 AS balance_after,
     COALESCE(l.currency, 'CNY') AS currency,
     l.created_at,
-    COALESCE(sch.scheme_name, '') AS scheme_name
+    COALESCE(sch.scheme_name, '') AS scheme_name,
+    COALESCE(sch.play_method, '') AS play_method,
+    COALESCE(sch.lottery_name, '') AS lottery_name
 FROM wallet_ledger l
 LEFT JOIN LATERAL (
-    SELECT c.scheme_name
+    SELECT
+        c.scheme_name,
+        COALESCE(bo.play_method, '') AS play_method,
+        COALESCE(bo.lottery_name, '') AS lottery_name
     FROM cloud_bet_records c
+    LEFT JOIN bet_orders bo
+      ON bo.member_id = c.member_id
+     AND bo.order_no = c.bet_order_no
     WHERE c.member_id = l.member_id
       AND (
         (NULLIF(TRIM(l.order_ref), '') IS NOT NULL AND c.bet_order_no = l.order_ref)
@@ -350,6 +594,8 @@ type ListMemberFundRecordsPagedRow struct {
 	Currency     string             `json:"currency"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	SchemeName   string             `json:"scheme_name"`
+	PlayMethod   string             `json:"play_method"`
+	LotteryName  string             `json:"lottery_name"`
 }
 
 func (q *Queries) ListMemberFundRecordsPaged(ctx context.Context, arg ListMemberFundRecordsPagedParams) ([]ListMemberFundRecordsPagedRow, error) {
@@ -379,200 +625,8 @@ func (q *Queries) ListMemberFundRecordsPaged(ctx context.Context, arg ListMember
 			&i.Currency,
 			&i.CreatedAt,
 			&i.SchemeName,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const countAdminFundRecords = `-- name: CountAdminFundRecords :one
-SELECT COUNT(*)::bigint
-FROM wallet_ledger l
-INNER JOIN members m ON m.id = l.member_id
-WHERE l.txn_type IN ('bet_debit', 'payout')
-  AND l.created_at >= $1
-  AND l.created_at < $2
-  AND (
-    $3::text IS NULL
-    OR $3::text = ''
-    OR m.account ILIKE '%' || $3::text || '%'
-  )
-  AND (
-    $4::text IS NULL
-    OR $4::text = ''
-    OR l.ledger_no ILIKE '%' || $4::text || '%'
-  )
-  AND (
-    $5::text IS NULL
-    OR $5::text = ''
-    OR $5::text = 'all'
-    OR ($5::text = 'income' AND l.delta_amount > 0)
-    OR ($5::text = 'expense' AND l.delta_amount < 0)
-  )
-  AND (
-    $6::text IS NULL
-    OR $6::text = ''
-    OR COALESCE(l.currency, 'CNY') = $6::text
-  )
-`
-
-type CountAdminFundRecordsParams struct {
-	TimeFrom      pgtype.Timestamptz `json:"time_from"`
-	TimeTo        pgtype.Timestamptz `json:"time_to"`
-	MemberAccount pgtype.Text        `json:"member_account"`
-	LedgerNo      pgtype.Text        `json:"ledger_no"`
-	FlowDir       pgtype.Text        `json:"flow_dir"`
-	Currency      pgtype.Text        `json:"currency"`
-}
-
-func (q *Queries) CountAdminFundRecords(ctx context.Context, arg CountAdminFundRecordsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countAdminFundRecords,
-		arg.TimeFrom,
-		arg.TimeTo,
-		arg.MemberAccount,
-		arg.LedgerNo,
-		arg.FlowDir,
-		arg.Currency,
-	)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
-}
-
-const listAdminFundRecordsPaged = `-- name: ListAdminFundRecordsPaged :many
-WITH ledger_page AS MATERIALIZED (
-SELECT
-    l.id,
-    l.ledger_no,
-    m.account,
-    l.txn_type,
-    l.delta_amount::float8 AS delta_amount,
-    l.balance_after::float8 AS balance_after,
-    COALESCE(l.currency, 'CNY') AS currency,
-    l.created_at,
-    l.member_id,
-    l.order_ref,
-    l.guaji_account_id
-FROM wallet_ledger l
-INNER JOIN members m ON m.id = l.member_id
-WHERE l.txn_type IN ('bet_debit', 'payout')
-  AND l.created_at >= $1
-  AND l.created_at < $2
-  AND (
-    $3::text IS NULL
-    OR $3::text = ''
-    OR m.account ILIKE '%' || $3::text || '%'
-  )
-  AND (
-    $4::text IS NULL
-    OR $4::text = ''
-    OR l.ledger_no ILIKE '%' || $4::text || '%'
-  )
-  AND (
-    $5::text IS NULL
-    OR $5::text = ''
-    OR $5::text = 'all'
-    OR ($5::text = 'income' AND l.delta_amount > 0)
-    OR ($5::text = 'expense' AND l.delta_amount < 0)
-  )
-  AND (
-    $6::text IS NULL
-    OR $6::text = ''
-    OR COALESCE(l.currency, 'CNY') = $6::text
-  )
-ORDER BY l.created_at DESC, l.id DESC
-LIMIT $8 OFFSET $7
-)
-SELECT
-    p.id,
-    p.ledger_no,
-    p.account,
-    p.txn_type,
-    p.delta_amount,
-    p.balance_after,
-    p.currency,
-    p.created_at,
-    COALESCE(by_order.scheme_name, by_legacy.scheme_name, '') AS scheme_name
-FROM ledger_page p
-LEFT JOIN LATERAL (
-    SELECT c.scheme_name
-    FROM cloud_bet_records c
-    WHERE NULLIF(TRIM(p.order_ref), '') IS NOT NULL
-      AND c.member_id = p.member_id
-      AND c.bet_order_no = NULLIF(TRIM(p.order_ref), '')
-    LIMIT 1
-) by_order ON true
-LEFT JOIN LATERAL (
-    SELECT c.scheme_name
-    FROM cloud_bet_records c
-    WHERE NULLIF(TRIM(p.order_ref), '') IS NULL
-      AND c.member_id = p.member_id
-      AND c.placed_at >= p.created_at - INTERVAL '5 seconds'
-      AND c.placed_at <= p.created_at + INTERVAL '5 seconds'
-      AND ABS(c.amount - ABS(p.delta_amount)) < 0.001
-      AND c.guaji_account_id IS NOT DISTINCT FROM p.guaji_account_id
-    ORDER BY c.placed_at DESC
-    LIMIT 1
-) by_legacy ON true
-ORDER BY p.created_at DESC, p.id DESC
-`
-
-type ListAdminFundRecordsPagedParams struct {
-	TimeFrom      pgtype.Timestamptz `json:"time_from"`
-	TimeTo        pgtype.Timestamptz `json:"time_to"`
-	MemberAccount pgtype.Text        `json:"member_account"`
-	LedgerNo      pgtype.Text        `json:"ledger_no"`
-	FlowDir       pgtype.Text        `json:"flow_dir"`
-	Currency      pgtype.Text        `json:"currency"`
-	RowOffset     int32              `json:"row_offset"`
-	RowLimit      int32              `json:"row_limit"`
-}
-
-type ListAdminFundRecordsPagedRow struct {
-	ID           int64              `json:"id"`
-	LedgerNo     string             `json:"ledger_no"`
-	Account      string             `json:"account"`
-	TxnType      string             `json:"txn_type"`
-	DeltaAmount  float64            `json:"delta_amount"`
-	BalanceAfter float64            `json:"balance_after"`
-	Currency     string             `json:"currency"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	SchemeName   string             `json:"scheme_name"`
-}
-
-func (q *Queries) ListAdminFundRecordsPaged(ctx context.Context, arg ListAdminFundRecordsPagedParams) ([]ListAdminFundRecordsPagedRow, error) {
-	rows, err := q.db.Query(ctx, listAdminFundRecordsPaged,
-		arg.TimeFrom,
-		arg.TimeTo,
-		arg.MemberAccount,
-		arg.LedgerNo,
-		arg.FlowDir,
-		arg.Currency,
-		arg.RowOffset,
-		arg.RowLimit,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListAdminFundRecordsPagedRow{}
-	for rows.Next() {
-		var i ListAdminFundRecordsPagedRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.LedgerNo,
-			&i.Account,
-			&i.TxnType,
-			&i.DeltaAmount,
-			&i.BalanceAfter,
-			&i.Currency,
-			&i.CreatedAt,
-			&i.SchemeName,
+			&i.PlayMethod,
+			&i.LotteryName,
 		); err != nil {
 			return nil, err
 		}

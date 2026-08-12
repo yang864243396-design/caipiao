@@ -1,6 +1,7 @@
 package schemes
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -79,5 +80,27 @@ func TestRen3ZhixuanFushiMaxIs9000(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("10000 应报超过 9000, got %+v", vs)
+	}
+}
+
+func TestNormalizeBetPayload_Ren3ZhixuanFushiAllowsThreeSelectedPositions(t *testing.T) {
+	input := BetPayload{
+		PlayTemplate: "ssc_std",
+		TypeID:       "g011",
+		SubID:        "80",
+		BetMode:      "fushi",
+		PlayMethod:   "任选 任三直选复式",
+		GroupContent: "0,1\n1,2\n\n\n4,5",
+	}
+	raw, err := NormalizeBetPayload(input)
+	if err != nil {
+		t.Fatalf("任三直选复式允许任选三个位置，空的未选位置不应拒绝: %v", err)
+	}
+	var got BetPayload
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.GroupContent != input.GroupContent {
+		t.Fatalf("content=%q want %q", got.GroupContent, input.GroupContent)
 	}
 }

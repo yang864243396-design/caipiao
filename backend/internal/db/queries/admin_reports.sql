@@ -48,7 +48,7 @@ SELECT
 FROM bet_orders b
 WHERE b.placed_at >= $1
   AND b.placed_at < $2
-  AND ($3::text = '' OR b.lottery_code = $3)
+  AND (sqlc.arg(lottery_code)::text = '' OR b.lottery_code = sqlc.arg(lottery_code)::text)
 GROUP BY stat_date, b.lottery_code, b.lottery_name
 ORDER BY stat_date DESC, valid_bet DESC;
 
@@ -60,4 +60,4 @@ SELECT
 FROM bet_orders b
 WHERE b.placed_at >= $1
   AND b.placed_at < $2
-  AND ($3::text = '' OR b.lottery_code = $3);
+  AND (sqlc.arg(lottery_code)::text = '' OR b.lottery_code = sqlc.arg(lottery_code)::text);

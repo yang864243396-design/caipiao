@@ -102,7 +102,7 @@ func (s *Service) ClientCreateMemberTemplate(ctx context.Context, account string
 	if err != nil {
 		return TemplateRow{}, err
 	}
-	return mapUpsertedTemplate(row, label), nil
+	return mapUpsertedTemplateFields(row.ID, row.Name, row.LotteryCode, row.Brief, row.SortOrder, row.Enabled, row.Config, row.DefinitionID, row.CreatedAt, row.UpdatedAt, label), nil
 }
 
 func (s *Service) ClientUpdateMemberTemplate(ctx context.Context, account, id string, in ClientUpdateMemberTemplateInput) (TemplateRow, error) {
@@ -138,7 +138,7 @@ func (s *Service) ClientUpdateMemberTemplate(ctx context.Context, account, id st
 	}
 	row, err := s.q.UpdateSchemeTemplateDefinitionOwned(ctx, sqlcdb.UpdateSchemeTemplateDefinitionOwnedParams{
 		ID:           id,
-		DefinitionID: definitionID,
+		DefinitionID: pgtype.Text{String: definitionID, Valid: true},
 		MemberID:     m.ID,
 		Name:         name,
 		Config:       cfg,
@@ -154,7 +154,7 @@ func (s *Service) ClientUpdateMemberTemplate(ctx context.Context, account, id st
 	if err != nil {
 		return TemplateRow{}, err
 	}
-	return mapUpsertedTemplate(row, label), nil
+	return mapUpsertedTemplateFields(row.ID, row.Name, row.LotteryCode, row.Brief, row.SortOrder, row.Enabled, row.Config, row.DefinitionID, row.CreatedAt, row.UpdatedAt, label), nil
 }
 
 func (s *Service) TemplateRoundsByID(ctx context.Context, templateID string) []schemeRound {

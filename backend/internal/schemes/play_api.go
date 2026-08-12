@@ -145,16 +145,29 @@ func validateGroupContent(rule playRule, content string) error {
 	if (sub == "zhixuan_fs" || rule.BetMode == "fushi" || rule.BetMode == "zhixuan_fs") && rule.SegmentLen > 1 {
 		checkContent := content
 		if strings.Contains(content, "\n") {
-			lines := splitGroupLinesPad(content, rule.SegmentLen)
-			for i := 0; i < rule.SegmentLen; i++ {
+			lineCount := rule.SegmentLen
+			renxuanFushi := isRenxuanZhixuanFushiRule(rule)
+			if renxuanFushi {
+				lineCount = 5
+			}
+			lines := splitGroupLinesPad(content, lineCount)
+			selected := 0
+			for i := 0; i < lineCount; i++ {
 				line := ""
 				if i < len(lines) {
 					line = strings.TrimSpace(lines[i])
 				}
 				// parseDigitTokens 空串会回落成 ["0"]，空位必须显式拒绝
 				if line == "" || !hasDigitPickToken(line) {
+					if renxuanFushi {
+						continue
+					}
 					return fmt.Errorf("第 %d 位选号不能为空", i+1)
 				}
+				selected++
+			}
+			if renxuanFushi && selected < rule.SegmentLen {
+				return fmt.Errorf("任选直选复式至少选择 %d 个位置", rule.SegmentLen)
 			}
 			checkContent = strings.Join(lines, "\n")
 		} else if !hasDigitPickToken(content) {

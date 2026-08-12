@@ -11,6 +11,20 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countSchemeTemplatesAdminPlatform = `-- name: CountSchemeTemplatesAdminPlatform :one
+SELECT COUNT(*)::bigint AS total
+FROM scheme_templates t
+WHERE t.member_id IS NULL AND t.definition_id IS NULL
+  AND ($1 = '' OR t.name ILIKE '%' || $1 || '%')
+`
+
+func (q *Queries) CountSchemeTemplatesAdminPlatform(ctx context.Context, nameKeyword interface{}) (int64, error) {
+	row := q.db.QueryRow(ctx, countSchemeTemplatesAdminPlatform, nameKeyword)
+	var total int64
+	err := row.Scan(&total)
+	return total, err
+}
+
 const deleteAllSchemeTemplates = `-- name: DeleteAllSchemeTemplates :exec
 DELETE FROM scheme_templates
 `
@@ -153,20 +167,6 @@ func (q *Queries) ListSchemeTemplatesAdmin(ctx context.Context) ([]ListSchemeTem
 	return items, nil
 }
 
-const countSchemeTemplatesAdminPlatform = `-- name: CountSchemeTemplatesAdminPlatform :one
-SELECT COUNT(*)::bigint AS total
-FROM scheme_templates t
-WHERE t.member_id IS NULL AND t.definition_id IS NULL
-  AND ($1 = '' OR t.name ILIKE '%' || $1 || '%')
-`
-
-func (q *Queries) CountSchemeTemplatesAdminPlatform(ctx context.Context, nameKeyword string) (int64, error) {
-	row := q.db.QueryRow(ctx, countSchemeTemplatesAdminPlatform, nameKeyword)
-	var total int64
-	err := row.Scan(&total)
-	return total, err
-}
-
 const listSchemeTemplatesAdminPlatformPaged = `-- name: ListSchemeTemplatesAdminPlatformPaged :many
 SELECT
     t.id,
@@ -184,15 +184,15 @@ SELECT
 FROM scheme_templates t
 LEFT JOIN lottery_catalog c ON c.code = t.lottery_code
 WHERE t.member_id IS NULL AND t.definition_id IS NULL
-  AND ($3 = '' OR t.name ILIKE '%' || $3 || '%')
+  AND ($1 = '' OR t.name ILIKE '%' || $1 || '%')
 ORDER BY t.sort_order ASC, t.name ASC
-LIMIT $1 OFFSET $2
+LIMIT $3 OFFSET $2
 `
 
 type ListSchemeTemplatesAdminPlatformPagedParams struct {
-	PageLimit   int32  `json:"page_limit"`
-	PageOffset  int32  `json:"page_offset"`
-	NameKeyword string `json:"name_keyword"`
+	NameKeyword interface{} `json:"name_keyword"`
+	PageOffset  int32       `json:"page_offset"`
+	PageLimit   int32       `json:"page_limit"`
 }
 
 type ListSchemeTemplatesAdminPlatformPagedRow struct {
@@ -211,7 +211,7 @@ type ListSchemeTemplatesAdminPlatformPagedRow struct {
 }
 
 func (q *Queries) ListSchemeTemplatesAdminPlatformPaged(ctx context.Context, arg ListSchemeTemplatesAdminPlatformPagedParams) ([]ListSchemeTemplatesAdminPlatformPagedRow, error) {
-	rows, err := q.db.Query(ctx, listSchemeTemplatesAdminPlatformPaged, arg.PageLimit, arg.PageOffset, arg.NameKeyword)
+	rows, err := q.db.Query(ctx, listSchemeTemplatesAdminPlatformPaged, arg.NameKeyword, arg.PageOffset, arg.PageLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -219,6 +219,86 @@ func (q *Queries) ListSchemeTemplatesAdminPlatformPaged(ctx context.Context, arg
 	items := []ListSchemeTemplatesAdminPlatformPagedRow{}
 	for rows.Next() {
 		var i ListSchemeTemplatesAdminPlatformPagedRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.LotteryCode,
+			&i.LotteryLabel,
+			&i.Brief,
+			&i.SortOrder,
+			&i.Enabled,
+			&i.Config,
+			&i.MemberID,
+			&i.DefinitionID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSchemeTemplatesForDefinition = `-- name: ListSchemeTemplatesForDefinition :many
+SELECT
+    t.id,
+    t.name,
+    t.lottery_code,
+    COALESCE(c.display_name, t.lottery_code) AS lottery_label,
+    COALESCE(t.brief, '') AS brief,
+    t.sort_order,
+    t.enabled,
+    t.config,
+    t.member_id,
+    t.definition_id,
+    t.created_at,
+    t.updated_at
+FROM scheme_templates t
+LEFT JOIN lottery_catalog c ON c.code = t.lottery_code
+WHERE (t.enabled = true AND t.definition_id IS NULL AND t.member_id IS NULL)
+   OR (
+        t.definition_id = $1
+        AND EXISTS (
+            SELECT 1 FROM scheme_definitions d
+            WHERE d.id = t.definition_id AND d.member_id = $2
+        )
+   )
+ORDER BY t.sort_order ASC, t.name ASC
+`
+
+type ListSchemeTemplatesForDefinitionParams struct {
+	DefinitionID pgtype.Text `json:"definition_id"`
+	MemberID     int64       `json:"member_id"`
+}
+
+type ListSchemeTemplatesForDefinitionRow struct {
+	ID           string             `json:"id"`
+	Name         string             `json:"name"`
+	LotteryCode  string             `json:"lottery_code"`
+	LotteryLabel string             `json:"lottery_label"`
+	Brief        string             `json:"brief"`
+	SortOrder    int32              `json:"sort_order"`
+	Enabled      bool               `json:"enabled"`
+	Config       []byte             `json:"config"`
+	MemberID     pgtype.Int8        `json:"member_id"`
+	DefinitionID pgtype.Text        `json:"definition_id"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) ListSchemeTemplatesForDefinition(ctx context.Context, arg ListSchemeTemplatesForDefinitionParams) ([]ListSchemeTemplatesForDefinitionRow, error) {
+	rows, err := q.db.Query(ctx, listSchemeTemplatesForDefinition, arg.DefinitionID, arg.MemberID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSchemeTemplatesForDefinitionRow{}
+	for rows.Next() {
+		var i ListSchemeTemplatesForDefinitionRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Name,
@@ -311,39 +391,35 @@ func (q *Queries) ListSchemeTemplatesPlatformEnabled(ctx context.Context) ([]Lis
 	return items, nil
 }
 
-const listSchemeTemplatesForDefinition = `-- name: ListSchemeTemplatesForDefinition :many
-SELECT
-    t.id,
-    t.name,
-    t.lottery_code,
-    COALESCE(c.display_name, t.lottery_code) AS lottery_label,
-    COALESCE(t.brief, '') AS brief,
-    t.sort_order,
-    t.enabled,
-    t.config,
-    t.member_id,
-    t.definition_id,
-    t.created_at,
-    t.updated_at
-FROM scheme_templates t
-LEFT JOIN lottery_catalog c ON c.code = t.lottery_code
-WHERE (t.enabled = true AND t.definition_id IS NULL AND t.member_id IS NULL)
-   OR (
-        t.definition_id = $1
-        AND EXISTS (
-            SELECT 1 FROM scheme_definitions d
-            WHERE d.id = t.definition_id AND d.member_id = $2
-        )
-   )
-ORDER BY t.sort_order ASC, t.name ASC
+const updateSchemeTemplateDefinitionOwned = `-- name: UpdateSchemeTemplateDefinitionOwned :one
+UPDATE scheme_templates t
+SET
+    name = $4,
+    config = $5,
+    brief = $6,
+    updated_at = now()
+FROM scheme_definitions d
+WHERE t.id = $1
+  AND t.definition_id = $2
+  AND d.id = t.definition_id
+  AND d.member_id = $3
+RETURNING t.id, t.name, t.lottery_code, t.brief, t.sort_order, t.enabled, t.config, t.member_id, t.definition_id, t.created_at, t.updated_at
 `
 
-type ListSchemeTemplatesForDefinitionRow struct {
+type UpdateSchemeTemplateDefinitionOwnedParams struct {
+	ID           string      `json:"id"`
+	DefinitionID pgtype.Text `json:"definition_id"`
+	MemberID     int64       `json:"member_id"`
+	Name         string      `json:"name"`
+	Config       []byte      `json:"config"`
+	Brief        pgtype.Text `json:"brief"`
+}
+
+type UpdateSchemeTemplateDefinitionOwnedRow struct {
 	ID           string             `json:"id"`
 	Name         string             `json:"name"`
 	LotteryCode  string             `json:"lottery_code"`
-	LotteryLabel string             `json:"lottery_label"`
-	Brief        string             `json:"brief"`
+	Brief        pgtype.Text        `json:"brief"`
 	SortOrder    int32              `json:"sort_order"`
 	Enabled      bool               `json:"enabled"`
 	Config       []byte             `json:"config"`
@@ -353,88 +429,16 @@ type ListSchemeTemplatesForDefinitionRow struct {
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
-type ListSchemeTemplatesForDefinitionParams struct {
-	DefinitionID string `json:"definition_id"`
-	MemberID     int64  `json:"member_id"`
-}
-
-func (q *Queries) ListSchemeTemplatesForDefinition(ctx context.Context, arg ListSchemeTemplatesForDefinitionParams) ([]ListSchemeTemplatesForDefinitionRow, error) {
-	rows, err := q.db.Query(ctx, listSchemeTemplatesForDefinition, arg.DefinitionID, arg.MemberID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListSchemeTemplatesForDefinitionRow{}
-	for rows.Next() {
-		var i ListSchemeTemplatesForDefinitionRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.LotteryCode,
-			&i.LotteryLabel,
-			&i.Brief,
-			&i.SortOrder,
-			&i.Enabled,
-			&i.Config,
-			&i.MemberID,
-			&i.DefinitionID,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const upsertSchemeTemplate = `-- name: UpsertSchemeTemplate :one
-INSERT INTO scheme_templates (
-    id, name, lottery_code, brief, sort_order, enabled, config, member_id, definition_id, created_at, updated_at
-) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, now(), now()
-)
-ON CONFLICT (id) DO UPDATE SET
-    name = EXCLUDED.name,
-    lottery_code = EXCLUDED.lottery_code,
-    brief = EXCLUDED.brief,
-    sort_order = EXCLUDED.sort_order,
-    enabled = EXCLUDED.enabled,
-    config = EXCLUDED.config,
-    member_id = COALESCE(scheme_templates.member_id, EXCLUDED.member_id),
-    definition_id = COALESCE(scheme_templates.definition_id, EXCLUDED.definition_id),
-    updated_at = now()
-RETURNING id, name, lottery_code, brief, sort_order, enabled, config, member_id, definition_id, created_at, updated_at
-`
-
-type UpsertSchemeTemplateParams struct {
-	ID           string      `json:"id"`
-	Name         string      `json:"name"`
-	LotteryCode  string      `json:"lottery_code"`
-	Brief        pgtype.Text `json:"brief"`
-	SortOrder    int32       `json:"sort_order"`
-	Enabled      bool        `json:"enabled"`
-	Config       []byte      `json:"config"`
-	MemberID     pgtype.Int8 `json:"member_id"`
-	DefinitionID pgtype.Text `json:"definition_id"`
-}
-
-func (q *Queries) UpsertSchemeTemplate(ctx context.Context, arg UpsertSchemeTemplateParams) (SchemeTemplate, error) {
-	row := q.db.QueryRow(ctx, upsertSchemeTemplate,
+func (q *Queries) UpdateSchemeTemplateDefinitionOwned(ctx context.Context, arg UpdateSchemeTemplateDefinitionOwnedParams) (UpdateSchemeTemplateDefinitionOwnedRow, error) {
+	row := q.db.QueryRow(ctx, updateSchemeTemplateDefinitionOwned,
 		arg.ID,
-		arg.Name,
-		arg.LotteryCode,
-		arg.Brief,
-		arg.SortOrder,
-		arg.Enabled,
-		arg.Config,
-		arg.MemberID,
 		arg.DefinitionID,
+		arg.MemberID,
+		arg.Name,
+		arg.Config,
+		arg.Brief,
 	)
-	var i SchemeTemplate
+	var i UpdateSchemeTemplateDefinitionOwnedRow
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
@@ -473,7 +477,21 @@ type UpdateSchemeTemplatePlatformParams struct {
 	Config    []byte      `json:"config"`
 }
 
-func (q *Queries) UpdateSchemeTemplatePlatform(ctx context.Context, arg UpdateSchemeTemplatePlatformParams) (SchemeTemplate, error) {
+type UpdateSchemeTemplatePlatformRow struct {
+	ID           string             `json:"id"`
+	Name         string             `json:"name"`
+	LotteryCode  string             `json:"lottery_code"`
+	Brief        pgtype.Text        `json:"brief"`
+	SortOrder    int32              `json:"sort_order"`
+	Enabled      bool               `json:"enabled"`
+	Config       []byte             `json:"config"`
+	MemberID     pgtype.Int8        `json:"member_id"`
+	DefinitionID pgtype.Text        `json:"definition_id"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) UpdateSchemeTemplatePlatform(ctx context.Context, arg UpdateSchemeTemplatePlatformParams) (UpdateSchemeTemplatePlatformRow, error) {
 	row := q.db.QueryRow(ctx, updateSchemeTemplatePlatform,
 		arg.ID,
 		arg.Name,
@@ -482,7 +500,7 @@ func (q *Queries) UpdateSchemeTemplatePlatform(ctx context.Context, arg UpdateSc
 		arg.Enabled,
 		arg.Config,
 	)
-	var i SchemeTemplate
+	var i UpdateSchemeTemplatePlatformRow
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
@@ -499,40 +517,64 @@ func (q *Queries) UpdateSchemeTemplatePlatform(ctx context.Context, arg UpdateSc
 	return i, err
 }
 
-const updateSchemeTemplateDefinitionOwned = `-- name: UpdateSchemeTemplateDefinitionOwned :one
-UPDATE scheme_templates t
-SET
-    name = $4,
-    config = $5,
-    brief = $6,
+const upsertSchemeTemplate = `-- name: UpsertSchemeTemplate :one
+INSERT INTO scheme_templates (
+    id, name, lottery_code, brief, sort_order, enabled, config, member_id, definition_id, created_at, updated_at
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, now(), now()
+)
+ON CONFLICT (id) DO UPDATE SET
+    name = EXCLUDED.name,
+    lottery_code = EXCLUDED.lottery_code,
+    brief = EXCLUDED.brief,
+    sort_order = EXCLUDED.sort_order,
+    enabled = EXCLUDED.enabled,
+    config = EXCLUDED.config,
+    member_id = COALESCE(scheme_templates.member_id, EXCLUDED.member_id),
+    definition_id = COALESCE(scheme_templates.definition_id, EXCLUDED.definition_id),
     updated_at = now()
-FROM scheme_definitions d
-WHERE t.id = $1
-  AND t.definition_id = $2
-  AND d.id = t.definition_id
-  AND d.member_id = $3
-RETURNING t.id, t.name, t.lottery_code, t.brief, t.sort_order, t.enabled, t.config, t.member_id, t.definition_id, t.created_at, t.updated_at
+RETURNING id, name, lottery_code, brief, sort_order, enabled, config, member_id, definition_id, created_at, updated_at
 `
 
-type UpdateSchemeTemplateDefinitionOwnedParams struct {
+type UpsertSchemeTemplateParams struct {
 	ID           string      `json:"id"`
-	DefinitionID string      `json:"definition_id"`
-	MemberID     int64       `json:"member_id"`
 	Name         string      `json:"name"`
-	Config       []byte      `json:"config"`
+	LotteryCode  string      `json:"lottery_code"`
 	Brief        pgtype.Text `json:"brief"`
+	SortOrder    int32       `json:"sort_order"`
+	Enabled      bool        `json:"enabled"`
+	Config       []byte      `json:"config"`
+	MemberID     pgtype.Int8 `json:"member_id"`
+	DefinitionID pgtype.Text `json:"definition_id"`
 }
 
-func (q *Queries) UpdateSchemeTemplateDefinitionOwned(ctx context.Context, arg UpdateSchemeTemplateDefinitionOwnedParams) (SchemeTemplate, error) {
-	row := q.db.QueryRow(ctx, updateSchemeTemplateDefinitionOwned,
+type UpsertSchemeTemplateRow struct {
+	ID           string             `json:"id"`
+	Name         string             `json:"name"`
+	LotteryCode  string             `json:"lottery_code"`
+	Brief        pgtype.Text        `json:"brief"`
+	SortOrder    int32              `json:"sort_order"`
+	Enabled      bool               `json:"enabled"`
+	Config       []byte             `json:"config"`
+	MemberID     pgtype.Int8        `json:"member_id"`
+	DefinitionID pgtype.Text        `json:"definition_id"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) UpsertSchemeTemplate(ctx context.Context, arg UpsertSchemeTemplateParams) (UpsertSchemeTemplateRow, error) {
+	row := q.db.QueryRow(ctx, upsertSchemeTemplate,
 		arg.ID,
-		arg.DefinitionID,
-		arg.MemberID,
 		arg.Name,
-		arg.Config,
+		arg.LotteryCode,
 		arg.Brief,
+		arg.SortOrder,
+		arg.Enabled,
+		arg.Config,
+		arg.MemberID,
+		arg.DefinitionID,
 	)
-	var i SchemeTemplate
+	var i UpsertSchemeTemplateRow
 	err := row.Scan(
 		&i.ID,
 		&i.Name,

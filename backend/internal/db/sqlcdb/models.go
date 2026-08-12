@@ -166,6 +166,10 @@ type CloudBetRecord struct {
 	// 第三方 web_bets/lott 接单返回的 periods（real）
 	ThirdPartyPeriod pgtype.Text `json:"third_party_period"`
 	SimBet           bool        `json:"sim_bet"`
+	// 投注注数：正式优先第三方 bets_nums，模拟为本地验奖注数
+	BetUnits pgtype.Int4 `json:"bet_units"`
+	// 返奖金额：pending=NULL；miss=0；real=第三方 payout 原值；sim=amount+pnl；本地兜底结算不写
+	PayoutAmount pgtype.Numeric `json:"payout_amount"`
 }
 
 // 平台公告（会员端列表/详情）
@@ -177,8 +181,25 @@ type CmsAnnouncement struct {
 	PublishedAt pgtype.Timestamptz `json:"published_at"`
 	// 富文本正文 HTML
 	BodyHtml  string             `json:"body_html"`
-	Pinned    bool               `json:"pinned"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	// 置顶公告；会员端 Banner 下展示，全局仅允许一条
+	Pinned bool `json:"pinned"`
+}
+
+// 游戏大厅主屏 Banner
+type CmsBanner struct {
+	ID string `json:"id"`
+	// Banner 备注（仅后台展示）
+	Remark string `json:"remark"`
+	// Banner 图片 URL
+	ImageUrl string `json:"image_url"`
+	// 排序，越小越靠前
+	Sort      int32              `json:"sort"`
+	Enabled   bool               `json:"enabled"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	// 点击跳转外链；为空则会员端 Banner 不可点击
+	LinkUrl string `json:"link_url"`
 }
 
 // 会员端联系客服配置（Admin 维护）
@@ -679,12 +700,15 @@ type SchemeTemplate struct {
 	// 排序权重，越小越靠前
 	SortOrder int32 `json:"sort_order"`
 	// 是否对会员可见
-	Enabled      bool               `json:"enabled"`
-	Config       []byte             `json:"config"`
-	MemberID     pgtype.Int8        `json:"member_id"`
-	DefinitionID pgtype.Text        `json:"definition_id"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	Enabled   bool               `json:"enabled"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	// 高级倍投轮次等 JSON（rounds[]）
+	Config []byte `json:"config"`
+	// NULL=平台模板；非 NULL=会员自建
+	MemberID pgtype.Int8 `json:"member_id"`
+	// NULL=平台模板；非 NULL=归属 scheme_definitions.id 的会员方案模板
+	DefinitionID pgtype.Text `json:"definition_id"`
 }
 
 type SubPlay struct {

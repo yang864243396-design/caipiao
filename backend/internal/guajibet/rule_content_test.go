@@ -774,6 +774,20 @@ func TestFormatBetContentForRule_renxuanRen3Wire(t *testing.T) {
 	}
 }
 
+func TestFormatBetContentForRule_renxuanRen3WireCollapsesPositionPools(t *testing.T) {
+	seg, _ := json.Marshal(map[string]string{
+		"guajiGroup": "任选", "guajiTeam": "任选三", "guajiFullName": "任三直选复式",
+	})
+	meta := ParseRuleMeta("ssc_std", "g011", "80", "任三直选复式", "任选", seg, "80")
+	got := FormatBetContentForRule(meta, "0,1\n1,2\n\n\n4,5")
+	if got != "01,12,,,45" {
+		t.Fatalf("wire=%q want 01,12,,,45", got)
+	}
+	if n := CountBetNums(meta, got); n != 8 {
+		t.Fatalf("betsNums=%d want 8", n)
+	}
+}
+
 func TestFormatBetContentForRule_fastHashPlays(t *testing.T) {
 	for _, tc := range []struct {
 		label, content, want string

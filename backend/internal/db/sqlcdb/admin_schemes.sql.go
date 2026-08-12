@@ -153,22 +153,22 @@ type ListAdminSchemeInstancesParams struct {
 }
 
 type ListAdminSchemeInstancesRow struct {
-	ID           string             `json:"id"`
-	DefinitionID string             `json:"definition_id"`
-	MemberID     int64              `json:"member_id"`
-	Account      string             `json:"account"`
-	Kind         string             `json:"kind"`
-	SchemeName   string             `json:"scheme_name"`
-	LotteryCode  string             `json:"lottery_code"`
-	LotteryLabel string             `json:"lottery_label"`
-	Status       string             `json:"status"`
-	StatusReason string             `json:"status_reason"`
-	SimBet       bool               `json:"sim_bet"`
+	ID            string             `json:"id"`
+	DefinitionID  string             `json:"definition_id"`
+	MemberID      int64              `json:"member_id"`
+	Account       string             `json:"account"`
+	Kind          string             `json:"kind"`
+	SchemeName    string             `json:"scheme_name"`
+	LotteryCode   string             `json:"lottery_code"`
+	LotteryLabel  string             `json:"lottery_label"`
+	Status        string             `json:"status"`
+	StatusReason  string             `json:"status_reason"`
+	SimBet        bool               `json:"sim_bet"`
 	RunType       interface{}        `json:"run_type"`
 	PlayTypeID    interface{}        `json:"play_type_id"`
-	PlayTypeLabel interface{}        `json:"play_type_label"`
+	PlayTypeLabel string             `json:"play_type_label"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
 func (q *Queries) ListAdminSchemeInstances(ctx context.Context, arg ListAdminSchemeInstancesParams) ([]ListAdminSchemeInstancesRow, error) {
@@ -248,7 +248,12 @@ type ListAdminSchemeShareSnapshotsParams struct {
 }
 
 func (q *Queries) ListAdminSchemeShareSnapshots(ctx context.Context, arg ListAdminSchemeShareSnapshotsParams) ([]SchemeShareSnapshot, error) {
-	rows, err := q.db.Query(ctx, listAdminSchemeShareSnapshots, arg.Keyword, arg.SearchField, arg.LotteryCode, arg.RowLimit)
+	rows, err := q.db.Query(ctx, listAdminSchemeShareSnapshots,
+		arg.Keyword,
+		arg.SearchField,
+		arg.LotteryCode,
+		arg.RowLimit,
+	)
 	if err != nil {
 		return nil, err
 	}

@@ -547,6 +547,8 @@ SELECT
 
     status, status_reason, bet_failed_detail, turnover, pnl, run_time_sec, lookback_pnl, session_pnl, multiplier, countdown_sec, sim_bet,
 
+    start_skip_period, start_skip_close_at,
+
     running_since, created_at, updated_at
 
 FROM scheme_instances
@@ -562,27 +564,29 @@ type ListSchemeInstancesByMemberIDsParams struct {
 }
 
 type ListSchemeInstancesByMemberIDsRow struct {
-	ID              string             `json:"id"`
-	DefinitionID    string             `json:"definition_id"`
-	MemberID        int64              `json:"member_id"`
-	Kind            string             `json:"kind"`
-	SchemeName      string             `json:"scheme_name"`
-	LotteryCode     string             `json:"lottery_code"`
-	LotteryLabel    string             `json:"lottery_label"`
-	Status          string             `json:"status"`
-	StatusReason    string             `json:"status_reason"`
-	BetFailedDetail pgtype.Text        `json:"bet_failed_detail"`
-	Turnover        pgtype.Numeric     `json:"turnover"`
-	Pnl             pgtype.Numeric     `json:"pnl"`
-	RunTimeSec      int32              `json:"run_time_sec"`
-	LookbackPnl     pgtype.Numeric     `json:"lookback_pnl"`
-	SessionPnl      pgtype.Numeric     `json:"session_pnl"`
-	Multiplier      pgtype.Numeric     `json:"multiplier"`
-	CountdownSec    int32              `json:"countdown_sec"`
-	SimBet          bool               `json:"sim_bet"`
-	RunningSince    pgtype.Timestamptz `json:"running_since"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	ID               string             `json:"id"`
+	DefinitionID     string             `json:"definition_id"`
+	MemberID         int64              `json:"member_id"`
+	Kind             string             `json:"kind"`
+	SchemeName       string             `json:"scheme_name"`
+	LotteryCode      string             `json:"lottery_code"`
+	LotteryLabel     string             `json:"lottery_label"`
+	Status           string             `json:"status"`
+	StatusReason     string             `json:"status_reason"`
+	BetFailedDetail  pgtype.Text        `json:"bet_failed_detail"`
+	Turnover         pgtype.Numeric     `json:"turnover"`
+	Pnl              pgtype.Numeric     `json:"pnl"`
+	RunTimeSec       int32              `json:"run_time_sec"`
+	LookbackPnl      pgtype.Numeric     `json:"lookback_pnl"`
+	SessionPnl       pgtype.Numeric     `json:"session_pnl"`
+	Multiplier       pgtype.Numeric     `json:"multiplier"`
+	CountdownSec     int32              `json:"countdown_sec"`
+	SimBet           bool               `json:"sim_bet"`
+	StartSkipPeriod  pgtype.Text        `json:"start_skip_period"`
+	StartSkipCloseAt pgtype.Timestamptz `json:"start_skip_close_at"`
+	RunningSince     pgtype.Timestamptz `json:"running_since"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 }
 
 func (q *Queries) ListSchemeInstancesByMemberIDs(ctx context.Context, arg ListSchemeInstancesByMemberIDsParams) ([]ListSchemeInstancesByMemberIDsRow, error) {
@@ -613,6 +617,8 @@ func (q *Queries) ListSchemeInstancesByMemberIDs(ctx context.Context, arg ListSc
 			&i.Multiplier,
 			&i.CountdownSec,
 			&i.SimBet,
+			&i.StartSkipPeriod,
+			&i.StartSkipCloseAt,
 			&i.RunningSince,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -634,6 +640,8 @@ SELECT
     id, definition_id, member_id, kind, scheme_name, lottery_code, lottery_label,
 
     status, status_reason, bet_failed_detail, turnover, pnl, run_time_sec, lookback_pnl, session_pnl, multiplier, countdown_sec, sim_bet,
+
+    start_skip_period, start_skip_close_at,
 
     running_since, created_at, updated_at
 
@@ -667,27 +675,29 @@ type ListSchemeInstancesByMemberPaginatedParams struct {
 }
 
 type ListSchemeInstancesByMemberPaginatedRow struct {
-	ID              string             `json:"id"`
-	DefinitionID    string             `json:"definition_id"`
-	MemberID        int64              `json:"member_id"`
-	Kind            string             `json:"kind"`
-	SchemeName      string             `json:"scheme_name"`
-	LotteryCode     string             `json:"lottery_code"`
-	LotteryLabel    string             `json:"lottery_label"`
-	Status          string             `json:"status"`
-	StatusReason    string             `json:"status_reason"`
-	BetFailedDetail pgtype.Text        `json:"bet_failed_detail"`
-	Turnover        pgtype.Numeric     `json:"turnover"`
-	Pnl             pgtype.Numeric     `json:"pnl"`
-	RunTimeSec      int32              `json:"run_time_sec"`
-	LookbackPnl     pgtype.Numeric     `json:"lookback_pnl"`
-	SessionPnl      pgtype.Numeric     `json:"session_pnl"`
-	Multiplier      pgtype.Numeric     `json:"multiplier"`
-	CountdownSec    int32              `json:"countdown_sec"`
-	SimBet          bool               `json:"sim_bet"`
-	RunningSince    pgtype.Timestamptz `json:"running_since"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	ID               string             `json:"id"`
+	DefinitionID     string             `json:"definition_id"`
+	MemberID         int64              `json:"member_id"`
+	Kind             string             `json:"kind"`
+	SchemeName       string             `json:"scheme_name"`
+	LotteryCode      string             `json:"lottery_code"`
+	LotteryLabel     string             `json:"lottery_label"`
+	Status           string             `json:"status"`
+	StatusReason     string             `json:"status_reason"`
+	BetFailedDetail  pgtype.Text        `json:"bet_failed_detail"`
+	Turnover         pgtype.Numeric     `json:"turnover"`
+	Pnl              pgtype.Numeric     `json:"pnl"`
+	RunTimeSec       int32              `json:"run_time_sec"`
+	LookbackPnl      pgtype.Numeric     `json:"lookback_pnl"`
+	SessionPnl       pgtype.Numeric     `json:"session_pnl"`
+	Multiplier       pgtype.Numeric     `json:"multiplier"`
+	CountdownSec     int32              `json:"countdown_sec"`
+	SimBet           bool               `json:"sim_bet"`
+	StartSkipPeriod  pgtype.Text        `json:"start_skip_period"`
+	StartSkipCloseAt pgtype.Timestamptz `json:"start_skip_close_at"`
+	RunningSince     pgtype.Timestamptz `json:"running_since"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 }
 
 func (q *Queries) ListSchemeInstancesByMemberPaginated(ctx context.Context, arg ListSchemeInstancesByMemberPaginatedParams) ([]ListSchemeInstancesByMemberPaginatedRow, error) {
@@ -724,6 +734,8 @@ func (q *Queries) ListSchemeInstancesByMemberPaginated(ctx context.Context, arg 
 			&i.Multiplier,
 			&i.CountdownSec,
 			&i.SimBet,
+			&i.StartSkipPeriod,
+			&i.StartSkipCloseAt,
 			&i.RunningSince,
 			&i.CreatedAt,
 			&i.UpdatedAt,

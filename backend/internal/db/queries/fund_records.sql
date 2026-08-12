@@ -284,19 +284,33 @@ SELECT
     p.balance_after,
     p.currency,
     p.created_at,
-    COALESCE(by_order.scheme_name, by_legacy.scheme_name, '') AS scheme_name
+    COALESCE(by_order.scheme_name, by_legacy.scheme_name, '') AS scheme_name,
+    COALESCE(by_order.play_method, by_legacy.play_method, '') AS play_method,
+    COALESCE(by_order.lottery_name, by_legacy.lottery_name, '') AS lottery_name
 FROM ledger_page p
 LEFT JOIN LATERAL (
-    SELECT c.scheme_name
+    SELECT
+        c.scheme_name,
+        COALESCE(bo.play_method, '') AS play_method,
+        COALESCE(bo.lottery_name, '') AS lottery_name
     FROM cloud_bet_records c
+    LEFT JOIN bet_orders bo
+      ON bo.member_id = c.member_id
+     AND bo.order_no = c.bet_order_no
     WHERE NULLIF(TRIM(p.order_ref), '') IS NOT NULL
       AND c.member_id = p.member_id
       AND c.bet_order_no = NULLIF(TRIM(p.order_ref), '')
     LIMIT 1
 ) by_order ON true
 LEFT JOIN LATERAL (
-    SELECT c.scheme_name
+    SELECT
+        c.scheme_name,
+        COALESCE(bo.play_method, '') AS play_method,
+        COALESCE(bo.lottery_name, '') AS lottery_name
     FROM cloud_bet_records c
+    LEFT JOIN bet_orders bo
+      ON bo.member_id = c.member_id
+     AND bo.order_no = c.bet_order_no
     WHERE NULLIF(TRIM(p.order_ref), '') IS NULL
       AND c.member_id = p.member_id
       AND c.placed_at >= p.created_at - INTERVAL '5 seconds'

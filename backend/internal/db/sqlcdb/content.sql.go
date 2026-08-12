@@ -11,12 +11,60 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const clearAnnouncementPinsAdmin = `-- name: ClearAnnouncementPinsAdmin :exec
+UPDATE cms_announcements SET pinned = false WHERE pinned = true
+`
+
+func (q *Queries) ClearAnnouncementPinsAdmin(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, clearAnnouncementPinsAdmin)
+	return err
+}
+
+const countBannersAdmin = `-- name: CountBannersAdmin :one
+SELECT COUNT(*)::bigint
+FROM cms_banners b
+WHERE (
+    $1::boolean IS NULL
+    OR b.enabled = $1::boolean
+)
+AND (
+    $2::timestamptz IS NULL
+    OR b.created_at >= $2::timestamptz
+)
+AND (
+    $3::timestamptz IS NULL
+    OR b.created_at <= $3::timestamptz
+)
+`
+
+type CountBannersAdminParams struct {
+	EnabledFilter pgtype.Bool        `json:"enabled_filter"`
+	CreatedFrom   pgtype.Timestamptz `json:"created_from"`
+	CreatedTo     pgtype.Timestamptz `json:"created_to"`
+}
+
+func (q *Queries) CountBannersAdmin(ctx context.Context, arg CountBannersAdminParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countBannersAdmin, arg.EnabledFilter, arg.CreatedFrom, arg.CreatedTo)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const deleteAnnouncementAdmin = `-- name: DeleteAnnouncementAdmin :exec
 DELETE FROM cms_announcements WHERE id = $1
 `
 
 func (q *Queries) DeleteAnnouncementAdmin(ctx context.Context, id string) error {
 	_, err := q.db.Exec(ctx, deleteAnnouncementAdmin, id)
+	return err
+}
+
+const deleteBannerAdmin = `-- name: DeleteBannerAdmin :exec
+DELETE FROM cms_banners WHERE id = $1
+`
+
+func (q *Queries) DeleteBannerAdmin(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, deleteBannerAdmin, id)
 	return err
 }
 
@@ -200,6 +248,118 @@ func (q *Queries) ListAnnouncementsAdmin(ctx context.Context) ([]ListAnnouncemen
 			&i.PublishedAt,
 			&i.BodyHtml,
 			&i.Pinned,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listBannersAdmin = `-- name: ListBannersAdmin :many
+SELECT id, remark, image_url, link_url, sort, enabled, created_at, updated_at
+FROM cms_banners b
+WHERE (
+    $1::boolean IS NULL
+    OR b.enabled = $1::boolean
+)
+AND (
+    $2::timestamptz IS NULL
+    OR b.created_at >= $2::timestamptz
+)
+AND (
+    $3::timestamptz IS NULL
+    OR b.created_at <= $3::timestamptz
+)
+ORDER BY sort ASC, created_at DESC, id DESC
+LIMIT $5 OFFSET $4
+`
+
+type ListBannersAdminParams struct {
+	EnabledFilter pgtype.Bool        `json:"enabled_filter"`
+	CreatedFrom   pgtype.Timestamptz `json:"created_from"`
+	CreatedTo     pgtype.Timestamptz `json:"created_to"`
+	RowOffset     int32              `json:"row_offset"`
+	RowLimit      int32              `json:"row_limit"`
+}
+
+type ListBannersAdminRow struct {
+	ID        string             `json:"id"`
+	Remark    string             `json:"remark"`
+	ImageUrl  string             `json:"image_url"`
+	LinkUrl   string             `json:"link_url"`
+	Sort      int32              `json:"sort"`
+	Enabled   bool               `json:"enabled"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) ListBannersAdmin(ctx context.Context, arg ListBannersAdminParams) ([]ListBannersAdminRow, error) {
+	rows, err := q.db.Query(ctx, listBannersAdmin,
+		arg.EnabledFilter,
+		arg.CreatedFrom,
+		arg.CreatedTo,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListBannersAdminRow{}
+	for rows.Next() {
+		var i ListBannersAdminRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Remark,
+			&i.ImageUrl,
+			&i.LinkUrl,
+			&i.Sort,
+			&i.Enabled,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listBannersPublic = `-- name: ListBannersPublic :many
+SELECT id, image_url, link_url, sort
+FROM cms_banners
+WHERE enabled = true
+ORDER BY sort ASC, id ASC
+`
+
+type ListBannersPublicRow struct {
+	ID       string `json:"id"`
+	ImageUrl string `json:"image_url"`
+	LinkUrl  string `json:"link_url"`
+	Sort     int32  `json:"sort"`
+}
+
+func (q *Queries) ListBannersPublic(ctx context.Context) ([]ListBannersPublicRow, error) {
+	rows, err := q.db.Query(ctx, listBannersPublic)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListBannersPublicRow{}
+	for rows.Next() {
+		var i ListBannersPublicRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ImageUrl,
+			&i.LinkUrl,
+			&i.Sort,
 		); err != nil {
 			return nil, err
 		}
@@ -481,6 +641,80 @@ func (q *Queries) ListPublishedAnnouncements(ctx context.Context, memberID int64
 	return items, nil
 }
 
+const setAnnouncementPinnedAdmin = `-- name: SetAnnouncementPinnedAdmin :one
+UPDATE cms_announcements
+SET pinned = $2
+WHERE id = $1
+RETURNING id, title, status, published_at, body_html, pinned
+`
+
+type SetAnnouncementPinnedAdminParams struct {
+	ID     string `json:"id"`
+	Pinned bool   `json:"pinned"`
+}
+
+type SetAnnouncementPinnedAdminRow struct {
+	ID          string             `json:"id"`
+	Title       string             `json:"title"`
+	Status      string             `json:"status"`
+	PublishedAt pgtype.Timestamptz `json:"published_at"`
+	BodyHtml    string             `json:"body_html"`
+	Pinned      bool               `json:"pinned"`
+}
+
+func (q *Queries) SetAnnouncementPinnedAdmin(ctx context.Context, arg SetAnnouncementPinnedAdminParams) (SetAnnouncementPinnedAdminRow, error) {
+	row := q.db.QueryRow(ctx, setAnnouncementPinnedAdmin, arg.ID, arg.Pinned)
+	var i SetAnnouncementPinnedAdminRow
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Status,
+		&i.PublishedAt,
+		&i.BodyHtml,
+		&i.Pinned,
+	)
+	return i, err
+}
+
+const setBannerEnabledAdmin = `-- name: SetBannerEnabledAdmin :one
+UPDATE cms_banners
+SET enabled = $2, updated_at = now()
+WHERE id = $1
+RETURNING id, remark, image_url, link_url, sort, enabled, created_at, updated_at
+`
+
+type SetBannerEnabledAdminParams struct {
+	ID      string `json:"id"`
+	Enabled bool   `json:"enabled"`
+}
+
+type SetBannerEnabledAdminRow struct {
+	ID        string             `json:"id"`
+	Remark    string             `json:"remark"`
+	ImageUrl  string             `json:"image_url"`
+	LinkUrl   string             `json:"link_url"`
+	Sort      int32              `json:"sort"`
+	Enabled   bool               `json:"enabled"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) SetBannerEnabledAdmin(ctx context.Context, arg SetBannerEnabledAdminParams) (SetBannerEnabledAdminRow, error) {
+	row := q.db.QueryRow(ctx, setBannerEnabledAdmin, arg.ID, arg.Enabled)
+	var i SetBannerEnabledAdminRow
+	err := row.Scan(
+		&i.ID,
+		&i.Remark,
+		&i.ImageUrl,
+		&i.LinkUrl,
+		&i.Sort,
+		&i.Enabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const upsertAnnouncementAdmin = `-- name: UpsertAnnouncementAdmin :one
 INSERT INTO cms_announcements (id, title, status, published_at, body_html, pinned)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -532,43 +766,6 @@ func (q *Queries) UpsertAnnouncementAdmin(ctx context.Context, arg UpsertAnnounc
 	return i, err
 }
 
-const clearAnnouncementPinsAdmin = `-- name: ClearAnnouncementPinsAdmin :exec
-UPDATE cms_announcements SET pinned = false WHERE pinned = true
-`
-
-func (q *Queries) ClearAnnouncementPinsAdmin(ctx context.Context) error {
-	_, err := q.db.Exec(ctx, clearAnnouncementPinsAdmin)
-	return err
-}
-
-const setAnnouncementPinnedAdmin = `-- name: SetAnnouncementPinnedAdmin :one
-UPDATE cms_announcements
-SET pinned = $2
-WHERE id = $1
-RETURNING id, title, status, published_at, body_html, pinned
-`
-
-type SetAnnouncementPinnedAdminParams struct {
-	ID     string `json:"id"`
-	Pinned bool   `json:"pinned"`
-}
-
-type SetAnnouncementPinnedAdminRow = UpsertAnnouncementAdminRow
-
-func (q *Queries) SetAnnouncementPinnedAdmin(ctx context.Context, arg SetAnnouncementPinnedAdminParams) (SetAnnouncementPinnedAdminRow, error) {
-	row := q.db.QueryRow(ctx, setAnnouncementPinnedAdmin, arg.ID, arg.Pinned)
-	var i SetAnnouncementPinnedAdminRow
-	err := row.Scan(
-		&i.ID,
-		&i.Title,
-		&i.Status,
-		&i.PublishedAt,
-		&i.BodyHtml,
-		&i.Pinned,
-	)
-	return i, err
-}
-
 const upsertAnnouncementRead = `-- name: UpsertAnnouncementRead :exec
 INSERT INTO member_announcement_reads (member_id, announcement_id, read_at)
 VALUES ($1, $2, now())
@@ -583,6 +780,62 @@ type UpsertAnnouncementReadParams struct {
 func (q *Queries) UpsertAnnouncementRead(ctx context.Context, arg UpsertAnnouncementReadParams) error {
 	_, err := q.db.Exec(ctx, upsertAnnouncementRead, arg.MemberID, arg.AnnouncementID)
 	return err
+}
+
+const upsertBannerAdmin = `-- name: UpsertBannerAdmin :one
+INSERT INTO cms_banners (id, remark, image_url, link_url, sort, enabled)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (id) DO UPDATE SET
+    remark = EXCLUDED.remark,
+    image_url = EXCLUDED.image_url,
+    link_url = EXCLUDED.link_url,
+    sort = EXCLUDED.sort,
+    enabled = EXCLUDED.enabled,
+    updated_at = now()
+RETURNING id, remark, image_url, link_url, sort, enabled, created_at, updated_at
+`
+
+type UpsertBannerAdminParams struct {
+	ID       string `json:"id"`
+	Remark   string `json:"remark"`
+	ImageUrl string `json:"image_url"`
+	LinkUrl  string `json:"link_url"`
+	Sort     int32  `json:"sort"`
+	Enabled  bool   `json:"enabled"`
+}
+
+type UpsertBannerAdminRow struct {
+	ID        string             `json:"id"`
+	Remark    string             `json:"remark"`
+	ImageUrl  string             `json:"image_url"`
+	LinkUrl   string             `json:"link_url"`
+	Sort      int32              `json:"sort"`
+	Enabled   bool               `json:"enabled"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) UpsertBannerAdmin(ctx context.Context, arg UpsertBannerAdminParams) (UpsertBannerAdminRow, error) {
+	row := q.db.QueryRow(ctx, upsertBannerAdmin,
+		arg.ID,
+		arg.Remark,
+		arg.ImageUrl,
+		arg.LinkUrl,
+		arg.Sort,
+		arg.Enabled,
+	)
+	var i UpsertBannerAdminRow
+	err := row.Scan(
+		&i.ID,
+		&i.Remark,
+		&i.ImageUrl,
+		&i.LinkUrl,
+		&i.Sort,
+		&i.Enabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const upsertFaqArticleAdmin = `-- name: UpsertFaqArticleAdmin :one

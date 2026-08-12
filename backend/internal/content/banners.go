@@ -119,7 +119,7 @@ func (s *Service) AdminSaveBanner(ctx context.Context, in SaveBannerInput) (Admi
 	if err != nil {
 		return AdminBanner{}, err
 	}
-	return mapBannerAdminRow(row), nil
+	return mapBannerAdminFields(row.ID, row.Remark, row.ImageUrl, row.LinkUrl, row.Sort, row.Enabled, row.CreatedAt, row.UpdatedAt), nil
 }
 
 func (s *Service) AdminSetBannerEnabled(ctx context.Context, id string, enabled bool) (AdminBanner, error) {
@@ -137,7 +137,7 @@ func (s *Service) AdminSetBannerEnabled(ctx context.Context, id string, enabled 
 		}
 		return AdminBanner{}, err
 	}
-	return mapBannerAdminRow(row), nil
+	return mapBannerAdminFields(row.ID, row.Remark, row.ImageUrl, row.LinkUrl, row.Sort, row.Enabled, row.CreatedAt, row.UpdatedAt), nil
 }
 
 func (s *Service) AdminDeleteBanner(ctx context.Context, id string) error {
@@ -199,11 +199,15 @@ func bannerFilterParams(enabled *bool, createdFrom, createdTo *time.Time) banner
 }
 
 func mapBannerAdminRow(row sqlcdb.ListBannersAdminRow) AdminBanner {
+	return mapBannerAdminFields(row.ID, row.Remark, row.ImageUrl, row.LinkUrl, row.Sort, row.Enabled, row.CreatedAt, row.UpdatedAt)
+}
+
+func mapBannerAdminFields(id, remark, imageURL, linkURL string, sort int32, enabled bool, createdAt, updatedAt pgtype.Timestamptz) AdminBanner {
 	return AdminBanner{
-		ID: row.ID, Remark: row.Remark, ImageUrl: row.ImageUrl, LinkUrl: row.LinkUrl,
-		Sort: int(row.Sort), Enabled: row.Enabled,
-		CreatedAt: timeutil.FormatISO(row.CreatedAt.Time),
-		UpdatedAt: timeutil.FormatISO(row.UpdatedAt.Time),
+		ID: id, Remark: remark, ImageUrl: imageURL, LinkUrl: linkURL,
+		Sort: int(sort), Enabled: enabled,
+		CreatedAt: timeutil.FormatISO(createdAt.Time),
+		UpdatedAt: timeutil.FormatISO(updatedAt.Time),
 	}
 }
 

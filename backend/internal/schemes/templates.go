@@ -19,9 +19,9 @@ import (
 )
 
 var (
-	ErrTemplateNotFound   = errors.New("scheme template not found")
-	ErrInvalidTemplate    = errors.New("invalid scheme template")
-	ErrTemplateForbidden  = errors.New("scheme template forbidden")
+	ErrTemplateNotFound  = errors.New("scheme template not found")
+	ErrInvalidTemplate   = errors.New("invalid scheme template")
+	ErrTemplateForbidden = errors.New("scheme template forbidden")
 )
 
 // ClientDraftDefinitionID 与客户端 session 草稿路由 param 一致（未落库方案）。
@@ -164,7 +164,7 @@ func (s *Service) ClientListTemplates(ctx context.Context, account, definitionID
 		return nil, err
 	}
 	rows, err := s.q.ListSchemeTemplatesForDefinition(ctx, sqlcdb.ListSchemeTemplatesForDefinitionParams{
-		DefinitionID: definitionID,
+		DefinitionID: pgtype.Text{String: definitionID, Valid: true},
 		MemberID:     m.ID,
 	})
 	if err != nil {
@@ -247,7 +247,7 @@ func (s *Service) AdminSaveTemplate(ctx context.Context, in SaveTemplateInput) (
 			}
 			return TemplateRow{}, err
 		}
-		return mapUpsertedTemplate(row, label), nil
+		return mapUpsertedTemplateFields(row.ID, row.Name, row.LotteryCode, row.Brief, row.SortOrder, row.Enabled, row.Config, row.DefinitionID, row.CreatedAt, row.UpdatedAt, label), nil
 	}
 	if in.ID == "" {
 		in.ID = newTemplateID()
@@ -266,7 +266,7 @@ func (s *Service) AdminSaveTemplate(ctx context.Context, in SaveTemplateInput) (
 	if err != nil {
 		return TemplateRow{}, err
 	}
-	return mapUpsertedTemplate(row, label), nil
+	return mapUpsertedTemplateFields(row.ID, row.Name, row.LotteryCode, row.Brief, row.SortOrder, row.Enabled, row.Config, row.DefinitionID, row.CreatedAt, row.UpdatedAt, label), nil
 }
 
 func (s *Service) AdminDeleteTemplate(ctx context.Context, id string) error {
@@ -463,27 +463,31 @@ func defaultTemplateSeedConfig() ([]byte, error) {
 }
 
 func mapUpsertedTemplate(row sqlcdb.SchemeTemplate, label string) TemplateRow {
+	return mapUpsertedTemplateFields(row.ID, row.Name, row.LotteryCode, row.Brief, row.SortOrder, row.Enabled, row.Config, row.DefinitionID, row.CreatedAt, row.UpdatedAt, label)
+}
+
+func mapUpsertedTemplateFields(id, name, lotteryCode string, briefValue pgtype.Text, sortOrder int32, enabled bool, config []byte, definitionID pgtype.Text, createdAt, updatedAt pgtype.Timestamptz, label string) TemplateRow {
 	brief := ""
-	if row.Brief.Valid {
-		brief = strings.TrimSpace(row.Brief.String)
+	if briefValue.Valid {
+		brief = strings.TrimSpace(briefValue.String)
 	}
 	defID := ""
-	if row.DefinitionID.Valid {
-		defID = strings.TrimSpace(row.DefinitionID.String)
+	if definitionID.Valid {
+		defID = strings.TrimSpace(definitionID.String)
 	}
 	return TemplateRow{
-		ID:           row.ID,
-		Name:         row.Name,
-		LotteryCode:  row.LotteryCode,
+		ID:           id,
+		Name:         name,
+		LotteryCode:  lotteryCode,
 		LotteryLabel: label,
 		Brief:        brief,
-		SortOrder:    int(row.SortOrder),
-		Enabled:      row.Enabled,
+		SortOrder:    int(sortOrder),
+		Enabled:      enabled,
 		MemberOwned:  defID != "",
 		DefinitionID: defID,
-		Config:       parseTemplateConfig(row.Config),
-		CreatedAt:    timeutil.FormatISO(row.CreatedAt.Time),
-		UpdatedAt:    timeutil.FormatISO(row.UpdatedAt.Time),
+		Config:       parseTemplateConfig(config),
+		CreatedAt:    timeutil.FormatISO(createdAt.Time),
+		UpdatedAt:    timeutil.FormatISO(updatedAt.Time),
 	}
 }
 

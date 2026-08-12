@@ -116,6 +116,31 @@ func (q *Queries) GetSchemeDefinitionByIDAndMember(ctx context.Context, arg GetS
 	return i, err
 }
 
+const getSchemeDefinitionNameStatusByMember = `-- name: GetSchemeDefinitionNameStatusByMember :one
+SELECT
+    d.id,
+    EXISTS (SELECT 1 FROM scheme_instances i WHERE i.definition_id = d.id) AS has_instance
+FROM scheme_definitions d
+WHERE d.member_id = $1 AND d.scheme_name = $2
+`
+
+type GetSchemeDefinitionNameStatusByMemberParams struct {
+	MemberID   int64  `json:"member_id"`
+	SchemeName string `json:"scheme_name"`
+}
+
+type GetSchemeDefinitionNameStatusByMemberRow struct {
+	ID          string `json:"id"`
+	HasInstance bool   `json:"has_instance"`
+}
+
+func (q *Queries) GetSchemeDefinitionNameStatusByMember(ctx context.Context, arg GetSchemeDefinitionNameStatusByMemberParams) (GetSchemeDefinitionNameStatusByMemberRow, error) {
+	row := q.db.QueryRow(ctx, getSchemeDefinitionNameStatusByMember, arg.MemberID, arg.SchemeName)
+	var i GetSchemeDefinitionNameStatusByMemberRow
+	err := row.Scan(&i.ID, &i.HasInstance)
+	return i, err
+}
+
 const getSchemeInstanceByDefinitionID = `-- name: GetSchemeInstanceByDefinitionID :one
 SELECT
     id, definition_id, member_id, kind, scheme_name, lottery_code, lottery_label,
@@ -485,31 +510,6 @@ func (q *Queries) SchemeDefinitionNameExistsByMember(ctx context.Context, arg Sc
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
-}
-
-const getSchemeDefinitionNameStatusByMember = `-- name: GetSchemeDefinitionNameStatusByMember :one
-SELECT
-    d.id,
-    EXISTS (SELECT 1 FROM scheme_instances i WHERE i.definition_id = d.id) AS has_instance
-FROM scheme_definitions d
-WHERE d.member_id = $1 AND d.scheme_name = $2
-`
-
-type GetSchemeDefinitionNameStatusByMemberParams struct {
-	MemberID   int64  `json:"member_id"`
-	SchemeName string `json:"scheme_name"`
-}
-
-type GetSchemeDefinitionNameStatusByMemberRow struct {
-	ID          string `json:"id"`
-	HasInstance bool   `json:"has_instance"`
-}
-
-func (q *Queries) GetSchemeDefinitionNameStatusByMember(ctx context.Context, arg GetSchemeDefinitionNameStatusByMemberParams) (GetSchemeDefinitionNameStatusByMemberRow, error) {
-	row := q.db.QueryRow(ctx, getSchemeDefinitionNameStatusByMember, arg.MemberID, arg.SchemeName)
-	var i GetSchemeDefinitionNameStatusByMemberRow
-	err := row.Scan(&i.ID, &i.HasInstance)
-	return i, err
 }
 
 const syncSchemeInstancesSimBetByDefinition = `-- name: SyncSchemeInstancesSimBetByDefinition :execrows

@@ -73,7 +73,12 @@ sql:
       - "migrations/00106_drop_chat_and_system_messages.sql"
       - "migrations/00108_drop_members_agent_codes.sql"
       - "migrations/00109_member_guaji_balances.sql"
+      - "migrations/00113_scheme_templates_member_config.sql"
+      - "migrations/00114_scheme_templates_definition_id.sql"
       - "migrations/00120_cms_banners.sql"
+      - "migrations/00121_cms_banners_link_url.sql"
+      - "migrations/00122_cms_announcements_pinned.sql"
+      - "migrations/00135_cloud_bet_records_detail_fields.sql"
       - "internal/db/sqlc/patches/99_cms_promo_for_sqlc.sql"
     gen:
       go:

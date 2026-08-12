@@ -81,7 +81,7 @@ func (s *Service) AdminSaveAnnouncement(ctx context.Context, in AdminAnnouncemen
 	if err != nil {
 		return AdminAnnouncement{}, err
 	}
-	return mapAdminAnnouncementFromUpsert(row), nil
+	return mapAdminAnnouncementFields(row.ID, row.Title, row.Status, row.PublishedAt, row.BodyHtml, row.Pinned), nil
 }
 
 func (s *Service) AdminSetAnnouncementPinned(ctx context.Context, id string, pinned bool) (AdminAnnouncement, error) {
@@ -123,7 +123,7 @@ func (s *Service) AdminSetAnnouncementPinned(ctx context.Context, id string, pin
 		}
 		return AdminAnnouncement{}, err
 	}
-	return mapAdminAnnouncementFromUpsert(row), nil
+	return mapAdminAnnouncementFields(row.ID, row.Title, row.Status, row.PublishedAt, row.BodyHtml, row.Pinned), nil
 }
 
 func (s *Service) AdminDeleteAnnouncement(ctx context.Context, id string) error {

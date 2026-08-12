@@ -128,7 +128,6 @@ func (q *Queries) ResetMemberLookbackRuntime(ctx context.Context, arg ResetMembe
 }
 
 const resetSchemeInstanceLookbackRound = `-- name: ResetSchemeInstanceLookbackRound :one
--- 仅归零倍投轮次/回头盈亏；保留出号游标（定码轮换/高级定码轮换跳局）
 
 UPDATE scheme_instances
 
@@ -183,6 +182,7 @@ type ResetSchemeInstanceLookbackRoundRow struct {
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 }
 
+// 仅归零倍投轮次/回头盈亏；保留出号游标（定码轮换/高级定码轮换跳局）
 func (q *Queries) ResetSchemeInstanceLookbackRound(ctx context.Context, arg ResetSchemeInstanceLookbackRoundParams) (ResetSchemeInstanceLookbackRoundRow, error) {
 	row := q.db.QueryRow(ctx, resetSchemeInstanceLookbackRound, arg.ID, arg.Multiplier)
 	var i ResetSchemeInstanceLookbackRoundRow

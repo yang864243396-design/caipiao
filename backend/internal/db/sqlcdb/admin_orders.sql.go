@@ -131,19 +131,19 @@ SELECT
     COALESCE(
         NULLIF(TRIM(b.third_party_bet_id), ''),
         NULLIF(TRIM(c.third_party_bet_id), ''),
-        ''
-    ) AS third_party_bet_id,
+        ''::text
+    )::text AS third_party_bet_id,
     b.issue_no,
     m.account,
     b.lottery_name,
     COALESCE(b.currency, '') AS currency,
-    COALESCE(array_to_string(ARRAY(SELECT jsonb_array_elements_text(d.balls)), ' '), '') AS draw_numbers,
+    COALESCE(array_to_string(ARRAY(SELECT jsonb_array_elements_text(d.balls)), ' '), ''::text)::text AS draw_numbers,
     COALESCE(c.scheme_name, '') AS scheme_name,
     b.amount::float8 AS amount,
-    CASE
+    (CASE
         WHEN b.status = 'win' THEN (b.amount + b.pnl)::float8
-        ELSE 0
-    END AS payout_amount,
+        ELSE 0::float8
+    END)::float8 AS payout_amount,
     b.status,
     b.placed_at
 FROM bet_orders b

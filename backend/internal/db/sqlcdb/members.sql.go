@@ -11,6 +11,57 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const adminInsertMember = `-- name: AdminInsertMember :one
+INSERT INTO members (account, password_hash, display_name, status)
+VALUES ($1, $2, $3, $4)
+RETURNING id, account, display_name, status, registered_at, last_login_at
+`
+
+type AdminInsertMemberParams struct {
+	Account      string `json:"account"`
+	PasswordHash string `json:"password_hash"`
+	DisplayName  string `json:"display_name"`
+	Status       string `json:"status"`
+}
+
+type AdminInsertMemberRow struct {
+	ID           int64              `json:"id"`
+	Account      string             `json:"account"`
+	DisplayName  string             `json:"display_name"`
+	Status       string             `json:"status"`
+	RegisteredAt pgtype.Timestamptz `json:"registered_at"`
+	LastLoginAt  pgtype.Timestamptz `json:"last_login_at"`
+}
+
+func (q *Queries) AdminInsertMember(ctx context.Context, arg AdminInsertMemberParams) (AdminInsertMemberRow, error) {
+	row := q.db.QueryRow(ctx, adminInsertMember,
+		arg.Account,
+		arg.PasswordHash,
+		arg.DisplayName,
+		arg.Status,
+	)
+	var i AdminInsertMemberRow
+	err := row.Scan(
+		&i.ID,
+		&i.Account,
+		&i.DisplayName,
+		&i.Status,
+		&i.RegisteredAt,
+		&i.LastLoginAt,
+	)
+	return i, err
+}
+
+const adminInsertMemberWallet = `-- name: AdminInsertMemberWallet :exec
+INSERT INTO member_wallets (member_id, balance, frozen_balance, currency)
+VALUES ($1, 0, 0, 'CNY')
+`
+
+func (q *Queries) AdminInsertMemberWallet(ctx context.Context, memberID int64) error {
+	_, err := q.db.Exec(ctx, adminInsertMemberWallet, memberID)
+	return err
+}
+
 const adminUpdateMemberPasswordByID = `-- name: AdminUpdateMemberPasswordByID :execrows
 UPDATE members
 SET password_hash = $2,
@@ -49,59 +100,6 @@ func (q *Queries) AdminUpdateMemberStatus(ctx context.Context, arg AdminUpdateMe
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const adminInsertMember = `-- name: AdminInsertMember :one
-INSERT INTO members (account, password_hash, display_name, status)
-VALUES ($1, $2, $3, $4)
-RETURNING id, account, display_name, status, registered_at, last_login_at
-`
-
-type AdminInsertMemberParams struct {
-	Account      string `json:"account"`
-	PasswordHash string `json:"password_hash"`
-	DisplayName  string `json:"display_name"`
-	Status       string `json:"status"`
-}
-
-type AdminInsertMemberRow struct {
-	ID             int64              `json:"id"`
-	Account        string             `json:"account"`
-	DisplayName    string             `json:"display_name"`
-	Status         string             `json:"status"`
-	TotalBetAmount float64            `json:"total_bet_amount"`
-	PayoutAmount   float64            `json:"payout_amount"`
-	RegisteredAt   pgtype.Timestamptz `json:"registered_at"`
-	LastLoginAt    pgtype.Timestamptz `json:"last_login_at"`
-}
-
-func (q *Queries) AdminInsertMember(ctx context.Context, arg AdminInsertMemberParams) (AdminInsertMemberRow, error) {
-	row := q.db.QueryRow(ctx, adminInsertMember,
-		arg.Account,
-		arg.PasswordHash,
-		arg.DisplayName,
-		arg.Status,
-	)
-	var i AdminInsertMemberRow
-	err := row.Scan(
-		&i.ID,
-		&i.Account,
-		&i.DisplayName,
-		&i.Status,
-		&i.RegisteredAt,
-		&i.LastLoginAt,
-	)
-	return i, err
-}
-
-const adminInsertMemberWallet = `-- name: AdminInsertMemberWallet :exec
-INSERT INTO member_wallets (member_id, balance, frozen_balance, currency)
-VALUES ($1, 0, 0, 'CNY')
-`
-
-func (q *Queries) AdminInsertMemberWallet(ctx context.Context, memberID int64) error {
-	_, err := q.db.Exec(ctx, adminInsertMemberWallet, memberID)
-	return err
 }
 
 const countAdminMembers = `-- name: CountAdminMembers :one
@@ -171,6 +169,13 @@ SELECT
     m.registered_at,
     m.last_login_at
 FROM members m
+LEFT JOIN LATERAL (
+    SELECT
+        SUM(b.amount) AS total_bet_amount,
+        SUM(CASE WHEN b.status = 'win' THEN b.amount + b.pnl ELSE 0 END) AS payout_amount
+    FROM bet_orders b
+    WHERE b.member_id = m.id
+) stats ON true
 WHERE m.account = $1
   AND m.status = 'active'
 `
@@ -194,6 +199,8 @@ func (q *Queries) GetMemberByAccount(ctx context.Context, account string) (GetMe
 		&i.Account,
 		&i.DisplayName,
 		&i.Status,
+		&i.TotalBetAmount,
+		&i.PayoutAmount,
 		&i.RegisteredAt,
 		&i.LastLoginAt,
 	)
@@ -213,6 +220,13 @@ SELECT
     COALESCE(w.balance, 0)::float8 AS balance
 FROM members m
 LEFT JOIN member_wallets w ON w.member_id = m.id
+LEFT JOIN LATERAL (
+    SELECT
+        SUM(b.amount) AS total_bet_amount,
+        SUM(CASE WHEN b.status = 'win' THEN b.amount + b.pnl ELSE 0 END) AS payout_amount
+    FROM bet_orders b
+    WHERE b.member_id = m.id
+) stats ON true
 WHERE m.id = $1
 `
 
@@ -236,6 +250,8 @@ func (q *Queries) GetMemberByID(ctx context.Context, id int64) (GetMemberByIDRow
 		&i.Account,
 		&i.DisplayName,
 		&i.Status,
+		&i.TotalBetAmount,
+		&i.PayoutAmount,
 		&i.RegisteredAt,
 		&i.LastLoginAt,
 		&i.Balance,

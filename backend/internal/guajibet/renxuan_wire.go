@@ -311,7 +311,9 @@ func formatRenxuanZhixuanPositionWire(groupContent string, k int) string {
 	if len(lines) == sscPositionCount {
 		segs := make([]string, sscPositionCount)
 		for i, line := range lines {
-			segs[i] = strings.TrimSpace(line)
+			// Each line is a digit pool for one position. Its commas delimit
+			// choices inside the pool, not the five-position wire segments.
+			segs[i] = normalizePickDigits(line)
 		}
 		return strings.Join(segs, ",")
 	}
