@@ -88,6 +88,15 @@ function fmtMoney(v: number) {
   return v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
+const STAT_CURRENCIES = ['USDT', 'TRX', 'CNY'] as const
+
+function fmtCurrencyStats(row: MemberRow, field: 'currency' | 'totalBetAmount' | 'totalPnl') {
+  return STAT_CURRENCIES.map((currency) => {
+    if (field === 'currency') return currency
+    return fmtMoney(row.currencyStats.find((stat) => stat.currency === currency)?.[field] ?? 0)
+  }).join('\n')
+}
+
 function statusToCode(status: MemberRow['status']): MemberStatusCode {
   return status === '禁用' ? 'frozen' : 'active'
 }
@@ -224,11 +233,14 @@ async function onClearAuth(row: MemberRow) {
       <el-table-column label="CNY" min-width="112" align="right">
         <template #default="{ row }">{{ fmtMoney(row.guajiBalances.cny) }}</template>
       </el-table-column>
-      <el-table-column label="总投注金额" min-width="120" align="right">
-        <template #default="{ row }">{{ fmtMoney(row.totalBetAmount) }}</template>
+      <el-table-column label="币种" min-width="80">
+        <template #default="{ row }"><span class="currency-stats">{{ fmtCurrencyStats(row, 'currency') }}</span></template>
       </el-table-column>
-      <el-table-column label="派彩金额" min-width="120" align="right">
-        <template #default="{ row }">{{ fmtMoney(row.payoutAmount) }}</template>
+      <el-table-column label="会员投注总金额" min-width="130" align="right">
+        <template #default="{ row }"><span class="currency-stats">{{ fmtCurrencyStats(row, 'totalBetAmount') }}</span></template>
+      </el-table-column>
+      <el-table-column label="总盈亏" min-width="120" align="right">
+        <template #default="{ row }"><span class="currency-stats">{{ fmtCurrencyStats(row, 'totalPnl') }}</span></template>
       </el-table-column>
       <el-table-column label="注册" min-width="140">
         <template #default="{ row }">{{ fmt(row.registeredAt) }}</template>
@@ -301,5 +313,10 @@ async function onClearAuth(row: MemberRow) {
   display: flex;
   justify-content: flex-end;
   margin-top: 1rem;
+}
+.currency-stats {
+  display: inline-block;
+  white-space: pre-line;
+  line-height: 1.7;
 }
 </style>

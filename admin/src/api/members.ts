@@ -7,13 +7,18 @@ export interface AdminGuajiBalances {
   cny: number
 }
 
+export interface AdminMemberCurrencyStat {
+  currency: string
+  totalBetAmount: number
+  totalPnl: number
+}
+
 export interface AdminMemberRow {
   id: string
   account: string
   displayName: string
   guajiBalances: AdminGuajiBalances
-  totalBetAmount: number
-  payoutAmount: number
+  currencyStats: AdminMemberCurrencyStat[]
   balanceYuan?: number
   status: '正常' | '禁用'
   registeredAt: string
@@ -40,6 +45,7 @@ function mapMember(row: AdminMemberRow): AdminMemberRow {
   return {
     ...row,
     guajiBalances: row.guajiBalances ?? emptyGuajiBalances(),
+    currencyStats: row.currencyStats ?? [],
   }
 }
 

@@ -68,6 +68,29 @@ func (q *Queries) CountAdminFundRecords(ctx context.Context, arg CountAdminFundR
 const countMemberFundRecords = `-- name: CountMemberFundRecords :one
 SELECT COUNT(*)::bigint AS count
 FROM wallet_ledger l
+LEFT JOIN LATERAL (
+    SELECT
+        c.scheme_name,
+        COALESCE(bo.lottery_code, '') AS lottery_code
+    FROM cloud_bet_records c
+    LEFT JOIN bet_orders bo
+      ON bo.member_id = c.member_id
+     AND bo.order_no = c.bet_order_no
+    WHERE c.member_id = l.member_id
+      AND (
+        (NULLIF(TRIM(l.order_ref), '') IS NOT NULL AND c.bet_order_no = l.order_ref)
+        OR (
+          NULLIF(TRIM(l.order_ref), '') IS NULL
+          AND ABS(EXTRACT(EPOCH FROM (c.placed_at - l.created_at))) <= 5
+          AND ABS(c.amount::float8 - ABS(l.delta_amount::float8)) < 0.001
+          AND c.guaji_account_id IS NOT DISTINCT FROM l.guaji_account_id
+        )
+      )
+    ORDER BY
+      CASE WHEN NULLIF(TRIM(l.order_ref), '') IS NOT NULL AND c.bet_order_no = l.order_ref THEN 0 ELSE 1 END,
+      ABS(EXTRACT(EPOCH FROM (c.placed_at - l.created_at)))
+    LIMIT 1
+) sch ON true
 WHERE l.member_id = $1
   AND l.guaji_account_id = $2
   AND l.txn_type IN ('bet_debit', 'payout')
@@ -85,6 +108,16 @@ WHERE l.member_id = $1
     OR $6::text = ''
     OR COALESCE(l.currency, 'CNY') = $6::text
   )
+  AND (
+    $7::text IS NULL
+    OR $7::text = ''
+    OR sch.scheme_name ILIKE '%' || $7::text || '%'
+  )
+  AND (
+    $8::text IS NULL
+    OR $8::text = ''
+    OR sch.lottery_code = $8::text
+  )
 `
 
 type CountMemberFundRecordsParams struct {
@@ -94,17 +127,12 @@ type CountMemberFundRecordsParams struct {
 	TimeTo         pgtype.Timestamptz `json:"time_to"`
 	FlowDir        pgtype.Text        `json:"flow_dir"`
 	Currency       pgtype.Text        `json:"currency"`
+	SchemeName     pgtype.Text        `json:"scheme_name"`
+	LotteryCode    pgtype.Text        `json:"lottery_code"`
 }
 
 func (q *Queries) CountMemberFundRecords(ctx context.Context, arg CountMemberFundRecordsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countMemberFundRecords,
-		arg.MemberID,
-		arg.GuajiAccountID,
-		arg.TimeFrom,
-		arg.TimeTo,
-		arg.FlowDir,
-		arg.Currency,
-	)
+	row := q.db.QueryRow(ctx, countMemberFundRecords, arg.MemberID, arg.GuajiAccountID, arg.TimeFrom, arg.TimeTo, arg.FlowDir, arg.Currency, arg.SchemeName, arg.LotteryCode)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -533,7 +561,8 @@ LEFT JOIN LATERAL (
     SELECT
         c.scheme_name,
         COALESCE(bo.play_method, '') AS play_method,
-        COALESCE(bo.lottery_name, '') AS lottery_name
+        COALESCE(bo.lottery_name, '') AS lottery_name,
+        COALESCE(bo.lottery_code, '') AS lottery_code
     FROM cloud_bet_records c
     LEFT JOIN bet_orders bo
       ON bo.member_id = c.member_id

@@ -22,13 +22,18 @@ type AdminGuajiBalances struct {
 	CNY  float64 `json:"cny"`
 }
 
+type AdminMemberCurrencyStat struct {
+	Currency       string  `json:"currency"`
+	TotalBetAmount float64 `json:"totalBetAmount"`
+	TotalPnl       float64 `json:"totalPnl"`
+}
+
 type AdminMemberRow struct {
 	ID             string             `json:"id"`
 	Account        string             `json:"account"`
 	DisplayName    string             `json:"displayName"`
 	Status         string             `json:"status"`
-	TotalBetAmount float64            `json:"totalBetAmount"`
-	PayoutAmount   float64            `json:"payoutAmount"`
+	CurrencyStats  []AdminMemberCurrencyStat `json:"currencyStats"`
 	GuajiBalances  AdminGuajiBalances `json:"guajiBalances"`
 	BalanceYuan    float64            `json:"balanceYuan,omitempty"`
 	RegisteredAt   string             `json:"registeredAt"`
@@ -96,9 +101,18 @@ func (s *Service) AdminListMembers(ctx context.Context, q AdminMemberListQuery) 
 		return AdminMemberListResult{}, err
 	}
 
+	memberIDs := make([]int64, 0, len(rows))
+	for _, row := range rows { memberIDs = append(memberIDs, row.ID) }
+	statRows, err := s.q.ListAdminMemberCurrencyStats(ctx, memberIDs)
+	if err != nil { return AdminMemberListResult{}, err }
+	statsByMember := groupAdminMemberCurrencyStats(statRows)
+
 	items := make([]AdminMemberRow, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, mapAdminMemberRow(row))
+		item := mapAdminMemberRow(row)
+		item.CurrencyStats = statsByMember[row.ID]
+		if item.CurrencyStats == nil { item.CurrencyStats = []AdminMemberCurrencyStat{} }
+		items = append(items, item)
 	}
 	return AdminMemberListResult{Items: items, Total: total}, nil
 }
@@ -126,11 +140,21 @@ func mapAdminMemberRow(row sqlcdb.ListAdminMembersRow) AdminMemberRow {
 		Account:        row.Account,
 		DisplayName:    row.DisplayName,
 		Status:         statusLabel(row.Status),
-		TotalBetAmount: roundMoney(row.TotalBetAmount),
-		PayoutAmount:   roundMoney(row.PayoutAmount),
 		RegisteredAt:   timeutil.FormatISO(row.RegisteredAt.Time),
 		LastLoginAt:    formatLastLogin(row.LastLoginAt),
 	}
+}
+
+func groupAdminMemberCurrencyStats(rows []sqlcdb.ListAdminMemberCurrencyStatsRow) map[int64][]AdminMemberCurrencyStat {
+	grouped := make(map[int64][]AdminMemberCurrencyStat)
+	for _, row := range rows {
+		grouped[row.MemberID] = append(grouped[row.MemberID], AdminMemberCurrencyStat{
+			Currency: strings.TrimSpace(row.Currency),
+			TotalBetAmount: roundMoney(row.TotalBetAmount),
+			TotalPnl: roundMoney(row.TotalPnl),
+		})
+	}
+	return grouped
 }
 
 func mapAdminMemberDetailRow(row sqlcdb.GetMemberByIDRow) AdminMemberRow {

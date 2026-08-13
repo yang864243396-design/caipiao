@@ -4,18 +4,10 @@ SELECT
     m.account,
     m.display_name,
     m.status,
-    COALESCE(stats.total_bet_amount, 0)::float8 AS total_bet_amount,
-    COALESCE(stats.payout_amount, 0)::float8 AS payout_amount,
     m.registered_at,
     m.last_login_at
 FROM members m
-LEFT JOIN LATERAL (
-    SELECT
-        SUM(b.amount) AS total_bet_amount,
-        SUM(CASE WHEN b.status = 'win' THEN b.amount + b.pnl ELSE 0 END) AS payout_amount
-    FROM bet_orders b
-    WHERE b.member_id = m.id
-) stats ON true
+
 WHERE m.account = $1
   AND m.status = 'active';
 
@@ -140,32 +132,17 @@ SELECT
     m.account,
     m.display_name,
     m.status,
-    COALESCE(stats.total_bet_amount, 0)::float8 AS total_bet_amount,
-    COALESCE(stats.payout_amount, 0)::float8 AS payout_amount,
     m.registered_at,
     m.last_login_at,
     COALESCE(w.balance, 0)::float8 AS balance
 FROM members m
 LEFT JOIN member_wallets w ON w.member_id = m.id
-LEFT JOIN LATERAL (
-    SELECT
-        SUM(b.amount) AS total_bet_amount,
-        SUM(CASE WHEN b.status = 'win' THEN b.amount + b.pnl ELSE 0 END) AS payout_amount
-    FROM bet_orders b
-    WHERE b.member_id = m.id
-) stats ON true
+
 WHERE m.id = $1;
 
 -- name: CountAdminMembers :one
 SELECT COUNT(*)::bigint
 FROM members m
-LEFT JOIN LATERAL (
-    SELECT
-        SUM(b.amount) AS total_bet_amount,
-        SUM(CASE WHEN b.status = 'win' THEN b.amount + b.pnl ELSE 0 END) AS payout_amount
-    FROM bet_orders b
-    WHERE b.member_id = m.id
-) stats ON true
 WHERE (
     sqlc.narg(keyword)::text IS NULL
     OR sqlc.narg(keyword)::text = ''
@@ -194,18 +171,9 @@ SELECT
     m.account,
     m.display_name,
     m.status,
-    COALESCE(stats.total_bet_amount, 0)::float8 AS total_bet_amount,
-    COALESCE(stats.payout_amount, 0)::float8 AS payout_amount,
     m.registered_at,
     m.last_login_at
 FROM members m
-LEFT JOIN LATERAL (
-    SELECT
-        SUM(b.amount) AS total_bet_amount,
-        SUM(CASE WHEN b.status = 'win' THEN b.amount + b.pnl ELSE 0 END) AS payout_amount
-    FROM bet_orders b
-    WHERE b.member_id = m.id
-) stats ON true
 WHERE (
     sqlc.narg(keyword)::text IS NULL
     OR sqlc.narg(keyword)::text = ''
@@ -229,6 +197,17 @@ WHERE (
 )
 ORDER BY m.registered_at DESC, m.id DESC
 LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
+
+-- name: ListAdminMemberCurrencyStats :many
+SELECT
+    b.member_id,
+    COALESCE(NULLIF(TRIM(b.currency), ''), 'CNY') AS currency,
+    SUM(b.amount)::float8 AS total_bet_amount,
+    SUM(b.pnl)::float8 AS total_pnl
+FROM bet_orders b
+WHERE b.member_id = ANY(sqlc.arg(member_ids)::bigint[])
+GROUP BY b.member_id, COALESCE(NULLIF(TRIM(b.currency), ''), 'CNY')
+ORDER BY b.member_id, currency;
 
 -- name: ListWalletLedgerAdmin :many
 SELECT
