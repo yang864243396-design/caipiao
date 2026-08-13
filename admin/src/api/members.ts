@@ -20,7 +20,7 @@ export interface AdminMemberRow {
   guajiBalances: AdminGuajiBalances
   currencyStats: AdminMemberCurrencyStat[]
   balanceYuan?: number
-  status: '正常' | '禁用'
+  status: '姝ｅ父' | '绂佺敤'
   registeredAt: string
   lastLoginAt: string
 }
@@ -114,6 +114,8 @@ export interface FetchMemberFundRecordsParams {
   dateTo: string
   flowType?: FundFlowType
   currency?: FundCurrency
+  schemeName?: string
+  lotteryCode?: string
   page?: number
   pageSize?: number
 }
@@ -127,6 +129,8 @@ export async function fetchMemberFundRecords(
   query.set('dateTo', params.dateTo)
   if (params.flowType && params.flowType !== 'all') query.set('flowType', params.flowType)
   if (params.currency && params.currency !== 'all') query.set('currency', params.currency)
+  if (params.schemeName?.trim()) query.set('schemeName', params.schemeName.trim())
+  if (params.lotteryCode) query.set('lotteryCode', params.lotteryCode)
   query.set('page', String(params.page ?? 1))
   query.set('pageSize', String(params.pageSize ?? 10))
   return requestApi<MemberFundRecordsResult>(

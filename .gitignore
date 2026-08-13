@@ -30,3 +30,7 @@ tests/
 
 # scheme-audit 输出（每次跑都是一份带时间戳的快照）
 backend/reports/
+/backend/.run-cache
+/backend/.run-modcache
+/backend/backend/.run-cache
+/backend/backend/.run-modcache

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"caipiao/backend/internal/apix"
@@ -114,14 +115,17 @@ func (h *Handler) AdminMemberFundRecords(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	result, err := h.members.AdminFundRecordsForMemberID(r.Context(), memberID, member.AdminFundRecordsQuery{
-		DateFrom: r.URL.Query().Get("dateFrom"),
-		DateTo:   r.URL.Query().Get("dateTo"),
-		FlowType: r.URL.Query().Get("flowType"),
-		Currency: r.URL.Query().Get("currency"),
-		Page:     queryInt(r, "page", 1),
-		PageSize: queryInt(r, "pageSize", 10),
+		DateFrom:    r.URL.Query().Get("dateFrom"),
+		DateTo:      r.URL.Query().Get("dateTo"),
+		FlowType:    r.URL.Query().Get("flowType"),
+		Currency:    r.URL.Query().Get("currency"),
+		SchemeName:  r.URL.Query().Get("schemeName"),
+		LotteryCode: r.URL.Query().Get("lotteryCode"),
+		Page:        queryInt(r, "page", 1),
+		PageSize:    queryInt(r, "pageSize", 10),
 	})
 	if err != nil {
+		slog.Error("admin member fund records failed", "memberId", memberID, "err", err)
 		h.handleMemberErr(w, err)
 		return
 	}

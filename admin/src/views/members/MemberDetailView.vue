@@ -6,6 +6,7 @@ import SchemeHistoryDrawer from '@/components/schemes/SchemeHistoryDrawer.vue'
 import { adminConfirmDialog } from '@/utils/adminConfirmDialog'
 import { useMembersStore, type MemberRow } from '@/stores/members'
 import { useSchemeInstancesStore } from '@/stores/schemeInstances'
+import { useLotteryCatalogStore } from '@/stores/lotteryCatalog'
 import { postMemberOp } from '@/api/memberOps'
 import { fetchMemberGuajiAccounts, type AdminGuajiAccountRow } from '@/api/guajiAccounts'
 import type { FundCurrency, FundFlowType, MemberFundRecordRow } from '@/types/members'
@@ -18,6 +19,8 @@ interface AppliedFundQuery {
   dateTo: string
   flowType: FundFlowType
   currency: FundCurrency
+  schemeName: string
+  lotteryCode: string
 }
 
 function todayYmd(): string {
@@ -34,6 +37,7 @@ const id = computed(() => route.params.id as string)
 
 const members = useMembersStore()
 const schemes = useSchemeInstancesStore()
+const lotteryCatalog = useLotteryCatalogStore()
 
 const member = ref<MemberRow | undefined>(undefined)
 const detailLoading = ref(true)
@@ -47,6 +51,8 @@ let guajiLoaded = false
 const dateRange = ref<[string, string]>([todayYmd(), todayYmd()])
 const flowType = ref<FundFlowType>('all')
 const currency = ref<FundCurrency>('all')
+const schemeName = ref('')
+const lotteryCode = ref('')
 const fundRows = ref<MemberFundRecordRow[]>([])
 const fundLoading = ref(false)
 const fundReady = ref(false)
@@ -65,6 +71,12 @@ const currencyOptions: { value: FundCurrency; label: string }[] = [
   { value: 'all', label: '全部币种' },
   ...PRIMARY_CURRENCIES.map((c) => ({ value: c as FundCurrency, label: c })),
 ]
+
+const lotteryOptions = computed(() =>
+  [...lotteryCatalog.rows]
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .map((row) => ({ value: row.code, label: row.displayName })),
+)
 
 async function loadGuajiAccounts(): Promise<void> {
   if (guajiLoading.value) return
@@ -114,6 +126,8 @@ async function reloadFundRecords(): Promise<void> {
       dateTo: q.dateTo,
       flowType: q.flowType,
       currency: q.currency,
+      schemeName: q.schemeName,
+      lotteryCode: q.lotteryCode,
       page: fundPage.value,
       pageSize: fundPageSize.value,
     })
@@ -140,6 +154,8 @@ async function runFundSearch(auto = false): Promise<void> {
     dateTo: dateRange.value[1],
     flowType: flowType.value,
     currency: currency.value,
+    schemeName: schemeName.value,
+    lotteryCode: lotteryCode.value,
   }
   await reloadFundRecords()
 }
@@ -153,7 +169,7 @@ async function loadMemberDetail() {
   member.value = undefined
   try {
     member.value = await members.loadDetail(id.value)
-    await schemes.hydrate()
+    await Promise.all([schemes.hydrate(), lotteryCatalog.hydrate()])
     if (tab.value === 'ledger') await runFundSearch(true)
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '加载会员详情失败')
@@ -367,6 +383,16 @@ async function onSoftStop(row: { id: string; status: string }) {
                 <el-option v-for="o in currencyOptions" :key="o.value" :label="o.label" :value="o.value" />
               </el-select>
             </div>
+            <div class="fund-filter">
+              <span class="fund-filter-label">方案</span>
+              <el-input v-model="schemeName" class="fund-filter-select" clearable placeholder="方案名称" />
+            </div>
+            <div class="fund-filter">
+              <span class="fund-filter-label">彩种</span>
+              <el-select v-model="lotteryCode" class="fund-filter-select" clearable placeholder="全部彩种">
+                <el-option v-for="option in lotteryOptions" :key="option.value" :label="option.label" :value="option.value" />
+              </el-select>
+            </div>
             <el-button type="primary" :loading="fundLoading" @click="onFundSearch">查询</el-button>
           </div>
 
@@ -374,7 +400,8 @@ async function onSoftStop(row: { id: string; status: string }) {
 
             <el-table-column prop="schemeName" label="方案名称" min-width="140" show-overflow-tooltip />
 
-            <el-table-column prop="playMethod" label="玩法" min-width="140" show-overflow-tooltip />`n            <el-table-column prop="lottery" label="彩种" min-width="120" show-overflow-tooltip />
+            <el-table-column prop="playMethod" label="玩法" min-width="140" show-overflow-tooltip />
+            <el-table-column prop="lottery" label="彩种" min-width="120" show-overflow-tooltip />
 
             <el-table-column label="变动金额" min-width="120" align="right">
 

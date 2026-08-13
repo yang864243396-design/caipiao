@@ -65,56 +65,16 @@ LIMIT sqlc.arg(row_limit);
 -- name: CountMemberFundRecords :one
 SELECT COUNT(*)::bigint AS count
 FROM wallet_ledger l
-LEFT JOIN LATERAL (
-    SELECT
-        c.scheme_name,
-        COALESCE(bo.lottery_code, '') AS lottery_code
-    FROM cloud_bet_records c
-    LEFT JOIN bet_orders bo
-      ON bo.member_id = c.member_id
-     AND bo.order_no = c.bet_order_no
-    WHERE c.member_id = l.member_id
-      AND (
-        (NULLIF(TRIM(l.order_ref), '') IS NOT NULL AND c.bet_order_no = l.order_ref)
-        OR (
-          NULLIF(TRIM(l.order_ref), '') IS NULL
-          AND ABS(EXTRACT(EPOCH FROM (c.placed_at - l.created_at))) <= 5
-          AND ABS(c.amount::float8 - ABS(l.delta_amount::float8)) < 0.001
-          AND c.guaji_account_id IS NOT DISTINCT FROM l.guaji_account_id
-        )
-      )
-    ORDER BY
-      CASE WHEN NULLIF(TRIM(l.order_ref), '') IS NOT NULL AND c.bet_order_no = l.order_ref THEN 0 ELSE 1 END,
-      ABS(EXTRACT(EPOCH FROM (c.placed_at - l.created_at)))
-    LIMIT 1
-) sch ON true
 WHERE l.member_id = $1
   AND l.guaji_account_id = sqlc.arg(guaji_account_id)
   AND l.txn_type IN ('bet_debit', 'payout')
   AND l.created_at >= sqlc.arg(time_from)
   AND l.created_at < sqlc.arg(time_to)
-  AND (
-    sqlc.narg(flow_dir)::text IS NULL
-    OR sqlc.narg(flow_dir)::text = ''
-    OR sqlc.narg(flow_dir)::text = 'all'
-    OR (sqlc.narg(flow_dir)::text = 'income' AND l.delta_amount > 0)
-    OR (sqlc.narg(flow_dir)::text = 'expense' AND l.delta_amount < 0)
-  )
-  AND (
-    sqlc.narg(currency)::text IS NULL
-    OR sqlc.narg(currency)::text = ''
-    OR COALESCE(l.currency, 'CNY') = sqlc.narg(currency)::text
-  )
-  AND (
-    sqlc.narg(scheme_name)::text IS NULL
-    OR sqlc.narg(scheme_name)::text = ''
-    OR sch.scheme_name ILIKE '%' || sqlc.narg(scheme_name)::text || '%'
-  )
-  AND (
-    sqlc.narg(lottery_code)::text IS NULL
-    OR sqlc.narg(lottery_code)::text = ''
-    OR sch.lottery_code = sqlc.narg(lottery_code)::text
-  );
+  AND (sqlc.narg(flow_dir)::text IS NULL OR sqlc.narg(flow_dir)::text = '' OR sqlc.narg(flow_dir)::text = 'all' OR (sqlc.narg(flow_dir)::text = 'income' AND l.delta_amount > 0) OR (sqlc.narg(flow_dir)::text = 'expense' AND l.delta_amount < 0))
+  AND (sqlc.narg(currency)::text IS NULL OR sqlc.narg(currency)::text = '' OR COALESCE(l.currency, 'CNY') = sqlc.narg(currency)::text)
+  AND (sqlc.narg(scheme_name)::text IS NULL OR sqlc.narg(scheme_name)::text = '' OR l.lottery_code ILIKE '%' || sqlc.narg(scheme_name)::text || '%')
+  AND (sqlc.narg(lottery_code)::text IS NULL OR sqlc.narg(lottery_code)::text = '' OR l.lottery_code = sqlc.narg(lottery_code)::text);
+
 -- name: ListMemberFundRecordsPaged :many
 SELECT
     l.id,
@@ -124,9 +84,9 @@ SELECT
     l.balance_after::float8 AS balance_after,
     COALESCE(l.currency, 'CNY') AS currency,
     l.created_at,
-    COALESCE(sch.scheme_name, '') AS scheme_name,
-    COALESCE(sch.play_method, '') AS play_method,
-    COALESCE(sch.lottery_name, '') AS lottery_name
+    COALESCE(COALESCE(by_order.scheme_name, by_legacy.scheme_name, ''), '') AS scheme_name,
+    COALESCE(COALESCE(by_order.play_method, by_legacy.play_method, ''), '') AS play_method,
+    COALESCE(NULLIF(l.lottery_name, ''), by_order.lottery_name, by_legacy.lottery_name, '') AS lottery_name
 FROM wallet_ledger l
 LEFT JOIN LATERAL (
     SELECT
@@ -138,21 +98,30 @@ LEFT JOIN LATERAL (
     LEFT JOIN bet_orders bo
       ON bo.member_id = c.member_id
      AND bo.order_no = c.bet_order_no
-    WHERE c.member_id = l.member_id
-      AND (
-        (NULLIF(TRIM(l.order_ref), '') IS NOT NULL AND c.bet_order_no = l.order_ref)
-        OR (
-          NULLIF(TRIM(l.order_ref), '') IS NULL
-          AND ABS(EXTRACT(EPOCH FROM (c.placed_at - l.created_at))) <= 5
-          AND ABS(c.amount::float8 - ABS(l.delta_amount::float8)) < 0.001
-          AND c.guaji_account_id IS NOT DISTINCT FROM l.guaji_account_id
-        )
-      )
-    ORDER BY
-      CASE WHEN NULLIF(TRIM(l.order_ref), '') IS NOT NULL AND c.bet_order_no = l.order_ref THEN 0 ELSE 1 END,
-      ABS(EXTRACT(EPOCH FROM (c.placed_at - l.created_at)))
+    WHERE NULLIF(TRIM(l.order_ref), '') IS NOT NULL
+      AND c.member_id = l.member_id
+      AND c.bet_order_no = NULLIF(TRIM(l.order_ref), '')
     LIMIT 1
-) sch ON true
+) by_order ON true
+LEFT JOIN LATERAL (
+    SELECT
+        c.scheme_name,
+        COALESCE(bo.play_method, '') AS play_method,
+        COALESCE(bo.lottery_name, '') AS lottery_name,
+        COALESCE(bo.lottery_code, '') AS lottery_code
+    FROM cloud_bet_records c
+    LEFT JOIN bet_orders bo
+      ON bo.member_id = c.member_id
+     AND bo.order_no = c.bet_order_no
+    WHERE NULLIF(TRIM(l.order_ref), '') IS NULL
+      AND c.member_id = l.member_id
+      AND c.placed_at >= l.created_at - INTERVAL '5 seconds'
+      AND c.placed_at <= l.created_at + INTERVAL '5 seconds'
+      AND ABS(c.amount::float8 - ABS(l.delta_amount::float8)) < 0.001
+      AND c.guaji_account_id = l.guaji_account_id
+    ORDER BY c.placed_at DESC
+    LIMIT 1
+) by_legacy ON true
 WHERE l.member_id = $1
   AND l.guaji_account_id = sqlc.arg(guaji_account_id)
   AND l.txn_type IN ('bet_debit', 'payout')
@@ -173,12 +142,12 @@ WHERE l.member_id = $1
   AND (
     sqlc.narg(scheme_name)::text IS NULL
     OR sqlc.narg(scheme_name)::text = ''
-    OR sch.scheme_name ILIKE '%' || sqlc.narg(scheme_name)::text || '%'
+    OR COALESCE(by_order.scheme_name, by_legacy.scheme_name, '') ILIKE '%' || sqlc.narg(scheme_name)::text || '%'
   )
   AND (
     sqlc.narg(lottery_code)::text IS NULL
     OR sqlc.narg(lottery_code)::text = ''
-    OR sch.lottery_code = sqlc.narg(lottery_code)::text
+    OR COALESCE(l.lottery_code, '') = sqlc.narg(lottery_code)::text
   )
 ORDER BY l.created_at DESC, l.id DESC
 LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);

@@ -49,12 +49,14 @@ type FundRecordsQuery struct {
 }
 
 type AdminFundRecordsQuery struct {
-	DateFrom string
-	DateTo   string
-	FlowType string
-	Currency string
-	Page     int
-	PageSize int
+	DateFrom    string
+	DateTo      string
+	FlowType    string
+	Currency    string
+	SchemeName  string
+	LotteryCode string
+	Page        int
+	PageSize    int
 }
 
 type AdminSiteFundRecordsQuery struct {
@@ -238,6 +240,8 @@ func (s *Service) AdminFundRecordsForMemberID(ctx context.Context, memberID int6
 	if err != nil {
 		return empty, err
 	}
+	schemeName := pgTextOptional(q.SchemeName)
+	lotteryCode := pgTextOptional(q.LotteryCode)
 
 	page := q.Page
 	if page < 1 {
@@ -266,6 +270,8 @@ func (s *Service) AdminFundRecordsForMemberID(ctx context.Context, memberID int6
 		TimeTo:         pgtype.Timestamptz{Time: timeTo, Valid: true},
 		FlowDir:        flowDir,
 		Currency:       currency,
+		SchemeName:     schemeName,
+		LotteryCode:    lotteryCode,
 	}
 	total, err := s.q.CountMemberFundRecords(ctx, filter)
 	if err != nil {
@@ -280,6 +286,8 @@ func (s *Service) AdminFundRecordsForMemberID(ctx context.Context, memberID int6
 		TimeTo:         pgtype.Timestamptz{Time: timeTo, Valid: true},
 		FlowDir:        flowDir,
 		Currency:       currency,
+		SchemeName:     schemeName,
+		LotteryCode:    lotteryCode,
 		RowLimit:       int32(pageSize),
 		RowOffset:      int32(offset),
 	})
