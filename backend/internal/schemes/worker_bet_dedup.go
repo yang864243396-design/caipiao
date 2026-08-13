@@ -176,6 +176,23 @@ func (w *Worker) finalizeCloudBetAfterGuaji(
 		}
 	}
 	guajiID := activeGuajiAccountIDForInst(ctx, w.q, inst)
+	updated, err := w.q.FinalizeClaimedCloudBetRecordGuajiMeta(ctx, inst.ID, periodNo,
+		pgtype.Text{String: tid, Valid: tid != ""},
+		pgtype.Text{String: meta.OrderNo, Valid: tid != "" && meta.OrderNo != ""},
+		guajiPeriodsPgtext(meta.Periods),
+		numericFromFloat(0), "pending", numericFromFloat(amount), betUnits, playType, betContent)
+	if err == nil && updated {
+		w.syncPeriodBetCursor(ctx, w.q, inst, periodNo)
+		return
+	}
+	if err != nil {
+		slog.Warn("scheme worker finalize claimed cloud bet update failed", "id", inst.ID, "period", periodNo, "err", err)
+	} else {
+		slog.Error("scheme worker finalize claim missing after upstream accept", "id", inst.ID, "period", periodNo, "thirdPartyBetId", tid)
+	}
+	// A process may have lost its pre-request claim after the upstream accepted
+	// the bet. Recover exactly once with the returned third-party id; this is not
+	// an amount-based association.
 	if err := w.q.InsertCloudBetRecordEx(ctx, sqlcdb.InsertCloudBetRecordExParams{
 		RecordNo:         recordNo,
 		MemberID:         inst.MemberID,

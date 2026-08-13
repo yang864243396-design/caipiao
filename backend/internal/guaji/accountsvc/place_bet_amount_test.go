@@ -27,7 +27,7 @@ func TestRoundLottBetAmount_commonUnits(t *testing.T) {
 		mult int
 		want float64
 	}{
-		{0.001, 3, 15, 0.04},
+		{0.001, 3, 15, 0.045},
 		{0.02, 3, 15, 0.9},
 		{0.1, 3, 15, 4.5},
 		{0.2, 3, 15, 9},
@@ -40,11 +40,13 @@ func TestRoundLottBetAmount_commonUnits(t *testing.T) {
 	}
 }
 
-func TestRoundLottBetAmount_truncatesToGuajiCents(t *testing.T) {
-	if got := roundLottBetAmount(0.001, 176, 1); got != 0.17 {
-		t.Fatalf("got %v want 0.17", got)
+func TestRoundLottBetAmount_preservesUnitProductForThirdPartyValidation(t *testing.T) {
+	// amount_unit、bets_nums、multiple、bet_amount 须严格相乘一致。
+	// 1 厘 × 五星组选120满选 252 注 = 0.252；若先截成 0.25，Guaji 会以 40000 拒单。
+	if got := roundLottBetAmount(0.001, 252, 1); got != 0.252 {
+		t.Fatalf("got %v want 0.252", got)
 	}
-	if got := roundLottBetAmount(0.001, 179, 1); got != 0.17 {
-		t.Fatalf("got %v want 0.17", got)
+	if got := roundLottBetAmount(0.001, 176, 1); got != 0.176 {
+		t.Fatalf("got %v want 0.176", got)
 	}
 }

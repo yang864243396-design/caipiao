@@ -13,7 +13,9 @@ import (
 )
 
 // roundLottBetAmount 计算第三方 bet_amount（unit×注数×倍数）。
-// Guaji 实际按两位小数向下截断，必须在请求、账本与回查前采用同一口径。
+// 请求中的 amount_unit、bets_nums、multiple、bet_amount 必须严格相乘一致；
+// 因此保留系统投注单位的三位小数，不能在请求前截为两位。
+// 账本/展示的实际扣款金额仍由 schemes.TruncateBetAmount 单独按两位处理。
 func roundLottBetAmount(unit float64, betsNums, mult int) float64 {
 	if unit <= 0 {
 		unit = 2
@@ -24,7 +26,7 @@ func roundLottBetAmount(unit float64, betsNums, mult int) float64 {
 	if mult <= 0 {
 		mult = 1
 	}
-	return math.Floor(unit*float64(betsNums)*float64(mult)*100+1e-9) / 100
+	return math.Round(unit*float64(betsNums)*float64(mult)*1000+1e-9) / 1000
 }
 
 func lottBetContentForRequest(meta guajibet.RuleMeta, content string, unit float64, betsNums, mult int) guaji.LottBetContent {

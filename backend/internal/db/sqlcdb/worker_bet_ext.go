@@ -381,6 +381,40 @@ WHERE scheme_id = $1 AND period_no = $2`,
 //
 // 目标期已占用时绝不可删除 from 占位：第三方接单期与本地开放期错位时，删占位会让
 // 同一开放期在下一 tick 再次 Place → 同期限连打（已在正式盘复现）。
+// FinalizeClaimedCloudBetRecordGuajiMeta writes third-party acceptance data
+// to the exact period claim created before the outbound request. A false
+// result means the claim is missing and must not be treated as success.
+func (q *Queries) FinalizeClaimedCloudBetRecordGuajiMeta(
+	ctx context.Context,
+	schemeID, periodNo string,
+	thirdPartyBetID, betOrderNo, thirdPartyPeriod pgtype.Text,
+	pnl pgtype.Numeric,
+	status string,
+	amount pgtype.Numeric,
+	betUnits int,
+	playType string,
+	betContent string,
+) (bool, error) {
+	tag, err := q.db.Exec(ctx, `
+UPDATE cloud_bet_records
+SET third_party_bet_id = $3,
+    bet_order_no = $4,
+    third_party_period = $5,
+    pnl = $6,
+    status = $7,
+    amount = $8,
+    bet_units = COALESCE($9::int, bet_units),
+    play_type = CASE WHEN NULLIF(TRIM($10), '') IS NOT NULL THEN TRIM($10) ELSE play_type END,
+    bet_content = CASE WHEN NULLIF(TRIM($11), '') IS NOT NULL THEN $11 ELSE bet_content END
+WHERE scheme_id = $1 AND period_no = $2`,
+		schemeID, periodNo, thirdPartyBetID, betOrderNo, thirdPartyPeriod, pnl, status, amount,
+		nullInt4(betUnits), strings.TrimSpace(playType), betContent)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 func (q *Queries) MoveCloudBetRecordPeriod(ctx context.Context, schemeID, fromPeriod, toPeriod string) (renamed bool, err error) {
 	fromPeriod = strings.TrimSpace(fromPeriod)
 	toPeriod = strings.TrimSpace(toPeriod)
@@ -658,16 +692,16 @@ SELECT scheme_id FROM cloud_bet_records WHERE bet_order_no = $1 LIMIT 1`, betOrd
 
 // CloudBetListRow 投注记录列表行（含第三方注单号）。
 type CloudBetListRow struct {
-	ID                int64
-	RecordNo          string
-	ThirdPartyBetID   pgtype.Text
-	SchemeName        string
-	LotteryLabel      string
-	PeriodNo          string
-	Amount            float64
-	Pnl               float64
-	Status            string
-	PlacedAt          pgtype.Timestamptz
+	ID              int64
+	RecordNo        string
+	ThirdPartyBetID pgtype.Text
+	SchemeName      string
+	LotteryLabel    string
+	PeriodNo        string
+	Amount          float64
+	Pnl             float64
+	Status          string
+	PlacedAt        pgtype.Timestamptz
 }
 
 // cloudBetLotteryLabelSQL：优先本表冗余彩种名（方案删除后仍可用）。
@@ -841,15 +875,15 @@ LIMIT $9`,
 
 // BetOrderListRow 含第三方注单号的 bet_orders 列表行。
 type BetOrderListRow struct {
-	ID                int64
-	OrderNo           string
-	ThirdPartyBetID   pgtype.Text
-	LotteryName       string
-	IssueNo           string
-	Amount            float64
-	Pnl               float64
-	Status            string
-	PlacedAt          pgtype.Timestamptz
+	ID              int64
+	OrderNo         string
+	ThirdPartyBetID pgtype.Text
+	LotteryName     string
+	IssueNo         string
+	Amount          float64
+	Pnl             float64
+	Status          string
+	PlacedAt        pgtype.Timestamptz
 }
 
 // CloudBetCurrencySummaryRow 云端投注按币种汇总行。

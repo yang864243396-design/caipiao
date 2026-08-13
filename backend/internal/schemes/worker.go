@@ -825,7 +825,7 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 				metaPeriod = guajiTargetPeriodNo
 			}
 		}
-		if err := qtx.UpdateCloudBetRecordGuajiMeta(ctx, inst.ID, metaPeriod,
+		updated, err := qtx.FinalizeClaimedCloudBetRecordGuajiMeta(ctx, inst.ID, metaPeriod,
 			pgtype.Text{String: metaTID, Valid: metaTID != ""},
 			pgtype.Text{String: metaOrder, Valid: metaOrder != ""},
 			guajiPeriodsPgtext(betMeta.Periods),
@@ -834,8 +834,12 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 			betUnits,
 			playTypeLabel,
 			betContent,
-		); err != nil {
+		)
+		if err != nil {
 			return err
+		}
+		if !updated {
+			return fmt.Errorf("accepted third-party bet claim missing: instance=%s period=%s third_party_bet_id=%s", inst.ID, metaPeriod, metaTID)
 		}
 		if metaAmount > 0 {
 			amount = metaAmount
