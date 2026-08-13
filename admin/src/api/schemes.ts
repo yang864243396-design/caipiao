@@ -27,6 +27,9 @@ interface ApiMonitorRow {
   status: ApiStatus
   statusLabel: string
   simBet: boolean
+  totalPnl: number
+  betWinRate: number
+  currency: string
   createdAt: string
   updatedAt: string
 }
@@ -78,6 +81,9 @@ function mapMonitorRow(row: ApiMonitorRow): SchemeInstanceRow {
     refId: row.definitionId,
     status: row.statusLabel as SchemeInstanceRow['status'],
     simBet: row.simBet,
+    totalPnl: row.totalPnl ?? 0,
+    betWinRate: row.betWinRate ?? 0,
+    currency: row.currency ?? 'CNY',
     runTypeLabel: row.runTypeLabel ?? '',
     playTypeLabel: row.playTypeLabel ?? '',
     createdAt: row.createdAt,

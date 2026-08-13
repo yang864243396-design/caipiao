@@ -95,6 +95,9 @@ SELECT
     i.status,
     i.status_reason,
     i.sim_bet,
+    i.pnl::float8 AS total_pnl,
+    COALESCE(stats.bet_win_rate, 0)::float8 AS bet_win_rate,
+    COALESCE(NULLIF(stats.current_currency, ''), m.primary_currency, 'CNY') AS currency,
     COALESCE(d.config->>'runTypeId', '') AS run_type,
     COALESCE(NULLIF(d.config->>'playTypeId', ''), NULLIF(d.config->>'typeId', ''), '') AS play_type_id,
     COALESCE(pt.label, '') AS play_type_label,
@@ -103,6 +106,18 @@ SELECT
 FROM scheme_instances i
 INNER JOIN members m ON m.id = i.member_id
 LEFT JOIN scheme_definitions d ON d.id = i.definition_id
+LEFT JOIN LATERAL (
+    SELECT
+        CASE
+            WHEN COUNT(*) FILTER (WHERE c.status IN ('hit', 'miss')) = 0 THEN 0
+            ELSE COUNT(*) FILTER (WHERE c.status = 'hit')::float8
+                / COUNT(*) FILTER (WHERE c.status IN ('hit', 'miss'))::float8 * 100
+        END AS bet_win_rate,
+        (array_agg(NULLIF(c.currency, '') ORDER BY c.placed_at DESC)
+            FILTER (WHERE NULLIF(c.currency, '') IS NOT NULL))[1] AS current_currency
+    FROM cloud_bet_records c
+    WHERE c.scheme_id = i.id
+) stats ON true
 LEFT JOIN lottery_catalog lc ON lc.code = i.lottery_code
 LEFT JOIN play_types pt ON pt.template_code = COALESCE(NULLIF(d.config->>'playTemplate', ''), lc.play_template)
     AND pt.type_id = COALESCE(NULLIF(d.config->>'playTypeId', ''), NULLIF(d.config->>'typeId', ''))
@@ -164,6 +179,9 @@ type ListAdminSchemeInstancesRow struct {
 	Status        string             `json:"status"`
 	StatusReason  string             `json:"status_reason"`
 	SimBet        bool               `json:"sim_bet"`
+	TotalPnl      float64            `json:"total_pnl"`
+	BetWinRate    float64            `json:"bet_win_rate"`
+	Currency      string             `json:"currency"`
 	RunType       interface{}        `json:"run_type"`
 	PlayTypeID    interface{}        `json:"play_type_id"`
 	PlayTypeLabel string             `json:"play_type_label"`
@@ -200,6 +218,9 @@ func (q *Queries) ListAdminSchemeInstances(ctx context.Context, arg ListAdminSch
 			&i.Status,
 			&i.StatusReason,
 			&i.SimBet,
+			&i.TotalPnl,
+			&i.BetWinRate,
+			&i.Currency,
 			&i.RunType,
 			&i.PlayTypeID,
 			&i.PlayTypeLabel,

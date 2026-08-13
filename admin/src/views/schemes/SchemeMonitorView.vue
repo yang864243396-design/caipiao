@@ -487,6 +487,20 @@ async function onDeleteShareSnapshot(row: SchemeShareSnapshotRow) {
 
         <el-table-column prop="lotteryLabel" label="彩种" min-width="120" />
 
+        <el-table-column label="累计盈亏" min-width="110" align="right">
+          <template #default="{ row }">
+            <span :class="{ 'monitor-pnl-positive': row.totalPnl > 0, 'monitor-pnl-negative': row.totalPnl < 0 }">
+              {{ row.totalPnl.toFixed(2) }}
+            </span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="投注胜率" min-width="100" align="right">
+          <template #default="{ row }">{{ row.betWinRate.toFixed(2) }}%</template>
+        </el-table-column>
+
+        <el-table-column prop="currency" label="当前币种" min-width="90" />
+
         <el-table-column label="玩法类型" min-width="100" show-overflow-tooltip>
           <template #default="{ row }">{{ rowPlayTypeLabel(row) }}</template>
         </el-table-column>
@@ -642,6 +656,13 @@ async function onDeleteShareSnapshot(row: SchemeShareSnapshotRow) {
 
 <style scoped>
 .monitor-lottery-maint {
+  color: var(--el-color-danger);
+}
+.monitor-pnl-positive {
+  color: var(--el-color-success);
+}
+
+.monitor-pnl-negative {
   color: var(--el-color-danger);
 }
 </style>

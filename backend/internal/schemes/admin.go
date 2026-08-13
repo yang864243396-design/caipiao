@@ -21,23 +21,26 @@ var (
 )
 
 type AdminMonitorRow struct {
-	InstanceID   string `json:"instanceId"`
-	DefinitionID string `json:"definitionId"`
-	MemberID     string `json:"memberId"`
-	MemberName   string `json:"memberName"`
-	Kind         string `json:"kind"`
-	RunTypeID    string `json:"runTypeId,omitempty"`
-	RunTypeLabel string `json:"runTypeLabel,omitempty"`
-	PlayTypeID   string `json:"playTypeId,omitempty"`
-	PlayTypeLabel string `json:"playTypeLabel,omitempty"`
-	SchemeName   string `json:"schemeName"`
-	LotteryCode  string `json:"lotteryCode"`
-	LotteryLabel string `json:"lotteryLabel"`
-	Status       string `json:"status"`
-	StatusLabel  string `json:"statusLabel"`
-	SimBet       bool   `json:"simBet"`
-	CreatedAt    string `json:"createdAt"`
-	UpdatedAt    string `json:"updatedAt"`
+	InstanceID    string  `json:"instanceId"`
+	DefinitionID  string  `json:"definitionId"`
+	MemberID      string  `json:"memberId"`
+	MemberName    string  `json:"memberName"`
+	Kind          string  `json:"kind"`
+	RunTypeID     string  `json:"runTypeId,omitempty"`
+	RunTypeLabel  string  `json:"runTypeLabel,omitempty"`
+	PlayTypeID    string  `json:"playTypeId,omitempty"`
+	PlayTypeLabel string  `json:"playTypeLabel,omitempty"`
+	SchemeName    string  `json:"schemeName"`
+	LotteryCode   string  `json:"lotteryCode"`
+	LotteryLabel  string  `json:"lotteryLabel"`
+	Status        string  `json:"status"`
+	StatusLabel   string  `json:"statusLabel"`
+	SimBet        bool    `json:"simBet"`
+	TotalPnl      float64 `json:"totalPnl"`
+	BetWinRate    float64 `json:"betWinRate"`
+	Currency      string  `json:"currency"`
+	CreatedAt     string  `json:"createdAt"`
+	UpdatedAt     string  `json:"updatedAt"`
 }
 
 type AdminMonitorQuery struct {
@@ -320,23 +323,26 @@ func mapAdminMonitorRow(row sqlcdb.ListAdminSchemeInstancesRow) AdminMonitorRow 
 		runTypeLabel = RunTypeLabels[runTypeID]
 	}
 	return AdminMonitorRow{
-		InstanceID:   row.ID,
-		DefinitionID: row.DefinitionID,
-		MemberID:     fmt.Sprintf("%d", row.MemberID),
-		MemberName:   row.Account,
-		Kind:         row.Kind,
-		RunTypeID:    runTypeID,
-		RunTypeLabel: runTypeLabel,
-		PlayTypeID:   strings.TrimSpace(fmt.Sprint(row.PlayTypeID)),
+		InstanceID:    row.ID,
+		DefinitionID:  row.DefinitionID,
+		MemberID:      fmt.Sprintf("%d", row.MemberID),
+		MemberName:    row.Account,
+		Kind:          row.Kind,
+		RunTypeID:     runTypeID,
+		RunTypeLabel:  runTypeLabel,
+		PlayTypeID:    strings.TrimSpace(fmt.Sprint(row.PlayTypeID)),
 		PlayTypeLabel: strings.TrimSpace(fmt.Sprint(row.PlayTypeLabel)),
-		SchemeName:   row.SchemeName,
-		LotteryCode:  row.LotteryCode,
-		LotteryLabel: row.LotteryLabel,
-		Status:       row.Status,
-		StatusLabel:  instanceStatusLabel(row.Status, row.StatusReason, ""),
-		SimBet:       row.SimBet,
-		CreatedAt:    timeutil.FormatISO(row.CreatedAt.Time),
-		UpdatedAt:    timeutil.FormatISO(row.UpdatedAt.Time),
+		SchemeName:    row.SchemeName,
+		LotteryCode:   row.LotteryCode,
+		LotteryLabel:  row.LotteryLabel,
+		Status:        row.Status,
+		StatusLabel:   instanceStatusLabel(row.Status, row.StatusReason, ""),
+		SimBet:        row.SimBet,
+		TotalPnl:      row.TotalPnl,
+		BetWinRate:    row.BetWinRate,
+		Currency:      row.Currency,
+		CreatedAt:     timeutil.FormatISO(row.CreatedAt.Time),
+		UpdatedAt:     timeutil.FormatISO(row.UpdatedAt.Time),
 	}
 }
 

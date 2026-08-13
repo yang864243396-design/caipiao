@@ -90,6 +90,9 @@ export interface SchemeInstanceRow {
   status: SchemeInstanceStatus
   /** false=正式盘，true=模拟盘 */
   simBet: boolean
+  totalPnl: number
+  betWinRate: number
+  currency: string
   /** 运行类型展示名（仅自创方案，后端下发） */
   runTypeLabel?: string
   /** 玩法类型展示名（后端下发） */
