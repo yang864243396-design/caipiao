@@ -34,3 +34,6 @@ backend/reports/
 /backend/.run-modcache
 /backend/backend/.run-cache
 /backend/backend/.run-modcache
+
+# Isolated implementation worktrees
+.worktrees/
