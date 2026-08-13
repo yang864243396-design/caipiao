@@ -957,10 +957,10 @@ func ResolveSolo(meta RuleMeta, wireContent string, betsNums int) bool {
 		return false
 	}
 	if guajiGroupRequiresSoloTrue(meta) {
-		// 五星直选复式：≤wuxingFushiSoloMaxBets 须 true，更大须 false（绕过 guajiSoloMaxBets=18）。
+		// 五星直选单式/复式：≤wuxingFushiSoloMaxBets 须 true，更大须 false（绕过 guajiSoloMaxBets=18）。
 		// 实测（tron_ffc_1m rule153）：32/1000/1800 注 solo=true 过、solo=false 拒；
 		// 1875/2000/10000/90000 注 solo=false 过、solo=true 拒（def-1-1785990509756）。
-		if isWuxingZhixuanFushiMeta(meta) {
+		if isWuxingZhixuanMeta(meta) {
 			return betsNums > 0 && betsNums <= wuxingFushiSoloMaxBets
 		}
 		// 前后四直选复式/单式：≤qianhou4SoloMaxBets 须 true，更大须 false。
@@ -969,7 +969,17 @@ func ResolveSolo(meta RuleMeta, wireContent string, betsNums int) bool {
 		if isQianhou4Meta(meta) {
 			return betsNums > 0 && betsNums <= qianhou4SoloMaxBets
 		}
+		// 任四直选单式/复式：使用独立 200 注单挑上限，避免落入通用 18 注阈值。
+		if isRen4ZhixuanMeta(meta) {
+			return betsNums > 0 && betsNums <= ren4ZhixuanSoloMaxBets
+		}
+		if isSixingZhixuanMeta(meta) {
+			return betsNums > 0 && betsNums <= sixingZhixuanSoloMaxBets
+		}
 		return true
+	}
+	if isQianZhongHou3ZuheMeta(meta) {
+		return betsNums > 0 && betsNums <= qianZhongHou3ZuheSoloMaxBets
 	}
 	if betsNums > guajiSoloMaxBets {
 		return false
@@ -986,6 +996,27 @@ func ResolveSolo(meta RuleMeta, wireContent string, betsNums int) bool {
 		return NeedsSoloForRule(meta, wireContent)
 	}
 	return NeedsSoloBet(wireContent)
+}
+
+func isQianZhongHou3ZuheMeta(meta RuleMeta) bool {
+	tpl := strings.TrimSpace(meta.PlayTemplate)
+	if tpl != "" && !IsSSCPlayTemplate(tpl) {
+		return false
+	}
+	if InferBetMode(meta) != "zuhe" {
+		return false
+	}
+	group := strings.TrimSpace(meta.Group)
+	switch group {
+	case "前三码", "中三码", "后三码", "前三", "中三", "后三", "前中后三", "前后三":
+		return true
+	}
+	text := meta.Group + " " + meta.TeamLabel + " " + meta.FullName + " " + meta.Label
+	if strings.Contains(text, "前中后三") || strings.Contains(text, "前后三") {
+		return true
+	}
+	return strings.Contains(text, "组合") &&
+		(strings.Contains(text, "前三") || strings.Contains(text, "中三") || strings.Contains(text, "后三"))
 }
 
 // sscErxingZuxuanForcesSoloFalse 时时彩前二/后二组选须 solo=false。
@@ -1089,14 +1120,20 @@ func guajiGroupRequiresSoloTrue(meta RuleMeta) bool {
 			return true
 		}
 	}
-	if isWuxingZhixuanFushiMeta(meta) {
+	if isWuxingZhixuanMeta(meta) {
+		return true
+	}
+	if isRen4ZhixuanMeta(meta) {
+		return true
+	}
+	if isSixingZhixuanMeta(meta) {
 		return true
 	}
 	return false
 }
 
-// isWuxingZhixuanFushiMeta 五星直选复式（含冷热多注，须绕过 guajiSoloMaxBets 上限）。
-func isWuxingZhixuanFushiMeta(meta RuleMeta) bool {
+// isWuxingZhixuanMeta 五星直选单式/复式（含冷热多注，须绕过 guajiSoloMaxBets 上限）。
+func isWuxingZhixuanMeta(meta RuleMeta) bool {
 	tpl := strings.TrimSpace(meta.PlayTemplate)
 	if tpl != "" && !IsSSCPlayTemplate(tpl) {
 		return false
@@ -1105,7 +1142,7 @@ func isWuxingZhixuanFushiMeta(meta RuleMeta) bool {
 		return false
 	}
 	// 勿把组选/特殊号等算进来
-	if InferBetMode(meta) != "fushi" {
+	if mode := InferBetMode(meta); mode != "fushi" && mode != "danshi" {
 		return false
 	}
 	label := meta.Label + meta.FullName + meta.TeamLabel
@@ -1113,6 +1150,18 @@ func isWuxingZhixuanFushiMeta(meta RuleMeta) bool {
 		return false
 	}
 	return true
+}
+
+func isSixingZhixuanMeta(meta RuleMeta) bool {
+	tpl := strings.TrimSpace(meta.PlayTemplate)
+	if tpl != "" && !IsSSCPlayTemplate(tpl) {
+		return false
+	}
+	if meta.TypeID != "g013" && meta.Group != "四星" {
+		return false
+	}
+	mode := InferBetMode(meta)
+	return mode == "fushi" || mode == "danshi"
 }
 
 func isQianhou4Meta(meta RuleMeta) bool {
@@ -2258,9 +2307,16 @@ func sortDigitRunes(s string) string {
 // 五星用 wuxingFushiSoloMaxBets；前后四用 qianhou4SoloMaxBets。
 const guajiSoloMaxBets = 18
 
+const qianZhongHou3ZuheSoloMaxBets = 9
+
 // qianhou4SoloMaxBets 前后四直选复式/单式单挑上限（2026-08-06 tron_ffc_1m rule134 实测）：
 // ≤200 注 solo=true；≥216 注须 solo=false（定码近满号池 18000 注走 false）。
 const qianhou4SoloMaxBets = 200
+
+// ren4ZhixuanSoloMaxBets 任四直选单式/复式单挑上限。
+const ren4ZhixuanSoloMaxBets = 200
+
+const sixingZhixuanSoloMaxBets = 200
 
 // wuxingFushiSoloMaxBets 五星直选复式单挑上限（2026-08-06 tron_ffc_1m rule153 实测）：
 // ≤1800 须 solo=true；≥1875 须 solo=false（1801–1874 无合法位积，阈值取 1800）。

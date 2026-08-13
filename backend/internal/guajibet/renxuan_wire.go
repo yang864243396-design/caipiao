@@ -786,6 +786,9 @@ func renxuanNeedsSoloTrue(meta RuleMeta, mode string, betsNums int) bool {
 	}
 	switch mode {
 	case "zu3":
+		if isRen3Zu3FushiMeta(meta) {
+			return betsNums > 0 && betsNums <= zu3SoloMaxBets
+		}
 		return betsNums == 1 || betsNums == 2
 	case "zu6":
 		// 任四组选6：与四星/前后四组选6 一致，任意注数 solo=false。
@@ -815,6 +818,9 @@ func renxuanNeedsSoloTrue(meta RuleMeta, mode string, betsNums int) bool {
 		// 其它组选单式：有注即须 solo=true，再由 ResolveSolo 按 guajiSoloMaxBets 钳制。
 		return betsNums > 0
 	case "danshi":
+		if isRen2ZhixuanSingleSoloMeta(meta) {
+			return betsNums == 1
+		}
 		if isZu3DanshiMeta(meta) {
 			return betsNums > 0 && betsNums <= zu3SoloMaxBets
 		}
@@ -838,6 +844,9 @@ func renxuanNeedsSoloTrue(meta RuleMeta, mode string, betsNums int) bool {
 		// 同实例 56 注 solo=false 可过（>guajiSoloMaxBets）。
 		return betsNums > 0
 	case "hezhi", "weishu":
+		if isRen2ZhixuanSingleSoloMeta(meta) {
+			return betsNums == 1
+		}
 		// 组选和值（方案常只存数字 subId，须 isZuxuanHezhiMeta）：
 		// - 任二 rule79：任意注数 solo=false（同前二组选和值）
 		// - 任三 rule88 / 任四 rule96：与中三组选和值同阈 ≤hunheSoloMaxBets(3)
@@ -866,6 +875,42 @@ func isRen2ZhixuanFushiMeta(meta RuleMeta) bool {
 	}
 	text := meta.Label + " " + meta.FullName + " " + meta.TeamLabel
 	return strings.Contains(text, "任二") && strings.Contains(text, "直选复式")
+}
+
+func isRen4ZhixuanMeta(meta RuleMeta) bool {
+	if !isRenxuanMeta(meta) || renxuanSegmentLen(meta) != 4 {
+		return false
+	}
+	mode := InferBetMode(meta)
+	return mode == "fushi" || mode == "danshi"
+}
+
+func isRen3Zu3FushiMeta(meta RuleMeta) bool {
+	if !isRenxuanMeta(meta) || renxuanSegmentLen(meta) != 3 || InferBetMode(meta) != "zu3" {
+		return false
+	}
+	if strings.TrimSpace(meta.RuleID) == "83" || strings.TrimSpace(meta.SubID) == "83" {
+		return true
+	}
+	text := meta.Label + " " + meta.FullName + " " + meta.TeamLabel
+	return strings.Contains(text, "任三") && strings.Contains(text, "组三复式")
+}
+
+func isRen2ZhixuanSingleSoloMeta(meta RuleMeta) bool {
+	if !isRenxuanMeta(meta) || renxuanSegmentLen(meta) != 2 {
+		return false
+	}
+	mode := InferBetMode(meta)
+	if mode != "danshi" && mode != "hezhi" {
+		return false
+	}
+	for _, id := range []string{meta.RuleID, meta.SubID} {
+		if strings.TrimSpace(id) == "75" || strings.TrimSpace(id) == "76" {
+			return true
+		}
+	}
+	text := meta.Label + " " + meta.FullName + " " + meta.TeamLabel
+	return strings.Contains(text, "任二") && (strings.Contains(text, "直选单式") || strings.Contains(text, "直选和值"))
 }
 
 // renxuanErxingZuxuanHezhi 任二组选和值（rule79）：任意注数须 solo=false。
