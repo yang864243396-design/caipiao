@@ -49,6 +49,10 @@ type BetRow struct {
 	Member       string  `json:"member"`
 	Lottery      string  `json:"lottery"`
 	Currency     string  `json:"currency"`
+	BetContent   string  `json:"betContent"`
+	BetUnits     int32   `json:"betUnits"`
+	Multiplier   string  `json:"multiplier"`
+	Round        string  `json:"round"`
 	DrawNumbers  string  `json:"drawNumbers"`
 	SchemeName   string  `json:"schemeName"`
 	Amount       float64 `json:"amount"`
@@ -133,6 +137,10 @@ func (s *Service) ListBets(ctx context.Context, q BetListQuery) (ListResult[BetR
 			Member:       strings.TrimSpace(row.Account),
 			Lottery:      row.LotteryName,
 			Currency:     strings.TrimSpace(row.Currency),
+			BetContent:   strings.TrimSpace(row.BetContent),
+			BetUnits:     row.BetUnits,
+			Multiplier:   strings.TrimSpace(row.Multiplier),
+			Round:        strings.TrimSpace(row.RoundLabel),
 			DrawNumbers:  strings.TrimSpace(row.DrawNumbers),
 			SchemeName:   schemeName,
 			Amount:       roundMoney(row.Amount),

@@ -49,6 +49,7 @@ func (h *Handler) AdminDailyLotteryReport(w http.ResponseWriter, r *http.Request
 		DateFrom:    r.URL.Query().Get("dateFrom"),
 		DateTo:      r.URL.Query().Get("dateTo"),
 		LotteryCode: r.URL.Query().Get("lotteryCode"),
+		Currency:    r.URL.Query().Get("currency"),
 	})
 	if err != nil {
 		h.handleReportsErr(w, err)

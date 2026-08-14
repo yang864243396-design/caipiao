@@ -16,6 +16,7 @@ SELECT
     (b.placed_at AT TIME ZONE 'Asia/Shanghai')::date AS stat_date,
     b.lottery_code,
     b.lottery_name,
+    COALESCE(NULLIF(TRIM(b.currency), ''), 'CNY') AS currency,
     COUNT(*)::bigint AS bet_count,
     COALESCE(SUM(b.amount) FILTER (WHERE b.status IN ('win', 'lose')), 0)::float8 AS valid_bet,
     COALESCE(-SUM(b.pnl) FILTER (WHERE b.status IN ('win', 'lose')), 0)::float8 AS platform_pnl
@@ -23,27 +24,30 @@ FROM bet_orders b
 WHERE b.placed_at >= $1
   AND b.placed_at < $2
   AND ($3::text = '' OR b.lottery_code = $3::text)
-GROUP BY stat_date, b.lottery_code, b.lottery_name
-ORDER BY stat_date DESC, valid_bet DESC
+AND ($4::text = '' OR UPPER(COALESCE(NULLIF(TRIM(b.currency), ''), 'CNY')) = $4::text)
+GROUP BY stat_date, b.lottery_code, b.lottery_name, COALESCE(NULLIF(TRIM(b.currency), ''), 'CNY')
+ORDER BY stat_date DESC, currency ASC, valid_bet DESC
 `
 
 type AdminDailyLotteryReportParams struct {
 	PlacedAt    pgtype.Timestamptz `json:"placed_at"`
 	PlacedAt_2  pgtype.Timestamptz `json:"placed_at_2"`
 	LotteryCode string             `json:"lottery_code"`
+	Currency    string             `json:"currency"`
 }
 
 type AdminDailyLotteryReportRow struct {
 	StatDate    pgtype.Date `json:"stat_date"`
 	LotteryCode string      `json:"lottery_code"`
 	LotteryName string      `json:"lottery_name"`
+	Currency    string      `json:"currency"`
 	BetCount    int64       `json:"bet_count"`
 	ValidBet    float64     `json:"valid_bet"`
 	PlatformPnl float64     `json:"platform_pnl"`
 }
 
 func (q *Queries) AdminDailyLotteryReport(ctx context.Context, arg AdminDailyLotteryReportParams) ([]AdminDailyLotteryReportRow, error) {
-	rows, err := q.db.Query(ctx, adminDailyLotteryReport, arg.PlacedAt, arg.PlacedAt_2, arg.LotteryCode)
+	rows, err := q.db.Query(ctx, adminDailyLotteryReport, arg.PlacedAt, arg.PlacedAt_2, arg.LotteryCode, arg.Currency)
 	if err != nil {
 		return nil, err
 	}
@@ -55,6 +59,7 @@ func (q *Queries) AdminDailyLotteryReport(ctx context.Context, arg AdminDailyLot
 			&i.StatDate,
 			&i.LotteryCode,
 			&i.LotteryName,
+			&i.Currency,
 			&i.BetCount,
 			&i.ValidBet,
 			&i.PlatformPnl,
@@ -78,12 +83,14 @@ FROM bet_orders b
 WHERE b.placed_at >= $1
   AND b.placed_at < $2
   AND ($3::text = '' OR b.lottery_code = $3::text)
+AND ($4::text = '' OR UPPER(COALESCE(NULLIF(TRIM(b.currency), ''), 'CNY')) = $4::text)
 `
 
 type AdminDailyLotterySummaryParams struct {
 	PlacedAt    pgtype.Timestamptz `json:"placed_at"`
 	PlacedAt_2  pgtype.Timestamptz `json:"placed_at_2"`
 	LotteryCode string             `json:"lottery_code"`
+	Currency    string             `json:"currency"`
 }
 
 type AdminDailyLotterySummaryRow struct {
@@ -93,7 +100,7 @@ type AdminDailyLotterySummaryRow struct {
 }
 
 func (q *Queries) AdminDailyLotterySummary(ctx context.Context, arg AdminDailyLotterySummaryParams) (AdminDailyLotterySummaryRow, error) {
-	row := q.db.QueryRow(ctx, adminDailyLotterySummary, arg.PlacedAt, arg.PlacedAt_2, arg.LotteryCode)
+	row := q.db.QueryRow(ctx, adminDailyLotterySummary, arg.PlacedAt, arg.PlacedAt_2, arg.LotteryCode, arg.Currency)
 	var i AdminDailyLotterySummaryRow
 	err := row.Scan(&i.BetCount, &i.ValidBet, &i.PlatformPnl)
 	return i, err

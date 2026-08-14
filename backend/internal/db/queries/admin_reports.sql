@@ -42,6 +42,7 @@ SELECT
     (b.placed_at AT TIME ZONE 'Asia/Shanghai')::date AS stat_date,
     b.lottery_code,
     b.lottery_name,
+    COALESCE(NULLIF(TRIM(b.currency), ''), 'CNY') AS currency,
     COUNT(*)::bigint AS bet_count,
     COALESCE(SUM(b.amount) FILTER (WHERE b.status IN ('win', 'lose')), 0)::float8 AS valid_bet,
     COALESCE(-SUM(b.pnl) FILTER (WHERE b.status IN ('win', 'lose')), 0)::float8 AS platform_pnl
@@ -49,8 +50,9 @@ FROM bet_orders b
 WHERE b.placed_at >= $1
   AND b.placed_at < $2
   AND (sqlc.arg(lottery_code)::text = '' OR b.lottery_code = sqlc.arg(lottery_code)::text)
-GROUP BY stat_date, b.lottery_code, b.lottery_name
-ORDER BY stat_date DESC, valid_bet DESC;
+  AND (sqlc.arg(currency)::text = '' OR UPPER(COALESCE(NULLIF(TRIM(b.currency), ''), 'CNY')) = sqlc.arg(currency)::text)
+GROUP BY stat_date, b.lottery_code, b.lottery_name, COALESCE(NULLIF(TRIM(b.currency), ''), 'CNY')
+ORDER BY stat_date DESC, currency ASC, valid_bet DESC;
 
 -- name: AdminDailyLotterySummary :one
 SELECT

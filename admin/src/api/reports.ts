@@ -46,6 +46,7 @@ export interface DailyLotterySummary {
 }
 
 export interface DailyLotteryRow {
+  currency: string
   date: string
   lotteryCode: string
   lottery: string
@@ -54,20 +55,29 @@ export interface DailyLotteryRow {
   platformPnlYuan: number
 }
 
+export interface DailyLotteryCurrencySummary {
+  currency: string
+  betCount: number
+  betAmountYuan: number
+  platformPnlYuan: number
+}
 export interface DailyLotteryReportResult {
   summary: DailyLotterySummary
   items: DailyLotteryRow[]
+  currencySummaries: DailyLotteryCurrencySummary[]
 }
 
 export async function fetchDailyLotteryReport(params: {
   dateFrom?: string
   dateTo?: string
   lotteryCode?: string
+  currency?: string
 }): Promise<DailyLotteryReportResult> {
   const q = new URLSearchParams()
   if (params.dateFrom) q.set('dateFrom', params.dateFrom)
   if (params.dateTo) q.set('dateTo', params.dateTo)
   if (params.lotteryCode) q.set('lotteryCode', params.lotteryCode)
+  if (params.currency) q.set('currency', params.currency)
   const qs = q.toString()
   return requestApi<DailyLotteryReportResult>(`/admin/reports/daily-lottery${qs ? `?${qs}` : ''}`)
 }

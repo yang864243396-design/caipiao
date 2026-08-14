@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { ElMessage } from 'element-plus'
-import { fetchDailyLotteryReport, type DailyLotteryRow, type DailyLotterySummary } from '@/api/reports'
+import { fetchDailyLotteryReport, type DailyLotteryRow, type DailyLotterySummary, type DailyLotteryCurrencySummary } from '@/api/reports'
 import { useLotteryCatalogStore } from '@/stores/lotteryCatalog'
 
 function todayYmd(): string {
@@ -18,6 +18,7 @@ const { rows: lotteryRows } = storeToRefs(catalog)
 
 const dateRange = ref<[string, string]>([todayYmd(), todayYmd()])
 const lotteryCode = ref('')
+const currency = ref('')
 const loading = ref(false)
 const summary = ref<DailyLotterySummary>({
   betCount: 0,
@@ -27,6 +28,7 @@ const summary = ref<DailyLotterySummary>({
   dateTo: '',
 })
 const rows = ref<DailyLotteryRow[]>([])
+const currencySummaries = ref<DailyLotteryCurrencySummary[]>([])
 
 const lotteryOptions = computed(() =>
   [...lotteryRows.value].sort((a, b) => a.sortOrder - b.sortOrder),
@@ -49,9 +51,11 @@ async function load() {
       dateFrom: dateRange.value[0],
       dateTo: dateRange.value[1],
       lotteryCode: lotteryCode.value || undefined,
+      currency: currency.value || undefined,
     })
     summary.value = res.summary
     rows.value = res.items
+    currencySummaries.value = res.currencySummaries ?? []
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '加载失败')
   } finally {
@@ -87,6 +91,11 @@ onMounted(() => {
           :value="lot.code"
         />
       </el-select>
+      <el-select v-model="currency" clearable :placeholder="'\u5168\u90e8\u5e01\u79cd'" style="width: 140px">
+        <el-option label="CNY" value="CNY" />
+        <el-option label="USDT" value="USDT" />
+        <el-option label="TRX" value="TRX" />
+      </el-select>
       <el-button type="primary" :loading="loading" @click="load">查询</el-button>
     </div>
 
@@ -108,6 +117,19 @@ onMounted(() => {
         </div>
       </div>
 
+      <div v-if="currencySummaries.length" class="currency-report">
+        <h2 class="currency-report__title">{{ '\u5206\u5e01\u79cd\u7edf\u8ba1' }}</h2>
+        <el-table :data="currencySummaries" size="small" border style="width: 100%">
+          <el-table-column prop="currency" :label="'\u5e01\u79cd'" min-width="90" />
+          <el-table-column prop="betCount" :label="'\u6295\u6ce8\u7b14\u6570'" min-width="110" align="center" />
+          <el-table-column :label="'\u6709\u6548\u6295\u6ce8'" min-width="130" align="right">
+            <template #default="{ row }">{{ fmtMoney(row.betAmountYuan) }}</template>
+          </el-table-column>
+          <el-table-column :label="'\u5e73\u53f0\u76c8\u4e8f'" min-width="130" align="right">
+            <template #default="{ row }"><span :class="pnlClass(row.platformPnlYuan)">{{ fmtMoney(row.platformPnlYuan) }}</span></template>
+          </el-table-column>
+        </el-table>
+      </div>
       <el-table
         :data="rows"
         stripe
@@ -119,6 +141,7 @@ onMounted(() => {
         </template>
         <el-table-column prop="date" label="日期" min-width="120" sortable />
         <el-table-column prop="lottery" label="彩种" min-width="140" />
+        <el-table-column prop="currency" :label="'\u5e01\u79cd'" min-width="80" />
         <el-table-column prop="betCount" label="投注笔数" min-width="100" align="center" sortable />
         <el-table-column label="投注金额" min-width="130" align="right" sortable prop="betAmountYuan">
           <template #default="{ row }">{{ fmtMoney(row.betAmountYuan) }}</template>
@@ -134,6 +157,15 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.currency-report {
+  margin-top: 1.25rem;
+}
+
+.currency-report__title {
+  margin: 0 0 0.75rem;
+  font-size: 15px;
+  font-weight: 600;
+}
 .report-toolbar {
   display: flex;
   gap: 0.75rem;

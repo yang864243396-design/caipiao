@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -23,6 +24,7 @@ type Query struct {
 	DateFrom    string
 	DateTo      string
 	LotteryCode string
+	Currency    string
 }
 
 type LotteryStatSummary struct {
@@ -76,14 +78,23 @@ type DailyLotteryRow struct {
 	Date            string  `json:"date"`
 	LotteryCode     string  `json:"lotteryCode"`
 	Lottery         string  `json:"lottery"`
+	Currency        string  `json:"currency"`
+	BetCount        int64   `json:"betCount"`
+	BetAmountYuan   float64 `json:"betAmountYuan"`
+	PlatformPnlYuan float64 `json:"platformPnlYuan"`
+}
+
+type DailyLotteryCurrencySummary struct {
+	Currency        string  `json:"currency"`
 	BetCount        int64   `json:"betCount"`
 	BetAmountYuan   float64 `json:"betAmountYuan"`
 	PlatformPnlYuan float64 `json:"platformPnlYuan"`
 }
 
 type DailyLotteryReportResult struct {
-	Summary DailyLotterySummary `json:"summary"`
-	Items   []DailyLotteryRow   `json:"items"`
+	Summary           DailyLotterySummary           `json:"summary"`
+	Items             []DailyLotteryRow             `json:"items"`
+	CurrencySummaries []DailyLotteryCurrencySummary `json:"currencySummaries"`
 }
 
 type Service struct {
@@ -184,15 +195,16 @@ func (s *Service) AdminDailyLotteryReport(ctx context.Context, q Query) (DailyLo
 	from := pgtype.Timestamptz{Time: fromTime, Valid: true}
 	to := pgtype.Timestamptz{Time: toTime, Valid: true}
 	lotteryCode := strings.TrimSpace(q.LotteryCode)
+	currency := strings.ToUpper(strings.TrimSpace(q.Currency))
 
 	sum, err := s.q.AdminDailyLotterySummary(ctx, sqlcdb.AdminDailyLotterySummaryParams{
-		PlacedAt: from, PlacedAt_2: to, LotteryCode: lotteryCode,
+		PlacedAt: from, PlacedAt_2: to, LotteryCode: lotteryCode, Currency: currency,
 	})
 	if err != nil {
 		return DailyLotteryReportResult{}, err
 	}
 	rows, err := s.q.AdminDailyLotteryReport(ctx, sqlcdb.AdminDailyLotteryReportParams{
-		PlacedAt: from, PlacedAt_2: to, LotteryCode: lotteryCode,
+		PlacedAt: from, PlacedAt_2: to, LotteryCode: lotteryCode, Currency: currency,
 	})
 	if err != nil {
 		return DailyLotteryReportResult{}, err
@@ -203,11 +215,32 @@ func (s *Service) AdminDailyLotteryReport(ctx context.Context, q Query) (DailyLo
 			Date:            formatDate(row.StatDate),
 			LotteryCode:     row.LotteryCode,
 			Lottery:         row.LotteryName,
+			Currency:        strings.TrimSpace(row.Currency),
 			BetCount:        row.BetCount,
 			BetAmountYuan:   roundMoney(row.ValidBet),
 			PlatformPnlYuan: roundMoney(row.PlatformPnl),
 		})
 	}
+	currencyMap := make(map[string]DailyLotteryCurrencySummary)
+	for _, item := range items {
+		currency := strings.TrimSpace(item.Currency)
+		if currency == "" {
+			currency = "CNY"
+		}
+		total := currencyMap[currency]
+		total.Currency = currency
+		total.BetCount += item.BetCount
+		total.BetAmountYuan = roundMoney(total.BetAmountYuan + item.BetAmountYuan)
+		total.PlatformPnlYuan = roundMoney(total.PlatformPnlYuan + item.PlatformPnlYuan)
+		currencyMap[currency] = total
+	}
+	currencySummaries := make([]DailyLotteryCurrencySummary, 0, len(currencyMap))
+	for _, item := range currencyMap {
+		currencySummaries = append(currencySummaries, item)
+	}
+	sort.Slice(currencySummaries, func(i, j int) bool {
+		return currencySummaries[i].Currency < currencySummaries[j].Currency
+	})
 	return DailyLotteryReportResult{
 		Summary: DailyLotterySummary{
 			BetCount:        sum.BetCount,
@@ -216,7 +249,8 @@ func (s *Service) AdminDailyLotteryReport(ctx context.Context, q Query) (DailyLo
 			DateFrom:        labels.from,
 			DateTo:          labels.to,
 		},
-		Items: items,
+		Items:             items,
+		CurrencySummaries: currencySummaries,
 	}, nil
 }
 

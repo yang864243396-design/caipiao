@@ -137,6 +137,10 @@ SELECT
     m.account,
     b.lottery_name,
     COALESCE(b.currency, '') AS currency,
+    COALESCE(c.bet_content, '')::text AS bet_content,
+    COALESCE(c.bet_units, 0)::int4 AS bet_units,
+    COALESCE(c.multiplier, '')::text AS multiplier,
+    COALESCE(c.round_label, '')::text AS round_label,
     COALESCE(array_to_string(ARRAY(SELECT jsonb_array_elements_text(d.balls)), ' '), ''::text)::text AS draw_numbers,
     COALESCE(c.scheme_name, '') AS scheme_name,
     b.amount::float8 AS amount,
@@ -190,6 +194,10 @@ type ListAdminBetOrdersRow struct {
 	Account         string             `json:"account"`
 	LotteryName     string             `json:"lottery_name"`
 	Currency        string             `json:"currency"`
+	BetContent      string             `json:"bet_content"`
+	BetUnits        int32              `json:"bet_units"`
+	Multiplier      string             `json:"multiplier"`
+	RoundLabel      string             `json:"round_label"`
 	DrawNumbers     string             `json:"draw_numbers"`
 	SchemeName      string             `json:"scheme_name"`
 	Amount          float64            `json:"amount"`
@@ -220,6 +228,10 @@ func (q *Queries) ListAdminBetOrders(ctx context.Context, arg ListAdminBetOrders
 			&i.Account,
 			&i.LotteryName,
 			&i.Currency,
+			&i.BetContent,
+			&i.BetUnits,
+			&i.Multiplier,
+			&i.RoundLabel,
 			&i.DrawNumbers,
 			&i.SchemeName,
 			&i.Amount,

@@ -6,6 +6,10 @@ export interface AdminBetOrderRow {
   member: string
   lottery: string
   currency: string
+  betContent: string
+  betUnits: number
+  multiplier: string
+  round: string
   drawNumbers: string
   schemeName: string
   amount: number
