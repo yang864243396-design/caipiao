@@ -220,6 +220,44 @@ SELECT EXISTS(
 	return exists, err
 }
 
+// UnsettledGuajiBet identifies a real pending cloud record relevant to the
+// third-party duplicate guard.
+type UnsettledGuajiBet struct {
+	PeriodNo         string
+	ThirdPartyPeriod string
+	Accepted         bool
+}
+
+// ListUnsettledGuajiBets lists real pending records for a scheme. The worker
+// keeps only an ambiguous or same/future accepted period as a duplicate guard.
+func (q *Queries) ListUnsettledGuajiBets(ctx context.Context, schemeID string) ([]UnsettledGuajiBet, error) {
+	rows, err := q.db.Query(ctx, `
+SELECT c.period_no,
+       COALESCE(NULLIF(TRIM(c.third_party_period), ''), ''),
+       NULLIF(TRIM(c.third_party_bet_id), '') IS NOT NULL
+FROM cloud_bet_records c
+WHERE c.scheme_id = $1
+  AND c.status = 'pending'
+  AND c.sim_bet = FALSE
+ORDER BY c.placed_at ASC, c.id ASC`, schemeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]UnsettledGuajiBet, 0)
+	for rows.Next() {
+		var row UnsettledGuajiBet
+		if err := rows.Scan(&row.PeriodNo, &row.ThirdPartyPeriod, &row.Accepted); err != nil {
+			return nil, err
+		}
+		row.PeriodNo = strings.TrimSpace(row.PeriodNo)
+		row.ThirdPartyPeriod = strings.TrimSpace(row.ThirdPartyPeriod)
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
 // TryClaimCloudBetPeriod 事务内占位 (scheme_id, period_no)；冲突返回 false。
 func (q *Queries) TryClaimCloudBetPeriod(ctx context.Context, arg ReserveCloudBetPeriodParams) (bool, error) {
 	var id int64

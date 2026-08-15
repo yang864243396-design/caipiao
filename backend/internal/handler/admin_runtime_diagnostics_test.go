@@ -31,3 +31,25 @@ func TestSchemeRuntimeBlockReason(t *testing.T) {
 		})
 	}
 }
+
+func TestAcceptedPendingBlocksCurrentPeriod(t *testing.T) {
+	cases := []struct {
+		name              string
+		currentOpenPeriod string
+		thirdPartyPeriod  string
+		want              bool
+	}{
+		{name: "historical accepted pending", currentOpenPeriod: "101", thirdPartyPeriod: "100", want: false},
+		{name: "same target period", currentOpenPeriod: "101", thirdPartyPeriod: "101", want: true},
+		{name: "future target period", currentOpenPeriod: "101", thirdPartyPeriod: "102", want: true},
+		{name: "missing third party period", currentOpenPeriod: "101", thirdPartyPeriod: "", want: true},
+		{name: "missing current period", currentOpenPeriod: "", thirdPartyPeriod: "100", want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := acceptedPendingBlocksCurrentPeriod(tc.currentOpenPeriod, tc.thirdPartyPeriod); got != tc.want {
+				t.Fatalf("got %t want %t", got, tc.want)
+			}
+		})
+	}
+}

@@ -83,19 +83,29 @@ func TestHasUnsettledGuajiBetIgnoresHistoricalUnconfirmedClaim(t *testing.T) {
 
 	if _, err := tx.Exec(ctx, `
 		UPDATE cloud_bet_records
-		SET third_party_bet_id = 'accepted-test-bet'
-		WHERE scheme_id = $1 AND period_no = $2`, schemeID, oldPeriod); err != nil {
+		SET third_party_bet_id = 'accepted-test-bet', third_party_period = $3
+		WHERE scheme_id = $1 AND period_no = $2`, schemeID, oldPeriod, oldPeriod); err != nil {
 		t.Fatal(err)
 	}
-	if !w.hasUnsettledGuajiBet(ctx, inst) {
-		t.Fatalf("accepted unsettled bet from period %s must still block period %s", oldPeriod, currentPeriod)
+	if w.hasUnsettledGuajiBet(ctx, inst) {
+		t.Fatalf("accepted historical bet from third-party period %s must not block later open period %s", oldPeriod, currentPeriod)
 	}
 	dedup, err = w.evaluateGuajiBetDedup(ctx, q, inst)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !dedup.Skip || dedup.Reason != "prior_third_party_pending" {
-		t.Fatalf("accepted unsettled bet from period %s must dedup period %s: %+v", oldPeriod, currentPeriod, dedup)
+	if dedup.Skip {
+		t.Fatalf("accepted historical bet from period %s must not dedup current open period %s: %+v", oldPeriod, currentPeriod, dedup)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE cloud_bet_records
+		SET third_party_period = NULL
+		WHERE scheme_id = $1 AND period_no = $2`, schemeID, oldPeriod); err != nil {
+		t.Fatal(err)
+	}
+	if !w.hasUnsettledGuajiBet(ctx, inst) {
+		t.Fatal("accepted pending bet without authoritative third-party period must remain blocking")
 	}
 }
 

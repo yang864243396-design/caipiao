@@ -32,6 +32,16 @@ type adminSchemeRuntimeDraw struct {
 	DrawnAt string   `json:"drawnAt"`
 }
 
+type adminSchemeAcceptedPendingBet struct {
+	RecordNo                string `json:"recordNo"`
+	ThirdPartyBetID         string `json:"thirdPartyBetId"`
+	PeriodNo                string `json:"periodNo"`
+	ThirdPartyPeriod        string `json:"thirdPartyPeriod,omitempty"`
+	PlacedAt                string `json:"placedAt"`
+	AgeSeconds              int64  `json:"ageSeconds"`
+	BlocksCurrentOpenPeriod bool   `json:"blocksCurrentOpenPeriod"`
+}
+
 func (h *Handler) AdminSchemeRuntimeDiagnostics(w http.ResponseWriter, r *http.Request) {
 	if h == nil || h.db == nil {
 		apix.Fail(w, http.StatusServiceUnavailable, apix.CodeInternal, "数据库未就绪")
@@ -73,6 +83,11 @@ WHERE id = $1`, instanceID).Scan(
 		apix.Internal(w)
 		return
 	}
+	acceptedPending, err := readAdminAcceptedPendingBets(r.Context(), h.db, inst.ID, runtime.CurrentOpenPeriod)
+	if err != nil {
+		apix.Internal(w)
+		return
+	}
 
 	apix.OK(w, map[string]any{
 		"instance":              inst,
@@ -80,8 +95,26 @@ WHERE id = $1`, instanceID).Scan(
 		"latestDraw":            latestDraw,
 		"expectedPreviousIssue": expectedPreviousIssue,
 		"previousDraw":          previousDraw,
+		"acceptedPending":       acceptedPending,
 		"blockReason":           schemeRuntimeBlockReason(inst.Status, runtime, expectedPreviousIssue != "", previousDraw != nil),
 	})
+}
+
+// acceptedPendingBlocksCurrentPeriod keeps completed upstream orders for
+// settlement recovery, but only lets ambiguous, same, or future orders block
+// the current outbound period.
+func acceptedPendingBlocksCurrentPeriod(currentOpenPeriod, thirdPartyPeriod string) bool {
+	currentOpenPeriod = strings.TrimSpace(currentOpenPeriod)
+	thirdPartyPeriod = strings.TrimSpace(thirdPartyPeriod)
+	if currentOpenPeriod == "" || thirdPartyPeriod == "" {
+		return true
+	}
+	current, currentErr := strconv.ParseInt(currentOpenPeriod, 10, 64)
+	thirdParty, thirdPartyErr := strconv.ParseInt(thirdPartyPeriod, 10, 64)
+	if currentErr == nil && thirdPartyErr == nil {
+		return thirdParty >= current
+	}
+	return thirdPartyPeriod >= currentOpenPeriod
 }
 
 // schemeRuntimeBlockReason reports only locally observable preflight blockers.
@@ -118,6 +151,52 @@ func previousIssueForRuntime(issue string) string {
 
 type adminRuntimeQueryRower interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+type adminRuntimeQuerier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+func readAdminAcceptedPendingBets(ctx context.Context, db adminRuntimeQuerier, instanceID, currentOpenPeriod string) ([]adminSchemeAcceptedPendingBet, error) {
+	rows, err := db.Query(ctx, `
+SELECT c.record_no,
+       c.third_party_bet_id,
+       COALESCE(c.period_no, ''),
+       COALESCE(NULLIF(TRIM(c.third_party_period), ''), ''),
+       c.placed_at::text,
+       GREATEST(0, EXTRACT(EPOCH FROM now() - c.placed_at))::bigint
+FROM cloud_bet_records c
+WHERE c.scheme_id = $1
+  AND c.status = 'pending'
+  AND c.sim_bet = FALSE
+  AND NULLIF(TRIM(c.third_party_bet_id), '') IS NOT NULL
+ORDER BY c.placed_at ASC, c.id ASC
+LIMIT 20`, instanceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]adminSchemeAcceptedPendingBet, 0)
+	for rows.Next() {
+		var item adminSchemeAcceptedPendingBet
+		if err := rows.Scan(
+			&item.RecordNo,
+			&item.ThirdPartyBetID,
+			&item.PeriodNo,
+			&item.ThirdPartyPeriod,
+			&item.PlacedAt,
+			&item.AgeSeconds,
+		); err != nil {
+			return nil, err
+		}
+		item.BlocksCurrentOpenPeriod = acceptedPendingBlocksCurrentPeriod(currentOpenPeriod, item.ThirdPartyPeriod)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 func readAdminRuntimeDraw(ctx context.Context, db adminRuntimeQueryRower, lotteryCode, issueNo string) (*adminSchemeRuntimeDraw, error) {
