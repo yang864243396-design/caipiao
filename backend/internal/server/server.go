@@ -336,6 +336,7 @@ func (s *Server) registerRoutes(wsSrv *ws.Server) {
 
 	api.Handle("GET /admin/schemes/instances", adminAuth(http.HandlerFunc(s.handler.AdminSchemeMonitorList)))
 	api.Handle("GET /admin/schemes/instances/{instanceId}/bet-history", adminAuth(http.HandlerFunc(s.handler.AdminSchemeBetHistory)))
+	api.Handle("GET /admin/diagnostics/schemes/{instanceId}/runtime", adminAuth(http.HandlerFunc(s.handler.AdminSchemeRuntimeDiagnostics)))
 	api.Handle("POST /admin/schemes/share", adminAuth(http.HandlerFunc(s.handler.AdminCreateShareSnapshot)))
 	api.Handle("PATCH /admin/schemes/share/{snapshotId}", adminAuth(http.HandlerFunc(s.handler.AdminPatchShareSnapshot)))
 	api.Handle("DELETE /admin/schemes/share/{snapshotId}", adminAuth(http.HandlerFunc(s.handler.AdminDeleteShareSnapshot)))
