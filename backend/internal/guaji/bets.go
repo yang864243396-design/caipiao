@@ -3,6 +3,7 @@ package guaji
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"time"
 )
+
+var ErrWebBetNotFound = errors.New("guaji web bet not found")
 
 // LottBetContent 是单个注单内容（接口文档 §11 bet_contents 元素）。
 type LottBetContent struct {
@@ -585,7 +588,41 @@ func (c *Client) GetWebBet(ctx context.Context, accessToken, betID string) (*Web
 			break
 		}
 	}
-	return nil, fmt.Errorf("guaji get bet: id %s not found", betID)
+	return nil, fmt.Errorf("%w: id %s", ErrWebBetNotFound, betID)
+}
+
+// FindWebBetFromPageRange searches a bounded part of the third-party bet
+// history. It is used by settlement recovery after the fast recent-page lookup
+// has missed an older accepted order.
+func (c *Client) FindWebBetFromPageRange(ctx context.Context, accessToken, betID string, startPage, pageBudget int) (*WebBetRecord, int, bool, error) {
+	betID = strings.TrimSpace(betID)
+	if betID == "" {
+		return nil, startPage, false, fmt.Errorf("guaji get bet: empty id")
+	}
+	if startPage < 1 {
+		startPage = 1
+	}
+	if pageBudget <= 0 {
+		pageBudget = 1
+	}
+	const pageSize = 50
+	for offset := 0; offset < pageBudget; offset++ {
+		page := startPage + offset
+		items, err := c.ListWebBets(ctx, accessToken, pageSize, page)
+		if err != nil {
+			return nil, page, false, err
+		}
+		for _, item := range items {
+			if strconv.FormatInt(item.ID, 10) == betID {
+				copy := item
+				return &copy, page, false, nil
+			}
+		}
+		if len(items) < pageSize {
+			return nil, page, true, fmt.Errorf("%w: id %s", ErrWebBetNotFound, betID)
+		}
+	}
+	return nil, startPage + pageBudget, false, fmt.Errorf("%w: id %s", ErrWebBetNotFound, betID)
 }
 
 // BetSettlement 第三方注单结算结果（T5 派奖同步）。
@@ -610,6 +647,16 @@ func (c *Client) QuerySettlement(ctx context.Context, accessToken, thirdPartyBet
 		return nil, err
 	}
 	return webBetToSettlement(item), nil
+}
+
+// QuerySettlementFromPageRange queries a bounded historical list range after
+// the normal recent-order lookup has missed an older accepted order.
+func (c *Client) QuerySettlementFromPageRange(ctx context.Context, accessToken, thirdPartyBetID string, startPage, pageBudget int) (*BetSettlement, int, bool, error) {
+	item, nextPage, exhausted, err := c.FindWebBetFromPageRange(ctx, accessToken, thirdPartyBetID, startPage, pageBudget)
+	if err != nil {
+		return nil, nextPage, exhausted, err
+	}
+	return webBetToSettlement(item), nextPage, exhausted, nil
 }
 
 func webBetToSettlement(item *WebBetRecord) *BetSettlement {

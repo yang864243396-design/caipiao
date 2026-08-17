@@ -2,11 +2,13 @@ package accountsvc
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"math"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"caipiao/backend/internal/cloud/schemestate"
@@ -18,7 +20,11 @@ import (
 	"caipiao/backend/internal/ws"
 )
 
-const payoutSyncBatch = 50
+const (
+	payoutSyncBatch                = 50
+	historicalSettlementFirstPage  = 4
+	historicalSettlementPageBudget = 3
+)
 
 // LocalDrawSettlement 本地开奖表派奖评估结果（保留类型供历史调用方编译；派奖同步不再使用本地金额）。
 type LocalDrawSettlement struct {
@@ -160,11 +166,37 @@ func (w *PayoutSyncWorker) syncOne(ctx context.Context, row sqlcdb.ListPendingGu
 		return err
 	}
 	res, err := w.svc.guaji.QuerySettlement(ctx, token, betID)
+	recoveryUsed := false
+	if errors.Is(err, guaji.ErrWebBetNotFound) {
+		startPage, cursorErr := w.historicalSettlementPage(ctx, row.GuajiAccountID.Int64, betID)
+		if cursorErr != nil {
+			return cursorErr
+		}
+		var nextPage int
+		var exhausted bool
+		res, nextPage, exhausted, err = w.svc.guaji.QuerySettlementFromPageRange(
+			ctx, token, betID, startPage, historicalSettlementPageBudget,
+		)
+		recoveryUsed = true
+		if err != nil {
+			if recordErr := w.saveHistoricalSettlementPage(ctx, row.GuajiAccountID.Int64, betID,
+				nextHistoricalSettlementPage(historicalSettlementFirstPage, nextPage, exhausted), err.Error()); recordErr != nil {
+				return recordErr
+			}
+			return nil
+		}
+	}
 	if err != nil {
-		// 查不到/失败：下轮重试。禁止本地开奖金额兜底，避免详情返奖与第三方毛派奖不一致。
+		// Transport failures keep the pending financial record for the next retry.
 		return nil
 	}
 	if res == nil || !res.Settled {
+		if recoveryUsed {
+			if err := w.saveHistoricalSettlementPage(ctx, row.GuajiAccountID.Int64, betID,
+				historicalSettlementFirstPage, ""); err != nil {
+				return err
+			}
+		}
 		return nil // 第三方尚未结算（C17：一直等待开奖）
 	}
 
@@ -192,7 +224,61 @@ func (w *PayoutSyncWorker) syncOne(ctx context.Context, row sqlcdb.ListPendingGu
 		balanceSnapshot = info.BalanceByCurrency(currency)
 		w.svc.persistGuajiBalances(ctx, row.GuajiAccountID.Int64, multiCurrencyFromInfo(info))
 	}
-	return w.commitSettlement(ctx, row, status, pnl, payout, currency, balanceSnapshot, true)
+	if err := w.commitSettlement(ctx, row, status, pnl, payout, currency, balanceSnapshot, true); err != nil {
+		return err
+	}
+	if recoveryUsed {
+		if err := w.clearHistoricalSettlementPage(ctx, row.GuajiAccountID.Int64, betID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func nextHistoricalSettlementPage(firstPage, nextPage int, exhausted bool) int {
+	if firstPage < 1 {
+		firstPage = historicalSettlementFirstPage
+	}
+	if exhausted || nextPage < firstPage {
+		return firstPage
+	}
+	return nextPage
+}
+
+func (w *PayoutSyncWorker) historicalSettlementPage(ctx context.Context, accountID int64, betID string) (int, error) {
+	var page int
+	err := w.svc.pool.QueryRow(ctx, `
+SELECT next_page
+FROM guaji_settlement_recovery
+WHERE guaji_account_id = $1 AND third_party_bet_id = $2`, accountID, betID).Scan(&page)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return historicalSettlementFirstPage, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return nextHistoricalSettlementPage(historicalSettlementFirstPage, page, false), nil
+}
+
+func (w *PayoutSyncWorker) saveHistoricalSettlementPage(ctx context.Context, accountID int64, betID string, nextPage int, lastErr string) error {
+	_, err := w.svc.pool.Exec(ctx, `
+INSERT INTO guaji_settlement_recovery (
+    guaji_account_id, third_party_bet_id, next_page, last_error, last_attempt_at, updated_at
+) VALUES ($1, $2, $3, $4, now(), now())
+ON CONFLICT (guaji_account_id, third_party_bet_id) DO UPDATE
+SET next_page = EXCLUDED.next_page,
+    last_error = EXCLUDED.last_error,
+    last_attempt_at = EXCLUDED.last_attempt_at,
+    updated_at = EXCLUDED.updated_at`,
+		accountID, betID, nextHistoricalSettlementPage(historicalSettlementFirstPage, nextPage, false), strings.TrimSpace(lastErr))
+	return err
+}
+
+func (w *PayoutSyncWorker) clearHistoricalSettlementPage(ctx context.Context, accountID int64, betID string) error {
+	_, err := w.svc.pool.Exec(ctx, `
+DELETE FROM guaji_settlement_recovery
+WHERE guaji_account_id = $1 AND third_party_bet_id = $2`, accountID, betID)
+	return err
 }
 
 func (w *PayoutSyncWorker) commitSettlement(
