@@ -295,3 +295,11 @@ SET status = $2,
     payout_amount = $4
 WHERE bet_order_no = $1
   AND status = 'pending';
+
+-- name: UpdateCloudBetRecordRuleSnapshot :execrows
+UPDATE cloud_bet_records
+SET rule_snapshot = sqlc.arg(rule_snapshot),
+    rule_version = sqlc.arg(rule_version),
+    rule_snapshot_hash = sqlc.arg(rule_snapshot_hash)
+WHERE id = sqlc.arg(id)
+  AND rule_snapshot IS NULL;

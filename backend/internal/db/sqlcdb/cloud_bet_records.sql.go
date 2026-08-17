@@ -865,3 +865,32 @@ func (q *Queries) UpdateCloudBetRecordFromSettlement(ctx context.Context, arg Up
 	}
 	return result.RowsAffected(), nil
 }
+
+const updateCloudBetRecordRuleSnapshot = `-- name: UpdateCloudBetRecordRuleSnapshot :execrows
+UPDATE cloud_bet_records
+SET rule_snapshot = $1,
+    rule_version = $2,
+    rule_snapshot_hash = $3
+WHERE id = $4
+  AND rule_snapshot IS NULL
+`
+
+type UpdateCloudBetRecordRuleSnapshotParams struct {
+	RuleSnapshot     []byte      `json:"rule_snapshot"`
+	RuleVersion      pgtype.Int4 `json:"rule_version"`
+	RuleSnapshotHash pgtype.Text `json:"rule_snapshot_hash"`
+	ID               int64       `json:"id"`
+}
+
+func (q *Queries) UpdateCloudBetRecordRuleSnapshot(ctx context.Context, arg UpdateCloudBetRecordRuleSnapshotParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateCloudBetRecordRuleSnapshot,
+		arg.RuleSnapshot,
+		arg.RuleVersion,
+		arg.RuleSnapshotHash,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}

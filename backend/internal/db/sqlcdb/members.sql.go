@@ -160,13 +160,7 @@ SELECT
     m.registered_at,
     m.last_login_at
 FROM members m
-LEFT JOIN LATERAL (
-    SELECT
-        SUM(b.amount) AS total_bet_amount,
-        SUM(CASE WHEN b.status = 'win' THEN b.amount + b.pnl ELSE 0 END) AS payout_amount
-    FROM bet_orders b
-    WHERE b.member_id = m.id
-) stats ON true
+
 WHERE m.account = $1
   AND m.status = 'active'
 `
@@ -205,13 +199,7 @@ SELECT
     COALESCE(w.balance, 0)::float8 AS balance
 FROM members m
 LEFT JOIN member_wallets w ON w.member_id = m.id
-LEFT JOIN LATERAL (
-    SELECT
-        SUM(b.amount) AS total_bet_amount,
-        SUM(CASE WHEN b.status = 'win' THEN b.amount + b.pnl ELSE 0 END) AS payout_amount
-    FROM bet_orders b
-    WHERE b.member_id = m.id
-) stats ON true
+
 WHERE m.id = $1
 `
 
@@ -387,6 +375,50 @@ func (q *Queries) GetWalletLedgerCursorAnchor(ctx context.Context, arg GetWallet
 	return i, err
 }
 
+const listAdminMemberCurrencyStats = `-- name: ListAdminMemberCurrencyStats :many
+SELECT
+    b.member_id,
+    COALESCE(NULLIF(TRIM(b.currency), ''), 'CNY'::text)::text AS currency,
+    SUM(b.amount)::float8 AS total_bet_amount,
+    SUM(b.pnl)::float8 AS total_pnl
+FROM bet_orders b
+WHERE b.member_id = ANY($1::bigint[])
+GROUP BY b.member_id, COALESCE(NULLIF(TRIM(b.currency), ''), 'CNY')
+ORDER BY b.member_id, currency
+`
+
+type ListAdminMemberCurrencyStatsRow struct {
+	MemberID       int64   `json:"member_id"`
+	Currency       string  `json:"currency"`
+	TotalBetAmount float64 `json:"total_bet_amount"`
+	TotalPnl       float64 `json:"total_pnl"`
+}
+
+func (q *Queries) ListAdminMemberCurrencyStats(ctx context.Context, memberIds []int64) ([]ListAdminMemberCurrencyStatsRow, error) {
+	rows, err := q.db.Query(ctx, listAdminMemberCurrencyStats, memberIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAdminMemberCurrencyStatsRow{}
+	for rows.Next() {
+		var i ListAdminMemberCurrencyStatsRow
+		if err := rows.Scan(
+			&i.MemberID,
+			&i.Currency,
+			&i.TotalBetAmount,
+			&i.TotalPnl,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAdminMembers = `-- name: ListAdminMembers :many
 SELECT
     m.id,
@@ -459,45 +491,6 @@ func (q *Queries) ListAdminMembers(ctx context.Context, arg ListAdminMembersPara
 			&i.RegisteredAt,
 			&i.LastLoginAt,
 		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listAdminMemberCurrencyStats = `-- name: ListAdminMemberCurrencyStats :many
-SELECT
-    b.member_id,
-    COALESCE(NULLIF(TRIM(b.currency), ''), 'CNY') AS currency,
-    SUM(b.amount)::float8 AS total_bet_amount,
-    SUM(b.pnl)::float8 AS total_pnl
-FROM bet_orders b
-WHERE b.member_id = ANY($1::bigint[])
-GROUP BY b.member_id, COALESCE(NULLIF(TRIM(b.currency), ''), 'CNY')
-ORDER BY b.member_id, currency
-`
-
-type ListAdminMemberCurrencyStatsRow struct {
-	MemberID       int64   `json:"member_id"`
-	Currency       string  `json:"currency"`
-	TotalBetAmount float64 `json:"total_bet_amount"`
-	TotalPnl       float64 `json:"total_pnl"`
-}
-
-func (q *Queries) ListAdminMemberCurrencyStats(ctx context.Context, memberIDs []int64) ([]ListAdminMemberCurrencyStatsRow, error) {
-	rows, err := q.db.Query(ctx, listAdminMemberCurrencyStats, memberIDs)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListAdminMemberCurrencyStatsRow{}
-	for rows.Next() {
-		var i ListAdminMemberCurrencyStatsRow
-		if err := rows.Scan(&i.MemberID, &i.Currency, &i.TotalBetAmount, &i.TotalPnl); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

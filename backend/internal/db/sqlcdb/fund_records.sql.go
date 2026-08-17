@@ -80,18 +80,27 @@ WHERE l.member_id = $1
 `
 
 type CountMemberFundRecordsParams struct {
-	MemberID       int64
-	GuajiAccountID pgtype.Int8
-	TimeFrom       pgtype.Timestamptz
-	TimeTo         pgtype.Timestamptz
-	FlowDir        pgtype.Text
-	Currency       pgtype.Text
-	SchemeName     pgtype.Text
-	LotteryCode    pgtype.Text
+	MemberID       int64              `json:"member_id"`
+	GuajiAccountID pgtype.Int8        `json:"guaji_account_id"`
+	TimeFrom       pgtype.Timestamptz `json:"time_from"`
+	TimeTo         pgtype.Timestamptz `json:"time_to"`
+	FlowDir        pgtype.Text        `json:"flow_dir"`
+	Currency       pgtype.Text        `json:"currency"`
+	SchemeName     pgtype.Text        `json:"scheme_name"`
+	LotteryCode    pgtype.Text        `json:"lottery_code"`
 }
 
 func (q *Queries) CountMemberFundRecords(ctx context.Context, arg CountMemberFundRecordsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countMemberFundRecords, arg.MemberID, arg.GuajiAccountID, arg.TimeFrom, arg.TimeTo, arg.FlowDir, arg.Currency, arg.SchemeName, arg.LotteryCode)
+	row := q.db.QueryRow(ctx, countMemberFundRecords,
+		arg.MemberID,
+		arg.GuajiAccountID,
+		arg.TimeFrom,
+		arg.TimeTo,
+		arg.FlowDir,
+		arg.Currency,
+		arg.SchemeName,
+		arg.LotteryCode,
+	)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -264,14 +273,14 @@ SELECT
     l.balance_after::float8 AS balance_after,
     COALESCE(l.currency, 'CNY') AS currency,
     l.created_at,
-    COALESCE(sch.scheme_name, '') AS scheme_name,
-    COALESCE(sch.play_method, '') AS play_method,
+    COALESCE(sch.scheme_name, ''::text)::text AS scheme_name,
+    COALESCE(sch.play_method, ''::text)::text AS play_method,
     COALESCE(sch.lottery_name, '') AS lottery_name
 FROM wallet_ledger l
 LEFT JOIN LATERAL (
     SELECT
         c.scheme_name,
-        COALESCE(bo.play_method, '') AS play_method,
+        COALESCE(bo.play_method, ''::text)::text AS play_method,
         COALESCE(bo.lottery_name, '') AS lottery_name
     FROM cloud_bet_records c
     LEFT JOIN bet_orders bo
@@ -284,7 +293,7 @@ LEFT JOIN LATERAL (
           NULLIF(TRIM(l.order_ref), '') IS NULL
           AND ABS(EXTRACT(EPOCH FROM (c.placed_at - l.created_at))) <= 5
           AND ABS(c.amount::float8 - ABS(l.delta_amount::float8)) < 0.001
-          AND c.guaji_account_id = l.guaji_account_id
+          AND c.guaji_account_id IS NOT DISTINCT FROM l.guaji_account_id
         )
       )
     ORDER BY
@@ -384,14 +393,14 @@ SELECT
     l.balance_after::float8 AS balance_after,
     COALESCE(l.currency, 'CNY') AS currency,
     l.created_at,
-    COALESCE(sch.scheme_name, '') AS scheme_name,
-    COALESCE(sch.play_method, '') AS play_method,
+    COALESCE(sch.scheme_name, ''::text)::text AS scheme_name,
+    COALESCE(sch.play_method, ''::text)::text AS play_method,
     COALESCE(sch.lottery_name, '') AS lottery_name
 FROM wallet_ledger l
 LEFT JOIN LATERAL (
     SELECT
         c.scheme_name,
-        COALESCE(bo.play_method, '') AS play_method,
+        COALESCE(bo.play_method, ''::text)::text AS play_method,
         COALESCE(bo.lottery_name, '') AS lottery_name
     FROM cloud_bet_records c
     LEFT JOIN bet_orders bo
@@ -404,7 +413,7 @@ LEFT JOIN LATERAL (
           NULLIF(TRIM(l.order_ref), '') IS NULL
           AND ABS(EXTRACT(EPOCH FROM (c.placed_at - l.created_at))) <= 5
           AND ABS(c.amount::float8 - ABS(l.delta_amount::float8)) < 0.001
-          AND c.guaji_account_id = l.guaji_account_id
+          AND c.guaji_account_id IS NOT DISTINCT FROM l.guaji_account_id
         )
       )
     ORDER BY
@@ -512,14 +521,14 @@ SELECT
     l.balance_after::float8 AS balance_after,
     COALESCE(l.currency, 'CNY') AS currency,
     l.created_at,
-    COALESCE(COALESCE(by_order.scheme_name, by_legacy.scheme_name, ''), '') AS scheme_name,
-    COALESCE(COALESCE(by_order.play_method, by_legacy.play_method, ''), '') AS play_method,
+    COALESCE(COALESCE(by_order.scheme_name, by_legacy.scheme_name, ''::text), ''::text)::text AS scheme_name,
+    COALESCE(COALESCE(by_order.play_method, by_legacy.play_method, ''::text), ''::text)::text AS play_method,
     COALESCE(NULLIF(l.lottery_name, ''), by_order.lottery_name, by_legacy.lottery_name, '') AS lottery_name
 FROM wallet_ledger l
 LEFT JOIN LATERAL (
     SELECT
         c.scheme_name,
-        COALESCE(bo.play_method, '') AS play_method,
+        COALESCE(bo.play_method, ''::text)::text AS play_method,
         COALESCE(bo.lottery_name, '') AS lottery_name,
         COALESCE(bo.lottery_code, '') AS lottery_code
     FROM cloud_bet_records c
@@ -534,7 +543,7 @@ LEFT JOIN LATERAL (
 LEFT JOIN LATERAL (
     SELECT
         c.scheme_name,
-        COALESCE(bo.play_method, '') AS play_method,
+        COALESCE(bo.play_method, ''::text)::text AS play_method,
         COALESCE(bo.lottery_name, '') AS lottery_name,
         COALESCE(bo.lottery_code, '') AS lottery_code
     FROM cloud_bet_records c
@@ -567,8 +576,16 @@ WHERE l.member_id = $1
     OR $6::text = ''
     OR COALESCE(l.currency, 'CNY') = $6::text
   )
-  AND ($7::text IS NULL OR $7::text = '' OR COALESCE(by_order.scheme_name, by_legacy.scheme_name, '') ILIKE '%' || $7::text || '%')
-  AND ($8::text IS NULL OR $8::text = '' OR COALESCE(l.lottery_code, '') = $8::text)
+  AND (
+    $7::text IS NULL
+    OR $7::text = ''
+    OR COALESCE(by_order.scheme_name, by_legacy.scheme_name, '') ILIKE '%' || $7::text || '%'
+  )
+  AND (
+    $8::text IS NULL
+    OR $8::text = ''
+    OR COALESCE(l.lottery_code, '') = $8::text
+  )
 ORDER BY l.created_at DESC, l.id DESC
 LIMIT $10 OFFSET $9
 `

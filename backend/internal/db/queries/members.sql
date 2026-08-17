@@ -201,7 +201,7 @@ LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
 -- name: ListAdminMemberCurrencyStats :many
 SELECT
     b.member_id,
-    COALESCE(NULLIF(TRIM(b.currency), ''), 'CNY') AS currency,
+    COALESCE(NULLIF(TRIM(b.currency), ''), 'CNY'::text)::text AS currency,
     SUM(b.amount)::float8 AS total_bet_amount,
     SUM(b.pnl)::float8 AS total_pnl
 FROM bet_orders b

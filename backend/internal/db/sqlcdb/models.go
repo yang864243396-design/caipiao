@@ -166,10 +166,22 @@ type CloudBetRecord struct {
 	// 第三方 web_bets/lott 接单返回的 periods（real）
 	ThirdPartyPeriod pgtype.Text `json:"third_party_period"`
 	SimBet           bool        `json:"sim_bet"`
+	// 方案币种冗余（USDT/TRX/CNY），会员投注记录汇总/筛选用
+	Currency string `json:"currency"`
+	// 彩种编码冗余，筛选用（方案删除后仍可查）
+	LotteryCode string `json:"lottery_code"`
+	// 彩种展示名冗余
+	LotteryLabel string `json:"lottery_label"`
+	// 方案定义 ID 冗余，按方案筛选无需 JOIN instance
+	DefinitionID string `json:"definition_id"`
 	// 投注注数：正式优先第三方 bets_nums，模拟为本地验奖注数
 	BetUnits pgtype.Int4 `json:"bet_units"`
 	// 返奖金额：pending=NULL；miss=0；real=第三方 payout 原值；sim=amount+pnl；本地兜底结算不写
-	PayoutAmount pgtype.Numeric `json:"payout_amount"`
+	PayoutAmount        pgtype.Numeric     `json:"payout_amount"`
+	RuleSnapshot        []byte             `json:"rule_snapshot"`
+	RuleVersion         pgtype.Int4        `json:"rule_version"`
+	RuleSnapshotHash    pgtype.Text        `json:"rule_snapshot_hash"`
+	StrategyEvaluatedAt pgtype.Timestamptz `json:"strategy_evaluated_at"`
 }
 
 // 平台公告（会员端列表/详情）
@@ -552,6 +564,44 @@ type MemberWallet struct {
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
+type PlayRuleSpec struct {
+	ID               int64              `json:"id"`
+	TemplateCode     string             `json:"template_code"`
+	TypeID           string             `json:"type_id"`
+	SubID            string             `json:"sub_id"`
+	LotteryCode      pgtype.Text        `json:"lottery_code"`
+	RuleVersion      int32              `json:"rule_version"`
+	EvaluatorKey     string             `json:"evaluator_key"`
+	EvaluatorVersion int32              `json:"evaluator_version"`
+	EvaluationSpec   []byte             `json:"evaluation_spec"`
+	SampleCases      []byte             `json:"sample_cases"`
+	SourceMeta       []byte             `json:"source_meta"`
+	StrategyEnabled  bool               `json:"strategy_enabled"`
+	PublishedAt      pgtype.Timestamptz `json:"published_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+type PlayRuleSpecRevision struct {
+	ID               int64              `json:"id"`
+	RuleSpecID       pgtype.Int8        `json:"rule_spec_id"`
+	TemplateCode     string             `json:"template_code"`
+	TypeID           string             `json:"type_id"`
+	SubID            string             `json:"sub_id"`
+	LotteryCode      pgtype.Text        `json:"lottery_code"`
+	Revision         int32              `json:"revision"`
+	Status           string             `json:"status"`
+	EvaluatorKey     string             `json:"evaluator_key"`
+	EvaluatorVersion int32              `json:"evaluator_version"`
+	EvaluationSpec   []byte             `json:"evaluation_spec"`
+	SampleCases      []byte             `json:"sample_cases"`
+	SourceMeta       []byte             `json:"source_meta"`
+	Actor            string             `json:"actor"`
+	ChangeReason     string             `json:"change_reason"`
+	VerifiedAt       pgtype.Timestamptz `json:"verified_at"`
+	PublishedAt      pgtype.Timestamptz `json:"published_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+}
+
 type PlayTemplate struct {
 	Code    string `json:"code"`
 	Label   string `json:"label"`
@@ -685,6 +735,25 @@ type SchemeShareSnapshot struct {
 	Config    []byte             `json:"config"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type SchemeStrategyEvaluation struct {
+	ID               int64              `json:"id"`
+	InstanceID       string             `json:"instance_id"`
+	LotteryCode      string             `json:"lottery_code"`
+	PeriodNo         string             `json:"period_no"`
+	CloudBetRecordID pgtype.Int8        `json:"cloud_bet_record_id"`
+	BetOrderNo       pgtype.Text        `json:"bet_order_no"`
+	Status           string             `json:"status"`
+	RuleVersion      pgtype.Int4        `json:"rule_version"`
+	RuleSnapshotHash pgtype.Text        `json:"rule_snapshot_hash"`
+	LocalHit         pgtype.Bool        `json:"local_hit"`
+	WinningUnits     pgtype.Int4        `json:"winning_units"`
+	Diagnostics      []byte             `json:"diagnostics"`
+	ClaimedAt        pgtype.Timestamptz `json:"claimed_at"`
+	CompletedAt      pgtype.Timestamptz `json:"completed_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 }
 
 // 高级方案模板库：Admin 维护，Client 倍投设定展示

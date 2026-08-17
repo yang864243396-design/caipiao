@@ -78,7 +78,9 @@ sql:
       - "migrations/00120_cms_banners.sql"
       - "migrations/00121_cms_banners_link_url.sql"
       - "migrations/00122_cms_announcements_pinned.sql"
+      - "migrations/00133_cloud_bet_records_denorm.sql"
       - "migrations/00135_cloud_bet_records_detail_fields.sql"
+      - "migrations/00149_play_rule_specs.sql"
       - "internal/db/sqlc/patches/99_cms_promo_for_sqlc.sql"
     gen:
       go:

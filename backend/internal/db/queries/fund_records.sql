@@ -14,14 +14,14 @@ SELECT
     l.balance_after::float8 AS balance_after,
     COALESCE(l.currency, 'CNY') AS currency,
     l.created_at,
-    COALESCE(sch.scheme_name, '') AS scheme_name,
-    COALESCE(sch.play_method, '') AS play_method,
+    COALESCE(sch.scheme_name, ''::text)::text AS scheme_name,
+    COALESCE(sch.play_method, ''::text)::text AS play_method,
     COALESCE(sch.lottery_name, '') AS lottery_name
 FROM wallet_ledger l
 LEFT JOIN LATERAL (
     SELECT
         c.scheme_name,
-        COALESCE(bo.play_method, '') AS play_method,
+        COALESCE(bo.play_method, ''::text)::text AS play_method,
         COALESCE(bo.lottery_name, '') AS lottery_name
     FROM cloud_bet_records c
     LEFT JOIN bet_orders bo
@@ -84,14 +84,14 @@ SELECT
     l.balance_after::float8 AS balance_after,
     COALESCE(l.currency, 'CNY') AS currency,
     l.created_at,
-    COALESCE(COALESCE(by_order.scheme_name, by_legacy.scheme_name, ''), '') AS scheme_name,
-    COALESCE(COALESCE(by_order.play_method, by_legacy.play_method, ''), '') AS play_method,
+    COALESCE(COALESCE(by_order.scheme_name, by_legacy.scheme_name, ''::text), ''::text)::text AS scheme_name,
+    COALESCE(COALESCE(by_order.play_method, by_legacy.play_method, ''::text), ''::text)::text AS play_method,
     COALESCE(NULLIF(l.lottery_name, ''), by_order.lottery_name, by_legacy.lottery_name, '') AS lottery_name
 FROM wallet_ledger l
 LEFT JOIN LATERAL (
     SELECT
         c.scheme_name,
-        COALESCE(bo.play_method, '') AS play_method,
+        COALESCE(bo.play_method, ''::text)::text AS play_method,
         COALESCE(bo.lottery_name, '') AS lottery_name,
         COALESCE(bo.lottery_code, '') AS lottery_code
     FROM cloud_bet_records c
@@ -106,7 +106,7 @@ LEFT JOIN LATERAL (
 LEFT JOIN LATERAL (
     SELECT
         c.scheme_name,
-        COALESCE(bo.play_method, '') AS play_method,
+        COALESCE(bo.play_method, ''::text)::text AS play_method,
         COALESCE(bo.lottery_name, '') AS lottery_name,
         COALESCE(bo.lottery_code, '') AS lottery_code
     FROM cloud_bet_records c
@@ -161,14 +161,14 @@ SELECT
     l.balance_after::float8 AS balance_after,
     COALESCE(l.currency, 'CNY') AS currency,
     l.created_at,
-    COALESCE(sch.scheme_name, '') AS scheme_name,
-    COALESCE(sch.play_method, '') AS play_method,
+    COALESCE(sch.scheme_name, ''::text)::text AS scheme_name,
+    COALESCE(sch.play_method, ''::text)::text AS play_method,
     COALESCE(sch.lottery_name, '') AS lottery_name
 FROM wallet_ledger l
 LEFT JOIN LATERAL (
     SELECT
         c.scheme_name,
-        COALESCE(bo.play_method, '') AS play_method,
+        COALESCE(bo.play_method, ''::text)::text AS play_method,
         COALESCE(bo.lottery_name, '') AS lottery_name
     FROM cloud_bet_records c
     LEFT JOIN bet_orders bo
