@@ -105,6 +105,26 @@ func IsPeriodClosedError(err error) bool {
 	return isPeriodClosedMessage(err.Error())
 }
 
+// IsInsufficientBalanceError 判断上游是否明确表达余额不足。
+// API code 40000 也可能代表投注金额、注数等其他业务错误，不能单独据此判定。
+func IsInsufficientBalanceError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	var api *APIError
+	if errors.As(err, &api) {
+		msg = api.Message
+	}
+	lower := strings.ToLower(strings.TrimSpace(msg))
+	for _, phrase := range []string{"余额不足", "可用余额不足", "insufficient balance", "balance insufficient"} {
+		if strings.Contains(lower, strings.ToLower(phrase)) {
+			return true
+		}
+	}
+	return false
+}
+
 func isPeriodClosedMessage(msg string) bool {
 	msg = strings.ToLower(strings.TrimSpace(msg))
 	if msg == "" {

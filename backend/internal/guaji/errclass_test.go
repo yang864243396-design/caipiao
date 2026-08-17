@@ -128,3 +128,23 @@ func TestIsPeriodClosedError(t *testing.T) {
 		}
 	}
 }
+
+func TestIsInsufficientBalanceErrorRequiresExplicitBalanceMeaning(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"chinese", &APIError{Code: 40000, Message: "可用余额不足"}, true},
+		{"english", &APIError{Code: 40000, Message: "insufficient balance"}, true},
+		{"same code amount error", &APIError{Code: 40000, Message: "投注金额不正确"}, false},
+		{"same code count error", &APIError{Code: 40000, Message: "投注注数不正确"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsInsufficientBalanceError(tc.err); got != tc.want {
+				t.Fatalf("got %v want %v", got, tc.want)
+			}
+		})
+	}
+}

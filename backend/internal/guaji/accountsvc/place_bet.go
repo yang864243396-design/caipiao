@@ -65,7 +65,7 @@ func mapAuthErrToBet(err error) error {
 }
 
 // PlaceRealBet 用会员启用授权下注（guajibet.Placer 实现，T4）：
-// 取启用授权 Token → 校验主币种余额 → web_bets/lott 接单。
+// 取启用授权 Token → web_bets/lott 接单。
 // token 失效时自动重新授权最多 3 次；成功则继续下注，失败则返回 ErrTokenInvalid（由 worker 按原逻辑停方案）。
 func (s *Service) PlaceRealBet(ctx context.Context, memberAccount string, req guajibet.Request) (guajibet.Result, error) {
 	if s == nil || s.guaji == nil || !s.guaji.Enabled() {
@@ -145,19 +145,6 @@ func (s *Service) placeRealBetWithRow(
 		return guajibet.Result{}, guajibet.ErrNoActiveAuth
 	}
 
-	info, err := s.guaji.UserInfo(ctx, token)
-	if err != nil {
-		fault := guaji.ClassifyUpstreamError(err)
-		if fault.IsTokenInvalid {
-			_ = s.markTokenError(ctx, memberID, row.id, row.accessTokenEnc.String, fault.UserMessage)
-			return guajibet.Result{}, guajibet.ErrTokenInvalid
-		}
-		return guajibet.Result{}, guajibet.ErrUpstream
-	}
-	if info.BalanceByCurrency(currency) < req.Amount {
-		return guajibet.Result{}, guajibet.ErrInsufficient
-	}
-
 	gameID, err := s.resolveGameID(ctx, req.LotteryCode, req.GameID)
 	if err != nil {
 		return guajibet.Result{}, fmt.Errorf("%w: %w", guajibet.ErrPlaceRejected, err)
@@ -201,8 +188,8 @@ func (s *Service) placeRealBetWithRow(
 		BetMultiple: []guaji.LottBetMultipleOuter{},
 	})
 	if err != nil {
-		if guaji.IsPeriodClosedError(err) {
-			return guajibet.Result{}, guajibet.ErrPeriodClosed
+		if businessErr := placeLottBetBusinessError(err); businessErr != nil {
+			return guajibet.Result{}, businessErr
 		}
 		fault := guaji.ClassifyUpstreamError(err)
 		if fault.IsTokenInvalid {
@@ -231,4 +218,15 @@ func (s *Service) placeRealBetWithRow(
 		Periods:         periods,
 		Currency:        currency,
 	}, nil
+}
+
+func placeLottBetBusinessError(err error) error {
+	switch {
+	case guaji.IsInsufficientBalanceError(err):
+		return guajibet.ErrInsufficient
+	case guaji.IsPeriodClosedError(err):
+		return guajibet.ErrPeriodClosed
+	default:
+		return nil
+	}
 }
