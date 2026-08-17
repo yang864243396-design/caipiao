@@ -103,6 +103,13 @@ func New(cfg config.Config) (*Server, error) {
 	guajiClient.TuneHTTPConcurrency(httpConns)
 	guajiAccounts := accountsvc.NewService(pool, guajiClient, cfg.Guaji.CredentialsKey, cfg.JWTSecret)
 	periodSyncer := periodsync.NewSyncer(pool, guajiClient, guajiAccounts)
+	var periodWorker *periodsync.Worker
+	if pool != nil && guajiAccounts != nil && guajiClient.Enabled() {
+		periodWorker = periodsync.NewWorker(pool, guajiClient, guajiAccounts)
+		if periodWorker != nil {
+			go periodWorker.Run(workerCtx)
+		}
+	}
 	schemesSvc := schemes.NewService(pool, periodSyncer)
 	schemesSvc.SetMemberAuthChecker(guajiAccounts)
 	gamesSvc := games.NewService(pool)
@@ -127,6 +134,7 @@ func New(cfg config.Config) (*Server, error) {
 		if w := schemes.NewWorker(pool, cfg.SchemeWorkerTickSec, wsHub, periodSyncer); w != nil {
 			w.SetConcurrency(cfg.SchemeWorkerConcurrency)
 			w.SetPlaceConcurrency(cfg.SchemeWorkerPlaceConcurrency)
+			w.SetPeriodRefreshRequester(periodWorker)
 			schemeWorker = w
 			if guajiAccounts != nil {
 				w.SetGuajiBetPlacer(guajiAccounts)
@@ -147,12 +155,6 @@ func New(cfg config.Config) (*Server, error) {
 	}
 
 	// periods API：同步第三方封盘倒计时（running 彩种，需挂机 token）
-	if pool != nil && guajiAccounts != nil && guajiClient.Enabled() {
-		if pw := periodsync.NewWorker(pool, guajiClient, guajiAccounts); pw != nil {
-			go pw.Run(workerCtx)
-		}
-	}
-
 	// 期号归属自检：下注链路（outbound_lottery_code）与开奖链路（guaji_ws_key）
 	// 必须取到同一族期号，否则注单期号永远查不到开奖号
 	if pool != nil && guajiClient.Enabled() {

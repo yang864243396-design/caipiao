@@ -11,6 +11,14 @@ import (
 	"caipiao/backend/internal/lottery"
 )
 
+type testPeriodRefreshRequester struct {
+	codes []string
+}
+
+func (r *testPeriodRefreshRequester) RequestRefresh(code string) {
+	r.codes = append(r.codes, code)
+}
+
 func TestClampSchemeWorkerConcurrency(t *testing.T) {
 	if got := clampSchemeWorkerConcurrency(0); got != defaultSchemeWorkerConcurrency {
 		t.Fatalf("0 -> %d, want default %d", got, defaultSchemeWorkerConcurrency)
@@ -88,6 +96,30 @@ func TestBetWindowGateNilSyncerClosed(t *testing.T) {
 	gate := newBetWindowGate(&Worker{})
 	if gate.ensureOpen(context.Background(), code) {
 		t.Fatal("expected closed without schedule/syncer")
+	}
+}
+
+func TestPrefetchPeriodSyncOnlyQueuesRequests(t *testing.T) {
+	requester := &testPeriodRefreshRequester{}
+	w := &Worker{periodRefresh: requester}
+	w.prefetchPeriodSync(context.Background(), []string{"a", "b", "a"})
+	if got, want := len(requester.codes), 2; got != want {
+		t.Fatalf("requests=%v want 2", requester.codes)
+	}
+	if requester.codes[0] != "a" || requester.codes[1] != "b" {
+		t.Fatalf("requests=%v", requester.codes)
+	}
+}
+
+func TestBetWindowGateQueuesRefreshWhenCacheMissing(t *testing.T) {
+	code := "gate_queue_" + t.Name()
+	requester := &testPeriodRefreshRequester{}
+	gate := newBetWindowGate(&Worker{periodRefresh: requester})
+	if gate.ensureOpen(context.Background(), code) {
+		t.Fatal("expected closed while cache is missing")
+	}
+	if len(requester.codes) != 1 || requester.codes[0] != code {
+		t.Fatalf("requests=%v", requester.codes)
 	}
 }
 

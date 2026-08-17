@@ -2,7 +2,6 @@ package schemes
 
 import (
 	"context"
-	"log/slog"
 	"sync"
 	"time"
 
@@ -15,7 +14,6 @@ const (
 	maxSchemeWorkerConcurrency          = 256
 	defaultSchemeWorkerPlaceConcurrency = 16
 	maxSchemeWorkerPlaceConcurrency     = 64
-	periodPrefetchConcurrency           = 8
 	guajiPlaceSafeRetryAttempts         = 3
 	guajiPlaceSafeRetryBackoff          = 250 * time.Millisecond
 )
@@ -144,23 +142,18 @@ func prioritizeOpenBetWindow(rows []sqlcdb.ListRunningSchemeInstancesRow) []sqlc
 }
 
 func (w *Worker) prefetchPeriodSync(ctx context.Context, codes []string) {
-	if w == nil || w.periodSync == nil || len(codes) == 0 {
+	_ = ctx
+	if w == nil || w.periodRefresh == nil || len(codes) == 0 {
 		return
 	}
-	sem := make(chan struct{}, periodPrefetchConcurrency)
-	var wg sync.WaitGroup
+	seen := make(map[string]struct{}, len(codes))
 	for _, code := range codes {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(lotteryCode string) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			if err := w.periodSync.EnsureFreshIfStale(ctx, lotteryCode); err != nil {
-				slog.Warn("scheme worker periods prefetch failed", "lottery", lotteryCode, "err", err)
-			}
-		}(code)
+		if _, ok := seen[code]; ok {
+			continue
+		}
+		seen[code] = struct{}{}
+		w.requestPeriodRefresh(code)
 	}
-	wg.Wait()
 }
 
 func (w *Worker) preloadPlanMultipliers(ctx context.Context, memberIDs []int64) map[int64]float64 {
@@ -185,16 +178,12 @@ func (g *betWindowGate) ensureOpen(ctx context.Context, lotteryCode string) bool
 	if _, ok := lottery.StrictOpenIssueForGuajiBet(lotteryCode); ok {
 		return true
 	}
-	if g == nil || g.w == nil || g.w.periodSync == nil {
+	if g == nil || g.w == nil {
 		return false
 	}
 	v, _ := g.once.LoadOrStore(lotteryCode, &sync.Once{})
 	v.(*sync.Once).Do(func() {
-		refreshCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		defer cancel()
-		if err := g.w.periodSync.ForceRefresh(refreshCtx, lotteryCode); err != nil {
-			slog.Debug("scheme worker force refresh before bet failed", "lottery", lotteryCode, "err", err)
-		}
+		g.w.requestPeriodRefresh(lotteryCode)
 	})
 	_, ok := lottery.StrictOpenIssueForGuajiBet(lotteryCode)
 	return ok

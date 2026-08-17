@@ -26,6 +26,10 @@ import (
 
 const defaultCountdownReset = 7
 
+type periodRefreshRequester interface {
+	RequestRefresh(lotteryCode string)
+}
+
 // Worker ticks running scheme instances: countdown → bet against lottery draw + scheme config.
 type Worker struct {
 	pool           *db.Pool
@@ -33,6 +37,7 @@ type Worker struct {
 	hub            *ws.Hub
 	guajiBets      guajiBetPlacer
 	periodSync     *periodsync.Syncer
+	periodRefresh  periodRefreshRequester
 	tickSec        int32
 	concurrency    int32
 	placeSem       chan struct{} // 真下单全站有界并发；nil 表示不额外限流
@@ -55,6 +60,20 @@ func NewWorker(pool *db.Pool, tickSec int, hub *ws.Hub, periodSync *periodsync.S
 	}
 	w.SetPlaceConcurrency(defaultSchemeWorkerPlaceConcurrency)
 	return w
+}
+
+func (w *Worker) SetPeriodRefreshRequester(requester periodRefreshRequester) {
+	if w == nil {
+		return
+	}
+	w.periodRefresh = requester
+}
+
+func (w *Worker) requestPeriodRefresh(lotteryCode string) {
+	if w == nil || w.periodRefresh == nil {
+		return
+	}
+	w.periodRefresh.RequestRefresh(lotteryCode)
 }
 
 func (w *Worker) Run(ctx context.Context) {
@@ -259,13 +278,7 @@ func (w *Worker) tryActivateAfterStartPeriod(ctx context.Context, inst sqlcdb.Sc
 	if n == 0 {
 		return false, nil
 	}
-	if w.periodSync != nil {
-		refreshCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		if err := w.periodSync.ForceRefresh(refreshCtx, inst.LotteryCode); err != nil {
-			slog.Warn("scheme worker periods refresh after activate failed", "id", inst.ID, "lottery", inst.LotteryCode, "err", err)
-		}
-		cancel()
-	}
+	w.requestPeriodRefresh(inst.LotteryCode)
 	w.notifySchemeInstance(ctx, inst.MemberID, inst.ID, runModeFromSimBet(inst.SimBet), "running", StatusReasonCloudActive)
 	slog.Info("scheme worker activated after start period ended",
 		"id", inst.ID, "skippedPeriod", inst.LastSettledIssue.String, "simBet", inst.SimBet)
@@ -280,14 +293,7 @@ func (w *Worker) ensureBetWindowOpen(ctx context.Context, inst sqlcdb.SchemeInst
 	if _, ok := lottery.StrictOpenIssueForGuajiBet(inst.LotteryCode); ok {
 		return true
 	}
-	if w == nil || w.periodSync == nil {
-		return false
-	}
-	refreshCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	if err := w.periodSync.ForceRefresh(refreshCtx, inst.LotteryCode); err != nil {
-		slog.Debug("scheme worker force refresh before bet failed", "id", inst.ID, "lottery", inst.LotteryCode, "err", err)
-	}
-	cancel()
+	w.requestPeriodRefresh(inst.LotteryCode)
 	_, ok := lottery.StrictOpenIssueForGuajiBet(inst.LotteryCode)
 	return ok
 }
