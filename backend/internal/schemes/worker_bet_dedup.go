@@ -81,15 +81,26 @@ func guajiBetPeriodHasSafeWindowAt(lotteryCode string, now time.Time) bool {
 // briefly keep the just-closing issue open while PlaceRealBet has already
 // rolled to the next issue; trusting it alone caused accepted-period drift.
 func guajiShortPeriodWSWindowAllowsAt(lotteryCode, targetPeriod string, now time.Time) bool {
-	ps, ok := lottery.PeriodsScheduleFor(lotteryCode)
-	if !ok || ps.PeriodDurationSec <= 0 || ps.PeriodDurationSec > 15 {
+	state, stateOK := lottery.PeriodStateFor(lotteryCode)
+	ps, periodsOK := lottery.PeriodsScheduleFor(lotteryCode)
+
+	// Prefer the cadence observed from the draw websocket. Some upstream
+	// periods responses expose a generic or missing duration for three-second
+	// games; using that metadata to classify the lottery bypasses this guard at
+	// the exact boundary it is intended to protect.
+	intervalSec := 0
+	if stateOK && state.IntervalSec > 0 && state.IntervalSec <= 15 {
+		intervalSec = state.IntervalSec
+	} else if periodsOK && ps.PeriodDurationSec > 0 && ps.PeriodDurationSec <= 15 {
+		intervalSec = ps.PeriodDurationSec
+	}
+	if intervalSec == 0 {
 		return true
 	}
-	state, ok := lottery.PeriodStateFor(lotteryCode)
-	if !ok || state.UpdatedAt.IsZero() || state.CloseAt.IsZero() {
+	if !stateOK || state.UpdatedAt.IsZero() || state.CloseAt.IsZero() {
 		return false
 	}
-	maxAge := time.Duration(ps.PeriodDurationSec*2) * time.Second
+	maxAge := time.Duration(intervalSec*2) * time.Second
 	age := now.UTC().Sub(state.UpdatedAt.UTC())
 	if age < 0 {
 		age = 0

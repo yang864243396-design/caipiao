@@ -12,6 +12,7 @@ type PeriodState struct {
 	NextIssue    string
 	CloseAt      time.Time // 封盘时刻（仅内部参考；展示倒计时用墙钟取模）
 	UpdatedAt    time.Time
+	IntervalSec  int
 }
 
 var periodState sync.Map // lotteryCode -> PeriodState
@@ -33,6 +34,7 @@ func UpdatePeriodState(lotteryCode, currentIssue, nextIssue string, drawnAt time
 		NextIssue:    strings.TrimSpace(nextIssue),
 		CloseAt:      closeAt,
 		UpdatedAt:    time.Now().UTC(),
+		IntervalSec:  intervalSec,
 	})
 }
 

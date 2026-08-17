@@ -104,6 +104,25 @@ func TestGuajiShortPeriodWSWindowRejectsRequestAtActualDrawBoundary(t *testing.T
 	}
 }
 
+func TestGuajiShortPeriodWSWindowUsesObservedWSCadence(t *testing.T) {
+	code := "guaji_ws_close_guard_periods_duration_mismatch_test"
+	now := time.Now().UTC()
+	lottery.ClearPeriodsSchedule(code)
+	t.Cleanup(func() { lottery.ClearPeriodsSchedule(code) })
+
+	// The periods endpoint can report a generic 60-second duration even though
+	// the draw websocket proves this lottery advances every three seconds.
+	// The observed WS cadence must still protect the actual close boundary.
+	lottery.UpdatePeriodsScheduleFullWithDuration(
+		code, "P19", "P19", now.Add(4*time.Second), now.Add(4*time.Second), 60, "", now.Add(-2*time.Second),
+	)
+	lottery.UpdatePeriodState(code, "P18", "P19", now.Add(-2*time.Second), 3)
+
+	if guajiShortPeriodWSWindowAllowsAt(code, "P19", now) {
+		t.Fatal("observed three-second WS cadence must reject a request inside its actual close safety window")
+	}
+}
+
 func TestGuajiBetSnapshotFreshAtRequiresFresherShortPeriodSnapshot(t *testing.T) {
 	now := time.Now().UTC()
 	short := lottery.PeriodsSchedule{CurrentPeriod: "P1", CloseAt: now.Add(time.Second), PeriodDurationSec: 3, UpdatedAt: now.Add(-2 * time.Second)}
