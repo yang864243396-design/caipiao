@@ -92,6 +92,23 @@ func (w *Worker) SetRuleRegistry(registry *playrules.RegistryStore) {
 	w.ruleRegistry = registry
 }
 
+func publishedRuleSubIDs(rule playRule) []string {
+	seen := make(map[string]struct{}, 2)
+	out := make([]string, 0, 2)
+	for _, raw := range []string{rule.CatalogSubID, rule.SubPlayID} {
+		id := strings.TrimSpace(raw)
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
 func (w *Worker) NotifyStrategyDraw(ctx context.Context, lotteryCode, periodNo string) {
 	if w != nil && w.strategyProcessor != nil {
 		w.strategyProcessor.NotifyDraw(ctx, lotteryCode, periodNo)
@@ -102,16 +119,18 @@ func (w *Worker) resolvePublishedRule(lotteryCode string, rule playRule) (playru
 	if w == nil || w.ruleRegistry == nil {
 		return playrules.Snapshot{}, false
 	}
-	snapshot, err := w.ruleRegistry.Resolve(playrules.Locator{
-		TemplateCode: rule.PlayTemplate,
-		TypeID:       rule.PlayTypeID,
-		SubID:        rule.SubPlayID,
-		LotteryCode:  lotteryCode,
-	})
-	if err != nil {
-		return playrules.Snapshot{}, false
+	for _, subID := range publishedRuleSubIDs(rule) {
+		snapshot, err := w.ruleRegistry.Resolve(playrules.Locator{
+			TemplateCode: rule.PlayTemplate,
+			TypeID:       rule.PlayTypeID,
+			SubID:        subID,
+			LotteryCode:  lotteryCode,
+		})
+		if err == nil {
+			return snapshot, true
+		}
 	}
-	return snapshot, true
+	return playrules.Snapshot{}, false
 }
 
 func (w *Worker) freezePublishedRule(ctx context.Context, q *sqlcdb.Queries, inst sqlcdb.SchemeInstance, rule playRule, periodNo string) error {

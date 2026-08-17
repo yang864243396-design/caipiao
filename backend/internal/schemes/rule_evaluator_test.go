@@ -104,6 +104,35 @@ func TestWorkerResolvesPublishedRuleForLotterySpecificScheme(t *testing.T) {
 	}
 }
 
+func TestWorkerResolvesPublishedRuleByCatalogSubIDBeforeSemanticMode(t *testing.T) {
+	registry, err := playrules.NewRegistry([]playrules.PublishedSpec{
+		{Locator: playrules.Locator{TemplateCode: "fast_ssc_std", TypeID: "g017", SubID: "390"}, RuleVersion: 7, EvaluatorVersion: 1, EvaluatorKey: "ssc.attribute", EvaluationSpec: []byte(`{"mode":"attribute","catalogSubId":"390"}`), StrategyEnabled: true},
+		{Locator: playrules.Locator{TemplateCode: "fast_ssc_std", TypeID: "g017", SubID: "daxiao"}, RuleVersion: 3, EvaluatorVersion: 1, EvaluatorKey: "ssc.attribute", EvaluationSpec: []byte(`{"mode":"attribute","catalogSubId":"legacy"}`), StrategyEnabled: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := &Worker{ruleRegistry: playrules.NewRegistryStore(registry)}
+	got, ok := worker.resolvePublishedRule("tron_ffc_3s", playRule{PlayTemplate: "fast_ssc_std", PlayTypeID: "g017", CatalogSubID: "390", SubPlayID: "daxiao"})
+	if !ok || got.Locator.SubID != "390" || got.RuleVersion != 7 {
+		t.Fatalf("snapshot=%+v ok=%v, want catalogue rule 390 version 7", got, ok)
+	}
+}
+
+func TestWorkerResolvesPublishedRuleBySemanticFallbackWithoutCatalogID(t *testing.T) {
+	registry, err := playrules.NewRegistry([]playrules.PublishedSpec{
+		{Locator: playrules.Locator{TemplateCode: "fast_ssc_std", TypeID: "g017", SubID: "daxiao"}, RuleVersion: 3, EvaluatorVersion: 1, EvaluatorKey: "ssc.attribute", EvaluationSpec: []byte(`{"mode":"attribute","catalogSubId":"390"}`), StrategyEnabled: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := &Worker{ruleRegistry: playrules.NewRegistryStore(registry)}
+	got, ok := worker.resolvePublishedRule("tron_ffc_3s", playRule{PlayTemplate: "fast_ssc_std", PlayTypeID: "g017", SubPlayID: "daxiao"})
+	if !ok || got.Locator.SubID != "daxiao" || got.RuleVersion != 3 {
+		t.Fatalf("snapshot=%+v ok=%v, want semantic fallback daxiao version 3", got, ok)
+	}
+}
+
 func TestSimSettlementUsesFrozenPublishedRuleWhenAvailable(t *testing.T) {
 	snapshot := frozenSnapshot(t, "ssc_std", "ssc.direct", map[string]any{
 		"mode": "direct", "numberMin": 0, "numberMax": 9,
