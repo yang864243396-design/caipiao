@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"caipiao/backend/internal/apix"
+	"caipiao/backend/internal/guaji/periodsync"
 	"caipiao/backend/internal/lottery"
 )
 
@@ -72,6 +73,7 @@ WHERE id = $1`, instanceID).Scan(
 	}
 
 	runtime := lottery.InspectPeriodRuntime(inst.LotteryCode, time.Now())
+	refreshDiagnostics, _ := periodsync.DiagnosticsForLottery(inst.LotteryCode)
 	expectedPreviousIssue := previousIssueForRuntime(runtime.CurrentOpenPeriod)
 	previousDraw, err := readAdminRuntimeDraw(r.Context(), h.db, inst.LotteryCode, expectedPreviousIssue)
 	if err != nil {
@@ -92,6 +94,7 @@ WHERE id = $1`, instanceID).Scan(
 	apix.OK(w, map[string]any{
 		"instance":              inst,
 		"periods":               runtime,
+		"periodRefresh":         refreshDiagnostics,
 		"latestDraw":            latestDraw,
 		"expectedPreviousIssue": expectedPreviousIssue,
 		"previousDraw":          previousDraw,

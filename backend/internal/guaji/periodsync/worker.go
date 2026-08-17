@@ -28,14 +28,16 @@ const (
 )
 
 type RefreshDiagnostics struct {
-	LotteryCode         string
-	LastAttemptAt       time.Time
-	LastSuccessAt       time.Time
-	LastDuration        time.Duration
-	ConsecutiveFailures int
-	NextAllowedAt       time.Time
-	LastError           string
+	LotteryCode         string        `json:"lotteryCode"`
+	LastAttemptAt       time.Time     `json:"lastAttemptAt,omitempty"`
+	LastSuccessAt       time.Time     `json:"lastSuccessAt,omitempty"`
+	LastDuration        time.Duration `json:"lastDuration,omitempty"`
+	ConsecutiveFailures int           `json:"consecutiveFailures"`
+	NextAllowedAt       time.Time     `json:"nextAllowedAt,omitempty"`
+	LastError           string        `json:"lastError,omitempty"`
 }
+
+var runtimeRefreshDiagnostics sync.Map // lotteryCode -> RefreshDiagnostics
 
 type refreshState struct {
 	RefreshDiagnostics
@@ -296,7 +298,9 @@ func (w *Worker) runRefresh(parent context.Context, lotteryCode string) {
 		state.NextAllowedAt = finished.Add(refreshFailureBackoff)
 		state.LastError = err.Error()
 	}
+	snapshot := state.RefreshDiagnostics
 	w.refreshMu.Unlock()
+	runtimeRefreshDiagnostics.Store(lotteryCode, snapshot)
 	if err != nil {
 		if guaji.ClassifyUpstreamError(err).IsTokenInvalid {
 			w.invalidateToken()
@@ -341,6 +345,16 @@ func (w *Worker) Diagnostics(lotteryCode string) (RefreshDiagnostics, bool) {
 		return RefreshDiagnostics{}, false
 	}
 	return state.RefreshDiagnostics, true
+}
+
+func DiagnosticsForLottery(lotteryCode string) (RefreshDiagnostics, bool) {
+	lotteryCode = strings.TrimSpace(lotteryCode)
+	v, ok := runtimeRefreshDiagnostics.Load(lotteryCode)
+	if !ok {
+		return RefreshDiagnostics{}, false
+	}
+	diag, ok := v.(RefreshDiagnostics)
+	return diag, ok
 }
 
 func isDialOrTimeoutErr(err error) bool {

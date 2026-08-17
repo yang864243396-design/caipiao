@@ -797,13 +797,15 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 
 	acceptedPeriod := strings.TrimSpace(draw.IssueNo)
 	cursorPeriod := acceptedPeriod
+	periodMismatch := false
 	if guajiReal {
 		acceptedPeriod = strings.TrimSpace(betMeta.Periods)
 		if acceptedPeriod == "" {
 			return fmt.Errorf("%w: upstream did not return periods", guajibet.ErrPlaceRejected)
 		}
 		metaPeriod := acceptedPeriod
-		if acceptedPeriod != guajiTargetPeriodNo {
+		if isAcceptedPeriodMismatch(guajiTargetPeriodNo, acceptedPeriod) {
+			periodMismatch = true
 			renamed, merr := qtx.MoveCloudBetRecordPeriod(ctx, inst.ID, guajiTargetPeriodNo, acceptedPeriod)
 			if merr != nil {
 				return merr
@@ -907,6 +909,11 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 	}
 	rollbackTx = false
 	committed = true
+	if periodMismatch {
+		detail := fmt.Sprintf("third-party accepted a different period: target=%s accepted=%s", guajiTargetPeriodNo, acceptedPeriod)
+		w.pauseRunningInstance(ctx, inst, StatusReasonBetFailed, detail)
+		return errSchemeBetStopped
+	}
 	// 即时结算路径（历史兼容）：下单即有盈亏后检查止盈止损。
 	// 模拟盘改走开奖后结算，止盈止损在 settleSimCloudBet 中检查。
 	if !deferSettle {

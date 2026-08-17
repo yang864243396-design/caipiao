@@ -101,3 +101,32 @@ func TestWorkerRequestRefresh_respectsGlobalConcurrency(t *testing.T) {
 	}
 	close(gate)
 }
+
+func TestWorkerRequestRefresh_updatesRuntimeDiagnostics(t *testing.T) {
+	code := "diagnostics"
+	done := make(chan struct{}, 1)
+	w := &Worker{refreshConcurrency: 1, refreshFn: func(_ context.Context, got string) error {
+		if got != code {
+			t.Fatalf("code=%q", got)
+		}
+		done <- struct{}{}
+		return nil
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w.startRefreshWorkers(ctx)
+	w.RequestRefresh(code)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("refresh did not finish")
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if diag, ok := DiagnosticsForLottery(code); ok && !diag.LastSuccessAt.IsZero() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("runtime diagnostics were not published")
+}
