@@ -187,7 +187,10 @@ func (w *Worker) placeGuajiSchemeBet(
 		// A wait for a shared place slot or a retry backoff can consume the final
 		// part of a very short period. Recheck immediately before every request;
 		// never let the upstream roll this bet into the next issue.
-		if !guajiBetPeriodMatches(inst.LotteryCode, periodNo) || !guajiBetPeriodHasSafeWindowAt(inst.LotteryCode, time.Now()) {
+		placeCheckAt := time.Now()
+		if !guajiBetPeriodMatches(inst.LotteryCode, periodNo) ||
+			!guajiBetPeriodHasSafeWindowAt(inst.LotteryCode, placeCheckAt) ||
+			!guajiShortPeriodWSWindowAllowsAt(inst.LotteryCode, periodNo, placeCheckAt) {
 			err := fmt.Errorf("%w: period %s is too close to close", guajibet.ErrPeriodClosed, periodNo)
 			if attempt == 1 {
 				return schemeGuajiBetMeta{}, preflightPlaceErr(err)

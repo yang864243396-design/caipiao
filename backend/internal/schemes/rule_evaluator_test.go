@@ -41,6 +41,28 @@ func TestFrozenSSCDirectRuleMatchesKnownSample(t *testing.T) {
 	}
 }
 
+func TestFrozenFastSSCHashTailBigSmallUsesFinalDigit(t *testing.T) {
+	snapshot := playrules.Snapshot{
+		Locator:        playrules.Locator{TemplateCode: "fast_ssc_std", TypeID: "g017", SubID: "390"},
+		EvaluatorKey:   "ssc.attribute",
+		EvaluationSpec: []byte(`{"mode":"attribute","numberMin":0,"numberMax":9,"segmentStart":0,"segmentLen":5,"betMode":"daxiao","catalogSubId":"390"}`),
+	}
+	small, err := evaluateFrozenRule(snapshot, playRule{}, []string{"5", "5", "6", "5", "3"}, "小", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !small.Hit || small.BetUnits != 1 {
+		t.Fatalf("small evaluation = %+v, want one hit from final digit 3", small)
+	}
+	large, err := evaluateFrozenRule(snapshot, playRule{}, []string{"5", "5", "6", "5", "3"}, "大", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if large.Hit {
+		t.Fatalf("large evaluation = %+v, want miss from final digit 3", large)
+	}
+}
+
 func TestFrozenLHCGuoguanRulePreservesEmptyPositions(t *testing.T) {
 	snapshot := frozenSnapshot(t, "lhc_std", "lhc.guoguan", map[string]any{
 		"mode": "guoguan", "numberMin": 1, "numberMax": 49, "betMode": "guoguan",

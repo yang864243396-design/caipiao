@@ -82,6 +82,28 @@ func TestGuajiBetPeriodHasSafeWindowAt(t *testing.T) {
 	}
 }
 
+func TestGuajiShortPeriodWSWindowRejectsRequestAtActualDrawBoundary(t *testing.T) {
+	code := "guaji_ws_close_guard_3s_test"
+	now := time.Now().UTC()
+	lottery.ClearPeriodsSchedule(code)
+	t.Cleanup(func() { lottery.ClearPeriodsSchedule(code) })
+
+	// The periods endpoint still reports P19 open beyond the actual WS cadence,
+	// while the latest P18 draw proves P19 rolls at now+1s.
+	lottery.UpdatePeriodsScheduleFullWithDuration(
+		code, "P19", "P19", now.Add(4*time.Second), now.Add(4*time.Second), 3, "", now.Add(-2*time.Second),
+	)
+	lottery.UpdatePeriodState(code, "P18", "P19", now, 3)
+	if !guajiShortPeriodWSWindowAllowsAt(code, "P19", now) {
+		t.Fatal("fresh WS-derived window with sufficient time should allow the matching next issue")
+	}
+	lottery.UpdatePeriodState(code, "P18", "P19", now.Add(-2*time.Second), 3)
+
+	if guajiShortPeriodWSWindowAllowsAt(code, "P19", now) {
+		t.Fatal("three-second request inside WS-derived close safety must be rejected even when periods API still reports it open")
+	}
+}
+
 func TestGuajiBetSnapshotFreshAtRequiresFresherShortPeriodSnapshot(t *testing.T) {
 	now := time.Now().UTC()
 	short := lottery.PeriodsSchedule{CurrentPeriod: "P1", CloseAt: now.Add(time.Second), PeriodDurationSec: 3, UpdatedAt: now.Add(-2 * time.Second)}

@@ -30,3 +30,26 @@ func TestPlayRuleStrategyMigrationDefinesRequiredPersistence(t *testing.T) {
 		}
 	}
 }
+
+func TestFastSSCHashTailBigSmallRuleIsPublishedByMigration(t *testing.T) {
+	path := filepath.Join("..", "..", "migrations", "00150_publish_fast_ssc_hash_tail_big_small.sql")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read hash tail rule migration: %v", err)
+	}
+	sql := string(data)
+	for _, want := range []string{
+		"'fast_ssc_std'",
+		"'g017'",
+		"'390'",
+		"'ssc.attribute'",
+		`"betMode":"daxiao"`,
+		"strategy_enabled",
+		"TRUE",
+		"'published'",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("hash tail rule migration missing %q", want)
+		}
+	}
+}

@@ -76,6 +76,33 @@ func guajiBetPeriodHasSafeWindowAt(lotteryCode string, now time.Time) bool {
 	return ok && closeAt.Sub(now.UTC()) > guajiPlaceCloseSafety
 }
 
+// guajiShortPeriodWSWindowAllowsAt cross-checks the periods endpoint against
+// the actual draw cadence for ultra-short games. The periods endpoint can
+// briefly keep the just-closing issue open while PlaceRealBet has already
+// rolled to the next issue; trusting it alone caused accepted-period drift.
+func guajiShortPeriodWSWindowAllowsAt(lotteryCode, targetPeriod string, now time.Time) bool {
+	ps, ok := lottery.PeriodsScheduleFor(lotteryCode)
+	if !ok || ps.PeriodDurationSec <= 0 || ps.PeriodDurationSec > 15 {
+		return true
+	}
+	state, ok := lottery.PeriodStateFor(lotteryCode)
+	if !ok || state.UpdatedAt.IsZero() || state.CloseAt.IsZero() {
+		return false
+	}
+	maxAge := time.Duration(ps.PeriodDurationSec*2) * time.Second
+	age := now.UTC().Sub(state.UpdatedAt.UTC())
+	if age < 0 {
+		age = 0
+	}
+	if age > maxAge {
+		return false
+	}
+	if strings.TrimSpace(state.NextIssue) != strings.TrimSpace(targetPeriod) {
+		return false
+	}
+	return state.CloseAt.UTC().Sub(now.UTC()) > guajiPlaceCloseSafety
+}
+
 // evaluateGuajiBetDedup 核心防重：已下注第三方期号 == 第三方当前开放期号 → 跳过（含待开奖）。
 func (w *Worker) evaluateGuajiBetDedup(
 	ctx context.Context,
