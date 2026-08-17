@@ -20,14 +20,20 @@ type Syncer struct {
 	client   *guaji.Client
 	accounts *accountsvc.Service
 
-	fallbackLocks sync.Map // lotteryCode -> *sync.Mutex
+	fallbackLocks         sync.Map // lotteryCode -> *sync.Mutex
+	prePlaceVerifications *prePlaceVerifyCache
 }
 
 func NewSyncer(pool *db.Pool, client *guaji.Client, accounts *accountsvc.Service) *Syncer {
 	if pool == nil || client == nil || !client.Enabled() || accounts == nil {
 		return nil
 	}
-	return &Syncer{pool: pool, client: client, accounts: accounts}
+	return &Syncer{
+		pool:                  pool,
+		client:                client,
+		accounts:              accounts,
+		prePlaceVerifications: newPrePlaceVerifyCache(500 * time.Millisecond),
+	}
 }
 
 func (s *Syncer) gameIDForLottery(ctx context.Context, lotteryCode string) (int, error) {
@@ -59,20 +65,65 @@ func (s *Syncer) fetchAndApply(ctx context.Context, lotteryCode string, numPerio
 }
 
 func (s *Syncer) fetchAndApplyWithToken(ctx context.Context, lotteryCode string, numPeriods int, token string) error {
+	_, err := s.fetchPeriodsAndApplyWithToken(ctx, lotteryCode, numPeriods, token)
+	return err
+}
+
+func (s *Syncer) fetchPeriodsAndApplyWithToken(ctx context.Context, lotteryCode string, numPeriods int, token string) ([]guaji.LottPeriod, error) {
 	gameID, err := s.gameIDForLottery(ctx, lotteryCode)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	periods, _, err := s.client.FetchLottPeriods(ctx, token, gameID, numPeriods)
 	if err != nil {
 		if guaji.IsPeriodClosedError(err) {
 			lottery.ClearPeriodsSchedule(lotteryCode)
-			return nil
+			return nil, nil
 		}
-		return err
+		return nil, err
 	}
 	applyPeriodsListToCache(lotteryCode, periods, time.Now())
-	return nil
+	return periods, nil
+}
+
+// VerifyOpenPeriodForMember synchronously confirms the open period with the
+// member's third-party account before an at-risk PlaceBet. Calls for the same
+// lottery/account are coalesced and briefly reused, so many schemes do not
+// amplify one close-window refresh into many upstream requests.
+func (s *Syncer) VerifyOpenPeriodForMember(ctx context.Context, lotteryCode, memberAccount string) (string, time.Time, error) {
+	if s == nil {
+		return "", time.Time{}, nil
+	}
+	lotteryCode = strings.TrimSpace(lotteryCode)
+	memberAccount = strings.TrimSpace(memberAccount)
+	if lotteryCode == "" || memberAccount == "" {
+		return "", time.Time{}, fmt.Errorf("empty lottery code or member account")
+	}
+	key := lotteryCode + "\x00" + memberAccount
+	cache := s.prePlaceVerifications
+	if cache == nil {
+		cache = newPrePlaceVerifyCache(500 * time.Millisecond)
+		s.prePlaceVerifications = cache
+	}
+	result, err := cache.getOrRefresh(ctx, key, time.Now(), func(ctx context.Context) (prePlaceVerifyResult, error) {
+		token, err := s.accounts.MemberAccessToken(ctx, memberAccount)
+		if err != nil {
+			return prePlaceVerifyResult{}, err
+		}
+		periods, err := s.fetchPeriodsAndApplyWithToken(ctx, lotteryCode, workerNumPeriods, token)
+		if err != nil {
+			return prePlaceVerifyResult{}, err
+		}
+		open, closeAt, ok := guaji.PickOpenLottPeriod(periods, lotteryCode, time.Now())
+		if !ok {
+			return prePlaceVerifyResult{}, fmt.Errorf("no currently open period for %s", lotteryCode)
+		}
+		return prePlaceVerifyResult{Period: strings.TrimSpace(open.Period), CloseAt: closeAt.UTC()}, nil
+	})
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	return result.Period, result.CloseAt, nil
 }
 
 // ForceRefreshForMember 用指定会员 token 拉取 periods（矩阵测试等）。

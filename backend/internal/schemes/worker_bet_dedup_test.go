@@ -1,9 +1,12 @@
 package schemes
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"caipiao/backend/internal/guajibet"
 	"caipiao/backend/internal/lottery"
 )
 
@@ -90,4 +93,57 @@ func TestGuajiBetSnapshotFreshAtRequiresFresherShortPeriodSnapshot(t *testing.T)
 	if !guajiBetSnapshotFreshAt(standard, now) {
 		t.Fatal("standard-period snapshot should remain usable within the five-second safety age")
 	}
+}
+
+func TestGuajiPrePlaceVerificationRejectsAdvancedUpstreamPeriod(t *testing.T) {
+	w := &Worker{periodVerifier: stubGuajiPeriodVerifier{
+		period: "85428957",
+		close:  time.Now().Add(5 * time.Second),
+	}}
+	err := w.verifyGuajiPeriodBeforePlace(context.Background(), "tron_ffc_3s", "vs8888", "85428956")
+	if !errors.Is(err, guajibet.ErrPeriodClosed) {
+		t.Fatalf("err=%v, want ErrPeriodClosed", err)
+	}
+}
+
+func TestGuajiPrePlaceVerificationRejectsInsufficientConfirmedWindow(t *testing.T) {
+	w := &Worker{periodVerifier: stubGuajiPeriodVerifier{
+		period: "P1",
+		close:  time.Now().Add(guajiVerifiedPlaceSafety - 10*time.Millisecond),
+	}}
+	err := w.verifyGuajiPeriodBeforePlace(context.Background(), "tron_ffc_3s", "vs8888", "P1")
+	if !errors.Is(err, guajibet.ErrPeriodClosed) {
+		t.Fatalf("err=%v, want ErrPeriodClosed", err)
+	}
+}
+
+func TestGuajiPrePlaceVerificationIsOnlyNeededForAtRiskSnapshot(t *testing.T) {
+	code := "guaji_preplace_verify_at_risk_test"
+	now := time.Now().UTC()
+	lottery.ClearPeriodsSchedule(code)
+	t.Cleanup(func() { lottery.ClearPeriodsSchedule(code) })
+
+	lottery.UpdatePeriodsScheduleFullWithDuration(
+		code, "P1", "P1", now, now.Add(5*time.Second), 3, "", now,
+	)
+	if guajiPrePlaceVerificationNeeded(code, "P1", now) {
+		t.Fatal("fresh period with ample time should use the centralized snapshot")
+	}
+
+	lottery.UpdatePeriodsScheduleFullWithDuration(
+		code, "P1", "P1", now, now.Add(guajiPrePlaceVerificationLead), 3, "", now,
+	)
+	if !guajiPrePlaceVerificationNeeded(code, "P1", now) {
+		t.Fatal("near-close period must synchronously confirm with upstream")
+	}
+}
+
+type stubGuajiPeriodVerifier struct {
+	period string
+	close  time.Time
+	err    error
+}
+
+func (s stubGuajiPeriodVerifier) VerifyOpenPeriodForMember(context.Context, string, string) (string, time.Time, error) {
+	return s.period, s.close, s.err
 }

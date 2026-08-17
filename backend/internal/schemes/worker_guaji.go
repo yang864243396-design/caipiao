@@ -174,6 +174,16 @@ func (w *Worker) placeGuajiSchemeBet(
 	var betRes guajibet.Result
 	var placeErr error
 	for attempt := 1; attempt <= guajiPlaceSafeRetryAttempts; attempt++ {
+		if guajiPrePlaceVerificationNeeded(inst.LotteryCode, periodNo, time.Now()) {
+			if verifyErr := w.verifyGuajiPeriodBeforePlace(ctx, inst.LotteryCode, account, periodNo); verifyErr != nil {
+				if attempt == 1 {
+					return schemeGuajiBetMeta{}, preflightPlaceErr(verifyErr)
+				}
+				// A prior attempt may already have reached the upstream. Keep its
+				// claim rather than releasing it and risking a duplicate retry.
+				return schemeGuajiBetMeta{}, verifyErr
+			}
+		}
 		// A wait for a shared place slot or a retry backoff can consume the final
 		// part of a very short period. Recheck immediately before every request;
 		// never let the upstream roll this bet into the next issue.

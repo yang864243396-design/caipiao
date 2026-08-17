@@ -32,6 +32,13 @@ type periodRefreshRequester interface {
 	RequestRefresh(lotteryCode string)
 }
 
+// guajiPeriodVerifier performs a synchronous upstream confirmation only for a
+// close-window or stale cached period. periodsync.Syncer coalesces those calls
+// by lottery and member account.
+type guajiPeriodVerifier interface {
+	VerifyOpenPeriodForMember(ctx context.Context, lotteryCode, memberAccount string) (period string, closeAt time.Time, err error)
+}
+
 // Worker ticks running scheme instances: countdown → bet against lottery draw + scheme config.
 type Worker struct {
 	pool              *db.Pool
@@ -40,6 +47,7 @@ type Worker struct {
 	guajiBets         guajiBetPlacer
 	periodSync        *periodsync.Syncer
 	periodRefresh     periodRefreshRequester
+	periodVerifier    guajiPeriodVerifier
 	ruleRegistry      *playrules.RegistryStore
 	strategyProcessor *StrategyProcessor
 	tickSec           int32
@@ -58,6 +66,7 @@ func NewWorker(pool *db.Pool, tickSec int, hub *ws.Hub, periodSync *periodsync.S
 		q:              sqlcdb.New(pool),
 		hub:            hub,
 		periodSync:     periodSync,
+		periodVerifier: periodSync,
 		tickSec:        int32(tickSec),
 		concurrency:    int32(defaultSchemeWorkerConcurrency),
 		countdownReset: defaultCountdownReset,
