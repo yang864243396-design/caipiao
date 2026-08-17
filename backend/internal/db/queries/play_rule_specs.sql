@@ -40,6 +40,21 @@ FROM play_rule_specs
 WHERE strategy_enabled
 ORDER BY template_code, type_id, sub_id, lottery_code NULLS FIRST;
 
+-- name: ListPublishedPlayRuleSpecsForAdmin :many
+SELECT id,
+       template_code,
+       type_id,
+       sub_id,
+       lottery_code,
+       rule_version,
+       evaluator_key,
+       evaluator_version,
+       strategy_enabled,
+       published_at,
+       updated_at
+FROM play_rule_specs
+ORDER BY template_code, type_id, sub_id, lottery_code NULLS FIRST;
+
 -- name: ListPlayRuleImportCandidates :many
 SELECT sp.template_code,
        sp.type_id,

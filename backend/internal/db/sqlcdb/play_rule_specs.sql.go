@@ -225,6 +225,68 @@ func (q *Queries) ListPlayRuleImportCandidates(ctx context.Context) ([]ListPlayR
 	return items, nil
 }
 
+const listPublishedPlayRuleSpecsForAdmin = `-- name: ListPublishedPlayRuleSpecsForAdmin :many
+SELECT id,
+       template_code,
+       type_id,
+       sub_id,
+       lottery_code,
+       rule_version,
+       evaluator_key,
+       evaluator_version,
+       strategy_enabled,
+       published_at,
+       updated_at
+FROM play_rule_specs
+ORDER BY template_code, type_id, sub_id, lottery_code NULLS FIRST
+`
+
+type ListPublishedPlayRuleSpecsForAdminRow struct {
+	ID               int64              `json:"id"`
+	TemplateCode     string             `json:"template_code"`
+	TypeID           string             `json:"type_id"`
+	SubID            string             `json:"sub_id"`
+	LotteryCode      pgtype.Text        `json:"lottery_code"`
+	RuleVersion      int32              `json:"rule_version"`
+	EvaluatorKey     string             `json:"evaluator_key"`
+	EvaluatorVersion int32              `json:"evaluator_version"`
+	StrategyEnabled  bool               `json:"strategy_enabled"`
+	PublishedAt      pgtype.Timestamptz `json:"published_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) ListPublishedPlayRuleSpecsForAdmin(ctx context.Context) ([]ListPublishedPlayRuleSpecsForAdminRow, error) {
+	rows, err := q.db.Query(ctx, listPublishedPlayRuleSpecsForAdmin)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPublishedPlayRuleSpecsForAdminRow{}
+	for rows.Next() {
+		var i ListPublishedPlayRuleSpecsForAdminRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TemplateCode,
+			&i.TypeID,
+			&i.SubID,
+			&i.LotteryCode,
+			&i.RuleVersion,
+			&i.EvaluatorKey,
+			&i.EvaluatorVersion,
+			&i.StrategyEnabled,
+			&i.PublishedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markPlayRuleSpecRevisionPublished = `-- name: MarkPlayRuleSpecRevisionPublished :execrows
 UPDATE play_rule_spec_revisions
 SET status = 'published', published_at = now()

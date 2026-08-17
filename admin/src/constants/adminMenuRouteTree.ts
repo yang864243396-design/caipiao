@@ -32,6 +32,7 @@ export const ADMIN_MENU_ROUTE_TREE: AdminMenuRouteNode[] = [
       { id: '/games/lottery-catalog', label: '彩种目录', path: '/games/lottery-catalog' },
       { id: '/games/copy-hall', label: '跟单大厅运营', path: '/games/copy-hall' },
       { id: '/games/scheme-defaults', label: '方案模板库', path: '/games/scheme-defaults' },
+      { id: '/games/play-rules', label: '玩法规则', path: '/games/play-rules' },
     ],
   },
   {

@@ -256,6 +256,7 @@ func (s *Server) registerRoutes(wsSrv *ws.Server) {
 	api.Handle("GET /admin/orders/bets", adminAuth(http.HandlerFunc(s.handler.AdminListBetOrders)))
 	api.Handle("GET /admin/orders/chases", adminAuth(http.HandlerFunc(s.handler.AdminListChaseOrders)))
 	api.Handle("GET /admin/orders/ledger", adminAuth(http.HandlerFunc(s.handler.AdminListLedgerEntries)))
+	api.Handle("GET /admin/play-rules", adminAuth(http.HandlerFunc(s.handler.AdminListPlayRules)))
 
 	api.Handle("GET /client/cloud/bet-records", clientAuth(http.HandlerFunc(s.handler.BetRecordGroups)))
 	api.Handle("GET /client/cloud/bet-records/item/{recordNo}", clientAuth(http.HandlerFunc(s.handler.BetRecordItem)))

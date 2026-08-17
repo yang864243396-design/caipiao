@@ -18,6 +18,7 @@ const SchemeMonitorView = () => import('@/views/schemes/SchemeMonitorView.vue')
 const LotteryCatalogView = () => import('@/views/games/LotteryCatalogView.vue')
 const CopyHallOpsView = () => import('@/views/games/CopyHallOpsView.vue')
 const GlobalSchemeDefaultsView = () => import('@/views/games/GlobalSchemeDefaultsView.vue')
+const PlayRulesView = () => import('@/views/games/PlayRulesView.vue')
 const BetOrdersView = () => import('@/views/orders/BetOrdersView.vue')
 const LedgerView = () => import('@/views/orders/LedgerView.vue')
 const LotteryStatReportView = () => import('@/views/reports/LotteryStatReportView.vue')
@@ -61,6 +62,7 @@ export const router = createRouter({
           meta: { title: '方案模板库' },
           component: GlobalSchemeDefaultsView,
         },
+        { path: 'games/play-rules', name: 'play-rules', meta: { title: '玩法规则' }, component: PlayRulesView },
         {
           path: 'orders/bets',
           name: 'orders-bets',

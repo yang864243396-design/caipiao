@@ -75,7 +75,7 @@ async function onLogout() {
             <el-menu-item v-if="canAccess('/schemes/monitor')" index="/schemes/monitor">全站方案监控</el-menu-item>
           </el-sub-menu>
 
-          <el-sub-menu v-if="canAccessSome(['/games/lottery-catalog', '/games/copy-hall', '/games/scheme-defaults'])"
+          <el-sub-menu v-if="canAccessSome(['/games/lottery-catalog', '/games/copy-hall', '/games/scheme-defaults', '/games/play-rules'])"
             index="games-group">
             <template #title>
               <el-icon>
@@ -86,6 +86,7 @@ async function onLogout() {
             <el-menu-item v-if="canAccess('/games/lottery-catalog')" index="/games/lottery-catalog">彩种目录</el-menu-item>
             <el-menu-item v-if="canAccess('/games/copy-hall')" index="/games/copy-hall">跟单大厅运营</el-menu-item>
             <el-menu-item v-if="canAccess('/games/scheme-defaults')" index="/games/scheme-defaults">方案模板库</el-menu-item>
+            <el-menu-item v-if="canAccess('/games/play-rules')" index="/games/play-rules">玩法规则</el-menu-item>
           </el-sub-menu>
 
           <el-sub-menu v-if="canAccessSome(['/orders/bets', '/orders/ledger'])" index="orders-group">
