@@ -186,6 +186,25 @@ func settlePayoutBatchRows(
 	return settledCount, nil
 }
 
+func settleAccountPayoutBatch(
+	diagnostics *payoutDiagnosticStore,
+	accountID int64,
+	rows []sqlcdb.ListPendingGuajiBetOrdersRow,
+	itemsByID map[string]guaji.WebBetRecord,
+	commitRecent func(sqlcdb.ListPendingGuajiBetOrdersRow, *guaji.BetSettlement) error,
+	syncHistorical func(sqlcdb.ListPendingGuajiBetOrdersRow) (bool, error),
+	at time.Time,
+) error {
+	settledCount, err := settlePayoutBatchRows(rows, itemsByID, commitRecent, syncHistorical)
+	if err != nil {
+		diagnostics.fail(accountID, err, at)
+		return err
+	}
+	settledCount, unresolvedCount := payoutBatchCounts(len(rows), settledCount)
+	diagnostics.succeed(accountID, len(itemsByID), settledCount, unresolvedCount, at)
+	return nil
+}
+
 func resolveHistoricalSettlementResult(
 	res *guaji.BetSettlement,
 	nextPage int,
@@ -268,7 +287,9 @@ func (w *PayoutSyncWorker) syncAccountPending(ctx context.Context, accountID int
 		w.svc.payoutDiagnostics.fail(accountID, err, time.Now())
 		return err // keep all pending for the next provider retry and let tick log the failure
 	}
-	settledCount, err := settlePayoutBatchRows(
+	err = settleAccountPayoutBatch(
+		w.svc.payoutDiagnostics,
+		accountID,
 		rows,
 		itemsByID,
 		func(row sqlcdb.ListPendingGuajiBetOrdersRow, res *guaji.BetSettlement) error {
@@ -277,12 +298,11 @@ func (w *PayoutSyncWorker) syncAccountPending(ctx context.Context, accountID int
 		func(row sqlcdb.ListPendingGuajiBetOrdersRow) (bool, error) {
 			return w.syncHistoricalOne(ctx, row, token)
 		},
+		time.Now(),
 	)
 	if err != nil {
 		return err
 	}
-	settledCount, unresolvedCount := payoutBatchCounts(len(rows), settledCount)
-	w.svc.payoutDiagnostics.succeed(accountID, len(itemsByID), settledCount, unresolvedCount, time.Now())
 	return nil
 }
 

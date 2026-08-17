@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -96,6 +97,36 @@ func TestSettlePayoutBatchRowsReturnsHistoricalProviderErrorAfterCursorSave(t *t
 	}
 	if savedPage != 7 || savedError != providerErr.Error() {
 		t.Fatalf("saved page=%d error=%q", savedPage, savedError)
+	}
+}
+
+func TestSettleAccountPayoutBatchRecordsHistoricalErrorInDiagnostics(t *testing.T) {
+	store := newPayoutDiagnosticStore()
+	attemptAt := time.Unix(100, 0).UTC()
+	failureAt := attemptAt.Add(time.Second)
+	store.begin(9, 1, attemptAt)
+	providerErr := errors.New("historical provider timeout")
+
+	err := settleAccountPayoutBatch(
+		store,
+		9,
+		[]sqlcdb.ListPendingGuajiBetOrdersRow{payoutBatchTestRow("101")},
+		map[string]guaji.WebBetRecord{},
+		func(sqlcdb.ListPendingGuajiBetOrdersRow, *guaji.BetSettlement) error {
+			t.Fatal("recent commit called for historical row")
+			return nil
+		},
+		func(sqlcdb.ListPendingGuajiBetOrdersRow) (bool, error) {
+			return false, providerErr
+		},
+		failureAt,
+	)
+	if !errors.Is(err, providerErr) {
+		t.Fatalf("err=%v, want historical provider error", err)
+	}
+	diagnostic, ok := store.snapshot(9)
+	if !ok || diagnostic.LastError != providerErr.Error() || diagnostic.LastErrorAt == nil || !diagnostic.LastErrorAt.Equal(failureAt) {
+		t.Fatalf("diagnostic=%+v ok=%v, want historical error at %v", diagnostic, ok, failureAt)
 	}
 }
 

@@ -5,6 +5,8 @@ import (
 	"time"
 )
 
+const payoutDiagnosticCapacity = 1024
+
 // PayoutSyncDiagnostics is the latest in-memory payout synchronization state
 // for one third-party account.
 type PayoutSyncDiagnostics struct {
@@ -37,10 +39,13 @@ func (s *payoutDiagnosticStore) begin(accountID int64, pending int, at time.Time
 	if s.byAccount == nil {
 		s.byAccount = make(map[int64]PayoutSyncDiagnostics)
 	}
-	diagnostic := s.byAccount[accountID]
+	diagnostic := s.diagnosticForUpdateLocked(accountID)
 	diagnostic.AccountID = accountID
 	diagnostic.LastAttemptAt = payoutDiagnosticTimePtr(at)
 	diagnostic.PendingCount = pending
+	diagnostic.ProviderListCount = 0
+	diagnostic.SettledCount = 0
+	diagnostic.ProviderUnsettledCount = 0
 	s.byAccount[accountID] = diagnostic
 }
 
@@ -53,7 +58,7 @@ func (s *payoutDiagnosticStore) succeed(accountID int64, providerList, settled, 
 	if s.byAccount == nil {
 		s.byAccount = make(map[int64]PayoutSyncDiagnostics)
 	}
-	diagnostic := s.byAccount[accountID]
+	diagnostic := s.diagnosticForUpdateLocked(accountID)
 	diagnostic.AccountID = accountID
 	diagnostic.LastSuccessAt = payoutDiagnosticTimePtr(at)
 	diagnostic.LastError = ""
@@ -73,11 +78,54 @@ func (s *payoutDiagnosticStore) fail(accountID int64, err error, at time.Time) {
 	if s.byAccount == nil {
 		s.byAccount = make(map[int64]PayoutSyncDiagnostics)
 	}
-	diagnostic := s.byAccount[accountID]
+	diagnostic := s.diagnosticForUpdateLocked(accountID)
 	diagnostic.AccountID = accountID
 	diagnostic.LastError = err.Error()
 	diagnostic.LastErrorAt = payoutDiagnosticTimePtr(at)
 	s.byAccount[accountID] = diagnostic
+}
+
+func (s *payoutDiagnosticStore) diagnosticForUpdateLocked(accountID int64) PayoutSyncDiagnostics {
+	if diagnostic, ok := s.byAccount[accountID]; ok {
+		return diagnostic
+	}
+	if len(s.byAccount) >= payoutDiagnosticCapacity {
+		s.evictOldestLocked()
+	}
+	return PayoutSyncDiagnostics{AccountID: accountID}
+}
+
+func (s *payoutDiagnosticStore) evictOldestLocked() {
+	var oldestID int64
+	var oldest PayoutSyncDiagnostics
+	found := false
+	for accountID, diagnostic := range s.byAccount {
+		if !found || payoutDiagnosticEvictsBefore(accountID, diagnostic, oldestID, oldest) {
+			oldestID = accountID
+			oldest = diagnostic
+			found = true
+		}
+	}
+	if found {
+		delete(s.byAccount, oldestID)
+	}
+}
+
+func payoutDiagnosticEvictsBefore(accountID int64, diagnostic PayoutSyncDiagnostics, otherID int64, other PayoutSyncDiagnostics) bool {
+	switch {
+	case diagnostic.LastAttemptAt == nil && other.LastAttemptAt != nil:
+		return true
+	case diagnostic.LastAttemptAt != nil && other.LastAttemptAt == nil:
+		return false
+	case diagnostic.LastAttemptAt != nil && other.LastAttemptAt != nil:
+		if diagnostic.LastAttemptAt.Before(*other.LastAttemptAt) {
+			return true
+		}
+		if other.LastAttemptAt.Before(*diagnostic.LastAttemptAt) {
+			return false
+		}
+	}
+	return accountID < otherID
 }
 
 func (s *payoutDiagnosticStore) snapshot(accountID int64) (PayoutSyncDiagnostics, bool) {

@@ -26,6 +26,57 @@ func TestPayoutDiagnosticStoreTracksFailureThenRecovery(t *testing.T) {
 	}
 }
 
+func TestPayoutDiagnosticStoreFailureAfterSuccessClearsAttemptCounters(t *testing.T) {
+	store := newPayoutDiagnosticStore()
+	t1 := time.Unix(100, 0).UTC()
+	store.begin(9, 4, t1)
+	store.succeed(9, 50, 2, 2, t1.Add(time.Second))
+
+	t2 := t1.Add(10 * time.Second)
+	store.begin(9, 3, t2)
+	store.fail(9, errors.New("historical provider timeout"), t2.Add(time.Second))
+
+	failed, ok := store.snapshot(9)
+	if !ok || failed.ProviderListCount != 0 || failed.SettledCount != 0 || failed.ProviderUnsettledCount != 0 {
+		t.Fatalf("failed=%+v ok=%v, want zero counters for the failed attempt", failed, ok)
+	}
+}
+
+func TestPayoutDiagnosticStoreEvictsOldestAttemptAtCapacity(t *testing.T) {
+	store := newPayoutDiagnosticStore()
+	base := time.Unix(100, 0).UTC()
+	for accountID := int64(1); accountID <= payoutDiagnosticCapacity; accountID++ {
+		store.begin(accountID, 1, base.Add(time.Duration(accountID)*time.Second))
+	}
+	store.begin(payoutDiagnosticCapacity+1, 1, base.Add(time.Duration(payoutDiagnosticCapacity+1)*time.Second))
+
+	if _, ok := store.snapshot(1); ok {
+		t.Fatal("oldest account snapshot was not evicted")
+	}
+	if _, ok := store.snapshot(2); !ok {
+		t.Fatal("newer account snapshot was unexpectedly evicted")
+	}
+	if _, ok := store.snapshot(payoutDiagnosticCapacity + 1); !ok {
+		t.Fatal("new account snapshot was not stored")
+	}
+}
+
+func TestPayoutDiagnosticStoreEvictionBreaksTimestampTiesByAccountID(t *testing.T) {
+	store := newPayoutDiagnosticStore()
+	at := time.Unix(100, 0).UTC()
+	for accountID := int64(payoutDiagnosticCapacity); accountID >= 1; accountID-- {
+		store.begin(accountID, 1, at)
+	}
+	store.begin(payoutDiagnosticCapacity+1, 1, at.Add(time.Second))
+
+	if _, ok := store.snapshot(1); ok {
+		t.Fatal("lowest account ID was not evicted for equal attempt timestamps")
+	}
+	if _, ok := store.snapshot(2); !ok {
+		t.Fatal("higher account ID was unexpectedly evicted for equal attempt timestamps")
+	}
+}
+
 func TestPayoutDiagnosticStoreConcurrentSnapshots(t *testing.T) {
 	store := newPayoutDiagnosticStore()
 	var wg sync.WaitGroup
