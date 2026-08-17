@@ -3,6 +3,7 @@ package handler
 import (
 	"testing"
 
+	"caipiao/backend/internal/guaji/accountsvc"
 	"caipiao/backend/internal/lottery"
 )
 
@@ -51,5 +52,30 @@ func TestAcceptedPendingBlocksCurrentPeriod(t *testing.T) {
 				t.Fatalf("got %t want %t", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestRuntimePayoutDiagnosticsUsesResolvedAccountSnapshot(t *testing.T) {
+	want := accountsvc.PayoutSyncDiagnostics{
+		AccountID:              17,
+		PendingCount:           3,
+		ProviderUnsettledCount: 3,
+	}
+	got := runtimePayoutDiagnostics(17, func(id int64) (accountsvc.PayoutSyncDiagnostics, bool) {
+		return want, id == 17
+	})
+	if got == nil || got.AccountID != 17 || got.PendingCount != 3 || got.ProviderUnsettledCount != 3 {
+		t.Fatalf("got=%+v", got)
+	}
+}
+
+func TestRuntimePayoutDiagnosticsMissingAccountDoesNotProbe(t *testing.T) {
+	calls := 0
+	got := runtimePayoutDiagnostics(0, func(int64) (accountsvc.PayoutSyncDiagnostics, bool) {
+		calls++
+		return accountsvc.PayoutSyncDiagnostics{}, false
+	})
+	if got != nil || calls != 0 {
+		t.Fatalf("got=%+v calls=%d", got, calls)
 	}
 }

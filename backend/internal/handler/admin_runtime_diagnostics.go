@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"caipiao/backend/internal/apix"
+	"caipiao/backend/internal/guaji/accountsvc"
 	"caipiao/backend/internal/guaji/periodsync"
 	"caipiao/backend/internal/lottery"
 )
@@ -25,6 +26,7 @@ type adminSchemeRuntimeInstance struct {
 	StatusReason     string `json:"statusReason"`
 	LastSettledIssue string `json:"lastSettledIssue,omitempty"`
 	StartSkipPeriod  string `json:"startSkipPeriod,omitempty"`
+	GuajiAccountID   int64  `json:"-"`
 }
 
 type adminSchemeRuntimeDraw struct {
@@ -57,11 +59,22 @@ func (h *Handler) AdminSchemeRuntimeDiagnostics(w http.ResponseWriter, r *http.R
 	var inst adminSchemeRuntimeInstance
 	err := h.db.QueryRow(r.Context(), `
 SELECT id, definition_id, scheme_name, lottery_code, status, status_reason,
-       COALESCE(last_settled_issue, ''), COALESCE(start_skip_period, '')
-FROM scheme_instances
-WHERE id = $1`, instanceID).Scan(
+       COALESCE(last_settled_issue, ''), COALESCE(start_skip_period, ''),
+       COALESCE(
+         (SELECT c.guaji_account_id
+          FROM cloud_bet_records c
+          WHERE c.scheme_id = si.id AND c.sim_bet = FALSE AND c.guaji_account_id IS NOT NULL
+          ORDER BY c.placed_at DESC, c.id DESC LIMIT 1),
+         (SELECT a.id
+          FROM member_guaji_accounts a
+          WHERE a.member_id = si.member_id AND a.is_active = TRUE
+          ORDER BY a.bound_at DESC LIMIT 1),
+         0
+       )
+FROM scheme_instances si
+WHERE si.id = $1`, instanceID).Scan(
 		&inst.ID, &inst.DefinitionID, &inst.SchemeName, &inst.LotteryCode,
-		&inst.Status, &inst.StatusReason, &inst.LastSettledIssue, &inst.StartSkipPeriod,
+		&inst.Status, &inst.StatusReason, &inst.LastSettledIssue, &inst.StartSkipPeriod, &inst.GuajiAccountID,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -90,6 +103,11 @@ WHERE id = $1`, instanceID).Scan(
 		apix.Internal(w)
 		return
 	}
+	var payoutRead func(int64) (accountsvc.PayoutSyncDiagnostics, bool)
+	if h.guajiAccounts != nil {
+		payoutRead = h.guajiAccounts.PayoutSyncDiagnostics
+	}
+	payoutSync := runtimePayoutDiagnostics(inst.GuajiAccountID, payoutRead)
 
 	apix.OK(w, map[string]any{
 		"instance":              inst,
@@ -99,8 +117,20 @@ WHERE id = $1`, instanceID).Scan(
 		"expectedPreviousIssue": expectedPreviousIssue,
 		"previousDraw":          previousDraw,
 		"acceptedPending":       acceptedPending,
+		"payoutSync":            payoutSync,
 		"blockReason":           schemeRuntimeBlockReason(inst.Status, runtime, expectedPreviousIssue != "", previousDraw != nil),
 	})
+}
+
+func runtimePayoutDiagnostics(accountID int64, read func(int64) (accountsvc.PayoutSyncDiagnostics, bool)) *accountsvc.PayoutSyncDiagnostics {
+	if accountID <= 0 || read == nil {
+		return nil
+	}
+	snapshot, ok := read(accountID)
+	if !ok {
+		return nil
+	}
+	return &snapshot
 }
 
 // acceptedPendingBlocksCurrentPeriod keeps completed upstream orders for
