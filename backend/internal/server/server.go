@@ -161,6 +161,7 @@ func New(cfg config.Config) (*Server, error) {
 			w.SetConcurrency(cfg.SchemeWorkerConcurrency)
 			w.SetPlaceConcurrency(cfg.SchemeWorkerPlaceConcurrency)
 			w.SetPeriodRefreshRequester(periodWorker)
+			w.SetRuleRegistry(playRuleRegistry)
 			schemeWorker = w
 			if guajiAccounts != nil {
 				w.SetGuajiBetPlacer(guajiAccounts)

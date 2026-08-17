@@ -2,12 +2,15 @@ package schemes
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 
 	"caipiao/backend/internal/cloud/schemestate"
 	"caipiao/backend/internal/db/sqlcdb"
 	"caipiao/backend/internal/member"
+	"caipiao/backend/internal/playrules"
 )
 
 const simSettlementBatchSize = 50
@@ -47,8 +50,16 @@ func decideSimSettlement(
 	kind string, config []byte, lotteryCode, betContent string,
 	roundIndex int, balls []string, amount float64,
 ) (simSettlement, bool) {
+	settlement, ok, _ := decideSimSettlementWithSnapshot(kind, config, lotteryCode, betContent, roundIndex, balls, amount, nil)
+	return settlement, ok
+}
+
+func decideSimSettlementWithSnapshot(
+	kind string, config []byte, lotteryCode, betContent string,
+	roundIndex int, balls []string, amount float64, snapshot *playrules.Snapshot,
+) (simSettlement, bool, error) {
 	if len(balls) == 0 {
-		return simSettlement{}, false
+		return simSettlement{}, false, nil
 	}
 	groupIndex := 0
 	if roundIndex > 0 {
@@ -61,7 +72,16 @@ func decideSimSettlement(
 		betContent = cfg.GroupContent
 	}
 	// cloud_bet_records.bet_content 已是当期实际投注内容（含反投展开），按原玩法验奖即可。
-	playEval := evaluatePlayHit(cfg.Play, balls, betContent, false, "", cfg.Play.PositionIdx)
+	playEval := betEvaluation{}
+	if snapshot != nil {
+		frozen, err := evaluateFrozenRule(*snapshot, cfg.Play, balls, betContent, false, "")
+		if err != nil {
+			return simSettlement{}, false, err
+		}
+		playEval = frozen
+	} else {
+		playEval = evaluatePlayHit(cfg.Play, balls, betContent, false, "", cfg.Play.PositionIdx)
+	}
 
 	amount = member.RoundMoney(amount)
 	pnl := calcPnLWithOdds(amount, playEval.Hit, playEval.Odds)
@@ -70,7 +90,7 @@ func decideSimSettlement(
 		out.Status = "hit"
 		out.Payout = member.RoundMoney(amount + pnl)
 	}
-	return out, true
+	return out, true, nil
 }
 
 func (w *Worker) settleSimCloudBet(ctx context.Context, row sqlcdb.PendingSimCloudBetRow) error {
@@ -88,10 +108,23 @@ func (w *Worker) settleSimCloudBet(ctx context.Context, row sqlcdb.PendingSimClo
 		return err
 	}
 
-	settle, ok := decideSimSettlement(
+	var snapshot *playrules.Snapshot
+	if len(row.RuleSnapshot) > 0 && string(row.RuleSnapshot) != "null" {
+		var frozen playrules.Snapshot
+		if err := json.Unmarshal(row.RuleSnapshot, &frozen); err != nil {
+			return fmt.Errorf("decode frozen play rule: %w", err)
+		}
+		if frozen.EvaluatorKey != "" {
+			snapshot = &frozen
+		}
+	}
+	settle, ok, err := decideSimSettlementWithSnapshot(
 		inst.Kind, def.Config, row.LotteryCode, row.BetContent,
-		int(inst.RoundIndex), balls, row.Amount,
+		int(inst.RoundIndex), balls, row.Amount, snapshot,
 	)
+	if err != nil {
+		return err
+	}
 	if !ok {
 		return nil
 	}

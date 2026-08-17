@@ -27,9 +27,15 @@ type Locator struct {
 // EvaluationSpec is deliberately declarative. Evaluator implementations are
 // selected by EvaluatorKey; no executable expression is stored in the database.
 type EvaluationSpec struct {
-	Mode      string `json:"mode"`
-	NumberMin int    `json:"numberMin"`
-	NumberMax int    `json:"numberMax"`
+	Mode         string `json:"mode"`
+	NumberMin    int    `json:"numberMin"`
+	NumberMax    int    `json:"numberMax"`
+	SegmentStart int    `json:"segmentStart,omitempty"`
+	SegmentLen   int    `json:"segmentLen,omitempty"`
+	PositionIdx  int    `json:"positionIdx,omitempty"`
+	BetMode      string `json:"betMode,omitempty"`
+	CatalogSubID string `json:"catalogSubId,omitempty"`
+	HezhiZuxuan  bool   `json:"hezhiZuxuan,omitempty"`
 }
 
 // PublishedSpec is the current published rule read from play_rule_specs.

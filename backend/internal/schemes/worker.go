@@ -2,6 +2,7 @@ package schemes
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -21,6 +22,7 @@ import (
 	"caipiao/backend/internal/guajibet"
 	"caipiao/backend/internal/lottery"
 	"caipiao/backend/internal/member"
+	"caipiao/backend/internal/playrules"
 	"caipiao/backend/internal/ws"
 )
 
@@ -38,6 +40,7 @@ type Worker struct {
 	guajiBets      guajiBetPlacer
 	periodSync     *periodsync.Syncer
 	periodRefresh  periodRefreshRequester
+	ruleRegistry   *playrules.RegistryStore
 	tickSec        int32
 	concurrency    int32
 	placeSem       chan struct{} // 真下单全站有界并发；nil 表示不额外限流
@@ -67,6 +70,49 @@ func (w *Worker) SetPeriodRefreshRequester(requester periodRefreshRequester) {
 		return
 	}
 	w.periodRefresh = requester
+}
+
+// SetRuleRegistry injects the server-owned immutable published-rule cache.
+// A nil registry keeps legacy behavior for records without a published rule.
+func (w *Worker) SetRuleRegistry(registry *playrules.RegistryStore) {
+	if w == nil {
+		return
+	}
+	w.ruleRegistry = registry
+}
+
+func (w *Worker) resolvePublishedRule(lotteryCode string, rule playRule) (playrules.Snapshot, bool) {
+	if w == nil || w.ruleRegistry == nil {
+		return playrules.Snapshot{}, false
+	}
+	snapshot, err := w.ruleRegistry.Resolve(playrules.Locator{
+		TemplateCode: rule.PlayTemplate,
+		TypeID:       rule.PlayTypeID,
+		SubID:        rule.SubPlayID,
+		LotteryCode:  lotteryCode,
+	})
+	if err != nil {
+		return playrules.Snapshot{}, false
+	}
+	return snapshot, true
+}
+
+func (w *Worker) freezePublishedRule(ctx context.Context, q *sqlcdb.Queries, inst sqlcdb.SchemeInstance, rule playRule, periodNo string) error {
+	if q == nil {
+		return nil
+	}
+	snapshot, ok := w.resolvePublishedRule(inst.LotteryCode, rule)
+	if !ok {
+		return nil
+	}
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		return fmt.Errorf("marshal published rule snapshot: %w", err)
+	}
+	if err := q.FreezeCloudBetRecordRuleSnapshot(ctx, inst.ID, periodNo, raw, snapshot.RuleVersion, snapshot.ContentHash); err != nil {
+		return fmt.Errorf("freeze published rule snapshot: %w", err)
+	}
+	return nil
 }
 
 func (w *Worker) requestPeriodRefresh(lotteryCode string) {
@@ -711,6 +757,9 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 			slog.Debug("scheme worker bet skipped: period claim conflict", "id", inst.ID, "period", guajiTargetPeriodNo)
 			return nil
 		}
+		if err := w.freezePublishedRule(ctx, qtx, inst, cfg.Play, guajiTargetPeriodNo); err != nil {
+			return err
+		}
 		// 占位必须先提交，再调第三方。若占位与 PlaceRealBet 同事务，
 		// 接单成功后本地 InsertBetOrder/Commit 失败会回滚占位，下 tick 再次 Place → 同期限连打。
 		if err := tx.Commit(ctx); err != nil {
@@ -1012,6 +1061,9 @@ func (w *Worker) reserveCloudBetPeriod(
 		}
 		slog.Debug("scheme worker bet skipped: period reserve conflict", "id", inst.ID, "period", periodNo)
 		return false, nil
+	}
+	if err := w.freezePublishedRule(ctx, qtx, inst, cfg.Play, periodNo); err != nil {
+		return false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, err

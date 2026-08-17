@@ -619,14 +619,15 @@ WHERE c.bet_order_no = $1
 
 // PendingSimCloudBetRow 已开奖、待本地验奖的模拟盘 cloud 注单。
 type PendingSimCloudBetRow struct {
-	ID          int64
-	SchemeID    string
-	MemberID    int64
-	PeriodNo    string
-	LotteryCode string
-	BetContent  string
-	Amount      float64
-	Balls       []byte
+	ID           int64
+	SchemeID     string
+	MemberID     int64
+	PeriodNo     string
+	LotteryCode  string
+	BetContent   string
+	Amount       float64
+	Balls        []byte
+	RuleSnapshot []byte
 }
 
 // ListPendingSimCloudBetsReady 模拟盘 pending 且 lottery_draws 已有真实开奖球号。
@@ -636,7 +637,7 @@ func (q *Queries) ListPendingSimCloudBetsReady(ctx context.Context, rowLimit int
 	}
 	rows, err := q.db.Query(ctx, `
 SELECT c.id, c.scheme_id, c.member_id, c.period_no, c.lottery_code,
-       COALESCE(c.bet_content, ''), c.amount::float8, d.balls
+       COALESCE(c.bet_content, ''), c.amount::float8, d.balls, c.rule_snapshot
 FROM cloud_bet_records c
 JOIN lottery_draws d
   ON d.lottery_code = c.lottery_code
@@ -656,12 +657,26 @@ LIMIT $1`, rowLimit)
 	for rows.Next() {
 		var r PendingSimCloudBetRow
 		if err := rows.Scan(&r.ID, &r.SchemeID, &r.MemberID, &r.PeriodNo, &r.LotteryCode,
-			&r.BetContent, &r.Amount, &r.Balls); err != nil {
+			&r.BetContent, &r.Amount, &r.Balls, &r.RuleSnapshot); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// FreezeCloudBetRecordRuleSnapshot persists the exact published rule that was
+// selected before a bet became eligible for later settlement.
+func (q *Queries) FreezeCloudBetRecordRuleSnapshot(ctx context.Context, schemeID, periodNo string, snapshot []byte, ruleVersion int, hash string) error {
+	_, err := q.db.Exec(ctx, `
+UPDATE cloud_bet_records
+SET rule_snapshot = $3,
+    rule_version = $4,
+    rule_snapshot_hash = $5
+WHERE scheme_id = $1
+  AND period_no = $2
+  AND rule_snapshot IS NULL`, schemeID, periodNo, snapshot, ruleVersion, hash)
+	return err
 }
 
 // UpdateCloudBetRecordFromSettlementByID 按记录 id 结算 pending 模拟注（无第三方 order_no）。
