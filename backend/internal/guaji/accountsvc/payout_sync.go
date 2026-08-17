@@ -3,6 +3,7 @@ package accountsvc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math"
 	"strconv"
@@ -154,6 +155,65 @@ func payoutBatchCounts(total, settled int) (int, int) {
 	return settled, total - settled
 }
 
+func settlePayoutBatchRows(
+	rows []sqlcdb.ListPendingGuajiBetOrdersRow,
+	itemsByID map[string]guaji.WebBetRecord,
+	commitRecent func(sqlcdb.ListPendingGuajiBetOrdersRow, *guaji.BetSettlement) error,
+	syncHistorical func(sqlcdb.ListPendingGuajiBetOrdersRow) (bool, error),
+) (int, error) {
+	settledCount := 0
+	for _, row := range rows {
+		betID := strings.TrimSpace(row.ThirdPartyBetID.String)
+		item, found := itemsByID[betID]
+		if found {
+			res := guaji.SettlementFromWebBet(&item)
+			if res != nil && res.Settled {
+				if err := commitRecent(row, res); err != nil {
+					return settledCount, err
+				}
+				settledCount++
+			}
+			continue
+		}
+		settled, err := syncHistorical(row)
+		if err != nil {
+			return settledCount, err
+		}
+		if settled {
+			settledCount++
+		}
+	}
+	return settledCount, nil
+}
+
+func resolveHistoricalSettlementResult(
+	res *guaji.BetSettlement,
+	nextPage int,
+	exhausted bool,
+	providerErr error,
+	saveCursor func(page int, lastErr string) error,
+	commit func(*guaji.BetSettlement) error,
+	clearCursor func() error,
+) (bool, error) {
+	if providerErr != nil {
+		page := nextHistoricalSettlementPage(historicalSettlementFirstPage, nextPage, exhausted)
+		if cursorErr := saveCursor(page, providerErr.Error()); cursorErr != nil {
+			return false, errors.Join(providerErr, fmt.Errorf("persist historical settlement cursor: %w", cursorErr))
+		}
+		return false, providerErr
+	}
+	if res == nil || !res.Settled {
+		return false, saveCursor(historicalSettlementFirstPage, "")
+	}
+	if err := commit(res); err != nil {
+		return false, err
+	}
+	if err := clearCursor(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 type webBetPageFetcher func(ctx context.Context, limit, page int) ([]guaji.WebBetRecord, error)
 
 // fetchRecentAccountSettlements reads the provider's recent range once for an
@@ -208,27 +268,18 @@ func (w *PayoutSyncWorker) syncAccountPending(ctx context.Context, accountID int
 		w.svc.payoutDiagnostics.fail(accountID, err, time.Now())
 		return err // keep all pending for the next provider retry and let tick log the failure
 	}
-	settledCount := 0
-	for _, row := range rows {
-		betID := strings.TrimSpace(row.ThirdPartyBetID.String)
-		item, found := itemsByID[betID]
-		if found {
-			res := guaji.SettlementFromWebBet(&item)
-			if res != nil && res.Settled {
-				if err := w.commitResolvedSettlement(ctx, row, res, token); err != nil {
-					return err
-				}
-				settledCount++
-			}
-			continue
-		}
-		settled, err := w.syncHistoricalOne(ctx, row, token)
-		if err != nil {
-			return err
-		}
-		if settled {
-			settledCount++
-		}
+	settledCount, err := settlePayoutBatchRows(
+		rows,
+		itemsByID,
+		func(row sqlcdb.ListPendingGuajiBetOrdersRow, res *guaji.BetSettlement) error {
+			return w.commitResolvedSettlement(ctx, row, res, token)
+		},
+		func(row sqlcdb.ListPendingGuajiBetOrdersRow) (bool, error) {
+			return w.syncHistoricalOne(ctx, row, token)
+		},
+	)
+	if err != nil {
+		return err
 	}
 	settledCount, unresolvedCount := payoutBatchCounts(len(rows), settledCount)
 	w.svc.payoutDiagnostics.succeed(accountID, len(itemsByID), settledCount, unresolvedCount, time.Now())
@@ -372,19 +423,21 @@ func (w *PayoutSyncWorker) syncHistoricalOne(ctx context.Context, row sqlcdb.Lis
 		return false, err
 	}
 	res, nextPage, exhausted, err := w.svc.guaji.QuerySettlementFromPageRange(ctx, token, betID, startPage, historicalSettlementPageBudget)
-	if err != nil {
-		return false, w.saveHistoricalSettlementPage(ctx, row.GuajiAccountID.Int64, betID, nextHistoricalSettlementPage(historicalSettlementFirstPage, nextPage, exhausted), err.Error())
-	}
-	if res == nil || !res.Settled {
-		return false, w.saveHistoricalSettlementPage(ctx, row.GuajiAccountID.Int64, betID, historicalSettlementFirstPage, "")
-	}
-	if err := w.commitResolvedSettlement(ctx, row, res, token); err != nil {
-		return false, err
-	}
-	if err := w.clearHistoricalSettlementPage(ctx, row.GuajiAccountID.Int64, betID); err != nil {
-		return false, err
-	}
-	return true, nil
+	return resolveHistoricalSettlementResult(
+		res,
+		nextPage,
+		exhausted,
+		err,
+		func(page int, lastErr string) error {
+			return w.saveHistoricalSettlementPage(ctx, row.GuajiAccountID.Int64, betID, page, lastErr)
+		},
+		func(res *guaji.BetSettlement) error {
+			return w.commitResolvedSettlement(ctx, row, res, token)
+		},
+		func() error {
+			return w.clearHistoricalSettlementPage(ctx, row.GuajiAccountID.Int64, betID)
+		},
+	)
 }
 
 func (w *PayoutSyncWorker) commitResolvedSettlement(ctx context.Context, row sqlcdb.ListPendingGuajiBetOrdersRow, res *guaji.BetSettlement, token string) error {
