@@ -2,6 +2,7 @@ package periodsync
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -15,12 +16,32 @@ import (
 )
 
 const (
-	defaultSyncInterval = 3 * time.Second
-	targetsCacheTTL     = 15 * time.Second
-	tokenCacheTTL       = 60 * time.Second
-	maxRefreshPerTick   = 4
-	dialFailBackoff     = 20 * time.Second
+	defaultSyncInterval       = 3 * time.Second
+	targetsCacheTTL           = 15 * time.Second
+	tokenCacheTTL             = 60 * time.Second
+	defaultRefreshConcurrency = 4
+	refreshRequestQueueSize   = 128
+	refreshRequestTimeout     = 1200 * time.Millisecond
+	refreshFailureBackoff     = 2 * time.Second
+	maxRefreshPerTick         = 4 // legacy synchronous fallback
+	dialFailBackoff           = 20 * time.Second
 )
+
+type RefreshDiagnostics struct {
+	LotteryCode         string
+	LastAttemptAt       time.Time
+	LastSuccessAt       time.Time
+	LastDuration        time.Duration
+	ConsecutiveFailures int
+	NextAllowedAt       time.Time
+	LastError           string
+}
+
+type refreshState struct {
+	RefreshDiagnostics
+	queued   bool
+	inFlight bool
+}
 
 // Worker 周期性拉取第三方 /api/web_bets/lott/periods，更新封盘倒计时缓存。
 type Worker struct {
@@ -29,12 +50,22 @@ type Worker struct {
 	accounts *accountsvc.Service
 	interval time.Duration
 
-	mu            sync.Mutex
-	cachedToken   string
-	tokenUntil    time.Time
-	targetsCache  []syncTarget
-	targetsUntil  time.Time
-	backoffUntil  time.Time
+	mu           sync.Mutex
+	cachedToken  string
+	tokenUntil   time.Time
+	targetsCache []syncTarget
+	targetsUntil time.Time
+	backoffUntil time.Time
+
+	refreshMu          sync.Mutex
+	refreshStates      map[string]*refreshState
+	highRefreshQueue   chan string
+	normalRefreshQueue chan string
+	refreshStart       sync.Once
+	refreshConcurrency int
+	refreshTimeout     time.Duration
+	refreshFn          func(context.Context, string) error
+	refreshFunc        func(context.Context, string) error
 }
 
 func NewWorker(pool *db.Pool, client *guaji.Client, accounts *accountsvc.Service) *Worker {
@@ -53,6 +84,7 @@ func (w *Worker) Run(ctx context.Context) {
 	if w == nil {
 		return
 	}
+	w.startRefreshWorkers(ctx)
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
 	slog.Info("guaji period sync started", "interval", w.interval.String())
@@ -67,7 +99,7 @@ func (w *Worker) Run(ctx context.Context) {
 	}
 }
 
-func (w *Worker) tick(ctx context.Context) {
+func (w *Worker) legacyTick(ctx context.Context) {
 	now := time.Now()
 	w.mu.Lock()
 	if now.Before(w.backoffUntil) {
@@ -121,6 +153,194 @@ func (w *Worker) tick(ctx context.Context) {
 		w.mu.Unlock()
 		slog.Warn("guaji period sync dial backoff", "until", until.Format(time.RFC3339), "fails", dialFails)
 	}
+}
+
+func (w *Worker) tick(ctx context.Context) {
+	targets, err := w.syncTargets(ctx)
+	if err != nil {
+		slog.Warn("guaji period sync list targets failed", "err", err)
+		return
+	}
+	for _, target := range targets {
+		if lottery.PeriodsScheduleNeedsRefresh(target.lotteryCode, time.Now()) {
+			w.RequestRefresh(target.lotteryCode)
+		}
+	}
+}
+
+func (w *Worker) ensureRefreshQueues() {
+	if w == nil {
+		return
+	}
+	w.refreshMu.Lock()
+	defer w.refreshMu.Unlock()
+	if w.refreshStates == nil {
+		w.refreshStates = make(map[string]*refreshState)
+	}
+	if w.highRefreshQueue == nil {
+		w.highRefreshQueue = make(chan string, refreshRequestQueueSize)
+	}
+	if w.normalRefreshQueue == nil {
+		w.normalRefreshQueue = make(chan string, refreshRequestQueueSize)
+	}
+}
+
+func (w *Worker) startRefreshWorkers(ctx context.Context) {
+	if w == nil {
+		return
+	}
+	w.ensureRefreshQueues()
+	w.refreshStart.Do(func() {
+		n := w.refreshConcurrency
+		if n <= 0 {
+			n = defaultRefreshConcurrency
+		}
+		for range n {
+			go w.refreshLoop(ctx)
+		}
+	})
+}
+
+func (w *Worker) RequestRefresh(lotteryCode string) {
+	if w == nil {
+		return
+	}
+	lotteryCode = strings.TrimSpace(lotteryCode)
+	if lotteryCode == "" {
+		return
+	}
+	w.ensureRefreshQueues()
+	now := time.Now().UTC()
+	w.refreshMu.Lock()
+	state := w.refreshStates[lotteryCode]
+	if state == nil {
+		state = &refreshState{RefreshDiagnostics: RefreshDiagnostics{LotteryCode: lotteryCode}}
+		w.refreshStates[lotteryCode] = state
+	}
+	if state.queued || state.inFlight || now.Before(state.NextAllowedAt) {
+		w.refreshMu.Unlock()
+		return
+	}
+	state.queued = true
+	queue := w.normalRefreshQueue
+	if isShortPeriodLottery(lotteryCode) {
+		queue = w.highRefreshQueue
+	}
+	w.refreshMu.Unlock()
+	select {
+	case queue <- lotteryCode:
+	default:
+		w.refreshMu.Lock()
+		state.queued = false
+		w.refreshMu.Unlock()
+	}
+}
+
+func isShortPeriodLottery(lotteryCode string) bool {
+	if ps, ok := lottery.PeriodsScheduleFor(lotteryCode); ok && ps.PeriodDurationSec > 0 {
+		return ps.PeriodDurationSec <= 15
+	}
+	code := strings.ToLower(strings.TrimSpace(lotteryCode))
+	return strings.Contains(code, "_3s") || strings.Contains(code, "_15s")
+}
+
+func (w *Worker) refreshLoop(ctx context.Context) {
+	for {
+		var code string
+		select {
+		case code = <-w.highRefreshQueue:
+		default:
+			select {
+			case <-ctx.Done():
+				return
+			case code = <-w.highRefreshQueue:
+			case code = <-w.normalRefreshQueue:
+			}
+		}
+		w.runRefresh(ctx, code)
+	}
+}
+
+func (w *Worker) runRefresh(parent context.Context, lotteryCode string) {
+	started := time.Now().UTC()
+	w.refreshMu.Lock()
+	state := w.refreshStates[lotteryCode]
+	if state == nil {
+		w.refreshMu.Unlock()
+		return
+	}
+	state.queued = false
+	state.inFlight = true
+	state.LastAttemptAt = started
+	w.refreshMu.Unlock()
+
+	timeout := w.refreshTimeout
+	if timeout <= 0 {
+		timeout = refreshRequestTimeout
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	err := w.refreshLottery(ctx, lotteryCode)
+	cancel()
+	finished := time.Now().UTC()
+
+	w.refreshMu.Lock()
+	state.inFlight = false
+	state.LastDuration = finished.Sub(started)
+	if err == nil {
+		state.LastSuccessAt = finished
+		state.ConsecutiveFailures = 0
+		state.NextAllowedAt = time.Time{}
+		state.LastError = ""
+	} else {
+		state.ConsecutiveFailures++
+		state.NextAllowedAt = finished.Add(refreshFailureBackoff)
+		state.LastError = err.Error()
+	}
+	w.refreshMu.Unlock()
+	if err != nil {
+		if guaji.ClassifyUpstreamError(err).IsTokenInvalid {
+			w.invalidateToken()
+		}
+		slog.Warn("guaji period sync failed", "lottery", lotteryCode, "err", err)
+	}
+}
+
+func (w *Worker) refreshLottery(ctx context.Context, lotteryCode string) error {
+	if w.refreshFunc != nil {
+		return w.refreshFunc(ctx, lotteryCode)
+	}
+	if w.refreshFn != nil {
+		return w.refreshFn(ctx, lotteryCode)
+	}
+	targets, err := w.syncTargets(ctx)
+	if err != nil {
+		return err
+	}
+	for _, target := range targets {
+		if target.lotteryCode != lotteryCode {
+			continue
+		}
+		token, err := w.syncToken(ctx)
+		if err != nil {
+			return err
+		}
+		return w.syncOne(ctx, token, target, time.Now())
+	}
+	return fmt.Errorf("period sync target not found: %s", lotteryCode)
+}
+
+func (w *Worker) Diagnostics(lotteryCode string) (RefreshDiagnostics, bool) {
+	if w == nil {
+		return RefreshDiagnostics{}, false
+	}
+	lotteryCode = strings.TrimSpace(lotteryCode)
+	w.refreshMu.Lock()
+	defer w.refreshMu.Unlock()
+	state := w.refreshStates[lotteryCode]
+	if state == nil {
+		return RefreshDiagnostics{}, false
+	}
+	return state.RefreshDiagnostics, true
 }
 
 func isDialOrTimeoutErr(err error) bool {

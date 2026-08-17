@@ -155,3 +155,41 @@ func TestWorker_tick_skipsFreshSchedule(t *testing.T) {
 		t.Fatalf("schedule changed unexpectedly: %+v ok=%v", ps, ok)
 	}
 }
+
+func TestWorker_tickQueuesStaleTargetWithoutWaitingForRefresh(t *testing.T) {
+	code := "periodsync_tick_queue_test"
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	w := &Worker{
+		interval:           time.Hour,
+		refreshConcurrency: 1,
+		refreshTimeout:     time.Second,
+		refreshFunc: func(context.Context, string) error {
+			started <- struct{}{}
+			<-release
+			return nil
+		},
+		targetsCache: []syncTarget{{lotteryCode: code, gameID: 29}},
+		targetsUntil: time.Now().Add(time.Minute),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go w.Run(ctx)
+
+	finished := make(chan struct{})
+	go func() {
+		w.tick(context.Background())
+		close(finished)
+	}()
+	select {
+	case <-finished:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("tick waited for the refresh request")
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("queued refresh did not start")
+	}
+	close(release)
+}
