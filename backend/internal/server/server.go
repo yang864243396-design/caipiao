@@ -17,6 +17,7 @@ import (
 	"caipiao/backend/internal/copyhall"
 	"caipiao/backend/internal/dashboard"
 	"caipiao/backend/internal/db"
+	"caipiao/backend/internal/db/sqlcdb"
 	"caipiao/backend/internal/games"
 	"caipiao/backend/internal/guaji"
 	"caipiao/backend/internal/guaji/accountsvc"
@@ -32,6 +33,7 @@ import (
 	ordersadmin "caipiao/backend/internal/orders/admin"
 	"caipiao/backend/internal/orders/bets"
 	"caipiao/backend/internal/orders/chases"
+	"caipiao/backend/internal/playrules"
 	"caipiao/backend/internal/reports"
 	"caipiao/backend/internal/schemes"
 	"caipiao/backend/internal/ws"
@@ -45,6 +47,7 @@ type Server struct {
 	db           *db.Pool
 	mux          *http.ServeMux
 	workerCancel context.CancelFunc
+	playRules    *playrules.RegistryStore
 }
 
 func New(cfg config.Config) (*Server, error) {
@@ -75,6 +78,29 @@ func New(cfg config.Config) (*Server, error) {
 	}
 
 	inst := instances.NewStore()
+	playRuleRegistry := playrules.NewRegistryStore(nil)
+	if pool != nil {
+		playRuleQuery := sqlcdb.New(pool)
+		if err := playRuleRegistry.Reload(workerCtx, playRuleQuery); err != nil {
+			slog.Warn("play rule registry unavailable; database-backed strategy evaluation remains disabled", "err", err)
+		} else {
+			slog.Info("play rule registry loaded")
+		}
+		go func() {
+			ticker := time.NewTicker(time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-workerCtx.Done():
+					return
+				case <-ticker.C:
+					if err := playRuleRegistry.Reload(workerCtx, playRuleQuery); err != nil {
+						slog.Warn("play rule registry refresh failed; keeping last known good snapshot", "err", err)
+					}
+				}
+			}
+		}()
+	}
 
 	lb := lookback.NewService(pool)
 
@@ -192,7 +218,7 @@ func New(cfg config.Config) (*Server, error) {
 		}
 	}
 
-	s := &Server{cfg: cfg, authSvc: authSvc, handler: h, guaji: guajiClient, db: pool, workerCancel: workerCancel}
+	s := &Server{cfg: cfg, authSvc: authSvc, handler: h, guaji: guajiClient, db: pool, workerCancel: workerCancel, playRules: playRuleRegistry}
 	s.mux = http.NewServeMux()
 	s.registerRoutes(wsSrv)
 	return s, nil
