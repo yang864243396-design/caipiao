@@ -2,6 +2,7 @@ package accountsvc
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"caipiao/backend/internal/guaji"
@@ -29,5 +30,22 @@ func TestPayoutSyncFetchesOneAccountListForMultiplePendingOrders(t *testing.T) {
 	}
 	if len(items) != 2 || items["101"].ID != 101 || items["102"].ID != 102 {
 		t.Fatalf("items=%#v, want both pending orders from the same account list", items)
+	}
+}
+
+func TestPayoutSyncFetchErrorIsReturned(t *testing.T) {
+	want := errors.New("tls handshake timeout")
+	_, err := fetchRecentAccountSettlements(context.Background(), func(context.Context, int, int) ([]guaji.WebBetRecord, error) {
+		return nil, want
+	})
+	if !errors.Is(err, want) {
+		t.Fatalf("got %v want %v", err, want)
+	}
+}
+
+func TestPayoutBatchCountsUnresolvedRows(t *testing.T) {
+	settled, unresolved := payoutBatchCounts(3, 1)
+	if settled != 1 || unresolved != 2 {
+		t.Fatalf("settled=%d unresolved=%d", settled, unresolved)
 	}
 }

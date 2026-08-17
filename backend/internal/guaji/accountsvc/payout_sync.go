@@ -141,6 +141,19 @@ func groupPendingPayoutRows(rows []sqlcdb.ListPendingGuajiBetOrdersRow) []payout
 	return batches
 }
 
+func payoutBatchCounts(total, settled int) (int, int) {
+	if total < 0 {
+		total = 0
+	}
+	if settled < 0 {
+		settled = 0
+	}
+	if settled > total {
+		settled = total
+	}
+	return settled, total - settled
+}
+
 type webBetPageFetcher func(ctx context.Context, limit, page int) ([]guaji.WebBetRecord, error)
 
 // fetchRecentAccountSettlements reads the provider's recent range once for an
@@ -176,6 +189,7 @@ func (w *PayoutSyncWorker) syncAccountPending(ctx context.Context, accountID int
 	if w == nil || w.svc == nil || accountID <= 0 || len(rows) == 0 {
 		return nil
 	}
+	w.svc.payoutDiagnostics.begin(accountID, len(rows), time.Now())
 	acc, err := w.svc.getRowByIDAny(ctx, accountID)
 	if err != nil {
 		return err
@@ -191,8 +205,10 @@ func (w *PayoutSyncWorker) syncAccountPending(ctx context.Context, accountID int
 		return w.svc.guaji.ListWebBets(ctx, token, limit, page)
 	})
 	if err != nil {
-		return nil // keep all pending for the next provider retry
+		w.svc.payoutDiagnostics.fail(accountID, err, time.Now())
+		return err // keep all pending for the next provider retry and let tick log the failure
 	}
+	settledCount := 0
 	for _, row := range rows {
 		betID := strings.TrimSpace(row.ThirdPartyBetID.String)
 		item, found := itemsByID[betID]
@@ -202,13 +218,20 @@ func (w *PayoutSyncWorker) syncAccountPending(ctx context.Context, accountID int
 				if err := w.commitResolvedSettlement(ctx, row, res, token); err != nil {
 					return err
 				}
+				settledCount++
 			}
 			continue
 		}
-		if err := w.syncHistoricalOne(ctx, row, token); err != nil {
+		settled, err := w.syncHistoricalOne(ctx, row, token)
+		if err != nil {
 			return err
 		}
+		if settled {
+			settledCount++
+		}
 	}
+	settledCount, unresolvedCount := payoutBatchCounts(len(rows), settledCount)
+	w.svc.payoutDiagnostics.succeed(accountID, len(itemsByID), settledCount, unresolvedCount, time.Now())
 	return nil
 }
 
@@ -336,29 +359,32 @@ func (w *PayoutSyncWorker) syncOne(ctx context.Context, row sqlcdb.ListPendingGu
 
 // syncHistoricalOne preserves the existing bounded recovery cursor after the
 // account's recent list range has already been fetched by syncAccountPending.
-func (w *PayoutSyncWorker) syncHistoricalOne(ctx context.Context, row sqlcdb.ListPendingGuajiBetOrdersRow, token string) error {
+func (w *PayoutSyncWorker) syncHistoricalOne(ctx context.Context, row sqlcdb.ListPendingGuajiBetOrdersRow, token string) (bool, error) {
 	if !row.GuajiAccountID.Valid || !row.ThirdPartyBetID.Valid {
-		return nil
+		return false, nil
 	}
 	betID := strings.TrimSpace(row.ThirdPartyBetID.String)
 	if betID == "" {
-		return nil
+		return false, nil
 	}
 	startPage, err := w.historicalSettlementPage(ctx, row.GuajiAccountID.Int64, betID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	res, nextPage, exhausted, err := w.svc.guaji.QuerySettlementFromPageRange(ctx, token, betID, startPage, historicalSettlementPageBudget)
 	if err != nil {
-		return w.saveHistoricalSettlementPage(ctx, row.GuajiAccountID.Int64, betID, nextHistoricalSettlementPage(historicalSettlementFirstPage, nextPage, exhausted), err.Error())
+		return false, w.saveHistoricalSettlementPage(ctx, row.GuajiAccountID.Int64, betID, nextHistoricalSettlementPage(historicalSettlementFirstPage, nextPage, exhausted), err.Error())
 	}
 	if res == nil || !res.Settled {
-		return w.saveHistoricalSettlementPage(ctx, row.GuajiAccountID.Int64, betID, historicalSettlementFirstPage, "")
+		return false, w.saveHistoricalSettlementPage(ctx, row.GuajiAccountID.Int64, betID, historicalSettlementFirstPage, "")
 	}
 	if err := w.commitResolvedSettlement(ctx, row, res, token); err != nil {
-		return err
+		return false, err
 	}
-	return w.clearHistoricalSettlementPage(ctx, row.GuajiAccountID.Int64, betID)
+	if err := w.clearHistoricalSettlementPage(ctx, row.GuajiAccountID.Int64, betID); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (w *PayoutSyncWorker) commitResolvedSettlement(ctx context.Context, row sqlcdb.ListPendingGuajiBetOrdersRow, res *guaji.BetSettlement, token string) error {

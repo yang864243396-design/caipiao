@@ -24,10 +24,11 @@ const (
 )
 
 type Service struct {
-	pool        *db.Pool
-	guaji       *guaji.Client
-	credKey     []byte
-	jwtFallback string
+	pool              *db.Pool
+	guaji             *guaji.Client
+	credKey           []byte
+	jwtFallback       string
+	payoutDiagnostics *payoutDiagnosticStore
 	// autoReauthSF 同账号自动重授权单飞：多方案同期撞 token 失效时只打一次上游。
 	autoReauthSF singleflight.Group
 }
@@ -37,7 +38,13 @@ func NewService(pool *db.Pool, client *guaji.Client, credentialsKey, jwtFallback
 		return nil
 	}
 	key, _ := guaji.CredentialsKey(credentialsKey, jwtFallback)
-	return &Service{pool: pool, guaji: client, credKey: key, jwtFallback: jwtFallback}
+	return &Service{
+		pool:              pool,
+		guaji:             client,
+		credKey:           key,
+		jwtFallback:       jwtFallback,
+		payoutDiagnostics: newPayoutDiagnosticStore(),
+	}
 }
 
 func (s *Service) Bind(ctx context.Context, memberAccount string, in BindInput) (BindResult, error) {
