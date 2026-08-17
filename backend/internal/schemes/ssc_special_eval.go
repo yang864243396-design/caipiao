@@ -674,6 +674,23 @@ func dxdsPickHit(rule playRule, pick string, seg []string) bool {
 			return sum%2 == 0
 		}
 	}
+	if isHashWeishuDxdsRule(rule) {
+		if len(seg) == 0 {
+			return false
+		}
+		n := atoiBall(seg[len(seg)-1])
+		switch pick {
+		case "大":
+			return n >= 5
+		case "小":
+			return n <= 4
+		case "单":
+			return n%2 == 1
+		case "双":
+			return n%2 == 0
+		}
+		return false
+	}
 	for _, d := range seg {
 		n := atoiBall(d)
 		switch pick {

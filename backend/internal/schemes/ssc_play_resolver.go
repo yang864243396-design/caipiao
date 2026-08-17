@@ -85,6 +85,11 @@ func resolveSSCPlayRule(typeID, subID, betMode string, playMethod ...string) pla
 		}
 		return rule
 	}
+	if isHashWeishuDxdsRule(rule) {
+		rule.SegmentStart = 0
+		rule.SegmentLen = 5
+		return rule
+	}
 	if typeID == "renxuan" || typeID == "g011" {
 		// 统一语义 id，便于 evaluateSSCByBetMode 走任选专用评估
 		rule.PlayTypeID = "renxuan"

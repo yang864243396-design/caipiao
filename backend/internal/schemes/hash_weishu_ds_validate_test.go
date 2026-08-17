@@ -42,6 +42,18 @@ func TestValidateGroupContent_hashWeishuDxOnePick(t *testing.T) {
 	}
 }
 
+func TestHashWeishuDaxiaoUsesOnlyLastDrawDigit(t *testing.T) {
+	rule := resolveSSCPlayRule("g017", "390", "daxiao", "")
+	balls := []string{"5", "5", "6", "5", "3"}
+
+	if got := evaluateDxds(rule, balls, "大"); got.Hit {
+		t.Fatalf("large=%v, want false when only the final digit is 3", got.Hit)
+	}
+	if got := evaluateDxds(rule, balls, "小"); !got.Hit {
+		t.Fatalf("small=%v, want true when only the final digit is 3", got.Hit)
+	}
+}
+
 func TestHashWeishuIdsNotConfusedWithSSC(t *testing.T) {
 	// SSC 下 270 是前二大小单双，不是哈希尾数
 	ssc := resolveSSCPlayRule("g016", "270", "dxds", "前二大小单双")
