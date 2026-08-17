@@ -40,6 +40,76 @@ type DraftRule struct {
 	CatalogCandidate
 }
 
+type ImportIssue struct {
+	Row     int
+	Rule    ExcelRule
+	Matches []CatalogCandidate
+}
+
+type ImportReport struct {
+	Drafts     []DraftRule
+	Unresolved []ImportIssue
+	Ambiguous  []ImportIssue
+}
+
+// ImportFilePartial keeps every exact, unambiguous catalogue match and
+// reports legacy rows that cannot be mapped safely. It never writes data.
+func ImportFilePartial(path string, candidates []CatalogCandidate) (ImportReport, error) {
+	book, err := excelize.OpenFile(path)
+	if err != nil {
+		return ImportReport{}, fmt.Errorf("open workbook: %w", err)
+	}
+	defer book.Close()
+
+	sheets := book.GetSheetList()
+	if len(sheets) == 0 {
+		return ImportReport{}, fmt.Errorf("workbook has no sheets")
+	}
+	rows, err := book.GetRows(sheets[0])
+	if err != nil {
+		return ImportReport{}, fmt.Errorf("read workbook rows: %w", err)
+	}
+	if len(rows) < 2 {
+		return ImportReport{}, fmt.Errorf("workbook has no data rows")
+	}
+	columns := columnsForHeader(rows[0])
+	if columns.ruleID < 0 || columns.fullName < 0 {
+		return ImportReport{}, fmt.Errorf("workbook header must contain ID and 规则全名")
+	}
+
+	report := ImportReport{Drafts: make([]DraftRule, 0, len(rows)-1)}
+	for rowNo, row := range rows[1:] {
+		rule := ExcelRule{
+			RuleID:       valueAt(row, columns.ruleID),
+			FullName:     valueAt(row, columns.fullName),
+			Description:  valueAt(row, columns.description),
+			Example:      valueAt(row, columns.example),
+			NumberRange:  valueAt(row, columns.numberRange),
+			TotalUnits:   valueAt(row, columns.totalUnits),
+			WinningUnits: valueAt(row, columns.winningUnits),
+			Odds:         valueAt(row, columns.odds),
+			SoloUnits:    valueAt(row, columns.soloUnits),
+		}
+		if rule.RuleID == "" && rule.FullName == "" {
+			continue
+		}
+		matches := matchCandidates(rule, candidates)
+		issue := ImportIssue{Row: rowNo + 2, Rule: rule, Matches: matches}
+		if len(matches) == 0 {
+			report.Unresolved = append(report.Unresolved, issue)
+			continue
+		}
+		if !sameCatalogPlay(matches) {
+			report.Ambiguous = append(report.Ambiguous, issue)
+			continue
+		}
+		for _, match := range matches {
+			report.Drafts = append(report.Drafts, DraftRule{ExcelRule: rule, CatalogCandidate: match})
+		}
+	}
+	return report, nil
+}
+
 // ImportFile parses the approved rule workbook and maps every non-empty rule
 // to exactly one existing catalogue play. It intentionally does not perform
 // any database write; callers decide whether the resulting drafts are stored.
@@ -87,21 +157,44 @@ func ImportFile(path string, candidates []CatalogCandidate) ([]DraftRule, error)
 			return nil, fmt.Errorf("%w at row %d: id=%q name=%q", ErrUnresolvedRuleMatch, rowNo+2, rule.RuleID, rule.FullName)
 		}
 		if len(matches) != 1 {
-			return nil, fmt.Errorf("%w at row %d: id=%q name=%q matched=%d", ErrAmbiguousRuleMatch, rowNo+2, rule.RuleID, rule.FullName, len(matches))
+			if !sameCatalogPlay(matches) {
+				return nil, fmt.Errorf("%w at row %d: id=%q name=%q matched=%d", ErrAmbiguousRuleMatch, rowNo+2, rule.RuleID, rule.FullName, len(matches))
+			}
 		}
-		drafts = append(drafts, DraftRule{ExcelRule: rule, CatalogCandidate: matches[0]})
+		for _, match := range matches {
+			drafts = append(drafts, DraftRule{ExcelRule: rule, CatalogCandidate: match})
+		}
 	}
 	return drafts, nil
 }
 
-func matchCandidates(rule ExcelRule, candidates []CatalogCandidate) []CatalogCandidate {
-	matched := make([]CatalogCandidate, 0, 1)
-	for _, candidate := range candidates {
-		if strings.TrimSpace(candidate.RuleID) == rule.RuleID && strings.TrimSpace(candidate.FullName) == rule.FullName {
-			matched = append(matched, candidate)
+func sameCatalogPlay(candidates []CatalogCandidate) bool {
+	if len(candidates) <= 1 {
+		return true
+	}
+	first := candidates[0]
+	for _, candidate := range candidates[1:] {
+		if candidate.TypeID != first.TypeID || candidate.SubID != first.SubID {
+			return false
 		}
 	}
-	return matched
+	return true
+}
+
+func matchCandidates(rule ExcelRule, candidates []CatalogCandidate) []CatalogCandidate {
+	exactMatches := make([]CatalogCandidate, 0, 1)
+	for _, candidate := range candidates {
+		if strings.TrimSpace(candidate.FullName) == rule.FullName {
+			exactMatches = append(exactMatches, candidate)
+		}
+	}
+	if len(exactMatches) > 0 {
+		return exactMatches
+	}
+	// Workbook rule ids belong to an older third-party catalogue and can be
+	// reused with a different meaning in the current catalogue. Match only the
+	// human-readable full name; unresolved rows stay out of the import.
+	return nil
 }
 
 type workbookColumns struct {

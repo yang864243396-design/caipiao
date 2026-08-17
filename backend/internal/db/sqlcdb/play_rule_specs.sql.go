@@ -125,6 +125,69 @@ func (q *Queries) InsertPlayRuleSpecRevision(ctx context.Context, arg InsertPlay
 	return i, err
 }
 
+const listDraftPlayRuleSpecRevisions = `-- name: ListDraftPlayRuleSpecRevisions :many
+SELECT id,
+       template_code,
+       type_id,
+       sub_id,
+       lottery_code,
+       revision,
+       evaluator_key,
+       evaluator_version,
+       evaluation_spec,
+       sample_cases,
+       source_meta
+FROM play_rule_spec_revisions
+WHERE status = 'draft'
+ORDER BY id
+`
+
+type ListDraftPlayRuleSpecRevisionsRow struct {
+	ID               int64       `json:"id"`
+	TemplateCode     string      `json:"template_code"`
+	TypeID           string      `json:"type_id"`
+	SubID            string      `json:"sub_id"`
+	LotteryCode      pgtype.Text `json:"lottery_code"`
+	Revision         int32       `json:"revision"`
+	EvaluatorKey     string      `json:"evaluator_key"`
+	EvaluatorVersion int32       `json:"evaluator_version"`
+	EvaluationSpec   []byte      `json:"evaluation_spec"`
+	SampleCases      []byte      `json:"sample_cases"`
+	SourceMeta       []byte      `json:"source_meta"`
+}
+
+func (q *Queries) ListDraftPlayRuleSpecRevisions(ctx context.Context) ([]ListDraftPlayRuleSpecRevisionsRow, error) {
+	rows, err := q.db.Query(ctx, listDraftPlayRuleSpecRevisions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDraftPlayRuleSpecRevisionsRow{}
+	for rows.Next() {
+		var i ListDraftPlayRuleSpecRevisionsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TemplateCode,
+			&i.TypeID,
+			&i.SubID,
+			&i.LotteryCode,
+			&i.Revision,
+			&i.EvaluatorKey,
+			&i.EvaluatorVersion,
+			&i.EvaluationSpec,
+			&i.SampleCases,
+			&i.SourceMeta,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listEnabledPlayRuleSpecs = `-- name: ListEnabledPlayRuleSpecs :many
 SELECT id,
        template_code,
@@ -180,10 +243,64 @@ func (q *Queries) ListEnabledPlayRuleSpecs(ctx context.Context) ([]PlayRuleSpec,
 	return items, nil
 }
 
+const listHistoricalRuleReplayCandidates = `-- name: ListHistoricalRuleReplayCandidates :many
+SELECT c.id,
+       c.status,
+       c.bet_content,
+       si.lottery_code,
+       sd.config,
+       d.balls
+FROM cloud_bet_records c
+JOIN scheme_instances si ON si.id = c.scheme_id AND si.member_id = c.member_id
+JOIN scheme_definitions sd ON sd.id = si.definition_id AND sd.member_id = c.member_id
+JOIN lottery_draws d ON d.lottery_code = si.lottery_code AND d.issue_no = c.period_no
+WHERE NOT c.sim_bet
+  AND c.status IN ('hit', 'miss')
+  AND NULLIF(TRIM(c.bet_content), '') IS NOT NULL
+ORDER BY c.id
+`
+
+type ListHistoricalRuleReplayCandidatesRow struct {
+	ID          int64  `json:"id"`
+	Status      string `json:"status"`
+	BetContent  string `json:"bet_content"`
+	LotteryCode string `json:"lottery_code"`
+	Config      []byte `json:"config"`
+	Balls       []byte `json:"balls"`
+}
+
+func (q *Queries) ListHistoricalRuleReplayCandidates(ctx context.Context) ([]ListHistoricalRuleReplayCandidatesRow, error) {
+	rows, err := q.db.Query(ctx, listHistoricalRuleReplayCandidates)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListHistoricalRuleReplayCandidatesRow{}
+	for rows.Next() {
+		var i ListHistoricalRuleReplayCandidatesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Status,
+			&i.BetContent,
+			&i.LotteryCode,
+			&i.Config,
+			&i.Balls,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPlayRuleImportCandidates = `-- name: ListPlayRuleImportCandidates :many
 SELECT sp.template_code,
        sp.type_id,
        sp.sub_id,
+       COALESCE(sp.bet_mode, '') AS bet_mode,
        COALESCE(sp.segment_rule ->> 'guajiRuleId', sp.outbound_play_code, sp.sub_id) AS rule_id,
        COALESCE(sp.segment_rule ->> 'guajiFullName', sp.label) AS full_name
 FROM sub_plays sp
@@ -195,6 +312,7 @@ type ListPlayRuleImportCandidatesRow struct {
 	TemplateCode string `json:"template_code"`
 	TypeID       string `json:"type_id"`
 	SubID        string `json:"sub_id"`
+	BetMode      string `json:"bet_mode"`
 	RuleID       string `json:"rule_id"`
 	FullName     string `json:"full_name"`
 }
@@ -212,6 +330,7 @@ func (q *Queries) ListPlayRuleImportCandidates(ctx context.Context) ([]ListPlayR
 			&i.TemplateCode,
 			&i.TypeID,
 			&i.SubID,
+			&i.BetMode,
 			&i.RuleID,
 			&i.FullName,
 		); err != nil {
@@ -401,6 +520,38 @@ func (q *Queries) ResolvePublishedPlayRuleSpec(ctx context.Context, arg ResolveP
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const updateDraftPlayRuleSpecRevisionCompiled = `-- name: UpdateDraftPlayRuleSpecRevisionCompiled :execrows
+UPDATE play_rule_spec_revisions
+SET evaluator_key = $1,
+    evaluator_version = $2,
+    evaluation_spec = $3,
+    change_reason = $4
+WHERE id = $5
+  AND status = 'draft'
+`
+
+type UpdateDraftPlayRuleSpecRevisionCompiledParams struct {
+	EvaluatorKey     string `json:"evaluator_key"`
+	EvaluatorVersion int32  `json:"evaluator_version"`
+	EvaluationSpec   []byte `json:"evaluation_spec"`
+	ChangeReason     string `json:"change_reason"`
+	ID               int64  `json:"id"`
+}
+
+func (q *Queries) UpdateDraftPlayRuleSpecRevisionCompiled(ctx context.Context, arg UpdateDraftPlayRuleSpecRevisionCompiledParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateDraftPlayRuleSpecRevisionCompiled,
+		arg.EvaluatorKey,
+		arg.EvaluatorVersion,
+		arg.EvaluationSpec,
+		arg.ChangeReason,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertPublishedPlayRuleSpec = `-- name: UpsertPublishedPlayRuleSpec :one

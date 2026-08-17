@@ -41,18 +41,27 @@ func main() {
 	if err != nil {
 		log.Fatalf("list play catalogue: %v", err)
 	}
-	matched, err := ImportFile(*file, catalogCandidates(candidates))
+	report, err := ImportFilePartial(*file, catalogCandidates(candidates))
 	if err != nil {
 		log.Fatalf("validate workbook: %v", err)
 	}
 	if *dryRun {
-		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"matched": len(matched), "mode": "dry-run"})
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{
+			"drafts": len(report.Drafts), "unresolved": len(report.Unresolved),
+			"ambiguous": len(report.Ambiguous), "mode": "dry-run",
+		})
 		return
 	}
-	if err := insertDraftRevisions(ctx, pool, matched); err != nil {
+	if len(report.Drafts) == 0 {
+		log.Fatal("no safely matched rules to import")
+	}
+	if err := insertDraftRevisions(ctx, pool, report.Drafts); err != nil {
 		log.Fatalf("insert drafts: %v", err)
 	}
-	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"draftsCreated": len(matched), "mode": "apply"})
+	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{
+		"draftsCreated": len(report.Drafts), "unresolved": len(report.Unresolved),
+		"ambiguous": len(report.Ambiguous), "mode": "apply",
+	})
 }
 
 func catalogCandidates(rows []sqlcdb.ListPlayRuleImportCandidatesRow) []CatalogCandidate {

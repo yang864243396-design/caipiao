@@ -59,11 +59,53 @@ ORDER BY template_code, type_id, sub_id, lottery_code NULLS FIRST;
 SELECT sp.template_code,
        sp.type_id,
        sp.sub_id,
+       COALESCE(sp.bet_mode, '') AS bet_mode,
        COALESCE(sp.segment_rule ->> 'guajiRuleId', sp.outbound_play_code, sp.sub_id) AS rule_id,
        COALESCE(sp.segment_rule ->> 'guajiFullName', sp.label) AS full_name
 FROM sub_plays sp
 WHERE sp.enabled
 ORDER BY sp.template_code, sp.type_id, sp.sub_id;
+
+-- name: ListDraftPlayRuleSpecRevisions :many
+SELECT id,
+       template_code,
+       type_id,
+       sub_id,
+       lottery_code,
+       revision,
+       evaluator_key,
+       evaluator_version,
+       evaluation_spec,
+       sample_cases,
+       source_meta
+FROM play_rule_spec_revisions
+WHERE status = 'draft'
+ORDER BY id;
+
+-- name: UpdateDraftPlayRuleSpecRevisionCompiled :execrows
+UPDATE play_rule_spec_revisions
+SET evaluator_key = sqlc.arg(evaluator_key),
+    evaluator_version = sqlc.arg(evaluator_version),
+    evaluation_spec = sqlc.arg(evaluation_spec),
+    change_reason = sqlc.arg(change_reason)
+WHERE id = sqlc.arg(id)
+  AND status = 'draft';
+
+-- name: ListHistoricalRuleReplayCandidates :many
+SELECT c.id,
+       c.status,
+       c.bet_content,
+       si.lottery_code,
+       sd.config,
+       d.balls
+FROM cloud_bet_records c
+JOIN scheme_instances si ON si.id = c.scheme_id AND si.member_id = c.member_id
+JOIN scheme_definitions sd ON sd.id = si.definition_id AND sd.member_id = c.member_id
+JOIN lottery_draws d ON d.lottery_code = si.lottery_code AND d.issue_no = c.period_no
+WHERE NOT c.sim_bet
+  AND c.status IN ('hit', 'miss')
+  AND NULLIF(TRIM(c.bet_content), '') IS NOT NULL
+ORDER BY c.id;
 
 -- name: NextPlayRuleSpecRevision :one
 SELECT COALESCE(MAX(revision), 0)::int + 1 AS next_revision
