@@ -40,6 +40,24 @@ FROM play_rule_specs
 WHERE strategy_enabled
 ORDER BY template_code, type_id, sub_id, lottery_code NULLS FIRST;
 
+-- name: ListPlayRuleImportCandidates :many
+SELECT sp.template_code,
+       sp.type_id,
+       sp.sub_id,
+       COALESCE(sp.segment_rule ->> 'guajiRuleId', sp.outbound_play_code, sp.sub_id) AS rule_id,
+       COALESCE(sp.segment_rule ->> 'guajiFullName', sp.label) AS full_name
+FROM sub_plays sp
+WHERE sp.enabled
+ORDER BY sp.template_code, sp.type_id, sp.sub_id;
+
+-- name: NextPlayRuleSpecRevision :one
+SELECT COALESCE(MAX(revision), 0)::int + 1 AS next_revision
+FROM play_rule_spec_revisions
+WHERE template_code = sqlc.arg(template_code)
+  AND type_id = sqlc.arg(type_id)
+  AND sub_id = sqlc.arg(sub_id)
+  AND lottery_code IS NOT DISTINCT FROM sqlc.narg(lottery_code);
+
 -- name: InsertPlayRuleSpecRevision :one
 INSERT INTO play_rule_spec_revisions (
     rule_spec_id, template_code, type_id, sub_id, lottery_code,

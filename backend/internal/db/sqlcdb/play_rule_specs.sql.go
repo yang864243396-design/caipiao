@@ -180,6 +180,51 @@ func (q *Queries) ListEnabledPlayRuleSpecs(ctx context.Context) ([]PlayRuleSpec,
 	return items, nil
 }
 
+const listPlayRuleImportCandidates = `-- name: ListPlayRuleImportCandidates :many
+SELECT sp.template_code,
+       sp.type_id,
+       sp.sub_id,
+       COALESCE(sp.segment_rule ->> 'guajiRuleId', sp.outbound_play_code, sp.sub_id) AS rule_id,
+       COALESCE(sp.segment_rule ->> 'guajiFullName', sp.label) AS full_name
+FROM sub_plays sp
+WHERE sp.enabled
+ORDER BY sp.template_code, sp.type_id, sp.sub_id
+`
+
+type ListPlayRuleImportCandidatesRow struct {
+	TemplateCode string `json:"template_code"`
+	TypeID       string `json:"type_id"`
+	SubID        string `json:"sub_id"`
+	RuleID       string `json:"rule_id"`
+	FullName     string `json:"full_name"`
+}
+
+func (q *Queries) ListPlayRuleImportCandidates(ctx context.Context) ([]ListPlayRuleImportCandidatesRow, error) {
+	rows, err := q.db.Query(ctx, listPlayRuleImportCandidates)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPlayRuleImportCandidatesRow{}
+	for rows.Next() {
+		var i ListPlayRuleImportCandidatesRow
+		if err := rows.Scan(
+			&i.TemplateCode,
+			&i.TypeID,
+			&i.SubID,
+			&i.RuleID,
+			&i.FullName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markPlayRuleSpecRevisionPublished = `-- name: MarkPlayRuleSpecRevisionPublished :execrows
 UPDATE play_rule_spec_revisions
 SET status = 'published', published_at = now()
@@ -208,6 +253,34 @@ func (q *Queries) MarkPlayRuleSpecRevisionVerified(ctx context.Context, id int64
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const nextPlayRuleSpecRevision = `-- name: NextPlayRuleSpecRevision :one
+SELECT COALESCE(MAX(revision), 0)::int + 1 AS next_revision
+FROM play_rule_spec_revisions
+WHERE template_code = $1
+  AND type_id = $2
+  AND sub_id = $3
+  AND lottery_code IS NOT DISTINCT FROM $4
+`
+
+type NextPlayRuleSpecRevisionParams struct {
+	TemplateCode string      `json:"template_code"`
+	TypeID       string      `json:"type_id"`
+	SubID        string      `json:"sub_id"`
+	LotteryCode  pgtype.Text `json:"lottery_code"`
+}
+
+func (q *Queries) NextPlayRuleSpecRevision(ctx context.Context, arg NextPlayRuleSpecRevisionParams) (int32, error) {
+	row := q.db.QueryRow(ctx, nextPlayRuleSpecRevision,
+		arg.TemplateCode,
+		arg.TypeID,
+		arg.SubID,
+		arg.LotteryCode,
+	)
+	var next_revision int32
+	err := row.Scan(&next_revision)
+	return next_revision, err
 }
 
 const resolvePublishedPlayRuleSpec = `-- name: ResolvePublishedPlayRuleSpec :one
