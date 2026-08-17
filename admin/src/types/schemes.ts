@@ -165,6 +165,7 @@ export interface SchemeBetRecordRow {
   playMethod: string
   multiplier: string
   round: string
+  currency: string
   amount: string
   profitLoss: number
   status: string

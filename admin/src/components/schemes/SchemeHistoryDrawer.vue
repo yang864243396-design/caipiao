@@ -309,14 +309,19 @@ function close() {
 
             <el-table-column prop="playMethod" label="玩法" min-width="88" show-overflow-tooltip />
 
-            <el-table-column prop="numbers" label="下注号码" min-width="100" show-overflow-tooltip>
+            <el-table-column prop="currency" label="币种" width="72" align="center" />
 
+            <el-table-column prop="numbers" label="下注号码" width="180">
               <template #default="{ row }">
-
-                <span class="scheme-history-mono">{{ row.numbers || '—' }}</span>
-
+                <el-tooltip
+                  :content="row.numbers || '-'"
+                  placement="top"
+                  :show-after="300"
+                  :disabled="!row.numbers"
+                >
+                  <span class="scheme-history-bet-content">{{ row.numbers || '-' }}</span>
+                </el-tooltip>
               </template>
-
             </el-table-column>
 
             <el-table-column prop="draw" label="开奖号码" min-width="100" show-overflow-tooltip>
@@ -608,6 +613,19 @@ function close() {
   font-variant-numeric: tabular-nums;
 
 }
+
+.scheme-history-bet-content {
+
+  display: block;
+
+  overflow: hidden;
+
+  text-overflow: ellipsis;
+
+  white-space: nowrap;
+
+}
+
 
 
 

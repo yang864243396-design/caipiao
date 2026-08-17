@@ -51,6 +51,7 @@ SELECT
     c.play_type,
     c.multiplier,
     c.round_label,
+    c.currency,
     c.amount::float8 AS amount,
     c.pnl::float8 AS pnl,
     c.status,

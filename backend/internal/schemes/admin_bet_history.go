@@ -16,12 +16,12 @@ import (
 
 // AdminBetHistoryResult 管理端「投注与盈亏」抽屉数据（执行+账务合并为一行）。
 type AdminBetHistoryResult struct {
-	InstanceID string               `json:"instanceId"`
-	SchemeName string               `json:"schemeName"`
-	SimBet     bool                 `json:"simBet"`
-	Days       int                  `json:"days"`
-	DateFrom   string               `json:"dateFrom"`
-	DateTo     string               `json:"dateTo"`
+	InstanceID string                `json:"instanceId"`
+	SchemeName string                `json:"schemeName"`
+	SimBet     bool                  `json:"simBet"`
+	Days       int                   `json:"days"`
+	DateFrom   string                `json:"dateFrom"`
+	DateTo     string                `json:"dateTo"`
 	Items      []AdminBetHistoryItem `json:"items"`
 }
 
@@ -37,6 +37,7 @@ type AdminBetHistoryItem struct {
 	PlayMethod       string  `json:"playMethod"`
 	Multiplier       string  `json:"multiplier"`
 	Round            string  `json:"round"`
+	Currency         string  `json:"currency"`
 	Amount           string  `json:"amount"`
 	ProfitLoss       float64 `json:"profitLoss"`
 	Status           string  `json:"status"`
@@ -105,6 +106,7 @@ func (s *Service) AdminBetHistory(ctx context.Context, instanceID string, days i
 			PlayMethod:       strings.TrimSpace(r.PlayType),
 			Multiplier:       formatAdminMultiplier(r.Multiplier),
 			Round:            formatAdminRound(r.RoundLabel),
+			Currency:         strings.TrimSpace(r.Currency),
 			Amount:           formatAdminAmount(r.Amount),
 			ProfitLoss:       roundAdminMoney(r.Pnl),
 			Status:           statusLabel,

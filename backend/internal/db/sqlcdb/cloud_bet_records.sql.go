@@ -623,6 +623,7 @@ SELECT
     c.play_type,
     c.multiplier,
     c.round_label,
+    c.currency,
     c.amount::float8 AS amount,
     c.pnl::float8 AS pnl,
     c.status,
@@ -654,6 +655,7 @@ type ListCloudBetRecordsBySchemeRow struct {
 	PlayType         string             `json:"play_type"`
 	Multiplier       string             `json:"multiplier"`
 	RoundLabel       string             `json:"round_label"`
+	Currency         string             `json:"currency"`
 	Amount           float64            `json:"amount"`
 	Pnl              float64            `json:"pnl"`
 	Status           string             `json:"status"`
@@ -685,6 +687,7 @@ func (q *Queries) ListCloudBetRecordsByScheme(ctx context.Context, arg ListCloud
 			&i.PlayType,
 			&i.Multiplier,
 			&i.RoundLabel,
+			&i.Currency,
 			&i.Amount,
 			&i.Pnl,
 			&i.Status,
