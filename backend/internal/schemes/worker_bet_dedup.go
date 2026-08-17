@@ -5,12 +5,20 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"caipiao/backend/internal/db/sqlcdb"
 	"caipiao/backend/internal/lottery"
 )
+
+// guajiPlaceCloseSafety reserves enough time for the third-party request to be
+// received before its period closes.  A request crossing that boundary may be
+// accepted into the next period, which is never safe for a scheme bet.
+const guajiPlaceCloseSafety = 1200 * time.Millisecond
+
+const guajiPlaceSnapshotMaxAge = 5 * time.Second
 
 // betPeriodDedup 防重：我方已下注第三方 periods vs 第三方当前开放 periods（模拟/真实共用）。
 type betPeriodDedup struct {
@@ -35,6 +43,37 @@ func guajiBetPeriodMatches(lotteryCode, periodNo string) bool {
 		return true
 	}
 	return strings.TrimSpace(openIssue) == strings.TrimSpace(periodNo)
+}
+
+// guajiBetSnapshotFreshAt uses a stricter freshness window than display data.
+// The normal refresh cadence is three seconds; for 3s/15s games, an older
+// snapshot can already describe a different upstream issue.
+func guajiBetSnapshotFreshAt(ps lottery.PeriodsSchedule, now time.Time) bool {
+	if strings.TrimSpace(ps.CurrentPeriod) == "" || ps.CloseAt.IsZero() || ps.UpdatedAt.IsZero() {
+		return false
+	}
+	maxAge := guajiPlaceSnapshotMaxAge
+	if ps.PeriodDurationSec > 0 && ps.PeriodDurationSec <= 15 {
+		maxAge = time.Duration(ps.PeriodDurationSec) * time.Second / 2
+	}
+	age := now.UTC().Sub(ps.UpdatedAt.UTC())
+	if age < 0 {
+		age = 0
+	}
+	return age <= maxAge
+}
+
+// guajiBetPeriodHasSafeWindowAt is intentionally based only on the fresh
+// periods snapshot, never on websocket state. It is called immediately before
+// PlaceRealBet so a locally-open period cannot be sent while it is too close to
+// the upstream closing boundary.
+func guajiBetPeriodHasSafeWindowAt(lotteryCode string, now time.Time) bool {
+	ps, ok := lottery.PeriodsScheduleFor(lotteryCode)
+	if !ok || !guajiBetSnapshotFreshAt(ps, now) {
+		return false
+	}
+	closeAt, ok := lottery.PeriodsBetCloseAt(lotteryCode, now)
+	return ok && closeAt.Sub(now.UTC()) > guajiPlaceCloseSafety
 }
 
 // evaluateGuajiBetDedup 核心防重：已下注第三方期号 == 第三方当前开放期号 → 跳过（含待开奖）。

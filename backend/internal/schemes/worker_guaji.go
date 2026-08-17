@@ -174,6 +174,18 @@ func (w *Worker) placeGuajiSchemeBet(
 	var betRes guajibet.Result
 	var placeErr error
 	for attempt := 1; attempt <= guajiPlaceSafeRetryAttempts; attempt++ {
+		// A wait for a shared place slot or a retry backoff can consume the final
+		// part of a very short period. Recheck immediately before every request;
+		// never let the upstream roll this bet into the next issue.
+		if !guajiBetPeriodMatches(inst.LotteryCode, periodNo) || !guajiBetPeriodHasSafeWindowAt(inst.LotteryCode, time.Now()) {
+			err := fmt.Errorf("%w: period %s is too close to close", guajibet.ErrPeriodClosed, periodNo)
+			if attempt == 1 {
+				return schemeGuajiBetMeta{}, preflightPlaceErr(err)
+			}
+			// An earlier attempt may already have reached the upstream. Keep its
+			// period claim rather than risking a duplicate by releasing it.
+			return schemeGuajiBetMeta{}, err
+		}
 		betRes, placeErr = w.guajiBets.PlaceRealBet(ctx, account, placeReq)
 		if placeErr == nil {
 			break

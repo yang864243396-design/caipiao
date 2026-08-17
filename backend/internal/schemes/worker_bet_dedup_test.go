@@ -57,3 +57,37 @@ func TestClearDuplicateThirdPartyBetReferenceKeepsReservedAmount(t *testing.T) {
 		t.Fatalf("reserved amount must remain positive, got %v", amount)
 	}
 }
+
+func TestGuajiBetPeriodHasSafeWindowAt(t *testing.T) {
+	code := "guaji_place_safety_margin_test"
+	now := time.Now().UTC()
+	lottery.ClearPeriodsSchedule(code)
+	t.Cleanup(func() { lottery.ClearPeriodsSchedule(code) })
+
+	lottery.UpdatePeriodsScheduleFullWithDuration(
+		code, "P1", "P1", now, now.Add(guajiPlaceCloseSafety), 3, "", now.Add(-3*time.Second),
+	)
+	if guajiBetPeriodHasSafeWindowAt(code, now) {
+		t.Fatal("period at the close safety boundary must not be sent to third party")
+	}
+
+	lottery.UpdatePeriodsScheduleFullWithDuration(
+		code, "P2", "P2", now, now.Add(guajiPlaceCloseSafety+time.Nanosecond), 3, "", now.Add(-3*time.Second),
+	)
+	if !guajiBetPeriodHasSafeWindowAt(code, now) {
+		t.Fatal("period beyond the close safety boundary should be eligible for placement")
+	}
+}
+
+func TestGuajiBetSnapshotFreshAtRequiresFresherShortPeriodSnapshot(t *testing.T) {
+	now := time.Now().UTC()
+	short := lottery.PeriodsSchedule{CurrentPeriod: "P1", CloseAt: now.Add(time.Second), PeriodDurationSec: 3, UpdatedAt: now.Add(-2 * time.Second)}
+	if guajiBetSnapshotFreshAt(short, now) {
+		t.Fatal("three-second period snapshot older than half a period must be rejected")
+	}
+
+	standard := lottery.PeriodsSchedule{CurrentPeriod: "P1", CloseAt: now.Add(time.Second), PeriodDurationSec: 60, UpdatedAt: now.Add(-2 * time.Second)}
+	if !guajiBetSnapshotFreshAt(standard, now) {
+		t.Fatal("standard-period snapshot should remain usable within the five-second safety age")
+	}
+}
