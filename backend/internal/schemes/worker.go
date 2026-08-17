@@ -34,18 +34,19 @@ type periodRefreshRequester interface {
 
 // Worker ticks running scheme instances: countdown → bet against lottery draw + scheme config.
 type Worker struct {
-	pool           *db.Pool
-	q              *sqlcdb.Queries
-	hub            *ws.Hub
-	guajiBets      guajiBetPlacer
-	periodSync     *periodsync.Syncer
-	periodRefresh  periodRefreshRequester
-	ruleRegistry   *playrules.RegistryStore
-	tickSec        int32
-	concurrency    int32
-	placeSem       chan struct{} // 真下单全站有界并发；nil 表示不额外限流
-	countdownReset int32
-	betSeq         atomic.Uint64
+	pool              *db.Pool
+	q                 *sqlcdb.Queries
+	hub               *ws.Hub
+	guajiBets         guajiBetPlacer
+	periodSync        *periodsync.Syncer
+	periodRefresh     periodRefreshRequester
+	ruleRegistry      *playrules.RegistryStore
+	strategyProcessor *StrategyProcessor
+	tickSec           int32
+	concurrency       int32
+	placeSem          chan struct{} // 真下单全站有界并发；nil 表示不额外限流
+	countdownReset    int32
+	betSeq            atomic.Uint64
 }
 
 func NewWorker(pool *db.Pool, tickSec int, hub *ws.Hub, periodSync *periodsync.Syncer) *Worker {
@@ -62,6 +63,7 @@ func NewWorker(pool *db.Pool, tickSec int, hub *ws.Hub, periodSync *periodsync.S
 		countdownReset: defaultCountdownReset,
 	}
 	w.SetPlaceConcurrency(defaultSchemeWorkerPlaceConcurrency)
+	w.strategyProcessor = NewStrategyProcessor(pool)
 	return w
 }
 
@@ -79,6 +81,12 @@ func (w *Worker) SetRuleRegistry(registry *playrules.RegistryStore) {
 		return
 	}
 	w.ruleRegistry = registry
+}
+
+func (w *Worker) NotifyStrategyDraw(ctx context.Context, lotteryCode, periodNo string) {
+	if w != nil && w.strategyProcessor != nil {
+		w.strategyProcessor.NotifyDraw(ctx, lotteryCode, periodNo)
+	}
 }
 
 func (w *Worker) resolvePublishedRule(lotteryCode string, rule playRule) (playrules.Snapshot, bool) {
@@ -191,6 +199,11 @@ func (w *Worker) tick(ctx context.Context) {
 		}
 	}
 	w.tickSimSettlements(ctx)
+	if w.strategyProcessor != nil {
+		if err := w.strategyProcessor.Recover(ctx); err != nil {
+			slog.Warn("scheme strategy recovery failed", "err", err)
+		}
+	}
 	w.tickMaintenanceResume(ctx)
 }
 

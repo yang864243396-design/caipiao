@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +23,8 @@ import (
 
 const (
 	payoutSyncBatch                = 50
+	payoutSyncPageSize             = 50
+	payoutSyncRecentPageBudget     = 3
 	historicalSettlementFirstPage  = 4
 	historicalSettlementPageBudget = 3
 )
@@ -88,14 +91,13 @@ func (w *PayoutSyncWorker) Run(ctx context.Context, interval time.Duration) {
 
 func (w *PayoutSyncWorker) tick(ctx context.Context) {
 	seen := make(map[int64]struct{}, payoutSyncBatch)
+	pending := make([]sqlcdb.ListPendingGuajiBetOrdersRow, 0, payoutSyncBatch*2)
 	if rows, err := w.listPendingForRunningSchemes(ctx, payoutSyncBatch); err != nil {
 		slog.Warn("payout sync running-scheme list failed", "err", err)
 	} else {
 		for _, row := range rows {
 			seen[row.ID] = struct{}{}
-			if err := w.syncOne(ctx, row); err != nil {
-				slog.Warn("payout sync failed", "orderNo", row.OrderNo, "err", err)
-			}
+			pending = append(pending, row)
 		}
 	}
 	rows, err := w.q.ListPendingGuajiBetOrders(ctx, payoutSyncBatch)
@@ -107,10 +109,107 @@ func (w *PayoutSyncWorker) tick(ctx context.Context) {
 		if _, ok := seen[row.ID]; ok {
 			continue
 		}
-		if err := w.syncOne(ctx, row); err != nil {
-			slog.Warn("payout sync failed", "orderNo", row.OrderNo, "err", err)
+		pending = append(pending, row)
+	}
+	for _, batch := range groupPendingPayoutRows(pending) {
+		if err := w.syncAccountPending(ctx, batch.accountID, batch.rows); err != nil {
+			slog.Warn("payout sync account batch failed", "accountId", batch.accountID, "orders", len(batch.rows), "err", err)
 		}
 	}
+}
+
+type payoutAccountBatch struct {
+	accountID int64
+	rows      []sqlcdb.ListPendingGuajiBetOrdersRow
+}
+
+func groupPendingPayoutRows(rows []sqlcdb.ListPendingGuajiBetOrdersRow) []payoutAccountBatch {
+	byAccount := make(map[int64]int)
+	batches := make([]payoutAccountBatch, 0)
+	for _, row := range rows {
+		if !row.GuajiAccountID.Valid || row.GuajiAccountID.Int64 <= 0 || !row.ThirdPartyBetID.Valid || strings.TrimSpace(row.ThirdPartyBetID.String) == "" {
+			continue
+		}
+		idx, found := byAccount[row.GuajiAccountID.Int64]
+		if !found {
+			idx = len(batches)
+			byAccount[row.GuajiAccountID.Int64] = idx
+			batches = append(batches, payoutAccountBatch{accountID: row.GuajiAccountID.Int64})
+		}
+		batches[idx].rows = append(batches[idx].rows, row)
+	}
+	return batches
+}
+
+type webBetPageFetcher func(ctx context.Context, limit, page int) ([]guaji.WebBetRecord, error)
+
+// fetchRecentAccountSettlements reads the provider's recent range once for an
+// account. A full page may have older pending orders immediately behind it, so
+// only full pages cause a bounded follow-up request.
+func fetchRecentAccountSettlements(ctx context.Context, fetch webBetPageFetcher) (map[string]guaji.WebBetRecord, error) {
+	itemsByID := make(map[string]guaji.WebBetRecord)
+	if fetch == nil {
+		return itemsByID, nil
+	}
+	for page := 1; page <= payoutSyncRecentPageBudget; page++ {
+		items, err := fetch(ctx, payoutSyncPageSize, page)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range items {
+			if item.ID > 0 {
+				itemsByID[strconv.FormatInt(item.ID, 10)] = item
+			}
+		}
+		if len(items) < payoutSyncPageSize {
+			break
+		}
+	}
+	return itemsByID, nil
+}
+
+// syncAccountPending batches recent provider settlement reads for a single
+// account. Only records outside that recent range use their existing bounded
+// historical recovery cursor, so multiple local pending orders never repeat
+// the same recent third-party list scan.
+func (w *PayoutSyncWorker) syncAccountPending(ctx context.Context, accountID int64, rows []sqlcdb.ListPendingGuajiBetOrdersRow) error {
+	if w == nil || w.svc == nil || accountID <= 0 || len(rows) == 0 {
+		return nil
+	}
+	acc, err := w.svc.getRowByIDAny(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	if !w.svc.tokenHealthy(acc) {
+		return nil
+	}
+	token, err := guaji.DecryptSecret(w.svc.credKey, acc.accessTokenEnc.String)
+	if err != nil {
+		return err
+	}
+	itemsByID, err := fetchRecentAccountSettlements(ctx, func(ctx context.Context, limit, page int) ([]guaji.WebBetRecord, error) {
+		return w.svc.guaji.ListWebBets(ctx, token, limit, page)
+	})
+	if err != nil {
+		return nil // keep all pending for the next provider retry
+	}
+	for _, row := range rows {
+		betID := strings.TrimSpace(row.ThirdPartyBetID.String)
+		item, found := itemsByID[betID]
+		if found {
+			res := guaji.SettlementFromWebBet(&item)
+			if res != nil && res.Settled {
+				if err := w.commitResolvedSettlement(ctx, row, res, token); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if err := w.syncHistoricalOne(ctx, row, token); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (w *PayoutSyncWorker) listPendingForRunningSchemes(ctx context.Context, limit int) ([]sqlcdb.ListPendingGuajiBetOrdersRow, error) {
@@ -235,6 +334,60 @@ func (w *PayoutSyncWorker) syncOne(ctx context.Context, row sqlcdb.ListPendingGu
 	return nil
 }
 
+// syncHistoricalOne preserves the existing bounded recovery cursor after the
+// account's recent list range has already been fetched by syncAccountPending.
+func (w *PayoutSyncWorker) syncHistoricalOne(ctx context.Context, row sqlcdb.ListPendingGuajiBetOrdersRow, token string) error {
+	if !row.GuajiAccountID.Valid || !row.ThirdPartyBetID.Valid {
+		return nil
+	}
+	betID := strings.TrimSpace(row.ThirdPartyBetID.String)
+	if betID == "" {
+		return nil
+	}
+	startPage, err := w.historicalSettlementPage(ctx, row.GuajiAccountID.Int64, betID)
+	if err != nil {
+		return err
+	}
+	res, nextPage, exhausted, err := w.svc.guaji.QuerySettlementFromPageRange(ctx, token, betID, startPage, historicalSettlementPageBudget)
+	if err != nil {
+		return w.saveHistoricalSettlementPage(ctx, row.GuajiAccountID.Int64, betID, nextHistoricalSettlementPage(historicalSettlementFirstPage, nextPage, exhausted), err.Error())
+	}
+	if res == nil || !res.Settled {
+		return w.saveHistoricalSettlementPage(ctx, row.GuajiAccountID.Int64, betID, historicalSettlementFirstPage, "")
+	}
+	if err := w.commitResolvedSettlement(ctx, row, res, token); err != nil {
+		return err
+	}
+	return w.clearHistoricalSettlementPage(ctx, row.GuajiAccountID.Int64, betID)
+}
+
+func (w *PayoutSyncWorker) commitResolvedSettlement(ctx context.Context, row sqlcdb.ListPendingGuajiBetOrdersRow, res *guaji.BetSettlement, token string) error {
+	if res == nil || !res.Settled {
+		return nil
+	}
+	status := "lose"
+	pnl := res.Pnl
+	payout := res.Payout
+	switch {
+	case pnl > 1e-6:
+		status = "win"
+	case res.Status == "win":
+		status = "win"
+	case payout > 1e-6 && pnl < -1e-6:
+		status = "win"
+	}
+	if status == "lose" && row.Amount > 1e-6 && math.Abs(pnl) < 0.01 && payout < 0.01 {
+		pnl = -row.Amount
+	}
+	currency := row.Currency
+	balanceSnapshot := 0.0
+	if info, ierr := w.svc.guaji.UserInfo(ctx, token); ierr == nil {
+		balanceSnapshot = info.BalanceByCurrency(currency)
+		w.svc.persistGuajiBalances(ctx, row.GuajiAccountID.Int64, multiCurrencyFromInfo(info))
+	}
+	return w.commitSettlement(ctx, row, status, pnl, payout, currency, balanceSnapshot, true)
+}
+
 func nextHistoricalSettlementPage(firstPage, nextPage int, exhausted bool) int {
 	if firstPage < 1 {
 		firstPage = historicalSettlementFirstPage
@@ -346,8 +499,41 @@ func (w *PayoutSyncWorker) commitSettlement(
 			if derr != nil {
 				return derr
 			}
-			if lerr := schemestate.ProcessFormalAfterSettlement(ctx, qtx, inst, periodNo, pnl, hit, def.Config, member.NumericFromFloat); lerr != nil {
-				return lerr
+			if strategyInput, found, serr := qtx.GetFormalCloudBetStrategyInputByOrderNo(ctx, row.OrderNo); serr != nil {
+				return serr
+			} else if found {
+				if strategyInput.PeriodNo != "" {
+					periodNo = strategyInput.PeriodNo
+				}
+				verdict := resolveFormalStrategyVerdict(formalStrategyInput{
+					ProviderHit:      hit,
+					Kind:             inst.Kind,
+					DefinitionConfig: def.Config,
+					RoundIndex:       int(inst.RoundIndex),
+					LotteryCode:      strategyInput.LotteryCode,
+					BetContent:       strategyInput.BetContent,
+					Balls:            strategyInput.Balls,
+					Snapshot:         strategyInput.RuleSnapshot,
+				})
+				if err := persistFormalStrategyVerdict(ctx, qtx, strategyInput, row.OrderNo, verdict); err != nil {
+					return err
+				}
+				// The provider remains authoritative for status/pnl/payout above;
+				// only the next strategy round uses a successfully frozen local rule.
+				hit = verdict.Hit
+			}
+			strategyAdvanced := false
+			if evaluation, eerr := qtx.GetSchemeStrategyEvaluation(ctx, sqlcdb.GetSchemeStrategyEvaluationParams{InstanceID: inst.ID, PeriodNo: periodNo}); eerr == nil {
+				strategyAdvanced = evaluation.Status == "completed" || evaluation.Status == "mismatch"
+			}
+			if !strategyAdvanced {
+				if lerr := schemestate.ProcessFormalAfterSettlement(ctx, qtx, inst, periodNo, pnl, hit, def.Config, member.NumericFromFloat); lerr != nil {
+					return lerr
+				}
+			} else {
+				if lerr := schemestate.ProcessFormalFinancialAfterSettlement(ctx, qtx, inst, periodNo, pnl, hit, def.Config, member.NumericFromFloat); lerr != nil {
+					return lerr
+				}
 			}
 			memberID := inst.MemberID
 			definitionID := inst.DefinitionID

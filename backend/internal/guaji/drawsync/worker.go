@@ -18,10 +18,21 @@ import (
 
 // Worker 订阅第三方开奖 WS，过滤忽略彩种，按 outbound_lottery_code 反查入库并广播 WS-5（T3）。
 type Worker struct {
-	pool   *db.Pool
-	q      *sqlcdb.Queries
-	client *guaji.Client
-	hub    *ws.Hub
+	pool             *db.Pool
+	q                *sqlcdb.Queries
+	client           *guaji.Client
+	hub              *ws.Hub
+	strategyNotifier interface {
+		NotifyStrategyDraw(context.Context, string, string)
+	}
+}
+
+func (w *Worker) SetStrategyNotifier(notifier interface {
+	NotifyStrategyDraw(context.Context, string, string)
+}) {
+	if w != nil {
+		w.strategyNotifier = notifier
+	}
 }
 
 func NewWorker(pool *db.Pool, client *guaji.Client, hub *ws.Hub) *Worker {
@@ -103,6 +114,9 @@ func (w *Worker) Ingest(ctx context.Context, ev guaji.DrawEvent) error {
 		}
 		if inserted {
 			lottery.LogDrawCloseToIngestLatency(tgt.code, ev.Periods, "draw_ws", drawnAt)
+			if w.strategyNotifier != nil {
+				w.strategyNotifier.NotifyStrategyDraw(ctx, tgt.code, ev.Periods)
+			}
 		}
 	}
 	return nil

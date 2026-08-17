@@ -177,6 +177,7 @@ func New(cfg config.Config) (*Server, error) {
 	// T3：第三方开奖 WS 订阅（GUAJI_ENABLED 时；入库与广播不依赖平台 WS 开关）
 	if pool != nil && guajiClient.Enabled() {
 		if dw := drawsync.NewWorker(pool, guajiClient, wsHub); dw != nil {
+			dw.SetStrategyNotifier(schemeWorker)
 			go dw.Run(workerCtx)
 		}
 	}
@@ -367,6 +368,7 @@ func (s *Server) registerRoutes(wsSrv *ws.Server) {
 	api.Handle("GET /admin/schemes/instances", adminAuth(http.HandlerFunc(s.handler.AdminSchemeMonitorList)))
 	api.Handle("GET /admin/schemes/instances/{instanceId}/bet-history", adminAuth(http.HandlerFunc(s.handler.AdminSchemeBetHistory)))
 	api.Handle("GET /admin/diagnostics/schemes/{instanceId}/runtime", adminAuth(http.HandlerFunc(s.handler.AdminSchemeRuntimeDiagnostics)))
+	api.Handle("GET /admin/diagnostics/schemes/{instanceId}/strategy", adminAuth(http.HandlerFunc(s.handler.AdminSchemeStrategyDiagnostics)))
 	api.Handle("POST /admin/schemes/share", adminAuth(http.HandlerFunc(s.handler.AdminCreateShareSnapshot)))
 	api.Handle("PATCH /admin/schemes/share/{snapshotId}", adminAuth(http.HandlerFunc(s.handler.AdminPatchShareSnapshot)))
 	api.Handle("DELETE /admin/schemes/share/{snapshotId}", adminAuth(http.HandlerFunc(s.handler.AdminDeleteShareSnapshot)))

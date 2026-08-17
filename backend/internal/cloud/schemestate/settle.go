@@ -40,7 +40,23 @@ func ProcessFormalAfterSettlement(
 	definitionConfig []byte,
 	numericFromFloat func(float64) pgtype.Numeric,
 ) error {
-	return ProcessAfterSettlement(ctx, q, inst, periodNo, pnl, hit, definitionConfig, numericFromFloat)
+	return processAfterSettlement(ctx, q, inst, periodNo, pnl, hit, definitionConfig, numericFromFloat, true)
+}
+
+// ProcessFormalFinancialAfterSettlement applies the third-party financial
+// settlement and lookback bookkeeping after the draw worker has already
+// advanced strategy state for this instance/period.
+func ProcessFormalFinancialAfterSettlement(
+	ctx context.Context,
+	q *sqlcdb.Queries,
+	inst sqlcdb.SchemeInstance,
+	periodNo string,
+	pnl float64,
+	hit bool,
+	definitionConfig []byte,
+	numericFromFloat func(float64) pgtype.Numeric,
+) error {
+	return processAfterSettlement(ctx, q, inst, periodNo, pnl, hit, definitionConfig, numericFromFloat, false)
 }
 
 // ProcessAfterSettlement 正式盘/模拟盘派奖后共用：回头盈亏 + 倍投轮次 + 出号游标。
@@ -54,6 +70,20 @@ func ProcessAfterSettlement(
 	hit bool,
 	definitionConfig []byte,
 	numericFromFloat func(float64) pgtype.Numeric,
+) error {
+	return processAfterSettlement(ctx, q, inst, periodNo, pnl, hit, definitionConfig, numericFromFloat, true)
+}
+
+func processAfterSettlement(
+	ctx context.Context,
+	q *sqlcdb.Queries,
+	inst sqlcdb.SchemeInstance,
+	periodNo string,
+	pnl float64,
+	hit bool,
+	definitionConfig []byte,
+	numericFromFloat func(float64) pgtype.Numeric,
+	advanceStrategy bool,
 ) error {
 	if q == nil {
 		return nil
@@ -77,23 +107,14 @@ func ProcessAfterSettlement(
 	applyRoundIndex := inst.RoundIndex
 	if lbEval.ResetIndividual || lbEval.ResetOverall {
 		applyRoundIndex = 0
-	} else {
+	} else if advanceStrategy {
 		rounds := schemerounds.ParseFromDefinitionConfig(definitionConfig)
 		applyRoundIndex = int32(schemerounds.NextIndex(rounds, int(inst.RoundIndex), hit))
 	}
 
 	// 出号体系：下单时（待开奖）冻结的出号游标在此按实际中/未中补推进，
 	// 使定码轮换/高级定码轮换等运行类型逐期切换下注内容（与倍投轮次推进独立）。
-	applyPickIndex, applyCurrentPick, applyLastDirection := inst.PickIndex, inst.CurrentPick, inst.LastDirection
-	if FormalPickAdvancer != nil {
-		betContent := ""
-		if snap, serr := q.GetCloudBetPeriodSnapshot(ctx, inst.ID, periodNo); serr == nil {
-			betContent = snap.BetContent
-		}
-		applyPickIndex, applyCurrentPick, applyLastDirection = FormalPickAdvancer(
-			inst.Kind, definitionConfig, inst, betContent, hit,
-		)
-	}
+	applyPickIndex, applyCurrentPick, applyLastDirection := formalPickStateAfterSettlement(ctx, advanceStrategy, q, inst, periodNo, definitionConfig, hit)
 
 	if err := q.ApplySchemeInstancePickAfterSettlement(ctx, sqlcdb.ApplySchemeInstanceBetParams{
 		ID:               inst.ID,
@@ -129,6 +150,27 @@ func ProcessAfterSettlement(
 		}
 	}
 	return nil
+}
+
+func formalPickStateAfterSettlement(
+	ctx context.Context,
+	advanceStrategy bool,
+	q *sqlcdb.Queries,
+	inst sqlcdb.SchemeInstance,
+	periodNo string,
+	definitionConfig []byte,
+	hit bool,
+) (int32, string, string) {
+	if !advanceStrategy || FormalPickAdvancer == nil {
+		return inst.PickIndex, inst.CurrentPick, inst.LastDirection
+	}
+	betContent := ""
+	if q != nil {
+		if snap, err := q.GetCloudBetPeriodSnapshot(ctx, inst.ID, periodNo); err == nil {
+			betContent = snap.BetContent
+		}
+	}
+	return FormalPickAdvancer(inst.Kind, definitionConfig, inst, betContent, hit)
 }
 
 func numericToFloat(n pgtype.Numeric) float64 {

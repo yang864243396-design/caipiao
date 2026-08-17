@@ -177,6 +177,21 @@ WHERE id = $1
 	return err
 }
 
+// ApplySchemeInstanceStrategyAfterDraw advances only strategy state. It must
+// never be used for third-party monetary settlement.
+func (q *Queries) ApplySchemeInstanceStrategyAfterDraw(ctx context.Context, id string, roundIndex, pickIndex int32, currentPick, lastDirection string) error {
+	_, err := q.db.Exec(ctx, `
+UPDATE scheme_instances
+SET round_index = $2,
+    pick_index = $3,
+    current_pick = $4,
+    last_direction = $5,
+    updated_at = now()
+WHERE id = $1
+  AND status IN ('running', 'pending')`, id, roundIndex, pickIndex, currentPick, lastDirection)
+	return err
+}
+
 // SchemeUnsettledGuajiPeriod 方案是否有未完成的第三方投注（占位中或已接单未派奖）。
 // 第三方请求发出到回写 third_party_bet_id 之间也必须拦截下一笔，避免期号缓存跳动时同一期连投。
 func (q *Queries) SchemeUnsettledGuajiPeriod(ctx context.Context, schemeID string) (string, bool, error) {
@@ -677,6 +692,202 @@ WHERE scheme_id = $1
   AND period_no = $2
   AND rule_snapshot IS NULL`, schemeID, periodNo, snapshot, ruleVersion, hash)
 	return err
+}
+
+// FormalCloudBetStrategyInput is the immutable real-bet context needed for
+// local strategy verification after the provider has settled the financial
+// order. Provider settlement fields are intentionally absent.
+type FormalCloudBetStrategyInput struct {
+	RecordID         int64
+	SchemeID         string
+	LotteryCode      string
+	PeriodNo         string
+	BetContent       string
+	RuleSnapshot     []byte
+	RuleVersion      pgtype.Int4
+	RuleSnapshotHash pgtype.Text
+	Balls            []string
+}
+
+// PendingFormalStrategyRow is an accepted real bet whose exact period draw and
+// frozen rule are available for local strategy advancement.
+type PendingFormalStrategyRow struct {
+	RecordID         int64
+	SchemeID         string
+	LotteryCode      string
+	PeriodNo         string
+	BetContent       string
+	RuleSnapshot     []byte
+	RuleVersion      pgtype.Int4
+	RuleSnapshotHash pgtype.Text
+	Balls            []string
+}
+
+func (q *Queries) ListPendingFormalStrategyRows(ctx context.Context, rowLimit int32) ([]PendingFormalStrategyRow, error) {
+	if rowLimit <= 0 {
+		rowLimit = 50
+	}
+	rows, err := q.db.Query(ctx, `
+SELECT c.id, c.scheme_id, COALESCE(c.lottery_code, ''), c.period_no,
+       COALESCE(c.bet_content, ''), c.rule_snapshot, c.rule_version,
+       c.rule_snapshot_hash, d.balls
+FROM cloud_bet_records c
+JOIN lottery_draws d ON d.lottery_code = c.lottery_code AND d.issue_no = c.period_no
+WHERE c.sim_bet = FALSE
+  AND c.status = 'pending'
+  AND NULLIF(TRIM(c.third_party_bet_id), '') IS NOT NULL
+  AND c.rule_snapshot IS NOT NULL
+  AND c.strategy_evaluated_at IS NULL
+  AND jsonb_typeof(d.balls) = 'array'
+  AND jsonb_array_length(d.balls) > 0
+ORDER BY c.placed_at ASC, c.id ASC
+LIMIT $1`, rowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]PendingFormalStrategyRow, 0, rowLimit)
+	for rows.Next() {
+		var item PendingFormalStrategyRow
+		var balls []byte
+		if err := rows.Scan(&item.RecordID, &item.SchemeID, &item.LotteryCode, &item.PeriodNo, &item.BetContent, &item.RuleSnapshot, &item.RuleVersion, &item.RuleSnapshotHash, &balls); err != nil {
+			return nil, err
+		}
+		item.Balls = ParseDrawBalls(balls)
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+// GetFormalCloudBetStrategyInputByOrderNo loads a real record and its draw
+// without scanning unrelated periods. A missing draw is represented as an
+// empty Balls slice so financial settlement can still complete safely.
+func (q *Queries) GetFormalCloudBetStrategyInputByOrderNo(ctx context.Context, orderNo string) (FormalCloudBetStrategyInput, bool, error) {
+	orderNo = strings.TrimSpace(orderNo)
+	if orderNo == "" {
+		return FormalCloudBetStrategyInput{}, false, nil
+	}
+	var out FormalCloudBetStrategyInput
+	var balls []byte
+	err := q.db.QueryRow(ctx, `
+SELECT c.id,
+       c.scheme_id,
+       COALESCE(c.lottery_code, ''),
+       c.period_no,
+       COALESCE(c.bet_content, ''),
+       c.rule_snapshot,
+       c.rule_version,
+       c.rule_snapshot_hash,
+       COALESCE(d.balls, '[]'::jsonb)
+FROM cloud_bet_records c
+LEFT JOIN lottery_draws d
+  ON d.lottery_code = c.lottery_code
+ AND d.issue_no = c.period_no
+WHERE c.bet_order_no = $1
+  AND c.sim_bet = FALSE
+LIMIT 1`, orderNo).Scan(
+		&out.RecordID,
+		&out.SchemeID,
+		&out.LotteryCode,
+		&out.PeriodNo,
+		&out.BetContent,
+		&out.RuleSnapshot,
+		&out.RuleVersion,
+		&out.RuleSnapshotHash,
+		&balls,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return FormalCloudBetStrategyInput{}, false, nil
+		}
+		return FormalCloudBetStrategyInput{}, false, err
+	}
+	out.SchemeID = strings.TrimSpace(out.SchemeID)
+	out.LotteryCode = strings.TrimSpace(out.LotteryCode)
+	out.PeriodNo = strings.TrimSpace(out.PeriodNo)
+	out.BetContent = strings.TrimSpace(out.BetContent)
+	out.Balls = ParseDrawBalls(balls)
+	return out, true, nil
+}
+
+// MarkCloudBetRecordStrategyEvaluated records that the frozen local-rule
+// reconciliation was finalized (completed, mismatch, or skipped).
+func (q *Queries) MarkCloudBetRecordStrategyEvaluated(ctx context.Context, recordID int64) error {
+	if recordID <= 0 {
+		return nil
+	}
+	_, err := q.db.Exec(ctx, `
+UPDATE cloud_bet_records
+SET strategy_evaluated_at = now()
+WHERE id = $1
+  AND strategy_evaluated_at IS NULL`, recordID)
+	return err
+}
+
+type CompleteSchemeStrategyEvaluationWithStatusParams struct {
+	CloudBetRecordID pgtype.Int8
+	BetOrderNo       pgtype.Text
+	RuleVersion      pgtype.Int4
+	RuleSnapshotHash pgtype.Text
+	LocalHit         pgtype.Bool
+	WinningUnits     pgtype.Int4
+	Diagnostics      []byte
+	Status           string
+	ID               int64
+}
+
+// CompleteSchemeStrategyEvaluationWithStatus allows a frozen local verdict to
+// retain a completed/mismatch distinction while keeping provider money intact.
+func (q *Queries) CompleteSchemeStrategyEvaluationWithStatus(ctx context.Context, arg CompleteSchemeStrategyEvaluationWithStatusParams) (int64, error) {
+	tag, err := q.db.Exec(ctx, `
+UPDATE scheme_strategy_evaluations
+SET status = $8,
+    cloud_bet_record_id = $1,
+    bet_order_no = $2,
+    rule_version = $3,
+    rule_snapshot_hash = $4,
+    local_hit = $5,
+    winning_units = $6,
+    diagnostics = $7,
+    completed_at = now(),
+    updated_at = now()
+WHERE id = $9
+  AND status = 'processing'`,
+		arg.CloudBetRecordID,
+		arg.BetOrderNo,
+		arg.RuleVersion,
+		arg.RuleSnapshotHash,
+		arg.LocalHit,
+		arg.WinningUnits,
+		arg.Diagnostics,
+		arg.Status,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+// ReconcileSchemeStrategyEvaluation attaches the later third-party verdict to
+// a strategy row already completed from the persisted draw. It never changes
+// strategy state or provider money; mismatch is determined solely by hit
+// disagreement.
+func (q *Queries) ReconcileSchemeStrategyEvaluation(ctx context.Context, id int64, status string, diagnostics []byte) (int64, error) {
+	if id <= 0 {
+		return 0, nil
+	}
+	tag, err := q.db.Exec(ctx, `
+UPDATE scheme_strategy_evaluations
+SET status = $2,
+    diagnostics = $3,
+    updated_at = now()
+WHERE id = $1
+  AND status IN ('completed', 'mismatch')`, id, status, diagnostics)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 // UpdateCloudBetRecordFromSettlementByID 按记录 id 结算 pending 模拟注（无第三方 order_no）。

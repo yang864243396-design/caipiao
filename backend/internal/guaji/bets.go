@@ -695,6 +695,13 @@ func webBetToSettlement(item *WebBetRecord) *BetSettlement {
 	}
 }
 
+// SettlementFromWebBet converts one item from a batched web-bets list into
+// the same provider-authoritative settlement representation used by a direct
+// settlement lookup.
+func SettlementFromWebBet(item *WebBetRecord) *BetSettlement {
+	return webBetToSettlement(item)
+}
+
 func absFloat(v float64) float64 {
 	if v < 0 {
 		return -v
