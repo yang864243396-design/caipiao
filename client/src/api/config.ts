@@ -47,3 +47,7 @@ export const WS_CLIENT_BASE = (() => {
 
 export const WS_CLIENT_ENABLED =
   import.meta.env.VITE_WS_ENABLED !== 'false' && WS_CLIENT_BASE.length > 0
+
+/** 云端中心版本化快照开关；关闭后恢复旧版 REST 轮询。 */
+export const CLOUD_REALTIME_CLIENT_ENABLED =
+  import.meta.env.VITE_CLOUD_REALTIME_ENABLED !== 'false'

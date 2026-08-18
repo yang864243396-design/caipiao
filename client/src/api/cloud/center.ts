@@ -605,6 +605,8 @@ export function instanceToDisplay(row: CloudRunningScheme) {
 
     id: row.id,
 
+    updatedAt: row.updatedAt,
+
     definitionId: row.definitionId || '',
 
     lotteryCode: row.lotteryCode || '',
@@ -669,7 +671,12 @@ export function mergeCloudSchemesStable(
   for (const item of prev) {
     const next = byId.get(item.id)
     if (next) {
-      merged.push(mergeSchemeCountdownOnPoll(item, next))
+      const prevTime = Date.parse(item.updatedAt)
+      const nextTime = Date.parse(next.updatedAt)
+      const nextIsOlder = Number.isFinite(prevTime) && Number.isFinite(nextTime)
+        ? nextTime < prevTime
+        : Boolean(item.updatedAt && next.updatedAt && next.updatedAt < item.updatedAt)
+      merged.push(nextIsOlder ? item : mergeSchemeCountdownOnPoll(item, next))
       byId.delete(item.id)
     }
   }

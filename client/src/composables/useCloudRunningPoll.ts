@@ -1,95 +1,268 @@
-import { WS_CLIENT_ENABLED, WS_CLIENT_BASE } from '@/api/config'
-
-import { getAccessToken } from '@/api/client'
+import type {
+  WsCloudStatsSnapshotPayload,
+  WsEnvelope,
+  WsSchemeInstancesSnapshotPayload,
+} from '@shared/types/ws'
+import { WS_EVENTS } from '@shared/types/ws'
 
 import {
+  CLOUD_REALTIME_CLIENT_ENABLED,
+  WS_CLIENT_BASE,
+  WS_CLIENT_ENABLED,
+} from '@/api/config'
+import { getAccessToken } from '@/api/client'
+import {
+  fetchCloudCenterStats,
   fetchRunningSchemesByIds,
   instanceToDisplay,
+  type CloudCenterStatsDto,
   type CloudSchemeCard,
 } from '@/api/cloud/center'
-
 import { connectClientWs, isCloudRefreshEvent } from '@/composables/ws/useClientWs'
 
-/** REST 轮询间隔：无 WS 时兜底；有 WS 时拉长，减轻 /running?ids= 压力 */
 const FALLBACK_POLL_MS = 15_000
 const WS_CONNECTED_POLL_MS = 60_000
 
+export interface CloudRunningSyncHandlers {
+  onSchemes(cards: CloudSchemeCard[], removedIds: string[]): void
+  onStats(stats: CloudCenterStatsDto): void
+}
+
+export interface CloudRunningSync {
+  stop(): void
+  reconcile(): Promise<void>
+  /** @deprecated 使用 reconcile */
+  refresh(): Promise<void>
+}
+
+type BufferedSnapshot =
+  | { kind: 'schemes'; payload: WsSchemeInstancesSnapshotPayload }
+  | { kind: 'stats'; payload: WsCloudStatsSnapshotPayload }
+
+function isVersionOlder(candidate: string, current: string): boolean {
+  const candidateTime = Date.parse(candidate)
+  const currentTime = Date.parse(current)
+  if (Number.isFinite(candidateTime) && Number.isFinite(currentTime)) {
+    return candidateTime < currentTime
+  }
+  return Boolean(candidate && current && candidate < current)
+}
+
+function isSchemeSnapshot(
+  event: WsEnvelope,
+): event is WsEnvelope<WsSchemeInstancesSnapshotPayload> {
+  const payload = event.payload as Partial<WsSchemeInstancesSnapshotPayload> | undefined
+  return event.name === WS_EVENTS.schemeInstancesSnapshot &&
+    payload?.schemaVersion === 1 &&
+    Array.isArray(payload.items) &&
+    Array.isArray(payload.removedIds)
+}
+
+function isStatsSnapshot(
+  event: WsEnvelope,
+): event is WsEnvelope<WsCloudStatsSnapshotPayload> {
+  const payload = event.payload as Partial<WsCloudStatsSnapshotPayload> | undefined
+  return event.name === WS_EVENTS.cloudStatsSnapshot &&
+    payload?.schemaVersion === 1 &&
+    payload.stats != null
+}
+
 /**
- * 云端运行列表同步：按已加载实例 ID 批量刷新。
- * - WS 事件 / 手动 refresh：立即拉取
- * - REST 轮询：无 WS 15s；有 WS 60s（倒计时本地 tick，盈亏等靠 WS + 慢轮询）
- * @returns stop 停止同步；refresh 立即拉取一次（并发时合并为单次在途请求）
+ * 云端中心运行卡片同步：版本化 WS 快照为主，每个订阅周期仅做一次 REST 对账。
+ * 旧回调签名暂时保留到 CloudCenterView 完成迁移。
  */
 export function startCloudRunningSync(
   getLoadedIds: () => string[],
-  onUpdate: (cards: CloudSchemeCard[]) => void,
-  pollMs = FALLBACK_POLL_MS,
-) {
+  handlers: CloudRunningSyncHandlers | ((cards: CloudSchemeCard[]) => void),
+  options?: { legacyFallbackMs?: number } | number,
+): CloudRunningSync {
+  const resolvedHandlers: CloudRunningSyncHandlers = typeof handlers === 'function'
+    ? { onSchemes: (cards) => handlers(cards), onStats: () => undefined }
+    : handlers
+  const legacyFallbackMs = typeof options === 'number'
+    ? options
+    : options?.legacyFallbackMs ?? FALLBACK_POLL_MS
+
   let stopped = false
   let pollTimer: ReturnType<typeof setInterval> | null = null
   let stopWs: (() => void) | null = null
-  let refreshInFlight = false
-  let refreshQueued = false
+  let reconcilePromise: Promise<void> | null = null
+  let bufferedSchemeMessages: BufferedSnapshot[] = []
+  let hasVersionedSnapshot = false
+  let subscribed = false
+  let subscribedCycle = 0
+  let startedCycle = 0
+  let queuedCycle = 0
+  const versions = new Map<string, string>()
+  const token = getAccessToken()
 
-  async function refresh() {
+  const realtimeMode = Boolean(
+    CLOUD_REALTIME_CLIENT_ENABLED && WS_CLIENT_ENABLED && WS_CLIENT_BASE && token,
+  )
+
+  function loadedIDs(): string[] {
+    return Array.from(new Set(getLoadedIds().filter(Boolean)))
+  }
+
+  function applySchemeSnapshot(payload: WsSchemeInstancesSnapshotPayload): void {
     if (stopped) return
-    if (refreshInFlight) {
-      refreshQueued = true
+    const loaded = new Set(loadedIDs())
+    const cards: CloudSchemeCard[] = []
+
+    for (const item of payload.items) {
+      if (!loaded.has(item.id)) continue
+      const currentVersion = versions.get(item.id)
+      if (currentVersion && isVersionOlder(item.updatedAt, currentVersion)) continue
+      versions.set(item.id, item.updatedAt)
+      cards.push(instanceToDisplay({
+        ...item,
+        lotteryName: item.lotteryName || item.lotteryLabel || '',
+      }))
+    }
+
+    const removedIds = payload.removedIds.filter((id) => {
+      if (!loaded.has(id)) return false
+      const currentVersion = versions.get(id)
+      if (currentVersion && isVersionOlder(payload.generatedAt, currentVersion)) return false
+      versions.delete(id)
+      return true
+    })
+
+    if (cards.length || removedIds.length) {
+      resolvedHandlers.onSchemes(cards, removedIds)
+    }
+  }
+
+  function applyStatsSnapshot(payload: WsCloudStatsSnapshotPayload): void {
+    if (!stopped) resolvedHandlers.onStats(payload.stats)
+  }
+
+  function applyBufferedSnapshot(message: BufferedSnapshot): void {
+    if (message.kind === 'schemes') applySchemeSnapshot(message.payload)
+    else applyStatsSnapshot(message.payload)
+  }
+
+  async function performReconciliation(): Promise<void> {
+    const ids = loadedIDs()
+    try {
+      const [rows, stats] = await Promise.all([
+        fetchRunningSchemesByIds(ids),
+        fetchCloudCenterStats(),
+      ])
+      if (stopped) return
+
+      const cards = rows.map(instanceToDisplay)
+      const returnedIDs = new Set(cards.map((card) => card.id))
+      const removedIds = ids.filter((id) => !returnedIDs.has(id))
+      for (const card of cards) versions.set(card.id, card.updatedAt)
+      for (const id of removedIds) versions.delete(id)
+      resolvedHandlers.onSchemes(cards, removedIds)
+      resolvedHandlers.onStats(stats)
+    } catch {
+      // 保留上次有效状态；缓冲的实时快照仍在 finally 中继续应用。
+    } finally {
+      const buffered = bufferedSchemeMessages
+      bufferedSchemeMessages = []
+      for (const message of buffered) applyBufferedSnapshot(message)
+    }
+  }
+
+  function startReconciliation(): Promise<void> {
+    if (stopped) return Promise.resolve()
+    if (reconcilePromise) return reconcilePromise
+
+    const running = performReconciliation()
+    reconcilePromise = running.finally(() => {
+      reconcilePromise = null
+      if (!stopped && queuedCycle > startedCycle) {
+        startedCycle = queuedCycle
+        void startReconciliation()
+      }
+    })
+    return reconcilePromise
+  }
+
+  function reconcile(): Promise<void> {
+    return startReconciliation()
+  }
+
+  function requestCycleReconciliation(cycle: number): void {
+    if (cycle <= startedCycle) return
+    if (reconcilePromise) {
+      queuedCycle = Math.max(queuedCycle, cycle)
       return
     }
-    const ids = getLoadedIds()
-    if (ids.length === 0) return
-    refreshInFlight = true
-    try {
-      const rows = await fetchRunningSchemesByIds(ids)
-      onUpdate(rows.map(instanceToDisplay))
-    } catch {
-      /* 保留上次有效数据 */
-    } finally {
-      refreshInFlight = false
-      if (refreshQueued) {
-        refreshQueued = false
-        void refresh()
-      }
-    }
+    startedCycle = cycle
+    void startReconciliation()
   }
 
-  function stopPoll() {
-    if (pollTimer) {
-      window.clearInterval(pollTimer)
-      pollTimer = null
-    }
+  function stopPoll(): void {
+    if (!pollTimer) return
+    window.clearInterval(pollTimer)
+    pollTimer = null
   }
 
-  function startPoll(intervalMs: number) {
-    if (pollTimer) return
+  function startPoll(intervalMs: number): void {
+    stopPoll()
     pollTimer = window.setInterval(() => {
-      void refresh()
+      void reconcile()
     }, intervalMs)
   }
 
-  const token = getAccessToken()
+  function handleEvent(event: WsEnvelope): void {
+    if (isSchemeSnapshot(event)) {
+      hasVersionedSnapshot = true
+      const message: BufferedSnapshot = { kind: 'schemes', payload: event.payload! }
+      if (reconcilePromise) bufferedSchemeMessages.push(message)
+      else applyBufferedSnapshot(message)
+      return
+    }
+    if (isStatsSnapshot(event)) {
+      hasVersionedSnapshot = true
+      const message: BufferedSnapshot = { kind: 'stats', payload: event.payload! }
+      if (reconcilePromise) bufferedSchemeMessages.push(message)
+      else applyBufferedSnapshot(message)
+      return
+    }
+    if (!hasVersionedSnapshot && isCloudRefreshEvent(event)) {
+      void reconcile()
+    }
+  }
+
   const wsAvailable = Boolean(WS_CLIENT_ENABLED && WS_CLIENT_BASE && token)
+  if (!realtimeMode) startPoll(legacyFallbackMs)
 
-  startPoll(wsAvailable ? WS_CONNECTED_POLL_MS : pollMs)
-
-  // 单独收窄 token / base：Boolean(...) 无法让 TS 排除 null
-  if (WS_CLIENT_ENABLED && WS_CLIENT_BASE && token) {
-    stopWs = connectClientWs(WS_CLIENT_BASE, token, (env) => {
-      if (isCloudRefreshEvent(env)) void refresh()
+  if (wsAvailable && token) {
+    stopWs = connectClientWs(WS_CLIENT_BASE, token, handleEvent, {
+      onConnected: () => {
+        if (stopped || subscribed) return
+        subscribed = true
+        if (realtimeMode) {
+          subscribedCycle += 1
+          requestCycleReconciliation(subscribedCycle)
+        } else {
+          startPoll(WS_CONNECTED_POLL_MS)
+        }
+      },
+      onDisconnected: () => {
+        subscribed = false
+        if (!realtimeMode && !stopped) startPoll(legacyFallbackMs)
+      },
     })
   }
 
-  function stop() {
+  function stop(): void {
     stopped = true
     stopWs?.()
+    stopWs = null
     stopPoll()
+    bufferedSchemeMessages = []
   }
 
-  return { stop, refresh }
+  return { stop, reconcile, refresh: reconcile }
 }
 
-export function cloudRunningPollMs() {
+export function cloudRunningPollMs(): number {
   return FALLBACK_POLL_MS
 }
 

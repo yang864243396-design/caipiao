@@ -37,6 +37,7 @@ export type CloudSchemeStatus = 'pending' | 'running' | 'paused' | 'soft_stopped
 
 export interface CloudRunningScheme {
   id: string
+  updatedAt: string
   definitionId?: string
   lotteryCode?: string
   lotteryName: string
