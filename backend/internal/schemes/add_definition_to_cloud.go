@@ -184,6 +184,7 @@ func (s *Service) AddDefinitionToCloud(
 	inst := mapInstanceFromInsertRow(instRow)
 	inst.Multiplier = instanceMultiplier
 	inst.SchemeCurrency = schemeCurrencyFromConfig(cfgBytes)
+	s.markScheme(inst.MemberID, inst.ID)
 	return AddToCloudResult{
 		Definition:      mapDefinitionFromUpdateRow(defRow, true),
 		Instance:        inst,

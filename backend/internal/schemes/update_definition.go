@@ -447,12 +447,17 @@ func (s *Service) UpdateDefinition(
 	}
 
 	hasInstance := false
-	if _, instErr := s.q.GetSchemeInstanceByDefinitionID(ctx, definitionID); instErr == nil {
+	var committedInstance sqlcdb.GetSchemeInstanceByDefinitionIDRow
+	if inst, instErr := s.q.GetSchemeInstanceByDefinitionID(ctx, definitionID); instErr == nil {
 		hasInstance = true
+		committedInstance = inst
 	} else if !errors.Is(instErr, pgx.ErrNoRows) {
 		return Definition{}, instErr
 	}
 
+	if hasInstance {
+		s.markScheme(committedInstance.MemberID, committedInstance.ID)
+	}
 	return mapDefinitionFromConfigUpdateRow(row, hasInstance), nil
 }
 

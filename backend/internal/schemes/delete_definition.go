@@ -38,10 +38,12 @@ func (s *Service) DeleteDefinition(ctx context.Context, account, definitionID st
 		return err
 	}
 
+	var removedRef RealtimeInstanceRef
 	if inst, err := s.q.GetSchemeInstanceByDefinitionID(ctx, definitionID); err == nil {
 		if inst.Status == "running" {
 			return ErrDeleteWhileRunning
 		}
+		removedRef = RealtimeInstanceRef{MemberID: inst.MemberID, InstanceID: inst.ID}
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
@@ -56,5 +58,6 @@ func (s *Service) DeleteDefinition(ctx context.Context, account, definitionID st
 	if rows == 0 {
 		return ErrDefinitionNotFound
 	}
+	s.markScheme(removedRef.MemberID, removedRef.InstanceID)
 	return nil
 }

@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"caipiao/backend/internal/db"
 	"caipiao/backend/internal/db/sqlcdb"
+	"caipiao/backend/internal/schemeevents"
 	"caipiao/backend/internal/timeutil"
 
 	"caipiao/backend/internal/guaji/periodsync"
@@ -22,6 +24,7 @@ type Service struct {
 	pool        *db.Pool
 	periodSync  *periodsync.Syncer
 	authChecker memberAuthChecker
+	realtime    schemeevents.Marker
 }
 
 // memberAuthChecker 由 accountsvc 注入：开启真实投注前校验授权与第三方可用余额。
@@ -45,6 +48,20 @@ func (s *Service) SetMemberAuthChecker(c memberAuthChecker) {
 		return
 	}
 	s.authChecker = c
+}
+
+func (s *Service) SetRealtimeMarker(marker schemeevents.Marker) {
+	if s == nil {
+		return
+	}
+	s.realtime = marker
+}
+
+func (s *Service) markScheme(memberID int64, instanceID string) {
+	if s == nil || s.realtime == nil || memberID <= 0 || strings.TrimSpace(instanceID) == "" {
+		return
+	}
+	s.realtime.MarkScheme(memberID, instanceID)
 }
 
 type ShareSnapshot struct {

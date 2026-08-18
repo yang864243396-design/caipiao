@@ -217,14 +217,16 @@ func (s *Service) insertFollowFromSnapshot(
 		return ShareFollowActionResult{}, err
 	}
 
-	return ShareFollowActionResult{
+	result := ShareFollowActionResult{
 		Definition: mapDefinitionRow(defRow, true),
 		Instance: func() Instance {
 			inst := mapInstanceFromInsertRow(instRow)
 			inst.Multiplier = instanceMultiplier
 			return inst
 		}(),
-	}, nil
+	}
+	s.markScheme(result.Instance.MemberID, result.Instance.ID)
+	return result, nil
 }
 
 func mergeSnapshotConfig(snap sqlcdb.SchemeShareSnapshot) map[string]interface{} {

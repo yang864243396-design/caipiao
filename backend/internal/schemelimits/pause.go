@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"caipiao/backend/internal/db/sqlcdb"
+	"caipiao/backend/internal/schemeevents"
 	"caipiao/backend/internal/ws"
 )
 
@@ -23,9 +24,10 @@ func numericToFloat(n pgtype.Numeric) float64 {
 func PauseRunningInstanceIfHit(
 	ctx context.Context,
 	q *sqlcdb.Queries,
-	hub *ws.Hub,
+	_ *ws.Hub,
 	inst sqlcdb.SchemeInstance,
 	defConfig []byte,
+	marker schemeevents.Marker,
 ) bool {
 	if q == nil || inst.Status != "running" {
 		return false
@@ -50,21 +52,8 @@ func PauseRunningInstanceIfHit(
 	if rows == 0 {
 		return false
 	}
-	if hub != nil {
-		if account, err := q.GetMemberAccountByID(ctx, inst.MemberID); err == nil && account != "" {
-		runMode := "real"
-		if inst.SimBet {
-			runMode = "sim"
-		}
-		ws.PublishSchemeInstance(hub, account, ws.SchemeInstancePayload{
-			InstanceID: inst.ID,
-			RunMode:    runMode,
-			SimBet:     inst.SimBet,
-				Status:     "pending",
-				Reason:     reason,
-				Hint:       "refresh_running_list",
-			})
-		}
+	if marker != nil && inst.MemberID > 0 && inst.ID != "" {
+		marker.MarkScheme(inst.MemberID, inst.ID)
 	}
 	slog.Info("scheme auto stopped: session limit",
 		"instanceId", inst.ID, "reason", reason, "sessionPnl", sessionPnl, "detail", detail)

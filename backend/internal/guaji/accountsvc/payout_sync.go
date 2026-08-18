@@ -18,6 +18,7 @@ import (
 	"caipiao/backend/internal/db/sqlcdb"
 	"caipiao/backend/internal/guaji"
 	"caipiao/backend/internal/member"
+	"caipiao/backend/internal/schemeevents"
 	"caipiao/backend/internal/schemelimits"
 	"caipiao/backend/internal/ws"
 )
@@ -53,6 +54,42 @@ type PayoutSyncWorker struct {
 	q           *sqlcdb.Queries
 	hub         *ws.Hub
 	afterSettle AfterSettleFn
+	realtime    schemeevents.Marker
+}
+
+type schemeMarkerFunc func(memberID int64, instanceID string)
+
+func (f schemeMarkerFunc) MarkScheme(memberID int64, instanceID string) {
+	f(memberID, instanceID)
+}
+
+type settlementMarkerKey struct {
+	memberID   int64
+	instanceID string
+}
+
+type settlementMarker struct {
+	marker schemeevents.Marker
+	seen   map[settlementMarkerKey]struct{}
+}
+
+func newSettlementMarker(marker schemeevents.Marker) *settlementMarker {
+	return &settlementMarker{
+		marker: marker,
+		seen:   make(map[settlementMarkerKey]struct{}),
+	}
+}
+
+func (m *settlementMarker) MarkScheme(memberID int64, instanceID string) {
+	if m == nil || m.marker == nil || memberID <= 0 || strings.TrimSpace(instanceID) == "" {
+		return
+	}
+	key := settlementMarkerKey{memberID: memberID, instanceID: instanceID}
+	if _, ok := m.seen[key]; ok {
+		return
+	}
+	m.seen[key] = struct{}{}
+	m.marker.MarkScheme(memberID, instanceID)
 }
 
 // SetAfterSettle 注册派奖完成后的回调（如玩法详情开奖补齐）。
@@ -61,6 +98,20 @@ func (w *PayoutSyncWorker) SetAfterSettle(fn AfterSettleFn) {
 		return
 	}
 	w.afterSettle = fn
+}
+
+func (w *PayoutSyncWorker) SetRealtimeMarker(marker schemeevents.Marker) {
+	if w == nil {
+		return
+	}
+	w.realtime = marker
+}
+
+func (w *PayoutSyncWorker) markScheme(memberID int64, instanceID string) {
+	if w == nil || w.realtime == nil || memberID <= 0 || strings.TrimSpace(instanceID) == "" {
+		return
+	}
+	w.realtime.MarkScheme(memberID, instanceID)
 }
 
 // NewPayoutSyncWorker 仅在第三方启用时创建。fallback 参数已忽略（兼容旧调用方）。
@@ -548,6 +599,9 @@ func (w *PayoutSyncWorker) commitSettlement(
 	}
 	defer tx.Rollback(ctx)
 	qtx := w.q.WithTx(tx)
+	var settledMemberID int64
+	var settledInstanceID string
+	settlementMarks := newSettlementMarker(schemeMarkerFunc(w.markScheme))
 
 	n, err := qtx.SettleBetOrder(ctx, sqlcdb.SettleBetOrderParams{
 		ID:     row.ID,
@@ -589,6 +643,8 @@ func (w *PayoutSyncWorker) commitSettlement(
 	var afterCommitLimits func()
 	if schemeID, err := qtx.GetCloudBetSchemeIDByOrderNo(ctx, row.OrderNo); err == nil && schemeID != "" {
 		if inst, ierr := qtx.GetSchemeInstanceFull(ctx, schemeID); ierr == nil {
+			settledMemberID = inst.MemberID
+			settledInstanceID = inst.ID
 			periodNo, _ := qtx.GetCloudBetPeriodByOrderNo(ctx, row.OrderNo)
 			if periodNo == "" {
 				periodNo = strings.TrimSpace(inst.LastSettledIssue.String)
@@ -644,10 +700,10 @@ func (w *PayoutSyncWorker) commitSettlement(
 				}
 				if instStatus == "running" && fresh.Status == "running" {
 					if def, derr := w.q.GetSchemeDefinitionByID(ctx, definitionID); derr == nil {
-						schemelimits.PauseRunningInstanceIfHit(ctx, w.q, w.hub, sqlcdb.SchemeInstanceFromAdminRow(fresh), def.Config)
+						schemelimits.PauseRunningInstanceIfHit(ctx, w.q, w.hub, sqlcdb.SchemeInstanceFromAdminRow(fresh), def.Config, settlementMarks)
 					}
 				}
-				cloudlimits.PauseAllRunningIfHit(ctx, w.q, w.hub, memberID)
+				cloudlimits.PauseAllRunningIfHit(ctx, w.q, w.hub, memberID, settlementMarks)
 			}
 		}
 	}
@@ -662,6 +718,7 @@ func (w *PayoutSyncWorker) commitSettlement(
 	if afterCommitLimits != nil {
 		afterCommitLimits()
 	}
+	settlementMarks.MarkScheme(settledMemberID, settledInstanceID)
 
 	if w.hub != nil {
 		var acct string

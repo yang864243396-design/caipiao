@@ -17,21 +17,14 @@ func (w *Worker) memberAccount(ctx context.Context, memberID int64) string {
 	return account
 }
 
-func (w *Worker) notifySchemeInstance(ctx context.Context, memberID int64, instanceID, runMode, status, reason string) {
-	if w == nil || w.hub == nil {
+func (w *Worker) notifySchemeInstance(_ context.Context, memberID int64, instanceID, _ string, status, _ string) {
+	if w == nil {
 		return
 	}
-	account := w.memberAccount(ctx, memberID)
-	if account == "" {
+	w.markScheme(memberID, instanceID)
+	if w.hub == nil {
 		return
 	}
-	ws.PublishSchemeInstance(w.hub, account, ws.SchemeInstancePayload{
-		InstanceID: instanceID,
-		RunMode:    runMode,
-		Status:     status,
-		Reason:     reason,
-		Hint:       "refresh_running_list",
-	})
 	ws.PublishSchemeMonitor(w.hub, ws.AdminSchemeMonitorPayload{
 		InstanceID: instanceID,
 		Status:     status,

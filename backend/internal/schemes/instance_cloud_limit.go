@@ -10,5 +10,5 @@ func (w *Worker) pauseAllRunningForCloudLimit(ctx context.Context, memberID int6
 	if w == nil || memberID <= 0 {
 		return false
 	}
-	return cloudlimits.PauseAllRunningIfHit(ctx, w.q, w.hub, memberID)
+	return cloudlimits.PauseAllRunningIfHit(ctx, w.q, w.hub, memberID, w.realtime)
 }

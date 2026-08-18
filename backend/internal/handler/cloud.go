@@ -15,7 +15,6 @@ import (
 	"caipiao/backend/internal/guajibet"
 	"caipiao/backend/internal/member"
 	"caipiao/backend/internal/schemes"
-	"caipiao/backend/internal/ws"
 )
 
 func parseInstanceRunModeFilter(r *http.Request) string {
@@ -346,18 +345,8 @@ func (h *Handler) cloudInstanceAction(w http.ResponseWriter, r *http.Request, fn
 	run("")
 }
 
-func (h *Handler) publishSchemeInstanceWS(account string, inst schemes.Instance, reason string) {
-	if h.wsHub == nil || account == "" {
-		return
-	}
-	ws.PublishSchemeInstance(h.wsHub, account, ws.SchemeInstancePayload{
-		InstanceID: inst.ID,
-		RunMode:    inst.RunMode,
-		SimBet:     inst.SimBet,
-		Status:     inst.Status,
-		Reason:     reason,
-		Hint:       "refresh_running_list",
-	})
+func (h *Handler) publishSchemeInstanceWS(_ string, inst schemes.Instance, _ string) {
+	h.markScheme(inst.MemberID, inst.ID)
 }
 
 func (h *Handler) handleCloudInstanceErr(w http.ResponseWriter, err error) {

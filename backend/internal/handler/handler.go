@@ -29,33 +29,49 @@ import (
 	"caipiao/backend/internal/orders/bets"
 	"caipiao/backend/internal/orders/chases"
 	"caipiao/backend/internal/reports"
+	"caipiao/backend/internal/schemeevents"
 	"caipiao/backend/internal/schemes"
 	"caipiao/backend/internal/ws"
 )
 
 type Handler struct {
-	auth        *auth.Service
-	maintenance *maintenance.Service
-	betRecords  *betrecords.Service
-	instances   *instances.Store
-	lookback    *lookback.Service
-	db          *db.Pool
-	members     *member.Service
-	bets        *bets.Service
-	chases      *chases.Service
-	copyHall    *copyhall.Service
-	schemes     *schemes.Service
-	games       *games.Service
-	content     *content.Service
-	audit       *audit.Service
-	dashboard   *dashboard.Service
-	ordersAdmin *ordersadmin.Service
-	reports     *reports.Service
-	wsHub       *ws.Hub
-	guaji       *guaji.Client
-	guajiAccounts *accountsvc.Service
-	cmsUploads    *content.UploadStore
+	auth              *auth.Service
+	maintenance       *maintenance.Service
+	betRecords        *betrecords.Service
+	instances         *instances.Store
+	lookback          *lookback.Service
+	db                *db.Pool
+	members           *member.Service
+	bets              *bets.Service
+	chases            *chases.Service
+	copyHall          *copyhall.Service
+	schemes           *schemes.Service
+	games             *games.Service
+	content           *content.Service
+	audit             *audit.Service
+	dashboard         *dashboard.Service
+	ordersAdmin       *ordersadmin.Service
+	reports           *reports.Service
+	wsHub             *ws.Hub
+	realtime          schemeevents.Marker
+	guaji             *guaji.Client
+	guajiAccounts     *accountsvc.Service
+	cmsUploads        *content.UploadStore
 	maintenanceResume schemes.MaintenanceResumeScheduler
+}
+
+func (h *Handler) SetRealtimeMarker(marker schemeevents.Marker) {
+	if h == nil {
+		return
+	}
+	h.realtime = marker
+}
+
+func (h *Handler) markScheme(memberID int64, instanceID string) {
+	if h == nil || h.realtime == nil || memberID <= 0 || strings.TrimSpace(instanceID) == "" {
+		return
+	}
+	h.realtime.MarkScheme(memberID, instanceID)
 }
 
 func New(

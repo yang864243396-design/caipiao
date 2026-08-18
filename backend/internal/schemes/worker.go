@@ -23,6 +23,7 @@ import (
 	"caipiao/backend/internal/lottery"
 	"caipiao/backend/internal/member"
 	"caipiao/backend/internal/playrules"
+	"caipiao/backend/internal/schemeevents"
 	"caipiao/backend/internal/ws"
 )
 
@@ -50,6 +51,7 @@ type Worker struct {
 	periodVerifier    guajiPeriodVerifier
 	ruleRegistry      *playrules.RegistryStore
 	strategyProcessor *StrategyProcessor
+	realtime          schemeevents.Marker
 	tickSec           int32
 	concurrency       int32
 	placeSem          chan struct{} // 真下单全站有界并发；nil 表示不额外限流
@@ -81,6 +83,20 @@ func (w *Worker) SetPeriodRefreshRequester(requester periodRefreshRequester) {
 		return
 	}
 	w.periodRefresh = requester
+}
+
+func (w *Worker) SetRealtimeMarker(marker schemeevents.Marker) {
+	if w == nil {
+		return
+	}
+	w.realtime = marker
+}
+
+func (w *Worker) markScheme(memberID int64, instanceID string) {
+	if w == nil || w.realtime == nil || memberID <= 0 || strings.TrimSpace(instanceID) == "" {
+		return
+	}
+	w.realtime.MarkScheme(memberID, instanceID)
 }
 
 // SetRuleRegistry injects the server-owned immutable published-rule cache.

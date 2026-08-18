@@ -1,9 +1,6 @@
 package member
 
-
-
 import (
-
 	"context"
 
 	"errors"
@@ -14,53 +11,32 @@ import (
 
 	"strings"
 
-
-
 	"github.com/jackc/pgx/v5"
 
 	"golang.org/x/crypto/bcrypt"
 
-
-
 	"caipiao/backend/internal/db/sqlcdb"
-
-	"caipiao/backend/internal/ws"
-
 )
-
-
 
 var (
-
-	ErrInvalidOp       = errors.New("invalid member op")
+	ErrInvalidOp = errors.New("invalid member op")
 
 	defaultResetSecret = "Reset123456"
-
 )
 
-
-
 type AdminMemberOpInput struct {
-
 	Action string `json:"action"`
-
 }
-
-
 
 type AdminMemberOpResult struct {
+	Action string `json:"action"`
 
-	Action       string         `json:"action"`
+	Member AdminMemberRow `json:"member"`
 
-	Member       AdminMemberRow `json:"member"`
+	Message string `json:"message,omitempty"`
 
-	Message      string         `json:"message,omitempty"`
-
-	TempPassword string         `json:"tempPassword,omitempty"`
-
+	TempPassword string `json:"tempPassword,omitempty"`
 }
-
-
 
 func (s *Service) AdminApplyOp(ctx context.Context, memberID int64, in AdminMemberOpInput) (AdminMemberOpResult, error) {
 
@@ -75,8 +51,6 @@ func (s *Service) AdminApplyOp(ctx context.Context, memberID int64, in AdminMemb
 		return AdminMemberOpResult{}, ErrNotFound
 
 	}
-
-
 
 	action := strings.TrimSpace(in.Action)
 
@@ -98,8 +72,6 @@ func (s *Service) AdminApplyOp(ctx context.Context, memberID int64, in AdminMemb
 
 }
 
-
-
 func (s *Service) adminResetPassword(ctx context.Context, memberID int64, label string) (AdminMemberOpResult, error) {
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(defaultResetSecret), bcrypt.DefaultCost)
@@ -113,7 +85,6 @@ func (s *Service) adminResetPassword(ctx context.Context, memberID int64, label 
 	rows, err := s.q.AdminUpdateMemberPasswordByID(ctx, sqlcdb.AdminUpdateMemberPasswordByIDParams{
 
 		ID: memberID, PasswordHash: string(hash),
-
 	})
 
 	if err != nil {
@@ -138,19 +109,16 @@ func (s *Service) adminResetPassword(ctx context.Context, memberID int64, label 
 
 	return AdminMemberOpResult{
 
-		Action:       "reset_login_password",
+		Action: "reset_login_password",
 
-		Member:       member,
+		Member: member,
 
-		Message:      fmt.Sprintf("已重置%s（演示环境统一写入同一哈希）", label),
+		Message: fmt.Sprintf("已重置%s（演示环境统一写入同一哈希）", label),
 
 		TempPassword: defaultResetSecret,
-
 	}, nil
 
 }
-
-
 
 func (s *Service) adminToggleFreeze(ctx context.Context, memberID int64) (AdminMemberOpResult, error) {
 
@@ -181,7 +149,6 @@ func (s *Service) adminToggleFreeze(ctx context.Context, memberID int64) (AdminM
 		rows, err := s.q.AdminUpdateMemberStatus(ctx, sqlcdb.AdminUpdateMemberStatusParams{
 
 			ID: memberID, Status: next,
-
 		})
 
 		if err != nil {
@@ -206,17 +173,14 @@ func (s *Service) adminToggleFreeze(ctx context.Context, memberID int64) (AdminM
 
 		return AdminMemberOpResult{
 
-			Action:  "toggle_freeze",
+			Action: "toggle_freeze",
 
-			Member:  member,
+			Member: member,
 
 			Message: msg,
-
 		}, nil
 
 	}
-
-
 
 	if s.pool == nil {
 
@@ -234,14 +198,11 @@ func (s *Service) adminToggleFreeze(ctx context.Context, memberID int64) (AdminM
 
 	defer tx.Rollback(ctx)
 
-
-
 	qtx := sqlcdb.New(tx)
 
 	rows, err := qtx.AdminUpdateMemberStatus(ctx, sqlcdb.AdminUpdateMemberStatusParams{
 
 		ID: memberID, Status: next,
-
 	})
 
 	if err != nil {
@@ -280,8 +241,6 @@ func (s *Service) adminToggleFreeze(ctx context.Context, memberID int64) (AdminM
 
 	}
 
-
-
 	member, err := s.AdminGetMember(ctx, memberID)
 
 	if err != nil {
@@ -292,53 +251,17 @@ func (s *Service) adminToggleFreeze(ctx context.Context, memberID int64) (AdminM
 
 	return AdminMemberOpResult{
 
-		Action:  "toggle_freeze",
+		Action: "toggle_freeze",
 
-		Member:  member,
+		Member: member,
 
 		Message: msg,
-
 	}, nil
 
 }
 
-
-
-func (s *Service) notifyPausedSchemeInstances(account string, paused []sqlcdb.PauseRunningPendingInstancesByMemberRow) {
-
-	if s.hub == nil || account == "" || len(paused) == 0 {
-
-		return
-
-	}
-
+func (s *Service) notifyPausedSchemeInstances(_ string, paused []sqlcdb.PauseRunningPendingInstancesByMemberRow) {
 	for _, inst := range paused {
-
-		runMode := "real"
-
-		if inst.SimBet {
-
-			runMode = "sim"
-
-		}
-
-		ws.PublishSchemeInstance(s.hub, account, ws.SchemeInstancePayload{
-
-			InstanceID: inst.ID,
-
-			RunMode:    runMode,
-
-			SimBet:     inst.SimBet,
-
-			Status:     "paused",
-
-			Reason:     "manual",
-
-			Hint:       "refresh_running_list",
-
-		})
-
+		s.markScheme(inst.MemberID, inst.ID)
 	}
-
 }
-

@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"caipiao/backend/internal/db/sqlcdb"
+	"caipiao/backend/internal/schemeevents"
 	"caipiao/backend/internal/ws"
 )
 
@@ -15,8 +16,9 @@ import (
 func PauseAllRunningIfHit(
 	ctx context.Context,
 	q *sqlcdb.Queries,
-	hub *ws.Hub,
+	_ *ws.Hub,
 	memberID int64,
+	marker schemeevents.Marker,
 ) bool {
 	if q == nil || memberID <= 0 {
 		return false
@@ -58,26 +60,9 @@ func PauseAllRunningIfHit(
 	}
 
 	detail := Detail(reason, totalPnl, limits)
-	account := ""
-	if hub != nil {
-		if acct, aerr := q.GetMemberAccountByID(ctx, memberID); aerr == nil {
-			account = acct
-		}
-	}
 	for _, inst := range rows {
-		if hub != nil && account != "" {
-		runMode := "real"
-		if inst.SimBet {
-			runMode = "sim"
-		}
-		ws.PublishSchemeInstance(hub, account, ws.SchemeInstancePayload{
-			InstanceID: inst.ID,
-			RunMode:    runMode,
-			SimBet:     inst.SimBet,
-				Status:     "pending",
-				Reason:     reason,
-				Hint:       "refresh_running_list",
-			})
+		if marker != nil && inst.MemberID > 0 && inst.ID != "" {
+			marker.MarkScheme(inst.MemberID, inst.ID)
 		}
 	}
 	slog.Info("cloud auto stopped all running",

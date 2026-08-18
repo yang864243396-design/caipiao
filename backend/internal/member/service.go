@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"caipiao/backend/internal/db"
 	"caipiao/backend/internal/db/sqlcdb"
+	"caipiao/backend/internal/schemeevents"
 	"caipiao/backend/internal/timeutil"
 	"caipiao/backend/internal/ws"
 )
@@ -20,9 +22,24 @@ var (
 )
 
 type Service struct {
-	q    *sqlcdb.Queries
-	pool *db.Pool
-	hub  *ws.Hub
+	q        *sqlcdb.Queries
+	pool     *db.Pool
+	hub      *ws.Hub
+	realtime schemeevents.Marker
+}
+
+func (s *Service) SetRealtimeMarker(marker schemeevents.Marker) {
+	if s == nil {
+		return
+	}
+	s.realtime = marker
+}
+
+func (s *Service) markScheme(memberID int64, instanceID string) {
+	if s == nil || s.realtime == nil || memberID <= 0 || strings.TrimSpace(instanceID) == "" {
+		return
+	}
+	s.realtime.MarkScheme(memberID, instanceID)
 }
 
 func NewService(pool *db.Pool, hub *ws.Hub) *Service {
@@ -45,10 +62,10 @@ type Profile struct {
 }
 
 type Wallet struct {
-	Balance        float64 `json:"balance"`
-	FrozenBalance  float64 `json:"frozenBalance"`
+	Balance          float64 `json:"balance"`
+	FrozenBalance    float64 `json:"frozenBalance"`
 	AvailableBalance float64 `json:"availableBalance"`
-	Currency       string  `json:"currency"`
+	Currency         string  `json:"currency"`
 }
 
 type LedgerItem struct {
