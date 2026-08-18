@@ -42,6 +42,17 @@ type fakeMemberSubscription struct {
 	active   bool
 }
 
+type synchronousMemberEventSource struct {
+	events []Envelope
+}
+
+func (s *synchronousMemberEventSource) SubscribeMember(_ int64, emit func(Envelope)) (func(), error) {
+	for _, event := range s.events {
+		emit(event)
+	}
+	return func() {}, nil
+}
+
 func (f *fakeMemberEventSource) SubscribeMember(memberID int64, emit func(Envelope)) (func(), error) {
 	f.mu.Lock()
 	f.subscribeCalls = append(f.subscribeCalls, memberID)
@@ -192,6 +203,36 @@ func TestHubSubscribesOncePerMemberAndReleasesLastConnection(t *testing.T) {
 	}
 	if got := h.Diagnostics().SubscribedMembers; got != 0 {
 		t.Fatalf("subscribed members=%d", got)
+	}
+}
+
+func TestHubDeliversSynchronousAcquisitionCallbacksExactlyOnce(t *testing.T) {
+	scheme := NewEvent(NameSchemeInstancesSnapshot, TopicClientSchemeInstance, map[string]any{"schemaVersion": 1})
+	stats := NewEvent(NameCloudStatsSnapshot, TopicClientCloudStats, map[string]any{"schemaVersion": 1})
+	source := &synchronousMemberEventSource{events: []Envelope{scheme, stats}}
+	h := NewHub()
+	h.SetMemberEventSource(source)
+	c := newTestClientConn(ClientIdentity{Account: "a", MemberID: 7})
+	wantTopics := []string{TopicClientSchemeInstance, TopicClientCloudStats}
+	if got := h.Subscribe(c, wantTopics); !reflect.DeepEqual(got, wantTopics) {
+		t.Fatalf("topics=%v want=%v", got, wantTopics)
+	}
+	if !h.Register(c) {
+		t.Fatal("member route acquisition was not ready")
+	}
+	t.Cleanup(func() { h.Unregister(c) })
+
+	if got := len(c.send); got != 2 {
+		t.Fatalf("synchronous acquisition callbacks delivered=%d want=2", got)
+	}
+	for _, want := range []Envelope{scheme, stats} {
+		got := <-c.send
+		if got.EventID != want.EventID || got.Name != want.Name || got.Topic != want.Topic {
+			t.Fatalf("event=%#v want=%#v", got, want)
+		}
+	}
+	if got := len(c.send); got != 0 {
+		t.Fatalf("duplicate synchronous acquisition callbacks=%d", got)
 	}
 }
 

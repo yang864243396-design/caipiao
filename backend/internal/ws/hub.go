@@ -379,7 +379,7 @@ func (h *Hub) publishToMemberGeneration(memberID int64, route *memberRoute, gene
 	current := h.members[memberID]
 	topicSubscribers := h.subs[env.Topic]
 	targets := make([]*Conn, 0)
-	if current == route && current.generation == generation && current.cancel != nil && !current.canceling {
+	if current == route && current.generation == generation {
 		targets = make([]*Conn, 0, len(route.connections))
 		for c := range route.connections {
 			if _, subscribed := topicSubscribers[c]; subscribed {
