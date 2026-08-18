@@ -40,24 +40,47 @@ type BufferedSnapshot =
   | { kind: 'schemes'; payload: WsSchemeInstancesSnapshotPayload }
   | { kind: 'stats'; payload: WsCloudStatsSnapshotPayload }
 
-function isVersionOlder(candidate: string, current: string): boolean {
+const RFC3339_UTC_NANO_PATTERN =
+  /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?Z$/
+
+function normalizeRFC3339UtcNano(value: string): string | null {
+  const match = RFC3339_UTC_NANO_PATTERN.exec(value)
+  if (!match) return null
+
+  const wholeSecond = match[1]
+  if (!Number.isFinite(Date.parse(`${wholeSecond}Z`))) return null
+
+  return `${wholeSecond}.${(match[2] ?? '').padEnd(9, '0')}`
+}
+
+function compareVersions(candidate: string, current: string): number {
+  const candidateCanonical = normalizeRFC3339UtcNano(candidate)
+  const currentCanonical = normalizeRFC3339UtcNano(current)
+  if (candidateCanonical && currentCanonical) {
+    if (candidateCanonical === currentCanonical) return 0
+    return candidateCanonical < currentCanonical ? -1 : 1
+  }
+
   const candidateTime = Date.parse(candidate)
   const currentTime = Date.parse(current)
   if (Number.isFinite(candidateTime) && Number.isFinite(currentTime)) {
-    return candidateTime < currentTime
+    if (candidateTime === currentTime) return 0
+    return candidateTime < currentTime ? -1 : 1
   }
-  return Boolean(candidate && current && candidate < current)
+
+  if (candidate === current) return 0
+  return candidate < current ? -1 : 1
+}
+
+function isVersionOlder(candidate: string, current: string): boolean {
+  if (!candidate || !current) return false
+  return compareVersions(candidate, current) < 0
 }
 
 function isVersionNewer(candidate: string, current: string): boolean {
   if (!candidate) return false
   if (!current) return true
-  const candidateTime = Date.parse(candidate)
-  const currentTime = Date.parse(current)
-  if (Number.isFinite(candidateTime) && Number.isFinite(currentTime)) {
-    return candidateTime > currentTime
-  }
-  return candidate > current
+  return compareVersions(candidate, current) > 0
 }
 
 function isSchemeSnapshot(

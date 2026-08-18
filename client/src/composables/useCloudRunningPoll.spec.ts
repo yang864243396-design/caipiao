@@ -260,10 +260,10 @@ describe('startCloudRunningSync', () => {
     )
 
     ws.onConnected?.()
-    ws.onEvent?.(statsSnapshot(10, '2026-08-18T00:00:01.000Z'))
-    ws.onEvent?.(statsSnapshot(11, '2026-08-18T00:00:02.000Z'))
-    ws.onEvent?.(statsSnapshot(30, '2026-08-18T00:00:03.000Z'))
-    statsRequest.resolve(stats(20, '2026-08-18T00:00:02.000Z'))
+    ws.onEvent?.(statsSnapshot(10, '2035-04-05T06:07:08.901000Z'))
+    ws.onEvent?.(statsSnapshot(11, '2035-04-05T06:07:08.901100000Z'))
+    ws.onEvent?.(statsSnapshot(30, '2035-04-05T06:07:08.901900Z'))
+    statsRequest.resolve(stats(20, '2035-04-05T06:07:08.901100Z'))
     await sync.reconcile()
 
     expect(applied).toEqual([20, 30])
