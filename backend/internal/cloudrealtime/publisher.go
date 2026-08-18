@@ -464,9 +464,14 @@ func (p *Publisher) publishStatsMember(ctx context.Context, memberID int64, stat
 	if err != nil {
 		return p.failStatsMember(memberID, fmt.Errorf("stats subject for member %d: %w", memberID, err))
 	}
+	generatedAt := strings.TrimSpace(stats.GeneratedAt)
+	if generatedAt == "" {
+		return p.failStatsMember(memberID, fmt.Errorf("stats snapshot for member %d: database generatedAt is required", memberID))
+	}
+	stats.GeneratedAt = ""
 	message := StatsSnapshotMessage{
 		SchemaVersion: SchemaVersion,
-		GeneratedAt:   time.Now().UTC().Format(time.RFC3339Nano),
+		GeneratedAt:   generatedAt,
 		Stats:         stats,
 	}
 	payload, err := json.Marshal(message)

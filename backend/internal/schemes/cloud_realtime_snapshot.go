@@ -115,7 +115,12 @@ func normalizeRealtimeMemberIDs(memberIDs []int64) []int64 {
 }
 
 func mapCloudRealtimeStatsRow(row sqlcdb.CloudRealtimeStatsRow) CloudCenterStats {
+	generatedAt := ""
+	if !row.GeneratedAt.IsZero() {
+		generatedAt = row.GeneratedAt.UTC().Format(time.RFC3339Nano)
+	}
 	return CloudCenterStats{
+		GeneratedAt: generatedAt,
 		Formal: mapCloudCenterChannelStats(sqlcdb.MemberCloudCenterStatsRow{
 			TotalTurnover:     row.FormalTotalTurnover,
 			TotalSessionPnl:   row.FormalTotalSessionPnl,

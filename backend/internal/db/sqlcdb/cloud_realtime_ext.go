@@ -16,6 +16,7 @@ type CloudRealtimeDefinitionMeta struct {
 
 type CloudRealtimeStatsRow struct {
 	MemberID                int64
+	GeneratedAt             time.Time
 	FormalTotalTurnover     pgtype.Numeric
 	FormalTotalSessionPnl   pgtype.Numeric
 	FormalRunningSessionPnl pgtype.Numeric
@@ -101,6 +102,7 @@ func (q *Queries) ListCloudRealtimeStats(ctx context.Context, memberIDs []int64,
 	rows, err := q.db.Query(ctx, `
 SELECT
     requested.member_id,
+    statement_timestamp() AS generated_at,
     COALESCE(SUM(i.turnover) FILTER (WHERE i.sim_bet = false), 0)::numeric AS formal_total_turnover,
     COALESCE(SUM(i.session_pnl) FILTER (WHERE i.sim_bet = false), 0)::numeric AS formal_total_session_pnl,
     COALESCE(SUM(i.session_pnl) FILTER (WHERE i.sim_bet = false AND i.status = 'running'), 0)::numeric AS formal_running_session_pnl,
@@ -127,6 +129,7 @@ ORDER BY requested.member_id`, memberIDs, today)
 		var item CloudRealtimeStatsRow
 		if err := rows.Scan(
 			&item.MemberID,
+			&item.GeneratedAt,
 			&item.FormalTotalTurnover, &item.FormalTotalSessionPnl, &item.FormalRunningSessionPnl,
 			&item.SimTotalTurnover, &item.SimTotalSessionPnl, &item.SimRunningSessionPnl,
 			&item.RunningSimSchemes, &item.TodaySimSchemeStarts,

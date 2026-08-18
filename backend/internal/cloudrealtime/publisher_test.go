@@ -198,7 +198,8 @@ func TestSuccessfulSchemeFlushMarksStatsDirtyAndPublishesExactStatsWireShape(t *
 	source := &fakeSource{
 		schemeResult: schemes.RealtimeSchemeSnapshotResult{ItemsByMember: map[int64][]schemes.Instance{7: {{ID: "inst-7"}}}},
 		statsResult: map[int64]schemes.CloudCenterStats{7: {
-			Formal: schemes.CloudCenterChannelStats{TotalTurnover: 12.3, TotalSessionPnl: 4.5},
+			GeneratedAt: "2035-04-05T06:07:08.901234567Z",
+			Formal:      schemes.CloudCenterChannelStats{TotalTurnover: 12.3, TotalSessionPnl: 4.5},
 		}},
 	}
 	bus := newRecordingBus()
@@ -237,11 +238,34 @@ func TestSuccessfulSchemeFlushMarksStatsDirtyAndPublishesExactStatsWireShape(t *
 	if err := json.Unmarshal(payload, &message); err != nil {
 		t.Fatal(err)
 	}
-	if message.SchemaVersion != 1 || message.GeneratedAt == "" || message.Stats.Formal.TotalTurnover != 12.3 {
+	if message.SchemaVersion != 1 ||
+		message.GeneratedAt != "2035-04-05T06:07:08.901234567Z" ||
+		message.Stats.GeneratedAt != "" ||
+		message.Stats.Formal.TotalTurnover != 12.3 {
 		t.Fatalf("message=%+v", message)
 	}
 	if diag := p.Diagnostics(); diag.StatsPublishes != 1 || diag.StatsQueueSize != 0 || diag.LastSuccess.IsZero() || diag.LastPublishLatency < 0 {
 		t.Fatalf("diagnostics=%+v", diag)
+	}
+}
+
+func TestStatsSnapshotWithoutDatabaseVersionIsRejected(t *testing.T) {
+	bus := newRecordingBus()
+	p := NewPublisher(&fakeSource{}, bus, Config{SubjectPrefix: "caipiao"})
+	p.MarkStats(7)
+	if got := p.takeStatsDirty(); !reflect.DeepEqual(got, []int64{7}) {
+		t.Fatalf("dirty members=%v", got)
+	}
+
+	err := p.publishStatsMember(context.Background(), 7, schemes.CloudCenterStats{})
+	if err == nil || !strings.Contains(err.Error(), "database generatedAt is required") {
+		t.Fatalf("error=%v", err)
+	}
+	if got := bus.subjects(); len(got) != 0 {
+		t.Fatalf("published subjects=%v", got)
+	}
+	if size := p.Diagnostics().StatsQueueSize; size != 1 {
+		t.Fatalf("stats queue size=%d want=1", size)
 	}
 }
 
@@ -837,6 +861,19 @@ type blockingSource struct {
 	lastMembers      []int64
 }
 
+const fakeStatsGeneratedAt = "2000-01-01T00:00:00Z"
+
+func withFakeStatsGeneratedAt(result map[int64]schemes.CloudCenterStats) map[int64]schemes.CloudCenterStats {
+	cloned := make(map[int64]schemes.CloudCenterStats, len(result))
+	for memberID, stats := range result {
+		if stats.GeneratedAt == "" {
+			stats.GeneratedAt = fakeStatsGeneratedAt
+		}
+		cloned[memberID] = stats
+	}
+	return cloned
+}
+
 type blockingTimerFactory struct {
 	started chan time.Duration
 	fire    chan time.Time
@@ -920,7 +957,7 @@ func (s *blockingSource) LoadRealtimeStats(ctx context.Context, memberIDs []int6
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return result, err
+	return withFakeStatsGeneratedAt(result), err
 }
 
 func (s *blockingSource) schemeCallCount() int {
@@ -978,7 +1015,7 @@ func (s *fakeSource) LoadRealtimeStats(_ context.Context, memberIDs []int64) (ma
 			return nil, errors.New("load stats member " + memberIDString(memberID))
 		}
 	}
-	return s.statsResult, nil
+	return withFakeStatsGeneratedAt(s.statsResult), nil
 }
 
 func (s *fakeSource) schemeCallCount() int {

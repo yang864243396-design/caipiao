@@ -124,19 +124,20 @@ func realtimeChangeScan(memberID int64, instanceID string, updatedAt time.Time) 
 	}
 }
 
-func realtimeStatsScan(memberID int64, formalTurnover, formalTotal, formalRunning, simTurnover, simTotal, simRunning float64, running, starts int) realtimeTestRow {
+func realtimeStatsScan(memberID int64, generatedAt time.Time, formalTurnover, formalTotal, formalRunning, simTurnover, simTotal, simRunning float64, running, starts int) realtimeTestRow {
 	return func(dest ...interface{}) error {
-		if len(dest) != 9 {
-			return fmt.Errorf("stats scan destinations=%d want 9", len(dest))
+		if len(dest) != 10 {
+			return fmt.Errorf("stats scan destinations=%d want 10", len(dest))
 		}
 		*(dest[0].(*int64)) = memberID
+		*(dest[1].(*time.Time)) = generatedAt
 		for index, value := range []float64{formalTurnover, formalTotal, formalRunning, simTurnover, simTotal, simRunning} {
-			if err := dest[index+1].(*pgtype.Numeric).Scan(strconv.FormatFloat(value, 'f', -1, 64)); err != nil {
+			if err := dest[index+2].(*pgtype.Numeric).Scan(strconv.FormatFloat(value, 'f', -1, 64)); err != nil {
 				return err
 			}
 		}
-		*(dest[7].(*int32)) = int32(running)
-		*(dest[8].(*int32)) = int32(starts)
+		*(dest[8].(*int32)) = int32(running)
+		*(dest[9].(*int32)) = int32(starts)
 		return nil
 	}
 }
@@ -243,10 +244,11 @@ func TestLoadRealtimeSchemeSnapshotsUsesTwoBulkQueriesAndDeduplicatesRefs(t *tes
 }
 
 func TestLoadRealtimeStatsMapsAllMembersInOneBulkQuery(t *testing.T) {
+	dbGeneratedAt := time.Date(2035, 4, 5, 6, 7, 8, 901234567, time.UTC)
 	db := &realtimeTestDB{queries: []pgx.Rows{
 		&realtimeTestRows{scans: []realtimeTestRow{
-			realtimeStatsScan(7, 0.176, 0.176, 0.176, 1.239, 1.25, 0, 2, 3),
-			realtimeStatsScan(8, 0, 0, 0, 0, 0, 0, 0, 0),
+			realtimeStatsScan(7, dbGeneratedAt, 0.176, 0.176, 0.176, 1.239, 1.25, 0, 2, 3),
+			realtimeStatsScan(8, dbGeneratedAt, 0, 0, 0, 0, 0, 0, 0, 0),
 		}},
 	}}
 	svc := &Service{q: sqlcdb.New(db)}
@@ -258,7 +260,9 @@ func TestLoadRealtimeStatsMapsAllMembersInOneBulkQuery(t *testing.T) {
 	if len(db.calls) != 1 {
 		t.Fatalf("query calls=%d want 1", len(db.calls))
 	}
-	if !strings.Contains(db.calls[0].sql, "FROM unnest($1::bigint[])") || !strings.Contains(db.calls[0].sql, "FILTER") {
+	if !strings.Contains(db.calls[0].sql, "FROM unnest($1::bigint[])") ||
+		!strings.Contains(db.calls[0].sql, "FILTER") ||
+		!strings.Contains(db.calls[0].sql, "statement_timestamp()") {
 		t.Fatalf("stats query is not a bulk filtered aggregate: %s", db.calls[0].sql)
 	}
 	if ids := db.calls[0].args[0]; !reflect.DeepEqual(ids, []int64{7, 8}) {
@@ -273,15 +277,19 @@ func TestLoadRealtimeStatsMapsAllMembersInOneBulkQuery(t *testing.T) {
 	if got[7].SimQuota != (SimSchemeQuota{TodayStarts: 3, TodayStartsLimit: 5, Running: 2, RunningLimit: 5}) {
 		t.Fatalf("quota=%+v", got[7].SimQuota)
 	}
+	if got[7].GeneratedAt != "2035-04-05T06:07:08.901234567Z" {
+		t.Fatalf("generatedAt=%q", got[7].GeneratedAt)
+	}
 	if _, ok := got[8]; !ok {
 		t.Fatal("member 8 missing from result")
 	}
 }
 
 func TestRealtimeAndRESTStatsUseSameProjection(t *testing.T) {
+	dbGeneratedAt := time.Date(2035, 4, 5, 6, 7, 8, 901234567, time.UTC)
 	newStatsRows := func() pgx.Rows {
 		return &realtimeTestRows{scans: []realtimeTestRow{
-			realtimeStatsScan(7, 0.176, 0.176, 0.176, 1.239, 1.25, 0, 2, 3),
+			realtimeStatsScan(7, dbGeneratedAt, 0.176, 0.176, 0.176, 1.239, 1.25, 0, 2, 3),
 		}}
 	}
 	realtimeDB := &realtimeTestDB{queries: []pgx.Rows{newStatsRows()}}
@@ -303,10 +311,9 @@ func TestRealtimeAndRESTStatsUseSameProjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := time.Parse(time.RFC3339Nano, restStats.GeneratedAt); err != nil {
-		t.Fatalf("REST generatedAt=%q: %v", restStats.GeneratedAt, err)
+	if restStats.GeneratedAt != "2035-04-05T06:07:08.901234567Z" {
+		t.Fatalf("REST generatedAt=%q", restStats.GeneratedAt)
 	}
-	restStats.GeneratedAt = ""
 	if !reflect.DeepEqual(restStats, realtimeStats[7]) {
 		t.Fatalf("REST=%+v realtime=%+v", restStats, realtimeStats[7])
 	}

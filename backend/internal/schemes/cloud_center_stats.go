@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"math"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -44,9 +43,7 @@ func (s *Service) GetCloudCenterStats(ctx context.Context, account string) (Clou
 	if err != nil {
 		return CloudCenterStats{}, err
 	}
-	stats := statsByMember[m.ID]
-	stats.GeneratedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	return stats, nil
+	return statsByMember[m.ID], nil
 }
 
 func mapCloudCenterChannelStats(row sqlcdb.MemberCloudCenterStatsRow) CloudCenterChannelStats {
