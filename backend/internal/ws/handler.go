@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -11,9 +12,10 @@ import (
 )
 
 type Server struct {
-	Hub     *Hub
-	Auth    *auth.Service
-	Origins []string
+	Hub                   *Hub
+	Auth                  *auth.Service
+	Origins               []string
+	ResolveClientIdentity func(context.Context, string) (ClientIdentity, error)
 }
 
 func (s *Server) upgrader() *websocket.Upgrader {
@@ -58,30 +60,40 @@ func (s *Server) handleAuthed(w http.ResponseWriter, r *http.Request, kind ConnK
 		return
 	}
 	c := newConn(s.Hub, conn, kind)
-	authFn := func(token string) (string, bool) {
+	identityContext := context.WithoutCancel(r.Context())
+	authFn := func(token string) (ClientIdentity, bool) {
 		if token == "" {
 			token = strings.TrimSpace(r.URL.Query().Get("token"))
 		}
 		if token == "" {
-			return "", false
+			return ClientIdentity{}, false
 		}
 		claims, err := s.Auth.ParseBearer(token)
 		if err != nil {
-			return "", false
+			return ClientIdentity{}, false
 		}
 		want := auth.RoleClient
 		if kind == KindAdmin {
 			want = auth.RoleAdmin
 		}
 		if claims.Role != want {
-			return "", false
+			return ClientIdentity{}, false
 		}
-		return claims.Subject, true
+		if kind == KindClient {
+			if s.ResolveClientIdentity == nil {
+				return ClientIdentity{}, false
+			}
+			identity, err := s.ResolveClientIdentity(identityContext, claims.Subject)
+			if err != nil || strings.TrimSpace(identity.Account) != strings.TrimSpace(claims.Subject) || identity.MemberID <= 0 {
+				return ClientIdentity{}, false
+			}
+			return identity, true
+		}
+		return ClientIdentity{Account: claims.Subject}, true
 	}
 	if token := strings.TrimSpace(r.URL.Query().Get("token")); token != "" {
-		if account, ok := authFn(token); ok {
-			c.authenticated = true
-			c.account = account
+		if identity, ok := authFn(token); ok {
+			_ = s.Hub.BindClientIdentity(c, identity)
 		}
 	}
 	go c.Run(authFn)

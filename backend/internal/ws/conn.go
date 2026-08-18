@@ -24,26 +24,43 @@ type Conn struct {
 	kind          ConnKind
 	authenticated bool
 	account       string
+	memberID      int64
 	topics        map[string]struct{}
 	send          chan Envelope
+	done          chan struct{}
 	mu            sync.Mutex
 	closed        bool
+	closeOnce     sync.Once
+	closeFn       func(code int, reason string)
+}
+
+type closeAction struct {
+	code   int
+	reason string
+	done   chan struct{}
+	fn     func(code int, reason string)
 }
 
 func newConn(hub *Hub, conn *websocket.Conn, kind ConnKind) *Conn {
-	return &Conn{
+	c := &Conn{
 		hub:    hub,
 		conn:   conn,
 		kind:   kind,
 		topics: make(map[string]struct{}),
 		send:   make(chan Envelope, sendBuffer),
+		done:   make(chan struct{}),
 	}
+	c.closeFn = func(code int, reason string) {
+		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, reason), time.Now().Add(writeWait))
+		_ = conn.Close()
+	}
+	return c
 }
 
-func (c *Conn) Run(authFn func(token string) (account string, ok bool)) {
+func (c *Conn) Run(authFn func(token string) (identity ClientIdentity, ok bool)) {
 	defer func() {
 		c.hub.Unregister(c)
-		_ = c.conn.Close()
+		c.Close(websocket.CloseNormalClosure, "")
 	}()
 
 	c.hub.Register(c)
@@ -53,12 +70,12 @@ func (c *Conn) Run(authFn func(token string) (account string, ok bool)) {
 	}))
 
 	if c.kind == KindPublic {
-		c.authenticated = true
+		c.setAuthenticated()
 		topics := c.hub.Subscribe(c, []string{TopicPublicMaintenance})
 		_ = c.TrySend(SystemFrame(NameSubscribed, map[string]any{"topics": topics}))
-	} else if c.kind == KindClient && c.authenticated {
+	} else if c.kind == KindClient && c.isAuthenticated() {
 		c.subscribeClientTopics()
-	} else if c.kind == KindAdmin && c.authenticated {
+	} else if c.kind == KindAdmin && c.isAuthenticated() {
 		c.subscribeAdminTopics()
 	}
 
@@ -80,7 +97,7 @@ func (c *Conn) Run(authFn func(token string) (account string, ok bool)) {
 	}
 }
 
-func (c *Conn) handleMessage(data []byte, authFn func(token string) (account string, ok bool)) {
+func (c *Conn) handleMessage(data []byte, authFn func(token string) (identity ClientIdentity, ok bool)) {
 	var in struct {
 		Type    string          `json:"type"`
 		Name    string          `json:"name"`
@@ -95,7 +112,7 @@ func (c *Conn) handleMessage(data []byte, authFn func(token string) (account str
 	}
 	switch in.Name {
 	case "auth":
-		if c.authenticated || authFn == nil {
+		if c.isAuthenticated() || authFn == nil {
 			return
 		}
 		var body struct {
@@ -105,14 +122,12 @@ func (c *Conn) handleMessage(data []byte, authFn func(token string) (account str
 			_ = c.TrySend(ErrorFrame(4003, "invalid auth payload"))
 			return
 		}
-		account, ok := authFn(strings.TrimSpace(body.AccessToken))
-		if !ok {
-			_ = c.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(4001, "unauthorized"), time.Now().Add(writeWait))
+		identity, ok := authFn(strings.TrimSpace(body.AccessToken))
+		if !ok || !c.hub.BindClientIdentity(c, identity) {
+			c.Close(4001, "unauthorized")
 			return
 		}
-		c.authenticated = true
-		c.setAccount(account)
-		_ = c.TrySend(SystemFrame(NameAuthOK, map[string]any{"account": account}))
+		_ = c.TrySend(SystemFrame(NameAuthOK, map[string]any{"account": identity.Account}))
 		if c.kind == KindClient {
 			c.subscribeClientTopics()
 		} else if c.kind == KindAdmin {
@@ -145,19 +160,11 @@ func (c *Conn) writePump() {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
-		c.mu.Lock()
-		if !c.closed {
-			c.closed = true
-			close(c.send)
-		}
-		c.mu.Unlock()
+		c.Close(websocket.CloseNormalClosure, "")
 	}()
 	for {
 		select {
-		case env, ok := <-c.send:
-			if !ok {
-				return
-			}
+		case env := <-c.send:
 			_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.conn.WriteJSON(env); err != nil {
 				return
@@ -167,54 +174,139 @@ func (c *Conn) writePump() {
 			if err := c.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(writeWait)); err != nil {
 				return
 			}
+		case <-c.done:
+			return
 		}
 	}
 }
 
 func (c *Conn) subscribeClientTopics() {
-	if c.kind != KindClient || !c.authenticated {
+	if c.kind != KindClient || !c.isAuthenticated() {
 		return
 	}
 	topics := c.hub.Subscribe(c, []string{
 		TopicClientSchemeInstance,
+		TopicClientCloudStats,
 		TopicClientWallet,
 	})
 	_ = c.TrySend(SystemFrame(NameSubscribed, map[string]any{"topics": topics}))
 }
 
 func (c *Conn) subscribeAdminTopics() {
-	if c.kind != KindAdmin || !c.authenticated {
+	if c.kind != KindAdmin || !c.isAuthenticated() {
 		return
 	}
 	topics := c.hub.Subscribe(c, []string{TopicAdminWithdrawQueue, TopicAdminSchemeMonitor, TopicAdminDashboardKpi})
 	_ = c.TrySend(SystemFrame(NameSubscribed, map[string]any{"topics": topics}))
 }
 
-// setAccount 在锁内写入会员账号，避免与发布 goroutine 的并发读产生数据竞争。
-func (c *Conn) setAccount(account string) {
+func (c *Conn) bindIdentity(identity ClientIdentity) bool {
+	identity.Account = strings.TrimSpace(identity.Account)
+	if identity.Account == "" || (c.kind == KindClient && identity.MemberID <= 0) {
+		return false
+	}
 	c.mu.Lock()
-	c.account = account
+	defer c.mu.Unlock()
+	if c.authenticated {
+		return c.account == identity.Account && c.memberID == identity.MemberID
+	}
+	c.authenticated = true
+	c.account = identity.Account
+	c.memberID = identity.MemberID
+	return true
+}
+
+func (c *Conn) setAuthenticated() {
+	c.mu.Lock()
+	c.authenticated = true
 	c.mu.Unlock()
 }
 
-// getAccount 在锁内读取会员账号，供 Hub.PublishToAccount 定向投递使用。
+func (c *Conn) isAuthenticated() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.authenticated
+}
+
+func (c *Conn) clientIdentity() (ClientIdentity, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	identity := ClientIdentity{Account: c.account, MemberID: c.memberID}
+	return identity, c.kind == KindClient && c.authenticated && c.memberID > 0
+}
+
 func (c *Conn) getAccount() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.account
 }
 
+func (c *Conn) Close(code int, reason string) {
+	c.close(code, reason, false)
+}
+
+func (c *Conn) closeAsync(code int, reason string) {
+	c.close(code, reason, true)
+}
+
+func (c *Conn) close(code int, reason string, async bool) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	action, reserved := c.reserveCloseLocked(code, reason)
+	c.mu.Unlock()
+	if reserved {
+		executeClose(action, async)
+	}
+}
+
+func (c *Conn) reserveCloseLocked(code int, reason string) (closeAction, bool) {
+	var action closeAction
+	reserved := false
+	c.closeOnce.Do(func() {
+		reserved = true
+		c.closed = true
+		action = closeAction{code: code, reason: reason, done: c.done, fn: c.closeFn}
+	})
+	return action, reserved
+}
+
+func executeClose(action closeAction, async bool) {
+	if action.done != nil {
+		close(action.done)
+	}
+	if action.fn == nil {
+		return
+	}
+	if async {
+		go action.fn(action.code, action.reason)
+		return
+	}
+	action.fn(action.code, action.reason)
+}
+
 func (c *Conn) TrySend(env Envelope) bool {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.closed {
+		c.mu.Unlock()
 		return false
 	}
 	select {
 	case c.send <- env:
+		c.mu.Unlock()
 		return true
 	default:
-		slog.Warn("ws outbound buffer full, drop frame", "name", env.Name, "topic", env.Topic)
-		return false
+		action, reserved := c.reserveCloseLocked(4010, "realtime_backpressure")
+		c.mu.Unlock()
+		if !reserved {
+			return false
+		}
+		executeClose(action, true)
 	}
+	if c.hub != nil {
+		c.hub.recordBackpressureClose()
+	}
+	slog.Warn("ws outbound buffer full, closing connection", "name", env.Name, "topic", env.Topic)
+	return false
 }

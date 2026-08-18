@@ -21,12 +21,14 @@ const (
 
 	NameMaintenanceChanged = "public.maintenance.changed"
 
-	NameSchemeInstanceUpdated = "client.scheme.instance.updated"
-	NameWalletUpdated         = "client.wallet.updated"
+	NameSchemeInstanceUpdated   = "client.scheme.instance.updated"
+	NameSchemeInstancesSnapshot = "client.scheme.instances.snapshot"
+	NameCloudStatsSnapshot      = "client.cloud.stats.snapshot"
+	NameWalletUpdated           = "client.wallet.updated"
 
 	NameWithdrawQueueChanged = "admin.withdraw.queue.changed"
-	NameSchemeMonitorChanged   = "admin.scheme.monitor.changed"
-	NameDashboardKpiChanged    = "admin.dashboard.kpi.changed"
+	NameSchemeMonitorChanged = "admin.scheme.monitor.changed"
+	NameDashboardKpiChanged  = "admin.dashboard.kpi.changed"
 
 	NameDrawResult = "public.draw.result"
 )
@@ -34,6 +36,7 @@ const (
 const (
 	TopicPublicMaintenance    = "public.maintenance"
 	TopicClientSchemeInstance = "client.scheme.instance"
+	TopicClientCloudStats     = "client.cloud.stats"
 	TopicClientWallet         = "client.wallet"
 	TopicAdminWithdrawQueue   = "admin.withdraw.queue"
 	TopicAdminSchemeMonitor   = "admin.scheme.monitor"
@@ -68,6 +71,12 @@ type SchemeInstancePayload struct {
 	Status     string `json:"status"`
 	Reason     string `json:"reason,omitempty"`
 	Hint       string `json:"hint,omitempty"`
+}
+
+type SchemeInstanceHintPayload struct {
+	InstanceID string `json:"instanceId"`
+	Status     string `json:"status"`
+	Hint       string `json:"hint"`
 }
 
 type WalletUpdatedPayload struct {
