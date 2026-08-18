@@ -20,7 +20,7 @@ export interface AdminMemberRow {
   guajiBalances: AdminGuajiBalances
   currencyStats: AdminMemberCurrencyStat[]
   balanceYuan?: number
-  status: '姝ｅ父' | '绂佺敤'
+  status: '正常' | '禁用'
   registeredAt: string
   lastLoginAt: string
 }
