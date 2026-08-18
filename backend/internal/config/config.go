@@ -12,54 +12,78 @@ import (
 )
 
 type Config struct {
-	Port              string
-	Env               string
-	JWTSecret         string
-	CORSOrigins       []string
-	ClientDemoAccount string
-	ClientDemoPass    string
-	AdminDemoAccount  string
-	AdminDemoPass     string
-	TokenTTL          time.Duration
-	DatabaseURL       string
-	DBRequired        bool
-	DBMaxConns        int
-	DBMinConns        int
+	Port                         string
+	Env                          string
+	JWTSecret                    string
+	CORSOrigins                  []string
+	ClientDemoAccount            string
+	ClientDemoPass               string
+	AdminDemoAccount             string
+	AdminDemoPass                string
+	TokenTTL                     time.Duration
+	DatabaseURL                  string
+	DBRequired                   bool
+	DBMaxConns                   int
+	DBMinConns                   int
 	SchemeWorkerEnabled          bool
 	SchemeWorkerTickSec          int
 	SchemeWorkerConcurrency      int
 	SchemeWorkerPlaceConcurrency int
 	WSEnabled                    bool
-	WSAuthViaQuery      bool
-	Guaji               guaji.Config
-	CMSUploadDir        string
+	WSAuthViaQuery               bool
+	CloudRealtimeEnabled         bool
+	CloudRealtimeBus             string
+	NATSURL                      string
+	NATSUser                     string
+	NATSPassword                 string
+	NATSToken                    string
+	NATSCredentialsFile          string
+	NATSSubjectPrefix            string
+	CloudRealtimeCoalesce        time.Duration
+	CloudStatsCoalesce           time.Duration
+	CloudReconcileInterval       time.Duration
+	CloudReconcileBatch          int
+	Guaji                        guaji.Config
+	CMSUploadDir                 string
 }
 
 func Load() Config {
 	ttlHours := envInt("TOKEN_TTL_HOURS", 8)
 	dbRequired := envBool("DB_REQUIRED", true)
 	return Config{
-		Port:              env("PORT", "8080"),
-		Env:               env("ENV", "development"),
-		JWTSecret:         env("JWT_SECRET", "dev-change-me-in-production"),
-		CORSOrigins:       splitCSV(env("CORS_ORIGINS", "http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173,http://127.0.0.1:5174")),
-		ClientDemoAccount: env("CLIENT_DEMO_ACCOUNT", "vs8888"),
-		ClientDemoPass:    env("CLIENT_DEMO_PASSWORD", "vs8888"),
-		AdminDemoAccount:  env("ADMIN_DEMO_ACCOUNT", "admin"),
-		AdminDemoPass:     env("ADMIN_DEMO_PASSWORD", "admin123"),
-		TokenTTL:            time.Duration(ttlHours) * time.Hour,
-		DatabaseURL:         buildDatabaseURL(),
-		DBRequired:          dbRequired,
-		DBMaxConns:          envInt("DB_MAX_CONNS", 25),
-		DBMinConns:          envInt("DB_MIN_CONNS", 2),
+		Port:                         env("PORT", "8080"),
+		Env:                          env("ENV", "development"),
+		JWTSecret:                    env("JWT_SECRET", "dev-change-me-in-production"),
+		CORSOrigins:                  splitCSV(env("CORS_ORIGINS", "http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173,http://127.0.0.1:5174")),
+		ClientDemoAccount:            env("CLIENT_DEMO_ACCOUNT", "vs8888"),
+		ClientDemoPass:               env("CLIENT_DEMO_PASSWORD", "vs8888"),
+		AdminDemoAccount:             env("ADMIN_DEMO_ACCOUNT", "admin"),
+		AdminDemoPass:                env("ADMIN_DEMO_PASSWORD", "admin123"),
+		TokenTTL:                     time.Duration(ttlHours) * time.Hour,
+		DatabaseURL:                  buildDatabaseURL(),
+		DBRequired:                   dbRequired,
+		DBMaxConns:                   envInt("DB_MAX_CONNS", 25),
+		DBMinConns:                   envInt("DB_MIN_CONNS", 2),
 		SchemeWorkerEnabled:          envBool("SCHEME_WORKER_ENABLED", true),
 		SchemeWorkerTickSec:          envInt("SCHEME_WORKER_TICK_SEC", 1),
 		SchemeWorkerConcurrency:      envInt("SCHEME_WORKER_CONCURRENCY", 32),
 		SchemeWorkerPlaceConcurrency: envInt("SCHEME_WORKER_PLACE_CONCURRENCY", 16),
 		WSEnabled:                    envBool("WS_ENABLED", true),
-		WSAuthViaQuery:      envBool("WS_AUTH_VIA_QUERY", true),
-		Guaji:               guaji.LoadConfigFromEnv(),
-		CMSUploadDir:        env("CMS_UPLOAD_DIR", "./data/uploads/cms"),
+		WSAuthViaQuery:               envBool("WS_AUTH_VIA_QUERY", true),
+		CloudRealtimeEnabled:         envBool("CLOUD_REALTIME_ENABLED", true),
+		CloudRealtimeBus:             env("CLOUD_REALTIME_BUS", "nats"),
+		NATSURL:                      env("NATS_URL", "nats://127.0.0.1:4222"),
+		NATSUser:                     env("NATS_USER", ""),
+		NATSPassword:                 env("NATS_PASSWORD", ""),
+		NATSToken:                    env("NATS_TOKEN", ""),
+		NATSCredentialsFile:          env("NATS_CREDENTIALS_FILE", ""),
+		NATSSubjectPrefix:            env("NATS_SUBJECT_PREFIX", "caipiao"),
+		CloudRealtimeCoalesce:        envDurationMS("CLOUD_REALTIME_COALESCE_MS", 200*time.Millisecond),
+		CloudStatsCoalesce:           envDurationMS("CLOUD_STATS_COALESCE_MS", time.Second),
+		CloudReconcileInterval:       envDurationMS("CLOUD_RECONCILE_INTERVAL_MS", 5*time.Second),
+		CloudReconcileBatch:          envInt("CLOUD_RECONCILE_BATCH", 500),
+		Guaji:                        guaji.LoadConfigFromEnv(),
+		CMSUploadDir:                 env("CMS_UPLOAD_DIR", "./data/uploads/cms"),
 	}
 }
 
@@ -108,6 +132,14 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func envDurationMS(key string, fallback time.Duration) time.Duration {
+	n := envInt(key, int(fallback/time.Millisecond))
+	if n <= 0 {
+		return fallback
+	}
+	return time.Duration(n) * time.Millisecond
 }
 
 func envBool(key string, fallback bool) bool {
