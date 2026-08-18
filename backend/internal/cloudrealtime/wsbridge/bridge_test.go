@@ -126,11 +126,23 @@ func TestBridgeCleansSchemeSubscriptionWhenStatsSubscriptionFails(t *testing.T) 
 	bus := newFakeBus()
 	bus.failSubject = "caipiao.client.7.cloud_stats"
 	bridge := New(bus, "caipiao")
-	if _, err := bridge.SubscribeMember(7, func(ws.Envelope) {}); err == nil {
+	emitted := 0
+	if _, err := bridge.SubscribeMember(7, func(ws.Envelope) { emitted++ }); err == nil {
 		t.Fatal("stats subscription failure ignored")
 	}
 	if got := bus.unsubscribeCount(); got != 1 {
 		t.Fatalf("scheme cleanup unsubscribes=%d", got)
+	}
+	if got := bus.activeSubscriptionCount(); got != 0 {
+		t.Fatalf("active subscriptions after partial cleanup=%d", got)
+	}
+	bus.deliverJSON(t, "caipiao.client.7.scheme", "caipiao.client.7.scheme", cloudrealtime.SchemeSnapshotMessage{
+		SchemaVersion: cloudrealtime.SchemaVersion,
+		GeneratedAt:   "2026-08-18T00:00:00Z",
+		Items:         []schemes.Instance{{ID: "stale", Status: "running"}},
+	})
+	if emitted != 0 {
+		t.Fatalf("cleaned partial subscription emitted %d events", emitted)
 	}
 }
 
@@ -154,7 +166,7 @@ func assertLegacyHintFields(t *testing.T, payload any) {
 
 type fakeBus struct {
 	mu            sync.Mutex
-	subscriptions []fakeBusSubscriptionRecord
+	subscriptions []*fakeBusSubscriptionRecord
 	unsubscribes  int
 	failSubject   string
 }
@@ -162,6 +174,7 @@ type fakeBus struct {
 type fakeBusSubscriptionRecord struct {
 	subject string
 	handler realtimebus.Handler
+	active  bool
 }
 
 func newFakeBus() *fakeBus {
@@ -176,8 +189,9 @@ func (b *fakeBus) Subscribe(subject string, handler realtimebus.Handler) (realti
 	if subject == b.failSubject {
 		return nil, errors.New("subscribe failed")
 	}
-	b.subscriptions = append(b.subscriptions, fakeBusSubscriptionRecord{subject: subject, handler: handler})
-	return &fakeSubscription{bus: b}, nil
+	record := &fakeBusSubscriptionRecord{subject: subject, handler: handler, active: true}
+	b.subscriptions = append(b.subscriptions, record)
+	return &fakeSubscription{bus: b, record: record}, nil
 }
 
 func (b *fakeBus) OnConnectionChange(func(bool)) {}
@@ -204,6 +218,18 @@ func (b *fakeBus) unsubscribeCount() int {
 	return b.unsubscribes
 }
 
+func (b *fakeBus) activeSubscriptionCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	count := 0
+	for _, subscription := range b.subscriptions {
+		if subscription.active {
+			count++
+		}
+	}
+	return count
+}
+
 func (b *fakeBus) deliverJSON(t *testing.T, registeredSubject, deliveredSubject string, payload any) {
 	t.Helper()
 	encoded, err := json.Marshal(payload)
@@ -217,7 +243,7 @@ func (b *fakeBus) deliver(registeredSubject, deliveredSubject string, payload []
 	b.mu.Lock()
 	var handler realtimebus.Handler
 	for _, subscription := range b.subscriptions {
-		if subscription.subject == registeredSubject {
+		if subscription.subject == registeredSubject && subscription.active {
 			handler = subscription.handler
 			break
 		}
@@ -229,14 +255,18 @@ func (b *fakeBus) deliver(registeredSubject, deliveredSubject string, payload []
 }
 
 type fakeSubscription struct {
-	bus  *fakeBus
-	once sync.Once
+	bus    *fakeBus
+	record *fakeBusSubscriptionRecord
+	once   sync.Once
 }
 
 func (s *fakeSubscription) Unsubscribe() error {
 	s.once.Do(func() {
 		s.bus.mu.Lock()
-		s.bus.unsubscribes++
+		if s.record.active {
+			s.record.active = false
+			s.bus.unsubscribes++
+		}
 		s.bus.mu.Unlock()
 	})
 	return nil

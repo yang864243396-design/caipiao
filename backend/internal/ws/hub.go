@@ -4,6 +4,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/gorilla/websocket"
 )
 
 type ClientIdentity struct {
@@ -25,12 +27,19 @@ type memberRoute struct {
 	connections map[*Conn]struct{}
 	cancel      func()
 	subscribing bool
+	canceling   bool
+	failed      bool
+	generation  uint64
+	transition  chan struct{}
 }
 
 type memberAcquisition struct {
-	memberID int64
-	route    *memberRoute
-	source   MemberEventSource
+	memberID   int64
+	route      *memberRoute
+	source     MemberEventSource
+	generation uint64
+	wait       <-chan struct{}
+	failed     bool
 }
 
 type Hub struct {
@@ -61,11 +70,13 @@ func (h *Hub) SetMemberEventSource(source MemberEventSource) {
 	h.memberSource = source
 	if source != nil {
 		for memberID, route := range h.members {
-			if len(route.connections) == 0 || route.cancel != nil || route.subscribing {
+			if len(route.connections) == 0 {
 				continue
 			}
-			route.subscribing = true
-			acquisitions = append(acquisitions, memberAcquisition{memberID: memberID, route: route, source: source})
+			acquisition := h.prepareMemberAcquisitionLocked(memberID, route)
+			if acquisition.route != nil {
+				acquisitions = append(acquisitions, acquisition)
+			}
 		}
 	}
 	h.mu.Unlock()
@@ -74,23 +85,27 @@ func (h *Hub) SetMemberEventSource(source MemberEventSource) {
 	}
 }
 
-func (h *Hub) Register(c *Conn) {
+func (h *Hub) Register(c *Conn) bool {
 	if h == nil || c == nil {
-		return
+		return false
 	}
 	identity, hasIdentity := c.clientIdentity()
 	var acquisition memberAcquisition
 	h.mu.Lock()
 	if _, exists := h.conns[c]; exists {
 		h.mu.Unlock()
-		return
+		return true
 	}
 	h.conns[c] = struct{}{}
 	if hasIdentity {
 		acquisition = h.bindRegisteredClientLocked(c, identity.MemberID)
 	}
 	h.mu.Unlock()
-	h.finishMemberAcquisition(acquisition)
+	ready := h.finishMemberAcquisition(acquisition)
+	if !ready {
+		c.Close(websocket.CloseServiceRestart, "realtime_route_unavailable")
+	}
+	return ready
 }
 
 func (h *Hub) Unregister(c *Conn) {
@@ -98,6 +113,9 @@ func (h *Hub) Unregister(c *Conn) {
 		return
 	}
 	var cancel func()
+	var cancelMemberID int64
+	var cancelRoute *memberRoute
+	var cancelGeneration uint64
 	h.mu.Lock()
 	if _, exists := h.conns[c]; !exists {
 		h.mu.Unlock()
@@ -109,8 +127,19 @@ func (h *Hub) Unregister(c *Conn) {
 		if route := h.members[memberID]; route != nil {
 			delete(route.connections, c)
 			if len(route.connections) == 0 {
-				delete(h.members, memberID)
-				cancel = route.cancel
+				switch {
+				case route.cancel != nil:
+					cancel = route.cancel
+					cancelMemberID = memberID
+					route.cancel = nil
+					route.canceling = true
+					route.generation++
+					route.transition = make(chan struct{})
+					cancelRoute = route
+					cancelGeneration = route.generation
+				case !route.subscribing && !route.canceling:
+					delete(h.members, memberID)
+				}
 			}
 		}
 	}
@@ -123,6 +152,7 @@ func (h *Hub) Unregister(c *Conn) {
 	h.mu.Unlock()
 	if cancel != nil {
 		cancel()
+		h.finishMemberCancellation(cancelMemberID, cancelRoute, cancelGeneration)
 	}
 }
 
@@ -136,8 +166,11 @@ func (h *Hub) BindClientIdentity(c *Conn, identity ClientIdentity) bool {
 		acquisition = h.bindRegisteredClientLocked(c, identity.MemberID)
 	}
 	h.mu.Unlock()
-	h.finishMemberAcquisition(acquisition)
-	return true
+	ready := h.finishMemberAcquisition(acquisition)
+	if !ready {
+		c.Close(websocket.CloseServiceRestart, "realtime_route_unavailable")
+	}
+	return ready
 }
 
 func (h *Hub) bindRegisteredClientLocked(c *Conn, memberID int64) memberAcquisition {
@@ -157,34 +190,138 @@ func (h *Hub) bindRegisteredClientLocked(c *Conn, memberID int64) memberAcquisit
 	}
 	route.connections[c] = struct{}{}
 	h.memberByConn[c] = memberID
-	if h.memberSource == nil || route.cancel != nil || route.subscribing {
+	return h.prepareMemberAcquisitionLocked(memberID, route)
+}
+
+func (h *Hub) prepareMemberAcquisitionLocked(memberID int64, route *memberRoute) memberAcquisition {
+	if h.members[memberID] != route {
+		return memberAcquisition{memberID: memberID, route: route, failed: true}
+	}
+	if route.failed {
+		return memberAcquisition{memberID: memberID, route: route, failed: true}
+	}
+	if route.cancel != nil {
+		return memberAcquisition{}
+	}
+	if route.canceling || route.subscribing {
+		return memberAcquisition{memberID: memberID, route: route, wait: route.transition}
+	}
+	if h.memberSource == nil {
 		return memberAcquisition{}
 	}
 	route.subscribing = true
-	return memberAcquisition{memberID: memberID, route: route, source: h.memberSource}
+	route.generation++
+	route.transition = make(chan struct{})
+	return memberAcquisition{
+		memberID:   memberID,
+		route:      route,
+		source:     h.memberSource,
+		generation: route.generation,
+	}
 }
 
-func (h *Hub) finishMemberAcquisition(acquisition memberAcquisition) {
-	if acquisition.source == nil || acquisition.route == nil {
+func (h *Hub) finishMemberAcquisition(acquisition memberAcquisition) bool {
+	for {
+		if acquisition.failed {
+			return false
+		}
+		if acquisition.route == nil {
+			return true
+		}
+		if acquisition.wait != nil {
+			<-acquisition.wait
+			h.mu.Lock()
+			acquisition = h.prepareMemberAcquisitionLocked(acquisition.memberID, acquisition.route)
+			h.mu.Unlock()
+			continue
+		}
+		if acquisition.source == nil {
+			return true
+		}
+		cancel, err := acquisition.source.SubscribeMember(acquisition.memberID, func(env Envelope) {
+			h.publishToMemberGeneration(acquisition.memberID, acquisition.route, acquisition.generation, env)
+		})
+		var closeTargets []*Conn
+		var closeTransition chan struct{}
+		var cancelGeneration uint64
+		keep := false
+		valid := false
+		h.mu.Lock()
+		current := h.members[acquisition.memberID]
+		if current == acquisition.route && current.generation == acquisition.generation {
+			valid = true
+			current.subscribing = false
+			if err == nil && cancel != nil && h.memberSource == acquisition.source && len(current.connections) > 0 {
+				current.cancel = cancel
+				keep = true
+				closeTransition = current.transition
+				current.transition = nil
+			} else if cancel != nil {
+				current.failed = err != nil || h.memberSource != acquisition.source
+				if current.failed {
+					closeTargets = memberRouteConnections(current)
+				}
+				current.canceling = true
+				current.generation++
+				cancelGeneration = current.generation
+			} else {
+				current.failed = true
+				closeTargets = memberRouteConnections(current)
+				closeTransition = current.transition
+				current.transition = nil
+				if len(current.connections) == 0 {
+					delete(h.members, acquisition.memberID)
+				}
+			}
+		}
+		h.mu.Unlock()
+		if keep {
+			if closeTransition != nil {
+				close(closeTransition)
+			}
+			return true
+		}
+		for _, c := range closeTargets {
+			c.Close(websocket.CloseServiceRestart, "realtime_route_unavailable")
+		}
+		if cancel != nil {
+			cancel()
+			if valid {
+				h.finishMemberCancellation(acquisition.memberID, acquisition.route, cancelGeneration)
+			}
+		}
+		if closeTransition != nil {
+			close(closeTransition)
+		}
+		return false
+	}
+}
+
+func memberRouteConnections(route *memberRoute) []*Conn {
+	targets := make([]*Conn, 0, len(route.connections))
+	for c := range route.connections {
+		targets = append(targets, c)
+	}
+	return targets
+}
+
+func (h *Hub) finishMemberCancellation(memberID int64, route *memberRoute, generation uint64) {
+	if route == nil {
 		return
 	}
-	cancel, err := acquisition.source.SubscribeMember(acquisition.memberID, func(env Envelope) {
-		h.publishToMember(acquisition.memberID, env)
-	})
-	keep := false
 	h.mu.Lock()
-	current := h.members[acquisition.memberID]
-	if current == acquisition.route {
-		current.subscribing = false
-		if err == nil && cancel != nil && h.memberSource == acquisition.source && len(current.connections) > 0 {
-			current.cancel = cancel
-			keep = true
+	if h.members[memberID] == route && route.canceling && route.generation == generation {
+		route.canceling = false
+		transition := route.transition
+		route.transition = nil
+		if len(route.connections) == 0 {
+			delete(h.members, memberID)
+		}
+		if transition != nil {
+			close(transition)
 		}
 	}
 	h.mu.Unlock()
-	if !keep && cancel != nil {
-		cancel()
-	}
 }
 
 func (h *Hub) Subscribe(c *Conn, topics []string) []string {
@@ -234,15 +371,15 @@ func (h *Hub) Publish(topic string, env Envelope) {
 	}
 }
 
-func (h *Hub) publishToMember(memberID int64, env Envelope) {
+func (h *Hub) publishToMemberGeneration(memberID int64, route *memberRoute, generation uint64, env Envelope) {
 	if h == nil || memberID <= 0 || strings.TrimSpace(env.Topic) == "" {
 		return
 	}
 	h.mu.RLock()
-	route := h.members[memberID]
+	current := h.members[memberID]
 	topicSubscribers := h.subs[env.Topic]
 	targets := make([]*Conn, 0)
-	if route != nil {
+	if current == route && current.generation == generation && current.cancel != nil && !current.canceling {
 		targets = make([]*Conn, 0, len(route.connections))
 		for c := range route.connections {
 			if _, subscribed := topicSubscribers[c]; subscribed {

@@ -63,7 +63,9 @@ func (c *Conn) Run(authFn func(token string) (identity ClientIdentity, ok bool))
 		c.Close(websocket.CloseNormalClosure, "")
 	}()
 
-	c.hub.Register(c)
+	if !c.hub.Register(c) {
+		return
+	}
 	_ = c.TrySend(SystemFrame(NameConnected, map[string]any{
 		"connId":     c.conn.RemoteAddr().String(),
 		"serverTime": time.Now().UTC().Format(time.RFC3339Nano),
