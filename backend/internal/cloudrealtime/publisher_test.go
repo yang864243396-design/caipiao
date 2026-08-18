@@ -108,6 +108,7 @@ func TestPublisherPublishesSeparateFullSnapshotsForMembers(t *testing.T) {
 	member8 := subscribePayloads(t, bus, "caipiao.client.8.scheme")
 	p := NewPublisher(source, bus, Config{SubjectPrefix: ".caipiao."})
 	p.MarkScheme(8, "inst-8")
+	p.MarkScheme(8, "gone-8")
 	p.MarkScheme(7, "inst-7")
 
 	if err := p.flushSchemes(context.Background()); err != nil {
@@ -281,6 +282,342 @@ func TestStatsLoadAndPublishFailuresRequeueOnlyAffectedMembers(t *testing.T) {
 	}
 }
 
+func TestPublisherSchemeOverflowKeepsNewestDistinctKey(t *testing.T) {
+	// An oldest-wins capacity guard leaves inst-a dirty and silently loses the
+	// newer committed state for inst-b.
+	source := &fakeSource{schemeResult: schemes.RealtimeSchemeSnapshotResult{
+		ItemsByMember: map[int64][]schemes.Instance{7: {{ID: "inst-b"}}},
+	}}
+	bus := newRecordingBus()
+	p := NewPublisher(source, bus, Config{SubjectPrefix: "caipiao", MaxSchemeDirty: 1})
+	p.MarkScheme(7, "inst-a")
+	p.MarkScheme(7, "inst-b")
+
+	if err := p.flushSchemes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	wantRefs := []schemes.RealtimeInstanceRef{{MemberID: 7, InstanceID: "inst-b"}}
+	if got := source.lastSchemeRefs(); !reflect.DeepEqual(got, wantRefs) {
+		t.Fatalf("loaded refs=%v want=%v", got, wantRefs)
+	}
+	payload, ok := bus.payloadFor("caipiao.client.7.scheme")
+	if !ok {
+		t.Fatal("newest scheme key was not published")
+	}
+	var message SchemeSnapshotMessage
+	if err := json.Unmarshal(payload, &message); err != nil {
+		t.Fatal(err)
+	}
+	if len(message.Items) != 1 || message.Items[0].ID != "inst-b" {
+		t.Fatalf("message=%+v", message)
+	}
+}
+
+func TestPublisherStatsOverflowKeepsNewestDistinctMember(t *testing.T) {
+	// A full stats set must retain the newest member, not the first member that
+	// happened to become dirty.
+	source := &fakeSource{statsResult: map[int64]schemes.CloudCenterStats{8: {}}}
+	bus := newRecordingBus()
+	p := NewPublisher(source, bus, Config{SubjectPrefix: "caipiao", MaxStatsDirty: 1})
+	p.MarkStats(7)
+	p.MarkStats(8)
+
+	if err := p.flushStats(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := source.lastStatsMemberIDs(); !reflect.DeepEqual(got, []int64{8}) {
+		t.Fatalf("loaded members=%v", got)
+	}
+	if got := bus.subjects(); !reflect.DeepEqual(got, []string{"caipiao.client.8.cloud_stats"}) {
+		t.Fatalf("subjects=%v", got)
+	}
+}
+
+func TestPublisherSchemeOverflowDuringFlushKeepsNewestDistinctKey(t *testing.T) {
+	// Capacity must remain latest-wins while the only old key is already being
+	// loaded, not just while every key is pending.
+	source := newBlockingSource()
+	source.schemeResult = schemes.RealtimeSchemeSnapshotResult{ItemsByMember: map[int64][]schemes.Instance{
+		7: {{ID: "inst-a"}, {ID: "inst-b"}},
+	}}
+	source.blockFirstScheme = true
+	bus := newRecordingBus()
+	p := NewPublisher(source, bus, Config{SubjectPrefix: "caipiao", MaxSchemeDirty: 1})
+	p.MarkScheme(7, "inst-a")
+
+	finished := flushSchemesAsync(p, context.Background())
+	awaitClosed(t, source.schemeStarted, "scheme source start")
+	p.MarkScheme(7, "inst-b")
+	close(source.releaseScheme)
+	if err := awaitFlush(t, finished); err != nil {
+		t.Fatal(err)
+	}
+	if size := p.Diagnostics().SchemeQueueSize; size != 1 {
+		t.Fatalf("queue size=%d", size)
+	}
+	if err := p.flushSchemes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	wantRefs := []schemes.RealtimeInstanceRef{{MemberID: 7, InstanceID: "inst-b"}}
+	if got := source.lastSchemeRefs(); !reflect.DeepEqual(got, wantRefs) {
+		t.Fatalf("latest refs=%v want=%v", got, wantRefs)
+	}
+	if got := bus.subjects(); !reflect.DeepEqual(got, []string{"caipiao.client.7.scheme"}) {
+		t.Fatalf("subjects=%v", got)
+	}
+}
+
+func TestPublisherSameSchemeKeyMarkedDuringSuccessfulFlushRemainsDirty(t *testing.T) {
+	// Completing an in-flight key must not clear a newer mark for the same key.
+	source := newBlockingSource()
+	source.schemeResult = schemes.RealtimeSchemeSnapshotResult{ItemsByMember: map[int64][]schemes.Instance{7: {{ID: "inst-a"}}}}
+	source.blockFirstScheme = true
+	bus := newRecordingBus()
+	p := NewPublisher(source, bus, Config{SubjectPrefix: "caipiao"})
+	p.MarkScheme(7, "inst-a")
+
+	finished := flushSchemesAsync(p, context.Background())
+	awaitClosed(t, source.schemeStarted, "scheme source start")
+	p.MarkScheme(7, "inst-a")
+	close(source.releaseScheme)
+	if err := awaitFlush(t, finished); err != nil {
+		t.Fatal(err)
+	}
+	if size := p.Diagnostics().SchemeQueueSize; size != 1 {
+		t.Fatalf("queue size=%d", size)
+	}
+	if err := p.flushSchemes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if source.schemeCallCount() != 2 || len(bus.subjects()) != 2 {
+		t.Fatalf("calls=%d subjects=%v", source.schemeCallCount(), bus.subjects())
+	}
+}
+
+func TestPublisherSameSchemeKeyMarkedDuringFailedFlushRemainsDirty(t *testing.T) {
+	// Restoring a failed in-flight key must merge with, not erase or duplicate,
+	// a newer same-key mark.
+	source := newBlockingSource()
+	source.schemeResult = schemes.RealtimeSchemeSnapshotResult{ItemsByMember: map[int64][]schemes.Instance{7: {{ID: "inst-a"}}}}
+	source.blockFirstScheme = true
+	source.firstSchemeErr = errors.New("database unavailable")
+	bus := newRecordingBus()
+	p := NewPublisher(source, bus, Config{SubjectPrefix: "caipiao"})
+	p.MarkScheme(7, "inst-a")
+
+	finished := flushSchemesAsync(p, context.Background())
+	awaitClosed(t, source.schemeStarted, "scheme source start")
+	p.MarkScheme(7, "inst-a")
+	close(source.releaseScheme)
+	if err := awaitFlush(t, finished); err == nil {
+		t.Fatal("expected first load failure")
+	}
+	if size := p.Diagnostics().SchemeQueueSize; size != 1 {
+		t.Fatalf("queue size=%d", size)
+	}
+	if err := p.flushSchemes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if source.schemeCallCount() != 2 || len(bus.subjects()) != 1 {
+		t.Fatalf("calls=%d subjects=%v", source.schemeCallCount(), bus.subjects())
+	}
+}
+
+func TestPublisherSameStatsKeyMarkedDuringSuccessfulFlushRemainsDirty(t *testing.T) {
+	source := newBlockingSource()
+	source.statsResult = map[int64]schemes.CloudCenterStats{7: {}}
+	source.blockFirstStats = true
+	bus := newRecordingBus()
+	p := NewPublisher(source, bus, Config{SubjectPrefix: "caipiao"})
+	p.MarkStats(7)
+
+	finished := flushStatsAsync(p, context.Background())
+	awaitClosed(t, source.statsStarted, "stats source start")
+	p.MarkStats(7)
+	close(source.releaseStats)
+	if err := awaitFlush(t, finished); err != nil {
+		t.Fatal(err)
+	}
+	if size := p.Diagnostics().StatsQueueSize; size != 1 {
+		t.Fatalf("queue size=%d", size)
+	}
+	if err := p.flushStats(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if source.statsCallCount() != 2 || len(bus.subjects()) != 2 {
+		t.Fatalf("calls=%d subjects=%v", source.statsCallCount(), bus.subjects())
+	}
+}
+
+func TestPublisherSameStatsKeyMarkedDuringFailedFlushRemainsDirty(t *testing.T) {
+	source := newBlockingSource()
+	source.statsResult = map[int64]schemes.CloudCenterStats{7: {}}
+	source.blockFirstStats = true
+	source.firstStatsErr = errors.New("database unavailable")
+	bus := newRecordingBus()
+	p := NewPublisher(source, bus, Config{SubjectPrefix: "caipiao"})
+	p.MarkStats(7)
+
+	finished := flushStatsAsync(p, context.Background())
+	awaitClosed(t, source.statsStarted, "stats source start")
+	p.MarkStats(7)
+	close(source.releaseStats)
+	if err := awaitFlush(t, finished); err == nil {
+		t.Fatal("expected first load failure")
+	}
+	if size := p.Diagnostics().StatsQueueSize; size != 1 {
+		t.Fatalf("queue size=%d", size)
+	}
+	if err := p.flushStats(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if source.statsCallCount() != 2 || len(bus.subjects()) != 1 {
+		t.Fatalf("calls=%d subjects=%v", source.statsCallCount(), bus.subjects())
+	}
+}
+
+func TestPublisherSchemeCancellationDuringSourceRestoresBatchWithoutFanout(t *testing.T) {
+	// A canceled bulk read is terminal for this flush; retrying once per member
+	// amplifies cancellation into N additional database calls.
+	source := newBlockingSource()
+	source.blockFirstScheme = true
+	bus := newRecordingBus()
+	p := NewPublisher(source, bus, Config{SubjectPrefix: "caipiao"})
+	for memberID := int64(7); memberID <= 9; memberID++ {
+		p.MarkScheme(memberID, "inst-"+memberIDString(memberID))
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	finished := flushSchemesAsync(p, ctx)
+	awaitClosed(t, source.schemeStarted, "scheme source start")
+	cancel()
+	err := awaitFlush(t, finished)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error=%v", err)
+	}
+	if source.schemeCallCount() != 1 {
+		t.Fatalf("source calls=%d", source.schemeCallCount())
+	}
+	if size := p.Diagnostics().SchemeQueueSize; size != 3 {
+		t.Fatalf("queue size=%d", size)
+	}
+	if got := bus.subjects(); len(got) != 0 {
+		t.Fatalf("subjects=%v", got)
+	}
+}
+
+func TestPublisherStatsCancellationDuringSourceRestoresBatchWithoutFanout(t *testing.T) {
+	source := newBlockingSource()
+	source.blockFirstStats = true
+	bus := newRecordingBus()
+	p := NewPublisher(source, bus, Config{SubjectPrefix: "caipiao"})
+	for memberID := int64(7); memberID <= 9; memberID++ {
+		p.MarkStats(memberID)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	finished := flushStatsAsync(p, ctx)
+	awaitClosed(t, source.statsStarted, "stats source start")
+	cancel()
+	err := awaitFlush(t, finished)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error=%v", err)
+	}
+	if source.statsCallCount() != 1 {
+		t.Fatalf("source calls=%d", source.statsCallCount())
+	}
+	if size := p.Diagnostics().StatsQueueSize; size != 3 {
+		t.Fatalf("queue size=%d", size)
+	}
+	if got := bus.subjects(); len(got) != 0 {
+		t.Fatalf("subjects=%v", got)
+	}
+}
+
+func TestPublisherSchemeCancellationDuringBusRestoresCurrentAndUnprocessedKeys(t *testing.T) {
+	source := &fakeSource{schemeResult: schemes.RealtimeSchemeSnapshotResult{ItemsByMember: map[int64][]schemes.Instance{
+		7: {{ID: "inst-7"}}, 8: {{ID: "inst-8"}}, 9: {{ID: "inst-9"}},
+	}}}
+	bus := newBlockingBus()
+	p := NewPublisher(source, bus, Config{SubjectPrefix: "caipiao"})
+	for memberID := int64(7); memberID <= 9; memberID++ {
+		p.MarkScheme(memberID, "inst-"+memberIDString(memberID))
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	finished := flushSchemesAsync(p, ctx)
+	if subject := awaitSubject(t, bus.started); subject != "caipiao.client.7.scheme" {
+		t.Fatalf("started subject=%q", subject)
+	}
+	cancel()
+	err := awaitFlush(t, finished)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error=%v", err)
+	}
+	if got := bus.attemptedSubjects(); !reflect.DeepEqual(got, []string{"caipiao.client.7.scheme"}) {
+		t.Fatalf("attempted subjects=%v", got)
+	}
+	if size := p.Diagnostics().SchemeQueueSize; size != 3 {
+		t.Fatalf("queue size=%d", size)
+	}
+}
+
+func TestPublisherStatsCancellationDuringBusRestoresCurrentAndUnprocessedKeys(t *testing.T) {
+	source := &fakeSource{statsResult: map[int64]schemes.CloudCenterStats{7: {}, 8: {}, 9: {}}}
+	bus := newBlockingBus()
+	p := NewPublisher(source, bus, Config{SubjectPrefix: "caipiao"})
+	for memberID := int64(7); memberID <= 9; memberID++ {
+		p.MarkStats(memberID)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	finished := flushStatsAsync(p, ctx)
+	if subject := awaitSubject(t, bus.started); subject != "caipiao.client.7.cloud_stats" {
+		t.Fatalf("started subject=%q", subject)
+	}
+	cancel()
+	err := awaitFlush(t, finished)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error=%v", err)
+	}
+	if got := bus.attemptedSubjects(); !reflect.DeepEqual(got, []string{"caipiao.client.7.cloud_stats"}) {
+		t.Fatalf("attempted subjects=%v", got)
+	}
+	if size := p.Diagnostics().StatsQueueSize; size != 3 {
+		t.Fatalf("queue size=%d", size)
+	}
+}
+
+func TestPublisherBlockingPublishFailureRestoresOnlyAffectedAndConcurrentlyMarkedKeys(t *testing.T) {
+	source := &fakeSource{schemeResult: schemes.RealtimeSchemeSnapshotResult{ItemsByMember: map[int64][]schemes.Instance{
+		7: {{ID: "inst-7"}}, 8: {{ID: "inst-8"}}, 9: {{ID: "inst-9"}},
+	}}}
+	bus := newBlockingBus()
+	bus.firstErr = errors.New("nats unavailable")
+	p := NewPublisher(source, bus, Config{SubjectPrefix: "caipiao"})
+	for memberID := int64(7); memberID <= 9; memberID++ {
+		p.MarkScheme(memberID, "inst-"+memberIDString(memberID))
+	}
+	finished := flushSchemesAsync(p, context.Background())
+	if subject := awaitSubject(t, bus.started); subject != "caipiao.client.7.scheme" {
+		t.Fatalf("started subject=%q", subject)
+	}
+	p.MarkScheme(8, "inst-8")
+	close(bus.release)
+	if err := awaitFlush(t, finished); err == nil {
+		t.Fatal("expected member 7 publish failure")
+	}
+	if size := p.Diagnostics().SchemeQueueSize; size != 2 {
+		t.Fatalf("queue size=%d", size)
+	}
+	if got := bus.subjects(); !reflect.DeepEqual(got, []string{"caipiao.client.8.scheme", "caipiao.client.9.scheme"}) {
+		t.Fatalf("successful subjects=%v", got)
+	}
+	if err := p.flushSchemes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	wantRefs := []schemes.RealtimeInstanceRef{{MemberID: 7, InstanceID: "inst-7"}, {MemberID: 8, InstanceID: "inst-8"}}
+	if got := source.lastSchemeRefs(); !reflect.DeepEqual(got, wantRefs) {
+		t.Fatalf("retry refs=%v want=%v", got, wantRefs)
+	}
+}
+
 func TestPublisherBoundsDirtySetsAndReportsOverflow(t *testing.T) {
 	// Removing either capacity check permits unbounded growth on a disconnected
 	// bus or a database outage.
@@ -302,10 +639,10 @@ func TestPublisherBoundsDirtySetsAndReportsOverflow(t *testing.T) {
 	if diag.SchemeQueueSize != 2 || diag.StatsQueueSize != 2 {
 		t.Fatalf("diagnostics=%+v", diag)
 	}
-	if diag.AcceptedSchemeMarks != 3 || diag.CoalescedSchemeMarks != 1 || diag.DroppedSchemeMarks != 1 {
+	if diag.AcceptedSchemeMarks != 4 || diag.CoalescedSchemeMarks != 0 || diag.DroppedSchemeMarks != 2 {
 		t.Fatalf("scheme diagnostics=%+v", diag)
 	}
-	if diag.AcceptedStatsMarks != 3 || diag.CoalescedStatsMarks != 1 || diag.DroppedStatsMarks != 1 {
+	if diag.AcceptedStatsMarks != 4 || diag.CoalescedStatsMarks != 0 || diag.DroppedStatsMarks != 2 {
 		t.Fatalf("stats diagnostics=%+v", diag)
 	}
 }
@@ -357,6 +694,51 @@ func TestPublisherRunReturnsWhenContextIsAlreadyCanceled(t *testing.T) {
 	}
 }
 
+func TestPublisherSchemeCoalescingTimerCancellationReturnsWithoutFlush(t *testing.T) {
+	// The barrier proves cancellation happens after the scheme loop creates its
+	// coalescing timer and before that timer fires.
+	timers := newBlockingTimerFactory()
+	source := &fakeSource{}
+	p := NewPublisher(source, newRecordingBus(), Config{SubjectPrefix: "caipiao", newTimer: timers.New})
+	p.MarkScheme(7, "inst-a")
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		p.runSchemes(ctx)
+		close(done)
+	}()
+	if duration := timers.awaitStarted(t); duration != 200*time.Millisecond {
+		t.Fatalf("duration=%s", duration)
+	}
+	cancel()
+	awaitClosed(t, done, "scheme loop cancellation")
+	if source.schemeCallCount() != 0 || p.Diagnostics().SchemeQueueSize != 1 {
+		t.Fatalf("calls=%d diagnostics=%+v", source.schemeCallCount(), p.Diagnostics())
+	}
+}
+
+func TestPublisherStatsCoalescingTimerCancellationReturnsWithoutFlush(t *testing.T) {
+	// This independently exercises the one-second stats coalescing timer.
+	timers := newBlockingTimerFactory()
+	source := &fakeSource{}
+	p := NewPublisher(source, newRecordingBus(), Config{SubjectPrefix: "caipiao", newTimer: timers.New})
+	p.MarkStats(7)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		p.runStats(ctx)
+		close(done)
+	}()
+	if duration := timers.awaitStarted(t); duration != time.Second {
+		t.Fatalf("duration=%s", duration)
+	}
+	cancel()
+	awaitClosed(t, done, "stats loop cancellation")
+	if source.statsCallCount() != 0 || p.Diagnostics().StatsQueueSize != 1 {
+		t.Fatalf("calls=%d diagnostics=%+v", source.statsCallCount(), p.Diagnostics())
+	}
+}
+
 func subscribePayloads(t *testing.T, bus *realtimebus.Memory, subject string) <-chan []byte {
 	t.Helper()
 	payloads := make(chan []byte, 4)
@@ -390,6 +772,173 @@ func assertNoPayload(t *testing.T, payloads <-chan []byte) {
 		t.Fatalf("unexpected extra payload %s", payload)
 	default:
 	}
+}
+
+func flushSchemesAsync(p *Publisher, ctx context.Context) <-chan error {
+	finished := make(chan error, 1)
+	go func() { finished <- p.flushSchemes(ctx) }()
+	return finished
+}
+
+func flushStatsAsync(p *Publisher, ctx context.Context) <-chan error {
+	finished := make(chan error, 1)
+	go func() { finished <- p.flushStats(ctx) }()
+	return finished
+}
+
+func awaitClosed(t *testing.T, signal <-chan struct{}, name string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for %s", name)
+	}
+}
+
+func awaitSubject(t *testing.T, subjects <-chan string) string {
+	t.Helper()
+	select {
+	case subject := <-subjects:
+		return subject
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for publish start")
+		return ""
+	}
+}
+
+func awaitFlush(t *testing.T, finished <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-finished:
+		return err
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for flush")
+		return nil
+	}
+}
+
+type blockingSource struct {
+	mu sync.Mutex
+
+	schemeResult schemes.RealtimeSchemeSnapshotResult
+	statsResult  map[int64]schemes.CloudCenterStats
+
+	blockFirstScheme bool
+	blockFirstStats  bool
+	firstSchemeErr   error
+	firstStatsErr    error
+	schemeStarted    chan struct{}
+	statsStarted     chan struct{}
+	releaseScheme    chan struct{}
+	releaseStats     chan struct{}
+	schemeCalls      int
+	statsCalls       int
+	lastRefs         []schemes.RealtimeInstanceRef
+	lastMembers      []int64
+}
+
+type blockingTimerFactory struct {
+	started chan time.Duration
+	fire    chan time.Time
+}
+
+func newBlockingTimerFactory() *blockingTimerFactory {
+	return &blockingTimerFactory{started: make(chan time.Duration, 1), fire: make(chan time.Time)}
+}
+
+func (f *blockingTimerFactory) New(duration time.Duration) (<-chan time.Time, func()) {
+	f.started <- duration
+	return f.fire, func() {}
+}
+
+func (f *blockingTimerFactory) awaitStarted(t *testing.T) time.Duration {
+	t.Helper()
+	select {
+	case duration := <-f.started:
+		return duration
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for coalescing timer")
+		return 0
+	}
+}
+
+func newBlockingSource() *blockingSource {
+	return &blockingSource{
+		schemeStarted: make(chan struct{}),
+		statsStarted:  make(chan struct{}),
+		releaseScheme: make(chan struct{}),
+		releaseStats:  make(chan struct{}),
+	}
+}
+
+func (s *blockingSource) LoadRealtimeSchemeSnapshots(ctx context.Context, refs []schemes.RealtimeInstanceRef) (schemes.RealtimeSchemeSnapshotResult, error) {
+	s.mu.Lock()
+	s.schemeCalls++
+	call := s.schemeCalls
+	s.lastRefs = append([]schemes.RealtimeInstanceRef(nil), refs...)
+	block := s.blockFirstScheme && call == 1
+	result := s.schemeResult
+	err := error(nil)
+	if call == 1 {
+		err = s.firstSchemeErr
+	}
+	s.mu.Unlock()
+	if block {
+		close(s.schemeStarted)
+		select {
+		case <-s.releaseScheme:
+		case <-ctx.Done():
+			return schemes.RealtimeSchemeSnapshotResult{}, ctx.Err()
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return schemes.RealtimeSchemeSnapshotResult{}, err
+	}
+	return result, err
+}
+
+func (s *blockingSource) LoadRealtimeStats(ctx context.Context, memberIDs []int64) (map[int64]schemes.CloudCenterStats, error) {
+	s.mu.Lock()
+	s.statsCalls++
+	call := s.statsCalls
+	s.lastMembers = append([]int64(nil), memberIDs...)
+	block := s.blockFirstStats && call == 1
+	result := s.statsResult
+	err := error(nil)
+	if call == 1 {
+		err = s.firstStatsErr
+	}
+	s.mu.Unlock()
+	if block {
+		close(s.statsStarted)
+		select {
+		case <-s.releaseStats:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return result, err
+}
+
+func (s *blockingSource) schemeCallCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.schemeCalls
+}
+
+func (s *blockingSource) statsCallCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.statsCalls
+}
+
+func (s *blockingSource) lastSchemeRefs() []schemes.RealtimeInstanceRef {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]schemes.RealtimeInstanceRef(nil), s.lastRefs...)
 }
 
 type fakeSource struct {
@@ -483,6 +1032,70 @@ type recordingBus struct {
 	mu       sync.Mutex
 	messages []recordedMessage
 	failures map[string][]error
+}
+
+type blockingBus struct {
+	mu       sync.Mutex
+	attempts []string
+	messages []recordedMessage
+	started  chan string
+	release  chan struct{}
+	firstErr error
+}
+
+func newBlockingBus() *blockingBus {
+	return &blockingBus{started: make(chan string, 1), release: make(chan struct{})}
+}
+
+func (b *blockingBus) Publish(ctx context.Context, subject string, payload []byte) error {
+	b.mu.Lock()
+	b.attempts = append(b.attempts, subject)
+	call := len(b.attempts)
+	b.mu.Unlock()
+	if call == 1 {
+		b.started <- subject
+		select {
+		case <-b.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		if b.firstErr != nil {
+			return b.firstErr
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	b.messages = append(b.messages, recordedMessage{subject: subject, payload: append([]byte(nil), payload...)})
+	b.mu.Unlock()
+	return nil
+}
+
+func (b *blockingBus) Subscribe(string, realtimebus.Handler) (realtimebus.Subscription, error) {
+	return nil, errors.New("blocking bus does not subscribe")
+}
+
+func (b *blockingBus) OnConnectionChange(func(bool)) {}
+func (b *blockingBus) Diagnostics() realtimebus.Diagnostics {
+	return realtimebus.Diagnostics{Kind: "blocking", Connected: true}
+}
+func (b *blockingBus) Close() error { return nil }
+
+func (b *blockingBus) attemptedSubjects() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]string(nil), b.attempts...)
+}
+
+func (b *blockingBus) subjects() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	result := make([]string, 0, len(b.messages))
+	for _, message := range b.messages {
+		result = append(result, message.subject)
+	}
+	return result
 }
 
 func newRecordingBus() *recordingBus {
