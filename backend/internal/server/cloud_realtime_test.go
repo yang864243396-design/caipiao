@@ -517,6 +517,68 @@ func TestServerCloseWaitsForTrackedWorkerBeforeDatabase(t *testing.T) {
 	}
 }
 
+func TestCleanupFailedServerStartWaitsBeforeClosingResources(t *testing.T) {
+	workerCtx, cancelWorkers := context.WithCancel(context.Background())
+	workerStarted := make(chan struct{})
+	releaseWorker := make(chan struct{})
+	workerFinished := make(chan struct{})
+	var workers sync.WaitGroup
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		close(workerStarted)
+		<-workerCtx.Done()
+		<-releaseWorker
+		close(workerFinished)
+	}()
+	<-workerStarted
+
+	busClosed := make(chan struct{})
+	databaseClosed := make(chan struct{})
+	cleanupDone := make(chan struct{})
+	go func() {
+		cleanupFailedServerStart(cancelWorkers, workers.Wait, func() { close(busClosed) }, func() { close(databaseClosed) })
+		close(cleanupDone)
+	}()
+	select {
+	case <-workerCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("constructor cleanup did not cancel workers")
+	}
+	select {
+	case <-busClosed:
+		t.Fatal("constructor cleanup closed bus while worker was running")
+	default:
+	}
+	select {
+	case <-databaseClosed:
+		t.Fatal("constructor cleanup closed database while worker was running")
+	default:
+	}
+
+	close(releaseWorker)
+	select {
+	case <-cleanupDone:
+	case <-time.After(time.Second):
+		t.Fatal("constructor cleanup did not finish after worker exited")
+	}
+	select {
+	case <-workerFinished:
+	default:
+		t.Fatal("worker did not finish before constructor cleanup returned")
+	}
+	select {
+	case <-busClosed:
+	default:
+		t.Fatal("constructor cleanup did not close bus")
+	}
+	select {
+	case <-databaseClosed:
+	default:
+		t.Fatal("constructor cleanup did not close database")
+	}
+}
+
 func TestServerCloseQuiescesRealtimeCallbacks(t *testing.T) {
 	bus := &callbackBus{connected: true}
 	guard := newRealtimeCallbackGuard()

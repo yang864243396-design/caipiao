@@ -178,6 +178,9 @@ func (w *Worker) Run(ctx context.Context) {
 	if w == nil {
 		return
 	}
+	if w.strategyProcessor != nil {
+		defer w.strategyProcessor.Close()
+	}
 	ticker := time.NewTicker(time.Duration(w.tickSec) * time.Second)
 	defer ticker.Stop()
 	placeN := 0

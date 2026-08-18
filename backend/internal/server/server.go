@@ -135,10 +135,11 @@ func New(cfg config.Config) (*Server, error) {
 		var err error
 		realtimeBus, err = newCloudRealtimeBus(cfg)
 		if err != nil {
-			workerCancel()
-			if pool != nil {
-				pool.Close()
-			}
+			cleanupFailedServerStart(workerCancel, workers.Wait, nil, func() {
+				if pool != nil {
+					pool.Close()
+				}
+			})
 			return nil, fmt.Errorf("cloud realtime bus: %w", err)
 		}
 	}
@@ -211,14 +212,15 @@ func New(cfg config.Config) (*Server, error) {
 	betSvc.SetHistorySync(historyWorker)
 	cmsUploads, err := content.NewUploadStore(cfg.CMSUploadDir)
 	if err != nil {
-		workerCancel()
-		workers.Wait()
-		if realtimeBus != nil {
-			_ = realtimeBus.Close()
-		}
-		if pool != nil {
-			pool.Close()
-		}
+		cleanupFailedServerStart(workerCancel, workers.Wait, func() {
+			if realtimeBus != nil {
+				_ = realtimeBus.Close()
+			}
+		}, func() {
+			if pool != nil {
+				pool.Close()
+			}
+		})
 		return nil, fmt.Errorf("cms upload store: %w", err)
 	}
 	h := handler.New(authSvc, maintSvc, betSvc, inst, lb, pool, memberSvc, bets.NewService(pool, memberSvc), chaseSvc, copyHallSvc, schemesSvc, gamesSvc, contentSvc, auditSvc, dashboardSvc, ordersAdminSvc, reportsSvc, wsHub, guajiClient, guajiAccounts, cmsUploads)
@@ -562,6 +564,21 @@ func (s *Server) Close() {
 			s.db.Close()
 		}
 	})
+}
+
+func cleanupFailedServerStart(cancelWorkers context.CancelFunc, waitWorkers, closeRealtime, closeDatabase func()) {
+	if cancelWorkers != nil {
+		cancelWorkers()
+	}
+	if waitWorkers != nil {
+		waitWorkers()
+	}
+	if closeRealtime != nil {
+		closeRealtime()
+	}
+	if closeDatabase != nil {
+		closeDatabase()
+	}
 }
 
 type memberIdentitySource interface {

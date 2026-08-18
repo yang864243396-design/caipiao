@@ -64,6 +64,7 @@ type Worker struct {
 	highRefreshQueue   chan string
 	normalRefreshQueue chan string
 	refreshStart       sync.Once
+	refreshWait        sync.WaitGroup
 	refreshConcurrency int
 	refreshTimeout     time.Duration
 	refreshFn          func(context.Context, string) error
@@ -87,6 +88,7 @@ func (w *Worker) Run(ctx context.Context) {
 		return
 	}
 	w.startRefreshWorkers(ctx)
+	defer w.refreshWait.Wait()
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
 	slog.Info("guaji period sync started", "interval", w.interval.String())
@@ -198,7 +200,11 @@ func (w *Worker) startRefreshWorkers(ctx context.Context) {
 			n = defaultRefreshConcurrency
 		}
 		for range n {
-			go w.refreshLoop(ctx)
+			w.refreshWait.Add(1)
+			go func() {
+				defer w.refreshWait.Done()
+				w.refreshLoop(ctx)
+			}()
 		}
 	})
 }

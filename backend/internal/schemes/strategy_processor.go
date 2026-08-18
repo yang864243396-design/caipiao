@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -30,6 +31,11 @@ type StrategyProcessor struct {
 	pool *db.Pool
 	q    *sqlcdb.Queries
 	busy atomic.Bool
+
+	lifecycleMu sync.Mutex
+	closing     bool
+	recoverWait sync.WaitGroup
+	recoverFn   func(context.Context) error
 }
 
 func NewStrategyProcessor(pool *db.Pool) *StrategyProcessor {
@@ -40,10 +46,17 @@ func NewStrategyProcessor(pool *db.Pool) *StrategyProcessor {
 }
 
 func (p *StrategyProcessor) Recover(ctx context.Context) error {
-	if p == nil || p.q == nil || !p.busy.CompareAndSwap(false, true) {
+	if p == nil || (p.q == nil && p.recoverFn == nil) || !p.busy.CompareAndSwap(false, true) {
 		return nil
 	}
 	defer p.busy.Store(false)
+	if p.recoverFn != nil {
+		return p.recoverFn(ctx)
+	}
+	return p.recoverPending(ctx)
+}
+
+func (p *StrategyProcessor) recoverPending(ctx context.Context) error {
 	rows, err := p.q.ListPendingFormalStrategyRows(ctx, strategyProcessorBatchSize)
 	if err != nil {
 		return err
@@ -60,7 +73,27 @@ func (p *StrategyProcessor) NotifyDraw(ctx context.Context, _, _ string) {
 	if p == nil || p.busy.Load() {
 		return
 	}
-	go func() { _ = p.Recover(ctx) }()
+	p.lifecycleMu.Lock()
+	if p.closing {
+		p.lifecycleMu.Unlock()
+		return
+	}
+	p.recoverWait.Add(1)
+	p.lifecycleMu.Unlock()
+	go func() {
+		defer p.recoverWait.Done()
+		_ = p.Recover(ctx)
+	}()
+}
+
+func (p *StrategyProcessor) Close() {
+	if p == nil {
+		return
+	}
+	p.lifecycleMu.Lock()
+	p.closing = true
+	p.lifecycleMu.Unlock()
+	p.recoverWait.Wait()
 }
 
 func (p *StrategyProcessor) process(ctx context.Context, row sqlcdb.PendingFormalStrategyRow) error {
