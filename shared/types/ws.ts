@@ -29,6 +29,65 @@ export interface WsSchemeInstanceUpdatedPayload {
   hint?: 'refresh_running_list' | 'refresh_bet_records'
 }
 
+export interface WsCloudSchemeSnapshotItem {
+  id: string
+  definitionId?: string
+  lotteryCode?: string
+  lotteryName?: string
+  lotteryLabel?: string
+  schemeName: string
+  status: 'pending' | 'running' | 'paused' | 'soft_stopped'
+  statusReason?: string
+  statusLabel: string
+  turnover: number
+  countdownSec: number
+  countdownEndTime?: string
+  countdownCloseAt?: string
+  countdownPeriod?: string
+  countdownWindowSec?: number
+  countdownLabel?: string
+  pnl: number
+  runTimeSec: number
+  lookbackPnl: number
+  sessionPnl: number
+  multiplier: number
+  simBet: boolean
+  schemeCurrency?: string
+  runTypeId?: string
+  runTypeLabel?: string
+  updatedAt: string
+}
+
+export interface WsCloudCenterChannelStats {
+  totalTurnover: number
+  totalSessionPnl: number
+  runningSessionPnl: number
+}
+
+export interface WsCloudCenterStats {
+  formal: WsCloudCenterChannelStats
+  sim: WsCloudCenterChannelStats
+  simQuota: {
+    todayStarts: number
+    todayStartsLimit: number
+    running: number
+    runningLimit: number
+  }
+}
+
+export interface WsSchemeInstancesSnapshotPayload {
+  schemaVersion: 1
+  generatedAt: string
+  items: WsCloudSchemeSnapshotItem[]
+  removedIds: string[]
+}
+
+export interface WsCloudStatsSnapshotPayload {
+  schemaVersion: 1
+  generatedAt: string
+  stats: WsCloudCenterStats
+}
+
 export interface WsWalletUpdatedPayload {
   available: number
   frozen: number
@@ -71,6 +130,7 @@ export interface WsDrawResultPayload {
 export const WS_TOPICS = {
   publicMaintenance: 'public.maintenance',
   clientSchemeInstance: 'client.scheme.instance',
+  clientCloudStats: 'client.cloud.stats',
   clientWallet: 'client.wallet',
   publicDraw: (lotteryCode: string) => `public.draw:${lotteryCode}`,
   adminWithdrawQueue: 'admin.withdraw.queue',
@@ -81,6 +141,8 @@ export const WS_TOPICS = {
 export const WS_EVENTS = {
   maintenanceChanged: 'public.maintenance.changed',
   schemeInstanceUpdated: 'client.scheme.instance.updated',
+  schemeInstancesSnapshot: 'client.scheme.instances.snapshot',
+  cloudStatsSnapshot: 'client.cloud.stats.snapshot',
   walletUpdated: 'client.wallet.updated',
   withdrawQueueChanged: 'admin.withdraw.queue.changed',
   schemeMonitorChanged: 'admin.scheme.monitor.changed',

@@ -1,6 +1,6 @@
 import type { WsEnvelope } from '@shared/types/ws'
 
-import { WS_EVENTS } from '@shared/types/ws'
+import { WS_EVENTS, WS_TOPICS } from '@shared/types/ws'
 
 
 
@@ -68,6 +68,8 @@ export function connectClientWs(
 
   let subscribedExtra = false
 
+  let readyNotified = false
+
 
 
   const wsUrl = accessToken ? `${url}?token=${encodeURIComponent(accessToken)}` : url
@@ -109,6 +111,8 @@ export function connectClientWs(
     authed = false
 
     subscribedExtra = false
+
+    readyNotified = false
 
   }
 
@@ -166,6 +170,21 @@ export function connectClientWs(
 
   }
 
+  function maybeNotifyReady(frame: WsEnvelope) {
+    if (!authed || readyNotified) return
+    const payload = frame.payload as { topics?: unknown } | undefined
+    if (!Array.isArray(payload?.topics)) return
+    const topics = payload.topics.filter((topic): topic is string => typeof topic === 'string')
+    if (
+      !topics.includes(WS_TOPICS.clientSchemeInstance) ||
+      !topics.includes(WS_TOPICS.clientCloudStats)
+    ) {
+      return
+    }
+    readyNotified = true
+    options?.onConnected?.()
+  }
+
 
 
   function connect() {
@@ -187,8 +206,6 @@ export function connectClientWs(
         authed = true
 
         maybeSubscribeExtra()
-
-        options?.onConnected?.()
 
       }
 
@@ -216,13 +233,13 @@ export function connectClientWs(
 
           maybeSubscribeExtra()
 
-          options?.onConnected?.()
-
           return
 
         }
 
         if (frame.name === 'system.subscribed') {
+
+          maybeNotifyReady(frame)
 
           return
 
