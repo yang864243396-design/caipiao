@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import ContentDialog from '@/components/ui/ContentDialog.vue'
-import { startCloudRunningSync, cloudRunningPollMs } from '@/composables/useCloudRunningPoll'
+import { startCloudRunningSync } from '@/composables/useCloudRunningPoll'
 import { ApiError } from '@/api/client'
 import { deleteSchemeDefinition, getSchemeDefinition, updateSchemeDefinition } from '@/api/schemes/definitions'
 import {
@@ -37,7 +37,6 @@ import {
   mergeCloudSchemesStable,
   mergeSchemeCountdownOnPoll,
   schemeCountdownDisplayFields,
-  SCHEME_COUNTDOWN_WAITING_LABEL,
   tickSchemeRunTimeSec,
   schemeCountdownText,
   stopCloudInstance,
@@ -108,10 +107,9 @@ const enableAllBusy = ref(false)
 const centerStats = ref(emptyCloudCenterStats())
 
 let stopCloudPoll: (() => void) | null = null
-let cloudRefresh: (() => void) | null = null
 let countdownTimer: ReturnType<typeof setInterval> | null = null
 let loadMoreObserver: IntersectionObserver | null = null
-let lastWaitingRefreshAt = 0
+let viewUnmounted = false
 
 function setupLoadMoreObserver() {
   loadMoreObserver?.disconnect()
@@ -180,6 +178,26 @@ function applyRunningSchemes(cards: CloudSchemeCard[], preserveOrder = false) {
   releaseBusyForSchemes(merged)
 }
 
+function applyRealtimeSchemes(cards: CloudSchemeCard[], removedIds: string[]) {
+  const loadedIds = new Set(runningSchemes.value.map((card) => card.id))
+  const updatesById = new Map(
+    cards
+      .filter((card) => loadedIds.has(card.id))
+      .map((card) => [card.id, card]),
+  )
+
+  if (updatesById.size > 0) {
+    const updatedCards = runningSchemes.value.map((card) => updatesById.get(card.id) ?? card)
+    applyRunningSchemes(updatedCards, true)
+  }
+
+  const tombstones = new Set(removedIds.filter((id) => loadedIds.has(id)))
+  if (tombstones.size === 0) return
+
+  runningSchemes.value = runningSchemes.value.filter((card) => !tombstones.has(card.id))
+  listTotal.value = Math.max(0, listTotal.value - tombstones.size)
+}
+
 function appendRunningSchemes(cards: CloudSchemeCard[]) {
   if (cards.length === 0) return
   const seen = new Set(runningSchemes.value.map((s) => s.id))
@@ -246,12 +264,11 @@ async function refreshCloudStats() {
 
 async function loadCloudData() {
   try {
-    const [lb, global, stats] = await Promise.all([
+    const [lb, global] = await Promise.all([
       fetchLookbackSettings(),
       fetchCloudGlobalSettings(),
-      fetchCloudCenterStats().catch(() => emptyCloudCenterStats()),
+      refreshCloudStats(),
     ])
-    centerStats.value = stats
     await loadSchemePage(true)
     Object.assign(lookback, lookbackToUi(lb))
     lookbackSummary.value = lookbackSummaryFromUi(lookback)
@@ -300,40 +317,15 @@ async function persistGlobalSettings() {
 }
 
 function tickSchemeLiveFields() {
-  let periodEnded = false
-  let needsWaitingRefresh = false
   for (const s of runningSchemes.value) {
     s.runTimeSec = tickSchemeRunTimeSec(s)
 
     if (!s.countdownEndTime) continue
 
-    const prev = s.countdownSec
     const display = schemeCountdownDisplayFields(s)
     s.countdownSec = display.countdownSec
     if (s.status === 'running') {
       s.countdownLabel = display.countdownLabel
-    }
-    if (prev > 0 && s.countdownSec === 0) {
-      periodEnded = true
-    }
-    if (
-      s.status === 'running'
-      && s.countdownSec <= 0
-      && (s.countdownLabel === SCHEME_COUNTDOWN_WAITING_LABEL || display.countdownLabel === SCHEME_COUNTDOWN_WAITING_LABEL)
-    ) {
-      needsWaitingRefresh = true
-    }
-  }
-  if (periodEnded) {
-    void cloudRefresh?.()
-    return
-  }
-  if (needsWaitingRefresh) {
-    const now = Date.now()
-    const waitMs = Math.max(5_000, Math.floor(cloudRunningPollMs() / 2))
-    if (now - lastWaitingRefreshAt >= waitMs) {
-      lastWaitingRefreshAt = now
-      void cloudRefresh?.()
     }
   }
 }
@@ -343,21 +335,25 @@ function statPnlClass(n: number): string {
 }
 
 onMounted(async () => {
-  const sync = startCloudRunningSync(
-    () => runningSchemes.value.map((s) => s.id),
-    (cards) => applyRunningSchemes(cards, true),
-  )
-  stopCloudPoll = sync.stop
-  cloudRefresh = async () => {
-    await sync.refresh()
-    await refreshCloudStats()
-  }
+  viewUnmounted = false
   countdownTimer = window.setInterval(tickSchemeLiveFields, 1000)
   await loadCloudData()
-  void sync.refresh()
+  if (viewUnmounted) return
+
+  const sync = startCloudRunningSync(
+    () => runningSchemes.value.map((s) => s.id),
+    {
+      onSchemes: applyRealtimeSchemes,
+      onStats: (stats) => {
+        centerStats.value = stats
+      },
+    },
+  )
+  stopCloudPoll = sync.stop
 })
 
 onUnmounted(() => {
+  viewUnmounted = true
   loadMoreObserver?.disconnect()
   loadMoreObserver = null
   if (countdownTimer) {
@@ -366,7 +362,6 @@ onUnmounted(() => {
   }
   stopCloudPoll?.()
   stopCloudPoll = null
-  cloudRefresh = null
 })
 
 function openLookbackDialog() {
@@ -640,7 +635,6 @@ async function enableAllSchemes() {
     }
     if (okCount > 0) {
       ElMessage.success(`已成功开启 ${okCount} 个方案`)
-      void refreshCloudStats()
     }
     if (failed.length > 0) {
       const hint = failed.slice(0, 2).join('；')
@@ -840,7 +834,6 @@ async function startScheme(s: CloudSchemeCard) {
     }
     const updated = await startCloudInstance(s.id)
     patchSchemeCard(updated)
-    void refreshCloudStats()
     ElMessage.success(`已开启：${s.schemeName}`)
   } catch (e) {
     endSchemeAction(s.id)
@@ -854,7 +847,6 @@ async function stopScheme(s: CloudSchemeCard) {
   try {
     const updated = await stopCloudInstance(s.id)
     patchSchemeCard(updated)
-    void refreshCloudStats()
     ElMessage.success(`已停止：${s.schemeName}`)
   } catch (e) {
     endSchemeAction(s.id)
