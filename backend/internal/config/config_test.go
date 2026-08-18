@@ -12,27 +12,35 @@ func TestLoadCloudRealtimeConfiguration(t *testing.T) {
 		name string
 		env  map[string]string
 		want struct {
-			enabled  bool
-			bus      string
-			url      string
-			prefix   string
-			coalesce time.Duration
-			stats    time.Duration
-			interval time.Duration
-			batch    int
+			enabled         bool
+			bus             string
+			url             string
+			user            string
+			password        string
+			token           string
+			credentialsFile string
+			prefix          string
+			coalesce        time.Duration
+			stats           time.Duration
+			interval        time.Duration
+			batch           int
 		}
 	}{
 		{
 			name: "uses cloud realtime defaults",
 			want: struct {
-				enabled  bool
-				bus      string
-				url      string
-				prefix   string
-				coalesce time.Duration
-				stats    time.Duration
-				interval time.Duration
-				batch    int
+				enabled         bool
+				bus             string
+				url             string
+				user            string
+				password        string
+				token           string
+				credentialsFile string
+				prefix          string
+				coalesce        time.Duration
+				stats           time.Duration
+				interval        time.Duration
+				batch           int
 			}{
 				enabled: true, bus: "nats", url: "nats://127.0.0.1:4222", prefix: "caipiao",
 				coalesce: 200 * time.Millisecond, stats: time.Second, interval: 5 * time.Second, batch: 500,
@@ -44,6 +52,10 @@ func TestLoadCloudRealtimeConfiguration(t *testing.T) {
 				"CLOUD_REALTIME_ENABLED":      "false",
 				"CLOUD_REALTIME_BUS":          "memory",
 				"NATS_URL":                    "nats://bus.internal:4222",
+				"NATS_USER":                   "nats-user-sentinel",
+				"NATS_PASSWORD":               "nats-password-sentinel",
+				"NATS_TOKEN":                  "nats-token-sentinel",
+				"NATS_CREDENTIALS_FILE":       "nats-credentials-file-sentinel",
 				"NATS_SUBJECT_PREFIX":         "tenant",
 				"CLOUD_REALTIME_COALESCE_MS":  "250",
 				"CLOUD_STATS_COALESCE_MS":     "1250",
@@ -51,16 +63,20 @@ func TestLoadCloudRealtimeConfiguration(t *testing.T) {
 				"CLOUD_RECONCILE_BATCH":       "250",
 			},
 			want: struct {
-				enabled  bool
-				bus      string
-				url      string
-				prefix   string
-				coalesce time.Duration
-				stats    time.Duration
-				interval time.Duration
-				batch    int
+				enabled         bool
+				bus             string
+				url             string
+				user            string
+				password        string
+				token           string
+				credentialsFile string
+				prefix          string
+				coalesce        time.Duration
+				stats           time.Duration
+				interval        time.Duration
+				batch           int
 			}{
-				enabled: false, bus: "memory", url: "nats://bus.internal:4222", prefix: "tenant",
+				enabled: false, bus: "memory", url: "nats://bus.internal:4222", user: "nats-user-sentinel", password: "nats-password-sentinel", token: "nats-token-sentinel", credentialsFile: "nats-credentials-file-sentinel", prefix: "tenant",
 				coalesce: 250 * time.Millisecond, stats: 1250 * time.Millisecond, interval: 6 * time.Second, batch: 250,
 			},
 		},
@@ -79,11 +95,8 @@ func TestLoadCloudRealtimeConfiguration(t *testing.T) {
 			}
 
 			got := Load()
-			if got.CloudRealtimeEnabled != tt.want.enabled || got.CloudRealtimeBus != tt.want.bus || got.NATSURL != tt.want.url || got.NATSSubjectPrefix != tt.want.prefix || got.CloudRealtimeCoalesce != tt.want.coalesce || got.CloudStatsCoalesce != tt.want.stats || got.CloudReconcileInterval != tt.want.interval || got.CloudReconcileBatch != tt.want.batch {
-				t.Fatalf("got enabled=%v bus=%q url=%q prefix=%q coalesce=%s stats=%s interval=%s batch=%d", got.CloudRealtimeEnabled, got.CloudRealtimeBus, got.NATSURL, got.NATSSubjectPrefix, got.CloudRealtimeCoalesce, got.CloudStatsCoalesce, got.CloudReconcileInterval, got.CloudReconcileBatch)
-			}
-			if got.NATSUser != "" || got.NATSPassword != "" || got.NATSToken != "" || got.NATSCredentialsFile != "" {
-				t.Fatal("unexpected NATS credentials")
+			if got.CloudRealtimeEnabled != tt.want.enabled || got.CloudRealtimeBus != tt.want.bus || got.NATSURL != tt.want.url || got.NATSUser != tt.want.user || got.NATSPassword != tt.want.password || got.NATSToken != tt.want.token || got.NATSCredentialsFile != tt.want.credentialsFile || got.NATSSubjectPrefix != tt.want.prefix || got.CloudRealtimeCoalesce != tt.want.coalesce || got.CloudStatsCoalesce != tt.want.stats || got.CloudReconcileInterval != tt.want.interval || got.CloudReconcileBatch != tt.want.batch {
+				t.Fatalf("got enabled=%v bus=%q url=%q user=%q password=%q token=%q credentialsFile=%q prefix=%q coalesce=%s stats=%s interval=%s batch=%d", got.CloudRealtimeEnabled, got.CloudRealtimeBus, got.NATSURL, got.NATSUser, got.NATSPassword, got.NATSToken, got.NATSCredentialsFile, got.NATSSubjectPrefix, got.CloudRealtimeCoalesce, got.CloudStatsCoalesce, got.CloudReconcileInterval, got.CloudReconcileBatch)
 			}
 		})
 	}

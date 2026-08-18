@@ -3,6 +3,7 @@ package realtimebus
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestMemoryBusIsolatesSubjectsAndUnsubscribes(t *testing.T) {
@@ -35,5 +36,54 @@ func TestMemoryBusIsolatesSubjectsAndUnsubscribes(t *testing.T) {
 	case value := <-got:
 		t.Fatalf("unexpected %q", value)
 	default:
+	}
+}
+
+func TestMemoryBusDoesNotBlockPublishOrOtherSubscribersOnSlowHandler(t *testing.T) {
+	// This catches synchronous handler dispatch, where one stuck consumer
+	// prevents Publish from returning and holds every later subscriber.
+	bus := NewMemory()
+	slowStarted := make(chan struct{})
+	releaseSlow := make(chan struct{})
+	defer close(releaseSlow)
+	fastReceived := make(chan string, 1)
+
+	if _, err := bus.Subscribe("caipiao.client.7.scheme", func(_ string, _ []byte) {
+		close(slowStarted)
+		<-releaseSlow
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bus.Subscribe("caipiao.client.7.scheme", func(_ string, payload []byte) {
+		fastReceived <- string(payload)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	published := make(chan error, 1)
+	go func() {
+		published <- bus.Publish(context.Background(), "caipiao.client.7.scheme", []byte("snapshot"))
+	}()
+
+	select {
+	case <-slowStarted:
+	case <-time.After(time.Second):
+		t.Fatal("slow handler did not start")
+	}
+	select {
+	case err := <-published:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Publish was blocked by slow handler")
+	}
+	select {
+	case value := <-fastReceived:
+		if value != "snapshot" {
+			t.Fatalf("got %q", value)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("fast subscriber was blocked by slow handler")
 	}
 }
