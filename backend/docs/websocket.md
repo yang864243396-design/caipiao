@@ -407,3 +407,22 @@ Admin：`admin/src/composables/ws/useAdminWs.ts`，提现/方案监控页监听 
 
 - 新增事件：**先**更新本文 §4.4 与 `contracts/ws.ts`，再实现 Publish 与前端 handler。
 - REST 行为不变；WS 仅为 **体验增强**，不得成为唯一数据源。
+
+---
+
+## 12. Cloud Center versioned snapshots
+
+Cloud Center uses two authenticated client-topic events:
+
+| Topic | Event name | Payload |
+|---|---|---|
+| `client.scheme.instance` | `client.scheme.instances.snapshot` | `{ schemaVersion: 1, generatedAt, items, removedIds }` |
+| `client.cloud.stats` | `client.cloud.stats.snapshot` | `{ schemaVersion: 1, generatedAt, stats }` |
+
+NATS routes snapshots internally by numeric member ID. The browser never selects the numeric NATS subject; the WebSocket Hub derives it from the authenticated member identity and forwards only that member's events.
+
+`system.connected` and `system.auth.ok` do not mean Cloud Center data is ready. A connection cycle becomes ready only after `system.subscribed.payload.topics` confirms both default topics above. The client then performs exactly one REST reconciliation for that subscription cycle. Snapshots received during reconciliation are buffered and replayed by each item's `updatedAt`; stale versions are ignored.
+
+During a stable ready WebSocket, Cloud Center performs no periodic requests to `/client/cloud/schemes/running` or `/client/cloud/schemes/stats`. Local one-second countdown updates do not issue network requests. If the socket closes because the realtime bus is unavailable, the server uses close code `1012` with reason `realtime_bus_unavailable`; after reconnect and subscription acknowledgement, the client performs one new REST reconciliation.
+
+The legacy event `client.scheme.instance.updated` with `hint=refresh_running_list` remains for phased deployment. A new client ignores legacy invalidations after receiving its first versioned snapshot. Production topology, rollout, diagnostics, smoke commands, rollback, and legacy-removal criteria are documented in [`cloud-realtime-nats.md`](cloud-realtime-nats.md).

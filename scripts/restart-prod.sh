@@ -40,7 +40,25 @@ SCOPE_SET=0
 
 log()  { printf '\n==> %s\n' "$*"; }
 ok()   { printf '    OK: %s\n' "$*"; }
+warn() { printf 'WARNING: %s\n' "$*" >&2; }
 die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+service_env_matches() {
+  local pattern="$1"
+  local main_pid
+  main_pid="$(sudo systemctl show "$BACKEND_UNIT" --property=MainPID --value 2>/dev/null || true)"
+  [[ "$main_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  sudo sh -c "tr '\\000' '\\n' < /proc/$main_pid/environ" | grep -E "$pattern" >/dev/null
+}
+
+warn_missing_nats_url() {
+  if service_env_matches '^CLOUD_REALTIME_ENABLED=(false|0|no|off)$'; then
+    return 0
+  fi
+  if ! service_env_matches '^NATS_URL=.+$'; then
+    warn "CLOUD_REALTIME_ENABLED is not false but NATS_URL is absent; backend will use its localhost default. Configure the production NATS cluster explicitly."
+  fi
+}
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "未找到命令：$1"
@@ -120,6 +138,7 @@ if [[ "$DO_BACKEND" -eq 1 ]]; then
   sudo systemctl restart "$BACKEND_UNIT"
   sleep 1
   if sudo systemctl is-active --quiet "$BACKEND_UNIT"; then
+    warn_missing_nats_url
     ok "$BACKEND_UNIT 运行中"
   else
     sudo systemctl status "$BACKEND_UNIT" --no-pager -l || true
