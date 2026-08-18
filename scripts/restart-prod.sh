@@ -48,7 +48,7 @@ service_env_matches() {
   local main_pid
   main_pid="$(sudo systemctl show "$BACKEND_UNIT" --property=MainPID --value 2>/dev/null || true)"
   [[ "$main_pid" =~ ^[1-9][0-9]*$ ]] || return 1
-  sudo sh -c "tr '\\000' '\\n' < /proc/$main_pid/environ" | grep -E "$pattern" >/dev/null
+  sudo sh -c "tr '\\000' '\\n' < /proc/$main_pid/environ" | grep -Ei "$pattern" >/dev/null
 }
 
 warn_missing_nats_url() {

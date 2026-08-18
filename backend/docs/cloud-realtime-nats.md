@@ -154,7 +154,7 @@ go run ./cmd/cloud-realtime-smoke -nats nats://10.0.0.11:4222 \
   -prefix caipiao-smoke -member-id 7 -timeout 15s -publish
 ```
 
-The command exits non-zero when NATS does not connect or both event types are not observed before the timeout.
+The command exits non-zero when NATS does not connect or both event types are not observed before the timeout. `SIGINT` and `SIGTERM` cancel the wait, unsubscribe both subjects, close the NATS client, and exit with code 130. The `-h` output uses a non-secret placeholder instead of echoing the effective `NATS_URL` value.
 
 ## 5. Failure diagnosis
 
