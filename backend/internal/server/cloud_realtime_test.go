@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 
 	"caipiao/backend/internal/config"
 	"caipiao/backend/internal/member"
@@ -64,6 +67,107 @@ func TestCloudRealtimeDisabledPreservesLegacyStartupAndHealth(t *testing.T) {
 	}
 }
 
+func TestCloudRealtimeDisabledDeliversLegacySchemeRefreshOverWebSocket(t *testing.T) {
+	cfg := cloudRealtimeTestConfig(t)
+	cfg.CloudRealtimeEnabled = false
+	cfg.WSEnabled = true
+	cfg.ClientDemoAccount = "disabled-realtime-client"
+	cfg.ClientDemoPass = "disabled-realtime-password"
+
+	srv, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New with rollout disabled: %v", err)
+	}
+	t.Cleanup(srv.Close)
+	conn := openServerClientWebSocket(t, srv, 73)
+	readWebSocketEnvelope(t, conn, ws.NameSubscribed)
+
+	if srv.realtimeMarker == nil {
+		t.Fatal("disabled rollout did not install a legacy marker")
+	}
+	srv.realtimeMarker.MarkScheme(73, "inst-disabled")
+	envelope := readWebSocketEnvelope(t, conn, ws.NameSchemeInstanceUpdated)
+	if envelope.Topic != ws.TopicClientSchemeInstance {
+		t.Fatalf("topic=%q", envelope.Topic)
+	}
+	payload, ok := envelope.Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("payload=%#v", envelope.Payload)
+	}
+	if payload["instanceId"] != "inst-disabled" || payload["hint"] != "refresh_running_list" {
+		t.Fatalf("payload=%#v", payload)
+	}
+}
+
+func TestLegacyRealtimeMarkerScopesRefreshByNumericMemberID(t *testing.T) {
+	marker := newLegacyRealtimeMarker()
+	member73 := make(chan ws.Envelope, 1)
+	member74 := make(chan ws.Envelope, 1)
+	cancel73, err := marker.SubscribeMember(73, func(envelope ws.Envelope) { member73 <- envelope })
+	if err != nil {
+		t.Fatalf("subscribe member 73: %v", err)
+	}
+	t.Cleanup(cancel73)
+	cancel74, err := marker.SubscribeMember(74, func(envelope ws.Envelope) { member74 <- envelope })
+	if err != nil {
+		t.Fatalf("subscribe member 74: %v", err)
+	}
+	t.Cleanup(cancel74)
+
+	marker.MarkScheme(73, "inst-member-73")
+	select {
+	case envelope := <-member73:
+		if envelope.Name != ws.NameSchemeInstanceUpdated || envelope.Topic != ws.TopicClientSchemeInstance {
+			t.Fatalf("member 73 envelope=%+v", envelope)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("member 73 did not receive its refresh")
+	}
+	select {
+	case envelope := <-member74:
+		t.Fatalf("member 74 received member 73 refresh: %+v", envelope)
+	default:
+	}
+}
+
+func openServerClientWebSocket(t *testing.T, srv *Server, memberID int64) *websocket.Conn {
+	t.Helper()
+	srv.wsServer.ResolveClientIdentity = func(_ context.Context, account string) (ws.ClientIdentity, error) {
+		return ws.ClientIdentity{Account: account, MemberID: memberID}, nil
+	}
+	token, err := srv.authSvc.LoginClient(srv.cfg.ClientDemoAccount, srv.cfg.ClientDemoPass)
+	if err != nil {
+		t.Fatalf("issue client token: %v", err)
+	}
+	httpServer := httptest.NewServer(srv.Handler())
+	t.Cleanup(httpServer.Close)
+	endpoint := "ws" + strings.TrimPrefix(httpServer.URL, "http") + "/api/v1/ws/client?token=" + url.QueryEscape(token.AccessToken)
+	conn, _, err := websocket.DefaultDialer.Dial(endpoint, nil)
+	if err != nil {
+		t.Fatalf("dial client websocket: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
+
+func readWebSocketEnvelope(t *testing.T, conn *websocket.Conn, wantName string) ws.Envelope {
+	t.Helper()
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set websocket read deadline: %v", err)
+	}
+	for attempts := 0; attempts < 8; attempts++ {
+		var envelope ws.Envelope
+		if err := conn.ReadJSON(&envelope); err != nil {
+			t.Fatalf("read websocket envelope %q: %v", wantName, err)
+		}
+		if envelope.Name == wantName {
+			return envelope
+		}
+	}
+	t.Fatalf("websocket envelope %q not received", wantName)
+	return ws.Envelope{}
+}
+
 func TestCloudRealtimeUnreachableNATSStartsBoundedAndDegraded(t *testing.T) {
 	cfg := cloudRealtimeTestConfig(t)
 	cfg.CloudRealtimeEnabled = true
@@ -98,6 +202,44 @@ func TestCloudRealtimeUnreachableNATSStartsBoundedAndDegraded(t *testing.T) {
 	realtime, ok := response.Data["cloudRealtime"].(map[string]any)
 	if !ok || realtime["status"] != "degraded" {
 		t.Fatalf("cloudRealtime=%#v, want degraded", response.Data["cloudRealtime"])
+	}
+}
+
+func TestCloudRealtimeInitiallyUnreachableNATSClosesClientBeforeReadiness(t *testing.T) {
+	cfg := cloudRealtimeTestConfig(t)
+	cfg.CloudRealtimeEnabled = true
+	cfg.CloudRealtimeBus = "nats"
+	cfg.NATSURL = "nats://127.0.0.1:1"
+	cfg.WSEnabled = true
+	cfg.ClientDemoAccount = "unreachable-realtime-client"
+	cfg.ClientDemoPass = "unreachable-realtime-password"
+
+	srv, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New with unreachable NATS: %v", err)
+	}
+	t.Cleanup(srv.Close)
+	conn := openServerClientWebSocket(t, srv, 91)
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set websocket read deadline: %v", err)
+	}
+	for {
+		var envelope ws.Envelope
+		err := conn.ReadJSON(&envelope)
+		if err == nil {
+			if envelope.Name == ws.NameSubscribed {
+				t.Fatal("client reached websocket readiness while realtime bus was initially unavailable")
+			}
+			continue
+		}
+		var closeError *websocket.CloseError
+		if !errors.As(err, &closeError) {
+			t.Fatalf("read websocket close: %v", err)
+		}
+		if closeError.Code != websocket.CloseServiceRestart {
+			t.Fatalf("close code=%d reason=%q", closeError.Code, closeError.Text)
+		}
+		return
 	}
 }
 
@@ -167,10 +309,11 @@ func TestClientIdentityResolverRejectsUnavailableMemberService(t *testing.T) {
 }
 
 type callbackBus struct {
-	mu       sync.Mutex
-	callback func(bool)
-	events   *[]string
-	closed   int
+	mu        sync.Mutex
+	callback  func(bool)
+	events    *[]string
+	closed    int
+	connected bool
 }
 
 func (b *callbackBus) Publish(context.Context, string, []byte) error { return nil }
@@ -183,7 +326,7 @@ func (b *callbackBus) OnConnectionChange(callback func(bool)) {
 	b.mu.Unlock()
 }
 func (b *callbackBus) Diagnostics() realtimebus.Diagnostics {
-	return realtimebus.Diagnostics{Kind: "fake", Connected: true}
+	return realtimebus.Diagnostics{Kind: "fake", Connected: b.connected}
 }
 func (b *callbackBus) Close() error {
 	b.mu.Lock()
@@ -202,13 +345,14 @@ func (b *callbackBus) emit(connected bool) {
 }
 
 func TestRealtimeDisconnectClosesOnlyOnUnavailableTransition(t *testing.T) {
-	bus := &callbackBus{}
+	bus := &callbackBus{connected: true}
+	guard := newRealtimeCallbackGuard()
 	type closeCall struct {
 		code   int
 		reason string
 	}
 	calls := make(chan closeCall, 2)
-	registerRealtimeDisconnect(bus, func(code int, reason string) {
+	registerRealtimeDisconnect(bus, guard, func(code int, reason string) {
 		calls <- closeCall{code: code, reason: reason}
 	})
 
@@ -226,6 +370,24 @@ func TestRealtimeDisconnectClosesOnlyOnUnavailableTransition(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("disconnect did not close client sockets")
+	}
+}
+
+func TestRegisterRealtimeDisconnectClosesExistingClientsWhenAlreadyDisconnected(t *testing.T) {
+	bus := &callbackBus{connected: false}
+	guard := newRealtimeCallbackGuard()
+	closed := make(chan struct{}, 1)
+	registerRealtimeDisconnect(bus, guard, func(code int, reason string) {
+		if code != websocket.CloseServiceRestart || reason != "realtime_bus_unavailable" {
+			t.Errorf("close code=%d reason=%q", code, reason)
+		}
+		closed <- struct{}{}
+	})
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("already-disconnected bus did not close existing clients at callback registration")
 	}
 }
 
@@ -271,10 +433,11 @@ func TestServerCloseOrdersWorkersRealtimeAndDatabaseExactlyOnce(t *testing.T) {
 	bus := &callbackBus{events: &events}
 	database := &recordingDBCloser{events: &events}
 	srv := &Server{
-		workerCancel: func() { events = append(events, "cancel") },
-		realtimeWait: func() { events = append(events, "workers-stopped") },
-		realtimeBus:  bus,
-		dbCloser:     database,
+		workerCancel:      func() { events = append(events, "cancel") },
+		workerWait:        func() { events = append(events, "workers-stopped") },
+		realtimeCallbacks: newRealtimeCallbackGuard(),
+		realtimeBus:       bus,
+		dbCloser:          database,
 	}
 
 	srv.Close()
@@ -286,5 +449,125 @@ func TestServerCloseOrdersWorkersRealtimeAndDatabaseExactlyOnce(t *testing.T) {
 	}
 	if bus.closed != 1 || database.closed != 1 {
 		t.Fatalf("bus closes=%d db closes=%d", bus.closed, database.closed)
+	}
+}
+
+type signalingDBCloser struct {
+	once   sync.Once
+	closed chan struct{}
+}
+
+func (c *signalingDBCloser) Close() {
+	c.once.Do(func() { close(c.closed) })
+}
+
+func TestServerCloseWaitsForTrackedWorkerBeforeDatabase(t *testing.T) {
+	workerCtx, cancelWorkers := context.WithCancel(context.Background())
+	workerStarted := make(chan struct{})
+	releaseWorker := make(chan struct{})
+	workerDBWork := make(chan struct{})
+	var workers sync.WaitGroup
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		close(workerStarted)
+		<-workerCtx.Done()
+		<-releaseWorker
+		close(workerDBWork)
+	}()
+	<-workerStarted
+
+	database := &signalingDBCloser{closed: make(chan struct{})}
+	srv := &Server{
+		workerCancel: cancelWorkers,
+		workerWait:   workers.Wait,
+		dbCloser:     database,
+	}
+	closeDone := make(chan struct{})
+	go func() {
+		srv.Close()
+		close(closeDone)
+	}()
+
+	select {
+	case <-workerCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("Close did not cancel workers")
+	}
+	select {
+	case <-database.closed:
+		t.Fatal("database closed while tracked worker could still use it")
+	default:
+	}
+	close(releaseWorker)
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not finish after tracked worker exited")
+	}
+	select {
+	case <-workerDBWork:
+	default:
+		t.Fatal("tracked worker did not finish its final database work")
+	}
+	select {
+	case <-database.closed:
+	default:
+		t.Fatal("database was not closed after tracked worker exited")
+	}
+}
+
+func TestServerCloseQuiescesRealtimeCallbacks(t *testing.T) {
+	bus := &callbackBus{connected: true}
+	guard := newRealtimeCallbackGuard()
+	callbackStarted := make(chan struct{})
+	releaseCallback := make(chan struct{})
+	callbackEffects := make(chan struct{}, 2)
+	registerRealtimeDisconnect(bus, guard, func(int, string) {
+		close(callbackStarted)
+		<-releaseCallback
+		callbackEffects <- struct{}{}
+	})
+
+	database := &signalingDBCloser{closed: make(chan struct{})}
+	srv := &Server{
+		workerCancel:      func() {},
+		realtimeCallbacks: guard,
+		realtimeBus:       bus,
+		dbCloser:          database,
+	}
+	go bus.emit(false)
+	select {
+	case <-callbackStarted:
+	case <-time.After(time.Second):
+		t.Fatal("disconnect callback did not start")
+	}
+	closeDone := make(chan struct{})
+	go func() {
+		srv.Close()
+		close(closeDone)
+	}()
+	select {
+	case <-database.closed:
+		t.Fatal("database closed while realtime callback was running")
+	default:
+	}
+	close(releaseCallback)
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not wait for realtime callback")
+	}
+	select {
+	case <-callbackEffects:
+	default:
+		t.Fatal("in-flight realtime callback did not finish")
+	}
+
+	bus.emit(false)
+	select {
+	case <-callbackEffects:
+		t.Fatal("realtime callback produced a side effect after Close")
+	default:
 	}
 }

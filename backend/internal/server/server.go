@@ -58,10 +58,12 @@ type Server struct {
 	dbCloser           interface{ Close() }
 	mux                *http.ServeMux
 	workerCancel       context.CancelFunc
-	realtimeWait       func()
+	workerWait         func()
 	realtimeBus        realtimebus.Bus
+	realtimeMarker     schemeevents.Marker
 	realtimePublisher  *cloudrealtime.Publisher
 	realtimeReconciler *cloudrealtime.Reconciler
+	realtimeCallbacks  *realtimeCallbackGuard
 	wsServer           *ws.Server
 	playRules          *playrules.RegistryStore
 	closeOnce          sync.Once
@@ -69,6 +71,14 @@ type Server struct {
 
 func New(cfg config.Config) (*Server, error) {
 	workerCtx, workerCancel := context.WithCancel(context.Background())
+	var workers sync.WaitGroup
+	launchWorker := func(run func()) {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			run()
+		}()
+	}
 
 	var pool *db.Pool
 	if cfg.DatabaseURL != "" {
@@ -103,7 +113,7 @@ func New(cfg config.Config) (*Server, error) {
 		} else {
 			slog.Info("play rule registry loaded")
 		}
-		go func() {
+		launchWorker(func() {
 			ticker := time.NewTicker(time.Minute)
 			defer ticker.Stop()
 			for {
@@ -116,7 +126,7 @@ func New(cfg config.Config) (*Server, error) {
 					}
 				}
 			}
-		}()
+		})
 	}
 
 	wsHub := ws.NewHub()
@@ -162,14 +172,15 @@ func New(cfg config.Config) (*Server, error) {
 	if pool != nil && guajiAccounts != nil && guajiClient.Enabled() {
 		periodWorker = periodsync.NewWorker(pool, guajiClient, guajiAccounts)
 		if periodWorker != nil {
-			go periodWorker.Run(workerCtx)
+			launchWorker(func() { periodWorker.Run(workerCtx) })
 		}
 	}
 	schemesSvc := schemes.NewService(pool, periodSyncer)
 	schemesSvc.SetMemberAuthChecker(guajiAccounts)
 	var realtimePublisher *cloudrealtime.Publisher
 	var realtimeReconciler *cloudrealtime.Reconciler
-	var realtimeWorkers sync.WaitGroup
+	var realtimeMarker schemeevents.Marker
+	var legacyMarker *legacyRealtimeMarker
 	if realtimeBus != nil {
 		realtimePublisher = cloudrealtime.NewPublisher(schemesSvc, realtimeBus, cloudrealtime.Config{
 			SubjectPrefix:  cfg.NATSSubjectPrefix,
@@ -180,17 +191,14 @@ func New(cfg config.Config) (*Server, error) {
 			Interval: cfg.CloudReconcileInterval,
 			Batch:    cfg.CloudReconcileBatch,
 		})
-		realtimeWorkers.Add(2)
-		go func() {
-			defer realtimeWorkers.Done()
-			realtimePublisher.Run(workerCtx)
-		}()
-		go func() {
-			defer realtimeWorkers.Done()
-			realtimeReconciler.Run(workerCtx)
-		}()
-		injectRealtimeMarker(realtimePublisher, schemesSvc, memberSvc)
+		launchWorker(func() { realtimePublisher.Run(workerCtx) })
+		launchWorker(func() { realtimeReconciler.Run(workerCtx) })
+		realtimeMarker = realtimePublisher
+	} else {
+		legacyMarker = newLegacyRealtimeMarker()
+		realtimeMarker = legacyMarker
 	}
+	injectRealtimeMarker(realtimeMarker, schemesSvc, memberSvc)
 	gamesSvc := games.NewService(pool)
 	if guajiAccounts != nil {
 		gamesSvc.SetGuajiBetPlacer(guajiAccounts)
@@ -204,7 +212,7 @@ func New(cfg config.Config) (*Server, error) {
 	cmsUploads, err := content.NewUploadStore(cfg.CMSUploadDir)
 	if err != nil {
 		workerCancel()
-		realtimeWorkers.Wait()
+		workers.Wait()
 		if realtimeBus != nil {
 			_ = realtimeBus.Close()
 		}
@@ -214,9 +222,7 @@ func New(cfg config.Config) (*Server, error) {
 		return nil, fmt.Errorf("cms upload store: %w", err)
 	}
 	h := handler.New(authSvc, maintSvc, betSvc, inst, lb, pool, memberSvc, bets.NewService(pool, memberSvc), chaseSvc, copyHallSvc, schemesSvc, gamesSvc, contentSvc, auditSvc, dashboardSvc, ordersAdminSvc, reportsSvc, wsHub, guajiClient, guajiAccounts, cmsUploads)
-	if realtimePublisher != nil {
-		injectRealtimeMarker(realtimePublisher, h)
-	}
+	injectRealtimeMarker(realtimeMarker, h)
 	h.SetCloudRealtimeDiagnostics(&cloudRealtimeDiagnostics{
 		enabled:    cfg.CloudRealtimeEnabled,
 		bus:        realtimeBus,
@@ -236,13 +242,11 @@ func New(cfg config.Config) (*Server, error) {
 			if guajiAccounts != nil {
 				w.SetGuajiBetPlacer(guajiAccounts)
 			}
-			if realtimePublisher != nil {
-				injectRealtimeMarker(realtimePublisher, w)
-			}
-			go w.Run(workerCtx)
+			injectRealtimeMarker(realtimeMarker, w)
+			launchWorker(func() { w.Run(workerCtx) })
 		}
 		if bw := bets.NewSettlementWorker(pool, wsHub); bw != nil {
-			go bets.RunSettlementWorker(workerCtx, bw, cfg.SchemeWorkerTickSec)
+			launchWorker(func() { bets.RunSettlementWorker(workerCtx, bw, cfg.SchemeWorkerTickSec) })
 		}
 	}
 	h.SetMaintenanceResumeScheduler(schemeWorker)
@@ -251,7 +255,7 @@ func New(cfg config.Config) (*Server, error) {
 	if pool != nil && guajiClient.Enabled() {
 		if dw := drawsync.NewWorker(pool, guajiClient, wsHub); dw != nil {
 			dw.SetStrategyNotifier(schemeWorker)
-			go dw.Run(workerCtx)
+			launchWorker(func() { dw.Run(workerCtx) })
 		}
 	}
 
@@ -260,25 +264,25 @@ func New(cfg config.Config) (*Server, error) {
 	// 必须取到同一族期号，否则注单期号永远查不到开奖号
 	if pool != nil && guajiClient.Enabled() {
 		if paw := periodaudit.NewWorker(pool); paw != nil {
-			go paw.Run(workerCtx)
+			launchWorker(func() { paw.Run(workerCtx) })
 		}
 	}
 
 	// 账号级赔率线：拉取 real/rate → schemes.SetGuajiOdds（预估/模拟共用）
 	if guajiAccounts != nil && guajiClient.Enabled() {
 		if ow := oddsrefresh.NewWorker(guajiClient, guajiAccounts); ow != nil {
-			go ow.Run(workerCtx)
+			launchWorker(func() { ow.Run(workerCtx) })
 		}
 	}
 
 	// 历史开奖 REST：同步第三方 §5 开奖历史至 lottery_draws（匿名 GET，无需 token）
 	if historyWorker != nil {
-		go historyWorker.Run(workerCtx)
+		launchWorker(func() { historyWorker.Run(workerCtx) })
 	}
 
 	// T6：第三方授权 Token 健康巡检告警（GUAJI_ENABLED 时）
 	if guajiAccounts != nil && guajiClient.Enabled() {
-		go guajiAccounts.RunTokenMonitor(workerCtx, 5*time.Minute)
+		launchWorker(func() { guajiAccounts.RunTokenMonitor(workerCtx, 5*time.Minute) })
 	}
 
 	// T5：第三方派奖同步 worker（扫 real pending 注单 → QuerySettlement → 镜像 ledger）
@@ -289,15 +293,18 @@ func New(cfg config.Config) (*Server, error) {
 					_ = historyWorker.SyncLottery(ctx, lotteryCode)
 				})
 			}
-			if realtimePublisher != nil {
-				injectRealtimeMarker(realtimePublisher, psw)
-			}
-			go psw.Run(workerCtx, 10*time.Second)
+			injectRealtimeMarker(realtimeMarker, psw)
+			launchWorker(func() { psw.Run(workerCtx, 10*time.Second) })
 		}
 	}
 
 	if realtimeBus != nil {
-		wsHub.SetMemberEventSource(wsbridge.New(realtimeBus, cfg.NATSSubjectPrefix))
+		wsHub.SetMemberEventSource(&connectedMemberEventSource{
+			bus:    realtimeBus,
+			source: wsbridge.New(realtimeBus, cfg.NATSSubjectPrefix),
+		})
+	} else {
+		wsHub.SetMemberEventSource(legacyMarker)
 	}
 	wsSrv := &ws.Server{
 		Hub:                   wsHub,
@@ -305,7 +312,8 @@ func New(cfg config.Config) (*Server, error) {
 		Origins:               cfg.CORSOrigins,
 		ResolveClientIdentity: clientIdentityResolver(memberSvc),
 	}
-	registerRealtimeDisconnect(realtimeBus, wsHub.CloseClientConnections)
+	realtimeCallbacks := newRealtimeCallbackGuard()
+	registerRealtimeDisconnect(realtimeBus, realtimeCallbacks, wsHub.CloseClientConnections)
 
 	s := &Server{
 		cfg:                cfg,
@@ -314,14 +322,14 @@ func New(cfg config.Config) (*Server, error) {
 		guaji:              guajiClient,
 		db:                 pool,
 		workerCancel:       workerCancel,
+		workerWait:         workers.Wait,
 		realtimeBus:        realtimeBus,
+		realtimeMarker:     realtimeMarker,
 		realtimePublisher:  realtimePublisher,
 		realtimeReconciler: realtimeReconciler,
+		realtimeCallbacks:  realtimeCallbacks,
 		wsServer:           wsSrv,
 		playRules:          playRuleRegistry,
-	}
-	if realtimeBus != nil {
-		s.realtimeWait = realtimeWorkers.Wait
 	}
 	if pool != nil {
 		s.dbCloser = pool
@@ -539,8 +547,11 @@ func (s *Server) Close() {
 		if s.workerCancel != nil {
 			s.workerCancel()
 		}
-		if s.realtimeWait != nil {
-			s.realtimeWait()
+		if s.workerWait != nil {
+			s.workerWait()
+		}
+		if s.realtimeCallbacks != nil {
+			s.realtimeCallbacks.CloseAndWait()
 		}
 		if s.realtimeBus != nil {
 			_ = s.realtimeBus.Close()
@@ -590,15 +601,127 @@ func injectRealtimeMarker(marker schemeevents.Marker, setters ...realtimeMarkerS
 	}
 }
 
-func registerRealtimeDisconnect(bus realtimebus.Bus, closeClients func(int, string)) {
-	if bus == nil || closeClients == nil {
+type legacyRealtimeMarker struct {
+	mu          sync.RWMutex
+	nextID      uint64
+	subscribers map[int64]map[uint64]func(ws.Envelope)
+}
+
+type connectedMemberEventSource struct {
+	bus    realtimebus.Bus
+	source ws.MemberEventSource
+}
+
+func (s *connectedMemberEventSource) SubscribeMember(memberID int64, emit func(ws.Envelope)) (func(), error) {
+	if s == nil || s.bus == nil || s.source == nil {
+		return nil, fmt.Errorf("realtime member event source is unavailable")
+	}
+	if !s.bus.Diagnostics().Connected {
+		return nil, fmt.Errorf("realtime bus is unavailable")
+	}
+	return s.source.SubscribeMember(memberID, emit)
+}
+
+func newLegacyRealtimeMarker() *legacyRealtimeMarker {
+	return &legacyRealtimeMarker{subscribers: make(map[int64]map[uint64]func(ws.Envelope))}
+}
+
+func (m *legacyRealtimeMarker) MarkScheme(memberID int64, instanceID string) {
+	if m == nil || memberID <= 0 {
 		return
 	}
-	bus.OnConnectionChange(func(connected bool) {
-		if !connected {
-			closeClients(1012, "realtime_bus_unavailable")
-		}
+	m.mu.RLock()
+	emits := make([]func(ws.Envelope), 0, len(m.subscribers[memberID]))
+	for _, emit := range m.subscribers[memberID] {
+		emits = append(emits, emit)
+	}
+	m.mu.RUnlock()
+
+	env := ws.NewEvent(ws.NameSchemeInstanceUpdated, ws.TopicClientSchemeInstance, ws.SchemeInstancePayload{
+		InstanceID: instanceID,
+		Hint:       "refresh_running_list",
 	})
+	for _, emit := range emits {
+		emit(env)
+	}
+}
+
+func (m *legacyRealtimeMarker) SubscribeMember(memberID int64, emit func(ws.Envelope)) (func(), error) {
+	if m == nil || memberID <= 0 || emit == nil {
+		return nil, fmt.Errorf("invalid legacy realtime subscription")
+	}
+	m.mu.Lock()
+	m.nextID++
+	subscriberID := m.nextID
+	if m.subscribers[memberID] == nil {
+		m.subscribers[memberID] = make(map[uint64]func(ws.Envelope))
+	}
+	m.subscribers[memberID][subscriberID] = emit
+	m.mu.Unlock()
+
+	var cancelOnce sync.Once
+	return func() {
+		cancelOnce.Do(func() {
+			m.mu.Lock()
+			delete(m.subscribers[memberID], subscriberID)
+			if len(m.subscribers[memberID]) == 0 {
+				delete(m.subscribers, memberID)
+			}
+			m.mu.Unlock()
+		})
+	}, nil
+}
+
+type realtimeCallbackGuard struct {
+	mu     sync.Mutex
+	closed bool
+	wait   sync.WaitGroup
+}
+
+func newRealtimeCallbackGuard() *realtimeCallbackGuard {
+	return &realtimeCallbackGuard{}
+}
+
+func (g *realtimeCallbackGuard) Run(callback func()) {
+	if g == nil || callback == nil {
+		return
+	}
+	g.mu.Lock()
+	if g.closed {
+		g.mu.Unlock()
+		return
+	}
+	g.wait.Add(1)
+	g.mu.Unlock()
+	defer g.wait.Done()
+	callback()
+}
+
+func (g *realtimeCallbackGuard) CloseAndWait() {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	g.closed = true
+	g.mu.Unlock()
+	g.wait.Wait()
+}
+
+func registerRealtimeDisconnect(bus realtimebus.Bus, guard *realtimeCallbackGuard, closeClients func(int, string)) {
+	if bus == nil || guard == nil || closeClients == nil {
+		return
+	}
+	onConnectionChange := func(connected bool) {
+		guard.Run(func() {
+			if !connected {
+				closeClients(1012, "realtime_bus_unavailable")
+			}
+		})
+	}
+	bus.OnConnectionChange(onConnectionChange)
+	if !bus.Diagnostics().Connected {
+		onConnectionChange(false)
+	}
 }
 
 func newCloudRealtimeBus(cfg config.Config) (realtimebus.Bus, error) {
