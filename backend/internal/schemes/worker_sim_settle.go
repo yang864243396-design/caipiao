@@ -11,6 +11,7 @@ import (
 	"caipiao/backend/internal/db/sqlcdb"
 	"caipiao/backend/internal/member"
 	"caipiao/backend/internal/playrules"
+	"caipiao/backend/internal/schemeevents"
 )
 
 const simSettlementBatchSize = 50
@@ -163,16 +164,28 @@ func (w *Worker) settleSimCloudBet(ctx context.Context, row sqlcdb.PendingSimClo
 		return err
 	}
 
-	if fresh, ferr := w.q.GetSchemeInstanceFull(ctx, row.SchemeID); ferr == nil && fresh.Status == "running" {
-		w.pauseRunningForSessionLimit(ctx, fresh, def.Config)
-		w.pauseAllRunningForCloudLimit(ctx, fresh.MemberID)
-		if st, serr := w.q.GetSchemeInstanceStatus(ctx, fresh.ID); serr == nil && st == "running" {
-			w.notifySchemeInstance(ctx, fresh.MemberID, fresh.ID, runModeFromSimBet(fresh.SimBet), "running", StatusReasonCloudActive)
-		}
-	}
+	w.afterCommittedSimSettlement(ctx, inst, def.Config)
 
 	slog.Info("scheme worker sim bet settled",
 		"instanceId", row.SchemeID, "period", row.PeriodNo,
 		"status", settle.Status, "pnl", pnl, "amount", row.Amount)
 	return nil
+}
+
+func (w *Worker) afterCommittedSimSettlement(ctx context.Context, inst sqlcdb.SchemeInstance, defConfig []byte) {
+	w.withCommittedSchemeMarker(ctx, RealtimeInstanceRef{MemberID: inst.MemberID, InstanceID: inst.ID},
+		func(operationCtx context.Context, marker schemeevents.Marker) {
+			if w.q == nil {
+				return
+			}
+			fresh, err := w.q.GetSchemeInstanceFull(operationCtx, inst.ID)
+			if err != nil || fresh.Status != "running" {
+				return
+			}
+			w.pauseRunningForSessionLimit(operationCtx, fresh, defConfig)
+			w.pauseAllRunningForCloudLimitWithMarker(operationCtx, fresh.MemberID, marker)
+			if status, err := w.q.GetSchemeInstanceStatus(operationCtx, fresh.ID); err == nil && status == "running" {
+				w.notifySchemeInstance(operationCtx, fresh.MemberID, fresh.ID, runModeFromSimBet(fresh.SimBet), "running", StatusReasonCloudActive)
+			}
+		})
 }

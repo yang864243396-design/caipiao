@@ -334,6 +334,7 @@ func (s *Service) UpdateDefinition(
 		}
 	}
 
+	renameTo := ""
 	if patch.HasSchemeName {
 		name := strings.TrimSpace(patch.SchemeName)
 		if name == "" {
@@ -353,10 +354,7 @@ func (s *Service) UpdateDefinition(
 			if nerr != nil && !errors.Is(nerr, pgx.ErrNoRows) {
 				return Definition{}, nerr
 			}
-			if rerr := s.q.RenameSchemeDefinitionAndInstances(ctx, m.ID, definitionID, name); rerr != nil {
-				return Definition{}, rerr
-			}
-			def.SchemeName = name
+			renameTo = name
 		}
 	}
 
@@ -393,8 +391,19 @@ func (s *Service) UpdateDefinition(
 		}
 	}
 
+	tx, err := s.beginTransaction(ctx)
+	if err != nil {
+		return Definition{}, err
+	}
+	defer tx.Rollback(ctx)
+	qtx := s.q.WithTx(tx)
+	if renameTo != "" {
+		if rerr := qtx.RenameSchemeDefinitionAndInstances(ctx, m.ID, definitionID, renameTo); rerr != nil {
+			return Definition{}, rerr
+		}
+	}
 	if planLottery != nil {
-		if uerr := s.q.UpdateSchemeDefinitionLottery(ctx, sqlcdb.UpdateSchemeDefinitionLotteryParams{
+		if uerr := qtx.UpdateSchemeDefinitionLottery(ctx, sqlcdb.UpdateSchemeDefinitionLotteryParams{
 			ID:           definitionID,
 			MemberID:     m.ID,
 			LotteryCode:  planLottery.Code,
@@ -403,13 +412,6 @@ func (s *Service) UpdateDefinition(
 			return Definition{}, uerr
 		}
 	}
-
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return Definition{}, err
-	}
-	defer tx.Rollback(ctx)
-	qtx := s.q.WithTx(tx)
 
 	row, err := qtx.UpdateSchemeDefinitionConfig(ctx, sqlcdb.UpdateSchemeDefinitionConfigParams{
 		ID:       definitionID,
@@ -442,21 +444,20 @@ func (s *Service) UpdateDefinition(
 			return Definition{}, serr
 		}
 	}
+	hasInstance := false
+	var committedInstance RealtimeInstanceRef
+	if inst, instErr := qtx.GetSchemeInstanceByDefinitionID(ctx, definitionID); instErr == nil {
+		hasInstance = true
+		committedInstance = RealtimeInstanceRef{MemberID: inst.MemberID, InstanceID: inst.ID}
+	} else if !errors.Is(instErr, pgx.ErrNoRows) {
+		return Definition{}, instErr
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return Definition{}, err
 	}
 
-	hasInstance := false
-	var committedInstance sqlcdb.GetSchemeInstanceByDefinitionIDRow
-	if inst, instErr := s.q.GetSchemeInstanceByDefinitionID(ctx, definitionID); instErr == nil {
-		hasInstance = true
-		committedInstance = inst
-	} else if !errors.Is(instErr, pgx.ErrNoRows) {
-		return Definition{}, instErr
-	}
-
 	if hasInstance {
-		s.markScheme(committedInstance.MemberID, committedInstance.ID)
+		s.markScheme(committedInstance.MemberID, committedInstance.InstanceID)
 	}
 	return mapDefinitionFromConfigUpdateRow(row, hasInstance), nil
 }

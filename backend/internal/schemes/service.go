@@ -7,6 +7,7 @@ import (
 	"math"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"caipiao/backend/internal/db"
@@ -25,6 +26,7 @@ type Service struct {
 	periodSync  *periodsync.Syncer
 	authChecker memberAuthChecker
 	realtime    schemeevents.Marker
+	beginTx     func(context.Context) (pgx.Tx, error)
 }
 
 // memberAuthChecker 由 accountsvc 注入：开启真实投注前校验授权与第三方可用余额。
@@ -62,6 +64,19 @@ func (s *Service) markScheme(memberID int64, instanceID string) {
 		return
 	}
 	s.realtime.MarkScheme(memberID, instanceID)
+}
+
+func (s *Service) beginTransaction(ctx context.Context) (pgx.Tx, error) {
+	if s == nil {
+		return nil, ErrUnavailable
+	}
+	if s.beginTx != nil {
+		return s.beginTx(ctx)
+	}
+	if s.pool == nil {
+		return nil, ErrUnavailable
+	}
+	return s.pool.Begin(ctx)
 }
 
 type ShareSnapshot struct {

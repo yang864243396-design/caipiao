@@ -1017,22 +1017,36 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 	committed = true
 	if periodMismatch {
 		detail := fmt.Sprintf("third-party accepted a different period: target=%s accepted=%s", guajiTargetPeriodNo, acceptedPeriod)
-		w.pauseRunningInstance(ctx, inst, StatusReasonBetFailed, detail)
+		w.withCommittedSchemeMarker(ctx, RealtimeInstanceRef{MemberID: inst.MemberID, InstanceID: inst.ID},
+			func(operationCtx context.Context, _ schemeevents.Marker) {
+				w.pauseRunningInstance(operationCtx, inst, StatusReasonBetFailed, detail)
+			})
 		return errSchemeBetStopped
 	}
 	// 即时结算路径（历史兼容）：下单即有盈亏后检查止盈止损。
 	// 模拟盘改走开奖后结算，止盈止损在 settleSimCloudBet 中检查。
-	if !deferSettle {
-		if fresh, ferr := w.q.GetSchemeInstanceFull(ctx, inst.ID); ferr == nil {
-			w.pauseRunningForSessionLimit(ctx, fresh, def.Config)
-			w.pauseAllRunningForCloudLimit(ctx, inst.MemberID)
-		}
-	}
-	if st, serr := w.q.GetSchemeInstanceStatus(ctx, inst.ID); serr == nil && st == "running" {
-		w.notifySchemeInstance(ctx, inst.MemberID, inst.ID, runModeFromSimBet(inst.SimBet), "running", StatusReasonCloudActive)
-	}
+	w.afterCommittedBet(ctx, inst, def.Config, deferSettle)
 	slog.Info("scheme worker bet placed", "instanceId", inst.ID, "memberId", inst.MemberID, "period", acceptedPeriod, "guajiPeriod", betMeta.Periods, "amount", amount, "simBet", inst.SimBet, "thirdParty", w.usesGuajiThirdParty(inst))
 	return nil
+}
+
+func (w *Worker) afterCommittedBet(ctx context.Context, inst sqlcdb.SchemeInstance, defConfig []byte, deferSettle bool) {
+	w.withCommittedSchemeMarker(ctx, RealtimeInstanceRef{MemberID: inst.MemberID, InstanceID: inst.ID},
+		func(operationCtx context.Context, marker schemeevents.Marker) {
+			if w.q == nil {
+				return
+			}
+			// Immediate settlements run limit checks after commit. Simulated and third-party bets settle later.
+			if !deferSettle {
+				if fresh, err := w.q.GetSchemeInstanceFull(operationCtx, inst.ID); err == nil {
+					w.pauseRunningForSessionLimit(operationCtx, fresh, defConfig)
+					w.pauseAllRunningForCloudLimitWithMarker(operationCtx, inst.MemberID, marker)
+				}
+			}
+			if status, err := w.q.GetSchemeInstanceStatus(operationCtx, inst.ID); err == nil && status == "running" {
+				w.notifySchemeInstance(operationCtx, inst.MemberID, inst.ID, runModeFromSimBet(inst.SimBet), "running", StatusReasonCloudActive)
+			}
+		})
 }
 
 func (w *Worker) reserveCloudBetPeriod(

@@ -12,6 +12,7 @@ import (
 	"caipiao/backend/internal/db/sqlcdb"
 	"caipiao/backend/internal/member"
 )
+
 func (s *Service) UpdateInstanceSimBet(ctx context.Context, account, instanceID string, simBet bool) (Instance, error) {
 	if s == nil || s.q == nil {
 		return Instance{}, ErrUnavailable
@@ -29,7 +30,14 @@ func (s *Service) UpdateInstanceSimBet(ctx context.Context, account, instanceID 
 		return Instance{}, err
 	}
 
-	row, err := s.q.UpdateSchemeInstanceSimBet(ctx, sqlcdb.UpdateSchemeInstanceSimBetParams{
+	tx, err := s.beginTransaction(ctx)
+	if err != nil {
+		return Instance{}, err
+	}
+	defer tx.Rollback(ctx)
+	qtx := s.q.WithTx(tx)
+
+	row, err := qtx.UpdateSchemeInstanceSimBet(ctx, sqlcdb.UpdateSchemeInstanceSimBetParams{
 		ID:       instanceID,
 		MemberID: m.ID,
 		SimBet:   simBet,
@@ -37,7 +45,7 @@ func (s *Service) UpdateInstanceSimBet(ctx context.Context, account, instanceID 
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// 区分不存在 vs running 禁止修改
-			if _, getErr := s.q.GetSchemeInstanceByIDAndMember(ctx, sqlcdb.GetSchemeInstanceByIDAndMemberParams{
+			if _, getErr := qtx.GetSchemeInstanceByIDAndMember(ctx, sqlcdb.GetSchemeInstanceByIDAndMemberParams{
 				ID: instanceID, MemberID: m.ID,
 			}); getErr == nil {
 				return Instance{}, ErrInstanceRunningSimBet
@@ -46,14 +54,17 @@ func (s *Service) UpdateInstanceSimBet(ctx context.Context, account, instanceID 
 		}
 		return Instance{}, err
 	}
-	if err := s.syncDefinitionSimBet(ctx, m.ID, row.DefinitionID, simBet); err != nil {
+	if err := s.syncDefinitionSimBet(ctx, qtx, m.ID, row.DefinitionID, simBet); err != nil {
+		return Instance{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return Instance{}, err
 	}
 	return s.enrichInstanceForDisplay(ctx, sqlcdb.SchemeInstanceFromSimBetRow(row), time.Now()), nil
 }
 
-func (s *Service) syncDefinitionSimBet(ctx context.Context, memberID int64, definitionID string, simBet bool) error {
-	def, err := s.q.GetSchemeDefinitionByIDAndMember(ctx, sqlcdb.GetSchemeDefinitionByIDAndMemberParams{
+func (s *Service) syncDefinitionSimBet(ctx context.Context, q *sqlcdb.Queries, memberID int64, definitionID string, simBet bool) error {
+	def, err := q.GetSchemeDefinitionByIDAndMember(ctx, sqlcdb.GetSchemeDefinitionByIDAndMemberParams{
 		ID:       definitionID,
 		MemberID: memberID,
 	})
@@ -70,7 +81,7 @@ func (s *Service) syncDefinitionSimBet(ctx context.Context, memberID int64, defi
 	if err != nil {
 		return err
 	}
-	_, err = s.q.UpdateSchemeDefinitionConfig(ctx, sqlcdb.UpdateSchemeDefinitionConfigParams{
+	_, err = q.UpdateSchemeDefinitionConfig(ctx, sqlcdb.UpdateSchemeDefinitionConfigParams{
 		ID:       definitionID,
 		MemberID: memberID,
 		Config:   cfgBytes,
