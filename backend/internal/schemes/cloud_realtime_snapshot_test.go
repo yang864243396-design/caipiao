@@ -303,6 +303,10 @@ func TestRealtimeAndRESTStatsUseSameProjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := time.Parse(time.RFC3339Nano, restStats.GeneratedAt); err != nil {
+		t.Fatalf("REST generatedAt=%q: %v", restStats.GeneratedAt, err)
+	}
+	restStats.GeneratedAt = ""
 	if !reflect.DeepEqual(restStats, realtimeStats[7]) {
 		t.Fatalf("REST=%+v realtime=%+v", restStats, realtimeStats[7])
 	}

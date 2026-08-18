@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -21,8 +22,9 @@ type CloudCenterChannelStats struct {
 }
 
 type CloudCenterStats struct {
-	Formal CloudCenterChannelStats `json:"formal"`
-	Sim    CloudCenterChannelStats `json:"sim"`
+	GeneratedAt string                  `json:"generatedAt,omitempty"`
+	Formal      CloudCenterChannelStats `json:"formal"`
+	Sim         CloudCenterChannelStats `json:"sim"`
 	// 模拟方案配额（北京时间自然日 / 同时运行）
 	SimQuota SimSchemeQuota `json:"simQuota"`
 }
@@ -42,7 +44,9 @@ func (s *Service) GetCloudCenterStats(ctx context.Context, account string) (Clou
 	if err != nil {
 		return CloudCenterStats{}, err
 	}
-	return statsByMember[m.ID], nil
+	stats := statsByMember[m.ID]
+	stats.GeneratedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	return stats, nil
 }
 
 func mapCloudCenterChannelStats(row sqlcdb.MemberCloudCenterStatsRow) CloudCenterChannelStats {

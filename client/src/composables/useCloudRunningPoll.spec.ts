@@ -23,7 +23,8 @@ const token = vi.hoisted(() => ({ value: 'token' }))
 
 type Subject = typeof import('./useCloudRunningPoll')
 
-const stats = (value: number) => ({
+const stats = (value: number, generatedAt?: string) => ({
+  ...(generatedAt ? { generatedAt } : {}),
   formal: {
     totalTurnover: value,
     totalSessionPnl: value,
@@ -80,10 +81,13 @@ function snapshot(
   })
 }
 
-function statsSnapshot(value: number): WsEnvelope<WsCloudStatsSnapshotPayload> {
+function statsSnapshot(
+  value: number,
+  generatedAt = '2026-08-18T00:00:00.000Z',
+): WsEnvelope<WsCloudStatsSnapshotPayload> {
   return envelope('client.cloud.stats.snapshot', {
     schemaVersion: 1,
-    generatedAt: '2026-08-18T00:00:00.000Z',
+    generatedAt,
     stats: stats(value),
   })
 }
@@ -239,6 +243,30 @@ describe('startCloudRunningSync', () => {
 
     expect(applied).toEqual(['schemes:a', 'stats:1', 'schemes:a', 'stats:2'])
     expect(onSchemes.mock.calls[1]?.[0][0].turnover).toBe('2.00')
+    sync.stop()
+  })
+
+  it('keeps REST stats newer than buffered older or equal snapshots and applies a newer snapshot', async () => {
+    const statsRequest = deferred<ReturnType<typeof stats>>()
+    api.fetchCloudCenterStats.mockReturnValueOnce(statsRequest.promise)
+    const applied: number[] = []
+    const { startCloudRunningSync } = await loadSubject()
+    const sync = startCloudRunningSync(
+      () => ['a'],
+      {
+        onSchemes: vi.fn(),
+        onStats: (value) => applied.push(value.formal.totalTurnover),
+      },
+    )
+
+    ws.onConnected?.()
+    ws.onEvent?.(statsSnapshot(10, '2026-08-18T00:00:01.000Z'))
+    ws.onEvent?.(statsSnapshot(11, '2026-08-18T00:00:02.000Z'))
+    ws.onEvent?.(statsSnapshot(30, '2026-08-18T00:00:03.000Z'))
+    statsRequest.resolve(stats(20, '2026-08-18T00:00:02.000Z'))
+    await sync.reconcile()
+
+    expect(applied).toEqual([20, 30])
     sync.stop()
   })
 

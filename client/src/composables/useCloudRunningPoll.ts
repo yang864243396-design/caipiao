@@ -49,6 +49,17 @@ function isVersionOlder(candidate: string, current: string): boolean {
   return Boolean(candidate && current && candidate < current)
 }
 
+function isVersionNewer(candidate: string, current: string): boolean {
+  if (!candidate) return false
+  if (!current) return true
+  const candidateTime = Date.parse(candidate)
+  const currentTime = Date.parse(current)
+  if (Number.isFinite(candidateTime) && Number.isFinite(currentTime)) {
+    return candidateTime > currentTime
+  }
+  return candidate > current
+}
+
 function isSchemeSnapshot(
   event: WsEnvelope,
 ): event is WsEnvelope<WsSchemeInstancesSnapshotPayload> {
@@ -100,6 +111,7 @@ export function startCloudRunningSync(
   let lastCompletedKey = ''
   let lastCompletedCycle = -1
   const versions = new Map<string, string>()
+  let statsVersion = ''
   const token = getAccessToken()
 
   const realtimeMode = Boolean(
@@ -155,8 +167,19 @@ export function startCloudRunningSync(
     }
   }
 
+  function applyStats(stats: CloudCenterStatsDto, generatedAt?: string): void {
+    if (stopped) return
+    if (generatedAt) {
+      if (!isVersionNewer(generatedAt, statsVersion)) return
+      statsVersion = generatedAt
+    } else if (statsVersion) {
+      return
+    }
+    resolvedHandlers.onStats(stats)
+  }
+
   function applyStatsSnapshot(payload: WsCloudStatsSnapshotPayload): void {
-    if (!stopped) resolvedHandlers.onStats(payload.stats)
+    applyStats(payload.stats, payload.generatedAt)
   }
 
   function applyBufferedSnapshot(message: BufferedSnapshot): void {
@@ -172,7 +195,7 @@ export function startCloudRunningSync(
         : [await rowsPromise, null]
       if (stopped) return false
       if (compatibilityHandler && loadedIDsKey(loadedIDs()) !== loadedIDsKey(ids)) {
-        if (stats) resolvedHandlers.onStats(stats)
+        if (stats) applyStats(stats, stats.generatedAt)
         return true
       }
 
@@ -182,7 +205,7 @@ export function startCloudRunningSync(
       for (const card of cards) versions.set(card.id, card.updatedAt)
       for (const id of removedIds) versions.delete(id)
       emitSchemes(cards, removedIds, false)
-      if (stats) resolvedHandlers.onStats(stats)
+      if (stats) applyStats(stats, stats.generatedAt)
       return true
     } catch {
       // Keep the last valid state and allow a later reconciliation to retry.

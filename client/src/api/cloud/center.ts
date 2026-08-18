@@ -86,6 +86,7 @@ export interface CloudSimSchemeQuotaDto {
 }
 
 export interface CloudCenterStatsDto {
+  generatedAt?: string
   formal: CloudCenterChannelStatsDto
   sim: CloudCenterChannelStatsDto
   simQuota: CloudSimSchemeQuotaDto
@@ -130,6 +131,7 @@ export async function fetchCloudCenterStats(): Promise<CloudCenterStatsDto> {
   await ensureClientSession()
   const raw = await requestApi<CloudCenterStatsDto>('/client/cloud/schemes/stats')
   return {
+    generatedAt: raw?.generatedAt,
     formal: raw?.formal ?? emptyCloudCenterChannelStats(),
     sim: raw?.sim ?? emptyCloudCenterChannelStats(),
     simQuota: {

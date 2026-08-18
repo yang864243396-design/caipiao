@@ -91,4 +91,19 @@ describe('connectClientWs readiness', () => {
 
     stop()
   })
+
+  it('does not accept a non-system frame as a subscription acknowledgement', () => {
+    const connected = vi.fn()
+    const stop = connectClientWs('ws://test', 'token', vi.fn(), { onConnected: connected })
+
+    const socket = FakeWebSocket.instances[0]
+    socket?.emitOpen()
+    socket?.emitMessage({
+      ...subscribedFrame(['client.scheme.instance', 'client.cloud.stats']),
+      type: 'event',
+    })
+
+    expect(connected).not.toHaveBeenCalled()
+    stop()
+  })
 })

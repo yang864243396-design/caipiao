@@ -184,7 +184,9 @@ func (s *Service) adminTransitionInstance(
 	if err != nil {
 		return Instance{}, err
 	}
-	return mapInstanceFromAdminStatusRow(row), nil
+	instance := mapInstanceFromAdminStatusRow(row)
+	s.markScheme(row.MemberID, row.ID)
+	return instance, nil
 }
 
 func (s *Service) AdminPatchShareSnapshot(ctx context.Context, snapshotID string, in PatchShareSnapshotInput) (ShareSnapshot, error) {

@@ -431,7 +431,7 @@ func (h *Hub) CloseClientConnections(code int, reason string) {
 	}
 	h.mu.RUnlock()
 	for _, c := range targets {
-		c.Close(code, reason)
+		c.closeAsync(code, reason)
 	}
 }
 

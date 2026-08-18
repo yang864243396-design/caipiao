@@ -237,7 +237,7 @@ export function connectClientWs(
 
         }
 
-        if (frame.name === 'system.subscribed') {
+        if (frame.type === 'system' && frame.name === 'system.subscribed') {
 
           maybeNotifyReady(frame)
 

@@ -599,6 +599,59 @@ func TestHubCloseClientConnectionsDoesNotHoldLockDuringNetworkClose(t *testing.T
 	}
 }
 
+func TestHubCloseClientConnectionsReservesAllClosesWithoutWaitingForBlockedControlWrite(t *testing.T) {
+	h := NewHub()
+	releaseFirst := make(chan struct{})
+	firstEntered := make(chan struct{}, 2)
+	secondEntered := make(chan struct{}, 2)
+	first := newTestClientConn(ClientIdentity{Account: "a", MemberID: 7})
+	first.done = make(chan struct{})
+	first.closeFn = func(code int, reason string) {
+		firstEntered <- struct{}{}
+		<-releaseFirst
+	}
+	second := newTestClientConn(ClientIdentity{Account: "b", MemberID: 8})
+	second.done = make(chan struct{})
+	second.closeFn = func(code int, reason string) {
+		secondEntered <- struct{}{}
+	}
+	h.Register(first)
+	h.Register(second)
+	t.Cleanup(func() {
+		close(releaseFirst)
+		h.Unregister(first)
+		h.Unregister(second)
+	})
+
+	closeReturned := make(chan struct{})
+	go func() {
+		h.CloseClientConnections(1012, "realtime_bus_unavailable")
+		close(closeReturned)
+	}()
+
+	waitClosed(t, first.done, "first connection done reservation")
+	waitClosed(t, second.done, "second connection done reservation")
+	waitClosed(t, closeReturned, "non-blocking bulk close return")
+	select {
+	case <-secondEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second close was delayed by another connection")
+	}
+	waitClosed(t, firstEntered, "first asynchronous close function")
+
+	h.CloseClientConnections(1012, "realtime_bus_unavailable")
+	select {
+	case <-secondEntered:
+		t.Fatal("second close function ran more than once")
+	default:
+	}
+	select {
+	case <-firstEntered:
+		t.Fatal("first close function ran more than once")
+	default:
+	}
+}
+
 func TestClientDefaultSubscriptionAcknowledgesSchemeStatsAndWallet(t *testing.T) {
 	h := NewHub()
 	c := newTestClientConn(ClientIdentity{Account: "a", MemberID: 7})
