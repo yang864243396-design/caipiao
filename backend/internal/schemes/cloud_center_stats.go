@@ -38,29 +38,11 @@ func (s *Service) GetCloudCenterStats(ctx context.Context, account string) (Clou
 		}
 		return CloudCenterStats{}, err
 	}
-	rows, err := s.q.ListMemberCloudCenterStatsBySimBet(ctx, m.ID)
+	statsByMember, err := s.LoadRealtimeStats(ctx, []int64{m.ID})
 	if err != nil {
 		return CloudCenterStats{}, err
 	}
-	out := CloudCenterStats{
-		SimQuota: SimSchemeQuota{
-			TodayStartsLimit: maxSimSchemeDailyStarts,
-			RunningLimit:     maxSimSchemeConcurrent,
-		},
-	}
-	for _, row := range rows {
-		ch := mapCloudCenterChannelStats(row)
-		if row.SimBet {
-			out.Sim = ch
-		} else {
-			out.Formal = ch
-		}
-	}
-	quota, qerr := s.simSchemeQuotaForMember(ctx, m.ID)
-	if qerr == nil {
-		out.SimQuota = quota
-	}
-	return out, nil
+	return statsByMember[m.ID], nil
 }
 
 func mapCloudCenterChannelStats(row sqlcdb.MemberCloudCenterStatsRow) CloudCenterChannelStats {

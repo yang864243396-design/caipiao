@@ -35,6 +35,7 @@ type Definition struct {
 
 type Instance struct {
 	ID                 string  `json:"id"`
+	MemberID           int64   `json:"-"`
 	DefinitionID       string  `json:"definitionId"`
 	Kind               string  `json:"kind"`
 	SchemeName         string  `json:"schemeName"`
@@ -272,6 +273,7 @@ func mapInstanceRow(row sqlcdb.SchemeInstance) Instance {
 	}
 	return Instance{
 		ID:           row.ID,
+		MemberID:     row.MemberID,
 		DefinitionID: row.DefinitionID,
 		Kind:         row.Kind,
 		SchemeName:   row.SchemeName,
