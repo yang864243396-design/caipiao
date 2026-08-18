@@ -108,7 +108,7 @@ func run(ctx context.Context, args []string, dependencies runDependencies) int {
 		ReconnectWait:   time.Second,
 	})
 	if err != nil {
-		fmt.Fprintf(dependencies.stderr, "error: connect to NATS: %v\n", err)
+		fmt.Fprintln(dependencies.stderr, "error: nats_connect_failed")
 		return 1
 	}
 	defer func() { _ = bus.Close() }()
@@ -143,13 +143,13 @@ func run(ctx context.Context, args []string, dependencies runDependencies) int {
 
 	schemeSubscription, err := subscribe(schemeSubject, "scheme")
 	if err != nil {
-		fmt.Fprintf(dependencies.stderr, "error: subscribe scheme subject: %v\n", err)
+		fmt.Fprintln(dependencies.stderr, "error: nats_subscribe_failed kind=scheme")
 		return 1
 	}
 	defer func() { _ = schemeSubscription.Unsubscribe() }()
 	statsSubscription, err := subscribe(statsSubject, "stats")
 	if err != nil {
-		fmt.Fprintf(dependencies.stderr, "error: subscribe stats subject: %v\n", err)
+		fmt.Fprintln(dependencies.stderr, "error: nats_subscribe_failed kind=stats")
 		return 1
 	}
 	defer func() { _ = statsSubscription.Unsubscribe() }()
@@ -160,7 +160,7 @@ func run(ctx context.Context, args []string, dependencies runDependencies) int {
 				fmt.Fprintf(dependencies.stderr, "canceled: %v\n", ctx.Err())
 				return 130
 			}
-			fmt.Fprintf(dependencies.stderr, "error: publish synthetic snapshots: %v\n", err)
+			fmt.Fprintln(dependencies.stderr, "error: nats_publish_failed")
 			return 1
 		}
 		fmt.Fprintln(dependencies.stdout, "synthetic_publish=enabled events=2")

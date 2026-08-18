@@ -43,19 +43,36 @@ ok()   { printf '    OK: %s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
 die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
-service_env_matches() {
-  local pattern="$1"
+service_env_value() {
+  local key="$1"
   local main_pid
   main_pid="$(sudo systemctl show "$BACKEND_UNIT" --property=MainPID --value 2>/dev/null || true)"
   [[ "$main_pid" =~ ^[1-9][0-9]*$ ]] || return 1
-  sudo sh -c "tr '\\000' '\\n' < /proc/$main_pid/environ" | grep -Ei "$pattern" >/dev/null
+  sudo sh -c "tr '\\000' '\\n' < /proc/$main_pid/environ" |
+    awk -F= -v key="$key" '$1 == key { sub(/^[^=]*=/, ""); print; found=1; exit } END { if (!found) exit 1 }'
+}
+
+service_env_has_nonempty_value() {
+  local value
+  value="$(service_env_value "$1")" || return 1
+  [[ -n "$value" ]]
+}
+
+cloud_realtime_disabled() {
+  local value
+  value="$(service_env_value 'CLOUD_REALTIME_ENABLED')" || return 1
+  value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+  case "$value" in
+    false|0|no|off) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 warn_missing_nats_url() {
-  if service_env_matches '^CLOUD_REALTIME_ENABLED=(false|0|no|off)$'; then
+  if cloud_realtime_disabled; then
     return 0
   fi
-  if ! service_env_matches '^NATS_URL=.+$'; then
+  if ! service_env_has_nonempty_value 'NATS_URL'; then
     warn "CLOUD_REALTIME_ENABLED is not false but NATS_URL is absent; backend will use its localhost default. Configure the production NATS cluster explicitly."
   fi
 }

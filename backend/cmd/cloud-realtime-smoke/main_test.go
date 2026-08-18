@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -37,6 +38,85 @@ func TestHelpDoesNotExposeNATSEnvironmentCredentials(t *testing.T) {
 	help := stdout.String() + stderr.String()
 	if strings.Contains(help, secretURL) || strings.Contains(help, "super-secret-password") {
 		t.Fatalf("help exposed NATS credentials: %q", help)
+	}
+}
+
+func TestExternalNATSErrorsNeverExposeCredentialBearingURLs(t *testing.T) {
+	const secretURL = "nats://smoke-user:super-secret-password@%zz"
+	secretError := fmt.Errorf("invalid NATS URL %s", secretURL)
+	tests := []struct {
+		name       string
+		args       []string
+		newBus     func(realtimebus.NATSConfig) (realtimebus.Bus, error)
+		wantOutput string
+	}{
+		{
+			name: "connect",
+			args: []string{"-nats", secretURL, "-member-id", "7"},
+			newBus: func(config realtimebus.NATSConfig) (realtimebus.Bus, error) {
+				if config.URL != secretURL {
+					t.Fatalf("NATS URL = %q, want secret test URL", config.URL)
+				}
+				return nil, secretError
+			},
+			wantOutput: "error: nats_connect_failed\n",
+		},
+		{
+			name: "subscribe scheme",
+			args: []string{"-member-id", "7"},
+			newBus: func(realtimebus.NATSConfig) (realtimebus.Bus, error) {
+				bus := newSmokeTestBus()
+				bus.subscribeErr = secretError
+				bus.failSubscribeAt = 1
+				return bus, nil
+			},
+			wantOutput: "error: nats_subscribe_failed kind=scheme\n",
+		},
+		{
+			name: "subscribe stats",
+			args: []string{"-member-id", "7"},
+			newBus: func(realtimebus.NATSConfig) (realtimebus.Bus, error) {
+				bus := newSmokeTestBus()
+				bus.subscribeErr = secretError
+				bus.failSubscribeAt = 2
+				return bus, nil
+			},
+			wantOutput: "error: nats_subscribe_failed kind=stats\n",
+		},
+		{
+			name: "publish",
+			args: []string{"-member-id", "7", "-publish"},
+			newBus: func(realtimebus.NATSConfig) (realtimebus.Bus, error) {
+				bus := newSmokeTestBus()
+				bus.publishErr = secretError
+				return bus, nil
+			},
+			wantOutput: "error: nats_publish_failed\n",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			code := run(context.Background(), test.args, runDependencies{
+				stdout: &stdout,
+				stderr: &stderr,
+				getenv: func(string) string { return "" },
+				newBus: test.newBus,
+			})
+
+			if code != 1 {
+				t.Fatalf("exit code = %d, want 1", code)
+			}
+			if got := stderr.String(); got != test.wantOutput {
+				t.Fatalf("stderr = %q, want fixed sanitized output %q", got, test.wantOutput)
+			}
+			output := stdout.String() + stderr.String()
+			if strings.Contains(output, secretURL) || strings.Contains(output, "super-secret-password") || strings.Contains(output, secretError.Error()) {
+				t.Fatalf("external NATS failure exposed credentials or raw error: %q", output)
+			}
+		})
 	}
 }
 
@@ -91,17 +171,25 @@ type smokeTestBus struct {
 	subscriptions      int
 	subscriptionsReady chan struct{}
 	readyOnce          sync.Once
+	subscribeErr       error
+	failSubscribeAt    int
+	publishErr         error
 }
 
 func newSmokeTestBus() *smokeTestBus {
 	return &smokeTestBus{subscriptionsReady: make(chan struct{})}
 }
 
-func (b *smokeTestBus) Publish(context.Context, string, []byte) error { return nil }
+func (b *smokeTestBus) Publish(context.Context, string, []byte) error { return b.publishErr }
 
 func (b *smokeTestBus) Subscribe(string, realtimebus.Handler) (realtimebus.Subscription, error) {
 	b.mu.Lock()
 	b.subscriptions++
+	if b.subscribeErr != nil && b.subscriptions == b.failSubscribeAt {
+		err := b.subscribeErr
+		b.mu.Unlock()
+		return nil, err
+	}
 	if b.subscriptions == 2 {
 		b.readyOnce.Do(func() { close(b.subscriptionsReady) })
 	}
