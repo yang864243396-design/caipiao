@@ -9,6 +9,7 @@ import (
 	"caipiao/backend/internal/db/sqlcdb"
 	"caipiao/backend/internal/schemeevents"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -21,6 +22,12 @@ const (
 
 	// "CloudRec" encoded as a positive, stable signed 64-bit advisory key.
 	reconcileAdvisoryLockKey int64 = 0x436c6f7564526563
+)
+
+var (
+	errReconcileAdvisoryUnlockFailed       = errors.New("cloud realtime reconciler advisory unlock failed")
+	errReconcileAdvisoryUnlockNotConfirmed = errors.New("cloud realtime reconciler advisory unlock not confirmed")
+	errReconcilePhysicalCloseFailed        = errors.New("cloud realtime reconciler physical connection close failed")
 )
 
 type ReconcilerConfig struct {
@@ -60,7 +67,7 @@ type reconcileAcquirer interface {
 type reconcileSession interface {
 	TryAdvisoryLock(context.Context, int64) (bool, error)
 	ListSchemeRealtimeChanges(context.Context, time.Time, string, int) ([]sqlcdb.SchemeRealtimeChange, error)
-	Release()
+	Release() error
 }
 
 func NewReconciler(pool *pgxpool.Pool, marker schemeevents.Marker, cfg ReconcilerConfig) *Reconciler {
@@ -150,12 +157,12 @@ func (r *Reconciler) acquireLeadership(ctx context.Context) bool {
 	}
 	leader, err := session.TryAdvisoryLock(ctx, reconcileAdvisoryLockKey)
 	if err != nil {
-		session.Release()
 		r.recordError(err)
+		r.releaseAcquiredSession(session)
 		return false
 	}
 	if !leader {
-		session.Release()
+		r.releaseAcquiredSession(session)
 		r.setLeader(false)
 		return false
 	}
@@ -166,10 +173,16 @@ func (r *Reconciler) acquireLeadership(ctx context.Context) bool {
 
 func (r *Reconciler) releaseSession() {
 	if r.session != nil {
-		r.session.Release()
+		r.releaseAcquiredSession(r.session)
 		r.session = nil
 	}
 	r.setLeader(false)
+}
+
+func (r *Reconciler) releaseAcquiredSession(session reconcileSession) {
+	if err := session.Release(); err != nil {
+		r.recordError(err)
+	}
 }
 
 func (r *Reconciler) cursor() (time.Time, string) {
@@ -232,35 +245,44 @@ func (a pgxReconcileAcquirer) Acquire(ctx context.Context) (reconcileSession, er
 	if err != nil {
 		return nil, err
 	}
-	return &pgxReconcileSession{conn: conn}, nil
+	return &pgxReconcileSession{
+		conn:        &pgxPooledReconcileConn{conn: conn},
+		listChanges: sqlcdb.New(conn).ListSchemeRealtimeChanges,
+	}, nil
 }
 
 type pgxReconcileSession struct {
-	conn    *pgxpool.Conn
-	locked  bool
-	lockKey int64
+	conn            reconcileConn
+	listChanges     func(context.Context, time.Time, string, int) ([]sqlcdb.SchemeRealtimeChange, error)
+	cleanupRequired bool
+	lockKey         int64
+}
+
+type reconcileConn interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+	Release()
+	ClosePhysical(context.Context) error
 }
 
 func (s *pgxReconcileSession) TryAdvisoryLock(ctx context.Context, key int64) (bool, error) {
+	s.cleanupRequired = true
+	s.lockKey = key
 	var acquired bool
 	if err := s.conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", key).Scan(&acquired); err != nil {
 		return false, err
 	}
-	if acquired {
-		s.locked = true
-		s.lockKey = key
-	}
+	s.cleanupRequired = acquired
 	return acquired, nil
 }
 
 func (s *pgxReconcileSession) ListSchemeRealtimeChanges(ctx context.Context, after time.Time, afterID string, limit int) ([]sqlcdb.SchemeRealtimeChange, error) {
-	return sqlcdb.New(s.conn).ListSchemeRealtimeChanges(ctx, after, afterID, limit)
+	return s.listChanges(ctx, after, afterID, limit)
 }
 
-func (s *pgxReconcileSession) Release() {
-	if !s.locked {
+func (s *pgxReconcileSession) Release() error {
+	if !s.cleanupRequired {
 		s.conn.Release()
-		return
+		return nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), reconcileUnlockTimeout)
@@ -268,12 +290,36 @@ func (s *pgxReconcileSession) Release() {
 	err := s.conn.QueryRow(ctx, "SELECT pg_advisory_unlock($1)", s.lockKey).Scan(&unlocked)
 	cancel()
 	if err == nil && unlocked {
+		s.cleanupRequired = false
 		s.conn.Release()
-		return
+		return nil
 	}
 
-	conn := s.conn.Hijack()
+	cleanupErr := errReconcileAdvisoryUnlockNotConfirmed
+	if err != nil {
+		cleanupErr = errReconcileAdvisoryUnlockFailed
+	}
 	ctx, cancel = context.WithTimeout(context.Background(), reconcileUnlockTimeout)
-	_ = conn.Close(ctx)
+	closeErr := s.conn.ClosePhysical(ctx)
 	cancel()
+	if closeErr != nil {
+		return errors.Join(cleanupErr, errReconcilePhysicalCloseFailed)
+	}
+	return cleanupErr
+}
+
+type pgxPooledReconcileConn struct {
+	conn *pgxpool.Conn
+}
+
+func (c *pgxPooledReconcileConn) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	return c.conn.QueryRow(ctx, sql, args...)
+}
+
+func (c *pgxPooledReconcileConn) Release() {
+	c.conn.Release()
+}
+
+func (c *pgxPooledReconcileConn) ClosePhysical(ctx context.Context) error {
+	return c.conn.Hijack().Close(ctx)
 }

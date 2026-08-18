@@ -4,12 +4,142 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"caipiao/backend/internal/db/sqlcdb"
+
+	"github.com/jackc/pgx/v5"
 )
+
+func TestPGXReconcileSessionLockErrorCannotReturnConnectionToPool(t *testing.T) {
+	t.Parallel()
+
+	lockResultErr := errors.New("lock result delivery failed password=unsafe")
+	tests := []struct {
+		name        string
+		unlock      fakeReconcileRow
+		wantRelease int
+		wantClose   int
+	}{
+		{name: "confirmed unlock permits pool release", unlock: fakeReconcileRow{value: true}, wantRelease: 1},
+		{name: "unconfirmed unlock closes physical connection", unlock: fakeReconcileRow{err: errors.New("unlock failed")}, wantClose: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conn := &fakeReconcileConn{rows: []fakeReconcileRow{{err: lockResultErr}, tt.unlock}}
+			session := &pgxReconcileSession{conn: conn}
+
+			if acquired, err := session.TryAdvisoryLock(context.Background(), reconcileAdvisoryLockKey); acquired || !errors.Is(err, lockResultErr) {
+				t.Fatalf("TryAdvisoryLock acquired=%v err=%v", acquired, err)
+			}
+			session.Release()
+
+			if conn.queryCalls != 2 || conn.poolReleases != tt.wantRelease || conn.physicalCloses != tt.wantClose {
+				t.Fatalf("queryCalls=%d poolReleases=%d physicalCloses=%d want=2,%d,%d", conn.queryCalls, conn.poolReleases, conn.physicalCloses, tt.wantRelease, tt.wantClose)
+			}
+		})
+	}
+}
+
+func TestPGXReconcileSessionCleanupOutcomes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		unlock        fakeReconcileRow
+		closeErr      error
+		wantRelease   int
+		wantClose     int
+		wantErrorText []string
+	}{
+		{
+			name:        "confirmed unlock returns connection to pool",
+			unlock:      fakeReconcileRow{value: true},
+			wantRelease: 1,
+		},
+		{
+			name:          "unlock failure closes physical connection and reports category",
+			unlock:        fakeReconcileRow{err: errors.New("unlock password=unsafe")},
+			wantClose:     1,
+			wantErrorText: []string{"advisory unlock failed"},
+		},
+		{
+			name:          "unlock false closes physical connection and reports category",
+			unlock:        fakeReconcileRow{value: false},
+			wantClose:     1,
+			wantErrorText: []string{"advisory unlock not confirmed"},
+		},
+		{
+			name:          "physical close failure is also reported without raw error",
+			unlock:        fakeReconcileRow{err: errors.New("unlock password=unsafe")},
+			closeErr:      errors.New("close token=unsafe"),
+			wantClose:     1,
+			wantErrorText: []string{"advisory unlock failed", "physical connection close failed"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conn := &fakeReconcileConn{
+				rows:     []fakeReconcileRow{{value: true}, tt.unlock},
+				closeErr: tt.closeErr,
+			}
+			session := &pgxReconcileSession{conn: conn}
+			if acquired, err := session.TryAdvisoryLock(context.Background(), reconcileAdvisoryLockKey); !acquired || err != nil {
+				t.Fatalf("TryAdvisoryLock acquired=%v err=%v", acquired, err)
+			}
+
+			cleanupErr := session.Release()
+
+			if conn.poolReleases != tt.wantRelease || conn.physicalCloses != tt.wantClose {
+				t.Fatalf("poolReleases=%d physicalCloses=%d want=%d,%d", conn.poolReleases, conn.physicalCloses, tt.wantRelease, tt.wantClose)
+			}
+			if len(tt.wantErrorText) == 0 {
+				if cleanupErr != nil {
+					t.Fatalf("cleanup err=%v want=nil", cleanupErr)
+				}
+				return
+			}
+			if cleanupErr == nil {
+				t.Fatal("cleanup err=nil")
+			}
+			for _, want := range tt.wantErrorText {
+				if !strings.Contains(cleanupErr.Error(), want) {
+					t.Fatalf("cleanup err=%q missing %q", cleanupErr, want)
+				}
+			}
+			if strings.Contains(cleanupErr.Error(), "unsafe") {
+				t.Fatalf("cleanup err leaks raw detail: %q", cleanupErr)
+			}
+		})
+	}
+}
+
+func TestReconcilerRecordsCleanupFailuresWithSafeDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	lockErr := errors.New("lock result delivery failed password=unsafe")
+	cleanupErr := errors.New("cloud realtime reconciler advisory unlock failed")
+	session := &fakeReconcileSession{lockErr: lockErr, releaseErr: cleanupErr}
+	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
+	reconciler := newReconciler(
+		&fakeReconcileAcquirer{sessions: []*fakeReconcileSession{session}},
+		reconcileMarkerFunc(func(int64, string) {}),
+		ReconcilerConfig{Interval: time.Second, Batch: 10, now: func() time.Time { return now }},
+	)
+
+	reconciler.reconcile(context.Background())
+
+	diagnostics := reconciler.Diagnostics()
+	if diagnostics.Errors != 2 || diagnostics.LastError != cleanupErr.Error() || strings.Contains(diagnostics.LastError, "unsafe") {
+		t.Fatalf("diagnostics=%+v", diagnostics)
+	}
+	if !session.released {
+		t.Fatal("session cleanup was not attempted")
+	}
+}
 
 func TestReconcilerOnlyLeaderScansAndAdvancesCompositeCursor(t *testing.T) {
 	t.Parallel()
@@ -207,6 +337,7 @@ type fakeReconcileSession struct {
 	query      func(call int, after time.Time, afterID string, limit int) ([]sqlcdb.SchemeRealtimeChange, error)
 	queryCalls int
 	released   bool
+	releaseErr error
 }
 
 func (s *fakeReconcileSession) TryAdvisoryLock(context.Context, int64) (bool, error) {
@@ -223,10 +354,11 @@ func (s *fakeReconcileSession) ListSchemeRealtimeChanges(_ context.Context, afte
 	return s.query(s.queryCalls, after, afterID, limit)
 }
 
-func (s *fakeReconcileSession) Release() {
+func (s *fakeReconcileSession) Release() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.released = true
+	return s.releaseErr
 }
 
 type reconcileMark struct {
@@ -262,4 +394,51 @@ func assertReconcileQuery(t *testing.T, gotAt time.Time, gotID string, gotLimit 
 	if !gotAt.Equal(wantAt) || gotID != wantID || gotLimit != wantLimit {
 		t.Fatalf("query cursor=(%s,%q) limit=%d want=(%s,%q) limit=%d", gotAt, gotID, gotLimit, wantAt, wantID, wantLimit)
 	}
+}
+
+type fakeReconcileRow struct {
+	value bool
+	err   error
+}
+
+func (r fakeReconcileRow) Scan(dest ...any) error {
+	if r.err != nil {
+		return r.err
+	}
+	if len(dest) != 1 {
+		return fmt.Errorf("scan destinations=%d want=1", len(dest))
+	}
+	value, ok := dest[0].(*bool)
+	if !ok {
+		return fmt.Errorf("scan destination %T want *bool", dest[0])
+	}
+	*value = r.value
+	return nil
+}
+
+type fakeReconcileConn struct {
+	rows           []fakeReconcileRow
+	queryCalls     int
+	poolReleases   int
+	physicalCloses int
+	closeErr       error
+}
+
+func (c *fakeReconcileConn) QueryRow(context.Context, string, ...any) pgx.Row {
+	c.queryCalls++
+	if len(c.rows) == 0 {
+		return fakeReconcileRow{err: errors.New("unexpected query")}
+	}
+	row := c.rows[0]
+	c.rows = c.rows[1:]
+	return row
+}
+
+func (c *fakeReconcileConn) Release() {
+	c.poolReleases++
+}
+
+func (c *fakeReconcileConn) ClosePhysical(context.Context) error {
+	c.physicalCloses++
+	return c.closeErr
 }
