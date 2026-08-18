@@ -2,16 +2,24 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"reflect"
+	"strings"
+	"sync"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"caipiao/backend/internal/audit"
 	"caipiao/backend/internal/auth"
 	"caipiao/backend/internal/cloud/betrecords"
 	"caipiao/backend/internal/cloud/instances"
 	"caipiao/backend/internal/cloud/lookback"
+	"caipiao/backend/internal/cloudrealtime"
+	"caipiao/backend/internal/cloudrealtime/wsbridge"
 	"caipiao/backend/internal/config"
 	"caipiao/backend/internal/content"
 	"caipiao/backend/internal/copyhall"
@@ -34,20 +42,29 @@ import (
 	"caipiao/backend/internal/orders/bets"
 	"caipiao/backend/internal/orders/chases"
 	"caipiao/backend/internal/playrules"
+	"caipiao/backend/internal/realtimebus"
 	"caipiao/backend/internal/reports"
+	"caipiao/backend/internal/schemeevents"
 	"caipiao/backend/internal/schemes"
 	"caipiao/backend/internal/ws"
 )
 
 type Server struct {
-	cfg          config.Config
-	authSvc      *auth.Service
-	handler      *handler.Handler
-	guaji        *guaji.Client
-	db           *db.Pool
-	mux          *http.ServeMux
-	workerCancel context.CancelFunc
-	playRules    *playrules.RegistryStore
+	cfg                config.Config
+	authSvc            *auth.Service
+	handler            *handler.Handler
+	guaji              *guaji.Client
+	db                 *db.Pool
+	dbCloser           interface{ Close() }
+	mux                *http.ServeMux
+	workerCancel       context.CancelFunc
+	realtimeWait       func()
+	realtimeBus        realtimebus.Bus
+	realtimePublisher  *cloudrealtime.Publisher
+	realtimeReconciler *cloudrealtime.Reconciler
+	wsServer           *ws.Server
+	playRules          *playrules.RegistryStore
+	closeOnce          sync.Once
 }
 
 func New(cfg config.Config) (*Server, error) {
@@ -102,11 +119,24 @@ func New(cfg config.Config) (*Server, error) {
 		}()
 	}
 
+	wsHub := ws.NewHub()
+	var realtimeBus realtimebus.Bus
+	if cfg.CloudRealtimeEnabled {
+		var err error
+		realtimeBus, err = newCloudRealtimeBus(cfg)
+		if err != nil {
+			workerCancel()
+			if pool != nil {
+				pool.Close()
+			}
+			return nil, fmt.Errorf("cloud realtime bus: %w", err)
+		}
+	}
+
 	lb := lookback.NewService(pool)
 
 	betSvc := betrecords.NewService(pool)
 	authSvc := auth.NewService(cfg, pool)
-	wsHub := ws.NewHub()
 	memberSvc := member.NewService(pool, wsHub)
 	chaseSvc := chases.NewService(pool, memberSvc)
 	copyHallSvc := copyhall.NewService(pool)
@@ -116,7 +146,6 @@ func New(cfg config.Config) (*Server, error) {
 	dashboardSvc := dashboard.NewService(pool)
 	ordersAdminSvc := ordersadmin.NewService(pool)
 	reportsSvc := reports.NewService(pool)
-	wsSrv := &ws.Server{Hub: wsHub, Auth: authSvc, Origins: cfg.CORSOrigins}
 	guajiClient := guaji.NewClient(cfg.Guaji)
 	// 与方案 Worker 并发对齐，避免默认 MaxConnsPerHost=32 卡住真下单。
 	httpConns := cfg.SchemeWorkerConcurrency
@@ -138,6 +167,30 @@ func New(cfg config.Config) (*Server, error) {
 	}
 	schemesSvc := schemes.NewService(pool, periodSyncer)
 	schemesSvc.SetMemberAuthChecker(guajiAccounts)
+	var realtimePublisher *cloudrealtime.Publisher
+	var realtimeReconciler *cloudrealtime.Reconciler
+	var realtimeWorkers sync.WaitGroup
+	if realtimeBus != nil {
+		realtimePublisher = cloudrealtime.NewPublisher(schemesSvc, realtimeBus, cloudrealtime.Config{
+			SubjectPrefix:  cfg.NATSSubjectPrefix,
+			SchemeCoalesce: cfg.CloudRealtimeCoalesce,
+			StatsCoalesce:  cfg.CloudStatsCoalesce,
+		})
+		realtimeReconciler = cloudrealtime.NewReconciler(poolForRealtime(pool), realtimePublisher, cloudrealtime.ReconcilerConfig{
+			Interval: cfg.CloudReconcileInterval,
+			Batch:    cfg.CloudReconcileBatch,
+		})
+		realtimeWorkers.Add(2)
+		go func() {
+			defer realtimeWorkers.Done()
+			realtimePublisher.Run(workerCtx)
+		}()
+		go func() {
+			defer realtimeWorkers.Done()
+			realtimeReconciler.Run(workerCtx)
+		}()
+		injectRealtimeMarker(realtimePublisher, schemesSvc, memberSvc)
+	}
 	gamesSvc := games.NewService(pool)
 	if guajiAccounts != nil {
 		gamesSvc.SetGuajiBetPlacer(guajiAccounts)
@@ -151,9 +204,26 @@ func New(cfg config.Config) (*Server, error) {
 	cmsUploads, err := content.NewUploadStore(cfg.CMSUploadDir)
 	if err != nil {
 		workerCancel()
+		realtimeWorkers.Wait()
+		if realtimeBus != nil {
+			_ = realtimeBus.Close()
+		}
+		if pool != nil {
+			pool.Close()
+		}
 		return nil, fmt.Errorf("cms upload store: %w", err)
 	}
 	h := handler.New(authSvc, maintSvc, betSvc, inst, lb, pool, memberSvc, bets.NewService(pool, memberSvc), chaseSvc, copyHallSvc, schemesSvc, gamesSvc, contentSvc, auditSvc, dashboardSvc, ordersAdminSvc, reportsSvc, wsHub, guajiClient, guajiAccounts, cmsUploads)
+	if realtimePublisher != nil {
+		injectRealtimeMarker(realtimePublisher, h)
+	}
+	h.SetCloudRealtimeDiagnostics(&cloudRealtimeDiagnostics{
+		enabled:    cfg.CloudRealtimeEnabled,
+		bus:        realtimeBus,
+		publisher:  realtimePublisher,
+		hub:        wsHub,
+		reconciler: realtimeReconciler,
+	})
 
 	var schemeWorker *schemes.Worker
 	if pool != nil && cfg.SchemeWorkerEnabled {
@@ -165,6 +235,9 @@ func New(cfg config.Config) (*Server, error) {
 			schemeWorker = w
 			if guajiAccounts != nil {
 				w.SetGuajiBetPlacer(guajiAccounts)
+			}
+			if realtimePublisher != nil {
+				injectRealtimeMarker(realtimePublisher, w)
 			}
 			go w.Run(workerCtx)
 		}
@@ -216,11 +289,43 @@ func New(cfg config.Config) (*Server, error) {
 					_ = historyWorker.SyncLottery(ctx, lotteryCode)
 				})
 			}
+			if realtimePublisher != nil {
+				injectRealtimeMarker(realtimePublisher, psw)
+			}
 			go psw.Run(workerCtx, 10*time.Second)
 		}
 	}
 
-	s := &Server{cfg: cfg, authSvc: authSvc, handler: h, guaji: guajiClient, db: pool, workerCancel: workerCancel, playRules: playRuleRegistry}
+	if realtimeBus != nil {
+		wsHub.SetMemberEventSource(wsbridge.New(realtimeBus, cfg.NATSSubjectPrefix))
+	}
+	wsSrv := &ws.Server{
+		Hub:                   wsHub,
+		Auth:                  authSvc,
+		Origins:               cfg.CORSOrigins,
+		ResolveClientIdentity: clientIdentityResolver(memberSvc),
+	}
+	registerRealtimeDisconnect(realtimeBus, wsHub.CloseClientConnections)
+
+	s := &Server{
+		cfg:                cfg,
+		authSvc:            authSvc,
+		handler:            h,
+		guaji:              guajiClient,
+		db:                 pool,
+		workerCancel:       workerCancel,
+		realtimeBus:        realtimeBus,
+		realtimePublisher:  realtimePublisher,
+		realtimeReconciler: realtimeReconciler,
+		wsServer:           wsSrv,
+		playRules:          playRuleRegistry,
+	}
+	if realtimeBus != nil {
+		s.realtimeWait = realtimeWorkers.Wait
+	}
+	if pool != nil {
+		s.dbCloser = pool
+	}
 	s.mux = http.NewServeMux()
 	s.registerRoutes(wsSrv)
 	return s, nil
@@ -369,6 +474,7 @@ func (s *Server) registerRoutes(wsSrv *ws.Server) {
 	api.Handle("GET /admin/schemes/instances/{instanceId}/bet-history", adminAuth(http.HandlerFunc(s.handler.AdminSchemeBetHistory)))
 	api.Handle("GET /admin/diagnostics/schemes/{instanceId}/runtime", adminAuth(http.HandlerFunc(s.handler.AdminSchemeRuntimeDiagnostics)))
 	api.Handle("GET /admin/diagnostics/schemes/{instanceId}/strategy", adminAuth(http.HandlerFunc(s.handler.AdminSchemeStrategyDiagnostics)))
+	api.Handle("GET /admin/diagnostics/cloud-realtime", adminAuth(http.HandlerFunc(s.handler.AdminCloudRealtimeDiagnostics)))
 	api.Handle("POST /admin/schemes/share", adminAuth(http.HandlerFunc(s.handler.AdminCreateShareSnapshot)))
 	api.Handle("PATCH /admin/schemes/share/{snapshotId}", adminAuth(http.HandlerFunc(s.handler.AdminPatchShareSnapshot)))
 	api.Handle("DELETE /admin/schemes/share/{snapshotId}", adminAuth(http.HandlerFunc(s.handler.AdminDeleteShareSnapshot)))
@@ -426,10 +532,142 @@ func (s *Server) ListenAndServe() error {
 }
 
 func (s *Server) Close() {
-	if s.workerCancel != nil {
-		s.workerCancel()
+	if s == nil {
+		return
 	}
-	if s.db != nil {
-		s.db.Close()
+	s.closeOnce.Do(func() {
+		if s.workerCancel != nil {
+			s.workerCancel()
+		}
+		if s.realtimeWait != nil {
+			s.realtimeWait()
+		}
+		if s.realtimeBus != nil {
+			_ = s.realtimeBus.Close()
+		}
+		if s.dbCloser != nil {
+			s.dbCloser.Close()
+		} else if s.db != nil {
+			s.db.Close()
+		}
+	})
+}
+
+type memberIdentitySource interface {
+	GetByAccount(context.Context, string) (member.MemberRef, error)
+}
+
+func clientIdentityResolver(source memberIdentitySource) func(context.Context, string) (ws.ClientIdentity, error) {
+	return func(ctx context.Context, account string) (ws.ClientIdentity, error) {
+		if source == nil || isNilPointer(source) {
+			return ws.ClientIdentity{}, fmt.Errorf("member identity service is unavailable")
+		}
+		resolved, err := source.GetByAccount(ctx, account)
+		if err != nil {
+			return ws.ClientIdentity{}, err
+		}
+		return ws.ClientIdentity{Account: resolved.Account, MemberID: resolved.ID}, nil
 	}
+}
+
+func isNilPointer(value any) bool {
+	ref := reflect.ValueOf(value)
+	return ref.Kind() == reflect.Pointer && ref.IsNil()
+}
+
+type realtimeMarkerSetter interface {
+	SetRealtimeMarker(schemeevents.Marker)
+}
+
+func injectRealtimeMarker(marker schemeevents.Marker, setters ...realtimeMarkerSetter) {
+	if marker == nil {
+		return
+	}
+	for _, setter := range setters {
+		if setter != nil && !isNilPointer(setter) {
+			setter.SetRealtimeMarker(marker)
+		}
+	}
+}
+
+func registerRealtimeDisconnect(bus realtimebus.Bus, closeClients func(int, string)) {
+	if bus == nil || closeClients == nil {
+		return
+	}
+	bus.OnConnectionChange(func(connected bool) {
+		if !connected {
+			closeClients(1012, "realtime_bus_unavailable")
+		}
+	})
+}
+
+func newCloudRealtimeBus(cfg config.Config) (realtimebus.Bus, error) {
+	switch strings.ToLower(strings.TrimSpace(cfg.CloudRealtimeBus)) {
+	case "memory":
+		return realtimebus.NewMemory(), nil
+	case "nats", "":
+		return realtimebus.NewNATS(realtimebus.NATSConfig{
+			URL:             cfg.NATSURL,
+			Name:            "caipiao-cloud-realtime",
+			User:            cfg.NATSUser,
+			Password:        cfg.NATSPassword,
+			Token:           cfg.NATSToken,
+			CredentialsFile: cfg.NATSCredentialsFile,
+		})
+	default:
+		return nil, fmt.Errorf("unsupported bus kind %q", cfg.CloudRealtimeBus)
+	}
+}
+
+func poolForRealtime(pool *db.Pool) *pgxpool.Pool {
+	if pool == nil {
+		return nil
+	}
+	return pool.Pool
+}
+
+type cloudRealtimeDiagnostics struct {
+	enabled    bool
+	bus        realtimebus.Bus
+	publisher  *cloudrealtime.Publisher
+	hub        *ws.Hub
+	reconciler *cloudrealtime.Reconciler
+}
+
+func (d *cloudRealtimeDiagnostics) Snapshot() map[string]any {
+	busDiagnostics := realtimebus.Diagnostics{Kind: "disabled"}
+	if d != nil && d.bus != nil {
+		busDiagnostics = d.bus.Diagnostics()
+	}
+	publisherDiagnostics := cloudrealtime.Diagnostics{}
+	if d != nil && d.publisher != nil {
+		publisherDiagnostics = d.publisher.Diagnostics()
+	}
+	hubDiagnostics := ws.HubDiagnostics{}
+	if d != nil && d.hub != nil {
+		hubDiagnostics = d.hub.Diagnostics()
+	}
+	scannerDiagnostics := cloudrealtime.ReconcilerDiagnostics{}
+	if d != nil && d.reconciler != nil {
+		scannerDiagnostics = d.reconciler.Diagnostics()
+	}
+	return map[string]any{
+		"enabled":   d != nil && d.enabled,
+		"bus":       diagnosticsMap(busDiagnostics),
+		"publisher": diagnosticsMap(publisherDiagnostics),
+		"hub":       diagnosticsMap(hubDiagnostics),
+		"scanner":   diagnosticsMap(scannerDiagnostics),
+	}
+}
+
+func diagnosticsMap(value any) map[string]any {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return map[string]any{}
+	}
+	result := make(map[string]any)
+	if json.Unmarshal(payload, &result) != nil {
+		return map[string]any{}
+	}
+	return result
 }

@@ -35,29 +35,30 @@ import (
 )
 
 type Handler struct {
-	auth              *auth.Service
-	maintenance       *maintenance.Service
-	betRecords        *betrecords.Service
-	instances         *instances.Store
-	lookback          *lookback.Service
-	db                *db.Pool
-	members           *member.Service
-	bets              *bets.Service
-	chases            *chases.Service
-	copyHall          *copyhall.Service
-	schemes           *schemes.Service
-	games             *games.Service
-	content           *content.Service
-	audit             *audit.Service
-	dashboard         *dashboard.Service
-	ordersAdmin       *ordersadmin.Service
-	reports           *reports.Service
-	wsHub             *ws.Hub
-	realtime          schemeevents.Marker
-	guaji             *guaji.Client
-	guajiAccounts     *accountsvc.Service
-	cmsUploads        *content.UploadStore
-	maintenanceResume schemes.MaintenanceResumeScheduler
+	auth                     *auth.Service
+	maintenance              *maintenance.Service
+	betRecords               *betrecords.Service
+	instances                *instances.Store
+	lookback                 *lookback.Service
+	db                       *db.Pool
+	members                  *member.Service
+	bets                     *bets.Service
+	chases                   *chases.Service
+	copyHall                 *copyhall.Service
+	schemes                  *schemes.Service
+	games                    *games.Service
+	content                  *content.Service
+	audit                    *audit.Service
+	dashboard                *dashboard.Service
+	ordersAdmin              *ordersadmin.Service
+	reports                  *reports.Service
+	wsHub                    *ws.Hub
+	realtime                 schemeevents.Marker
+	cloudRealtimeDiagnostics realtimeDiagnosticsProvider
+	guaji                    *guaji.Client
+	guajiAccounts            *accountsvc.Service
+	cmsUploads               *content.UploadStore
+	maintenanceResume        schemes.MaintenanceResumeScheduler
 }
 
 func (h *Handler) SetRealtimeMarker(marker schemeevents.Marker) {
@@ -65,6 +66,13 @@ func (h *Handler) SetRealtimeMarker(marker schemeevents.Marker) {
 		return
 	}
 	h.realtime = marker
+}
+
+func (h *Handler) SetCloudRealtimeDiagnostics(provider interface{ Snapshot() map[string]any }) {
+	if h == nil {
+		return
+	}
+	h.cloudRealtimeDiagnostics = provider
 }
 
 func (h *Handler) markScheme(memberID int64, instanceID string) {
@@ -133,6 +141,7 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 		"status": "ok",
 		"db":     "disabled",
 	}
+	h.addCloudRealtimeHealth(payload)
 	if h.db == nil {
 		if h.guaji != nil {
 			payload["guaji"] = h.guajiHealth(r.Context())
