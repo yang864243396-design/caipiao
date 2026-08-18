@@ -25,11 +25,35 @@ func guajiPrePlaceVerificationNeeded(lotteryCode, targetPeriod string, now time.
 	if strings.TrimSpace(ps.CurrentPeriod) != strings.TrimSpace(targetPeriod) {
 		return true
 	}
+	if guajiShortPeriodSharedSnapshotsAllowDirectPlaceAt(lotteryCode, targetPeriod, now) {
+		return false
+	}
 	closeAt, ok := lottery.PeriodsBetCloseAt(lotteryCode, now)
 	if !ok {
 		return true
 	}
 	return closeAt.Sub(now.UTC()) <= guajiPrePlaceVerificationLead
+}
+
+func guajiShortPeriodSharedSnapshotsAllowDirectPlaceAt(lotteryCode, targetPeriod string, now time.Time) bool {
+	ps, periodsOK := lottery.PeriodsScheduleFor(lotteryCode)
+	state, stateOK := lottery.PeriodStateFor(lotteryCode)
+	if !periodsOK || !stateOK || !guajiBetSnapshotFreshAt(ps, now) {
+		return false
+	}
+	if state.IntervalSec <= 0 || state.IntervalSec > 15 {
+		return false
+	}
+	targetPeriod = strings.TrimSpace(targetPeriod)
+	if targetPeriod == "" ||
+		strings.TrimSpace(ps.CurrentPeriod) != targetPeriod ||
+		strings.TrimSpace(state.NextIssue) != targetPeriod {
+		return false
+	}
+	if ps.CloseAt.UTC().Sub(now.UTC()) <= guajiPlaceCloseSafety {
+		return false
+	}
+	return guajiShortPeriodWSWindowAllowsAt(lotteryCode, targetPeriod, now)
 }
 
 func (w *Worker) verifyGuajiPeriodBeforePlace(ctx context.Context, lotteryCode, memberAccount, targetPeriod string) error {

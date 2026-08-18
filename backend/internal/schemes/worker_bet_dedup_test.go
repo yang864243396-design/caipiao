@@ -179,6 +179,64 @@ func TestGuajiPrePlaceVerificationIsOnlyNeededForAtRiskSnapshot(t *testing.T) {
 	}
 }
 
+func TestGuajiPrePlaceVerificationSkipsMemberProbeWhenShortPeriodSnapshotsAgree(t *testing.T) {
+	code := "guaji_preplace_short_period_phase_lock_test"
+	now := time.Now().UTC()
+	lottery.ClearPeriodsSchedule(code)
+	t.Cleanup(func() { lottery.ClearPeriodsSchedule(code) })
+
+	closeAt := now.Add(1800 * time.Millisecond)
+	lottery.UpdatePeriodsScheduleFullWithDuration(code, "P2", "P2", now, closeAt, 3, "", now)
+	lottery.UpdatePeriodState(code, "P1", "P2", closeAt.Add(-3*time.Second), 3)
+
+	if guajiPrePlaceVerificationNeeded(code, "P2", now) {
+		t.Fatal("matching fresh short-period snapshots must not spend the remaining window on member verification")
+	}
+}
+
+func TestGuajiPrePlaceVerificationKeepsSafetyFallbacks(t *testing.T) {
+	now := time.Now().UTC()
+
+	t.Run("short period WS mismatch", func(t *testing.T) {
+		code := "guaji_preplace_short_period_ws_mismatch_test"
+		lottery.ClearPeriodsSchedule(code)
+		t.Cleanup(func() { lottery.ClearPeriodsSchedule(code) })
+		closeAt := now.Add(1800 * time.Millisecond)
+		lottery.UpdatePeriodsScheduleFullWithDuration(code, "P2", "P2", now, closeAt, 3, "", now)
+		lottery.UpdatePeriodState(code, "P1", "P3", closeAt.Add(-3*time.Second), 3)
+
+		if !guajiPrePlaceVerificationNeeded(code, "P2", now) {
+			t.Fatal("mismatched WS target must retain member verification")
+		}
+	})
+
+	t.Run("short period exact safety boundary", func(t *testing.T) {
+		code := "guaji_preplace_short_period_safety_boundary_test"
+		lottery.ClearPeriodsSchedule(code)
+		t.Cleanup(func() { lottery.ClearPeriodsSchedule(code) })
+		closeAt := now.Add(guajiPlaceCloseSafety)
+		lottery.UpdatePeriodsScheduleFullWithDuration(code, "P2", "P2", now, closeAt, 3, "", now)
+		lottery.UpdatePeriodState(code, "P1", "P2", closeAt.Add(-3*time.Second), 3)
+
+		if !guajiPrePlaceVerificationNeeded(code, "P2", now) {
+			t.Fatal("short period at the safety boundary must retain member verification")
+		}
+	})
+
+	t.Run("ordinary period near close", func(t *testing.T) {
+		code := "guaji_preplace_standard_period_near_close_test"
+		lottery.ClearPeriodsSchedule(code)
+		t.Cleanup(func() { lottery.ClearPeriodsSchedule(code) })
+		closeAt := now.Add(guajiPrePlaceVerificationLead)
+		lottery.UpdatePeriodsScheduleFullWithDuration(code, "P2", "P2", now, closeAt, 60, "", now)
+		lottery.UpdatePeriodState(code, "P1", "P2", closeAt.Add(-60*time.Second), 60)
+
+		if !guajiPrePlaceVerificationNeeded(code, "P2", now) {
+			t.Fatal("ordinary near-close period must retain member verification")
+		}
+	})
+}
+
 type stubGuajiPeriodVerifier struct {
 	period string
 	close  time.Time
