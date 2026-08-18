@@ -54,7 +54,7 @@ func restoreMaintResumeSnap(t *testing.T, pool *db.Pool, memberID int64, snap ma
 	t.Helper()
 	_, err := pool.Exec(context.Background(), `
 UPDATE scheme_instances
-SET status = $2, status_reason = NULLIF($3,''), turnover = $4, session_pnl = $5, updated_at = now()
+SET status = $2, status_reason = $3, turnover = $4, session_pnl = $5, updated_at = now()
 WHERE id = $1 AND member_id = $6`,
 		snap.instID, snap.status, snap.statusReason, snap.turnover, snap.sessionPnl, memberID)
 	if err != nil {
