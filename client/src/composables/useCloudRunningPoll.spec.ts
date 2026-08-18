@@ -115,18 +115,14 @@ async function loadSubject(options?: {
   vi.doMock('@/api/client', () => ({
     getAccessToken: () => token.value,
   }))
-  vi.doMock('@/api/cloud/center', () => ({
-    fetchRunningSchemesByIds: api.fetchRunningSchemesByIds,
-    fetchCloudCenterStats: api.fetchCloudCenterStats,
-    instanceToDisplay: (row: ReturnType<typeof scheme>) => ({
-      ...row,
-      turnover: row.turnover.toFixed(2),
-      pnl: row.pnl.toFixed(1),
-      lookbackPnl: row.lookbackPnl.toFixed(1),
-      sessionPnl: row.sessionPnl.toFixed(1),
-      multiplier: String(row.multiplier),
-    }),
-  }))
+  vi.doMock('@/api/cloud/center', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/api/cloud/center')>()
+    return {
+      ...actual,
+      fetchRunningSchemesByIds: api.fetchRunningSchemesByIds,
+      fetchCloudCenterStats: api.fetchCloudCenterStats,
+    }
+  })
   vi.doMock('@/composables/ws/useClientWs', () => ({
     connectClientWs: (
       _url: string,
@@ -311,6 +307,76 @@ describe('startCloudRunningSync', () => {
     await vi.advanceTimersByTimeAsync(15_000)
     expect(api.fetchRunningSchemesByIds).toHaveBeenCalledTimes(1)
     expect(api.fetchCloudCenterStats).toHaveBeenCalledTimes(1)
+    sync.stop()
+  })
+
+  it('keeps unchanged compatibility cards and applies snapshot tombstones', async () => {
+    const { startCloudRunningSync } = await loadSubject()
+    const { instanceToDisplay, mergeCloudSchemesStable } = await import('@/api/cloud/center')
+    let displayed = [
+      instanceToDisplay(scheme('a', '2026-08-18T00:00:01.000Z', 1)),
+      instanceToDisplay(scheme('b', '2026-08-18T00:00:01.000Z', 1)),
+      instanceToDisplay(scheme('c', '2026-08-18T00:00:01.000Z', 1)),
+    ]
+    const sync = startCloudRunningSync(
+      () => displayed.map((card) => card.id),
+      (cards) => {
+        displayed = mergeCloudSchemesStable(displayed, cards)
+      },
+    )
+
+    ws.onEvent?.(snapshot([scheme('a', '2026-08-18T00:00:02.000Z', 2)]))
+    expect(displayed.map((card) => card.id)).toEqual(['a', 'b', 'c'])
+    expect(displayed[0]?.turnover).toBe('2.00')
+    expect(displayed[1]?.turnover).toBe('1.00')
+
+    ws.onEvent?.(snapshot([], ['b']))
+    expect(displayed.map((card) => card.id)).toEqual(['a', 'c'])
+
+    api.fetchRunningSchemesByIds.mockResolvedValueOnce([
+      scheme('a', '2026-08-18T00:00:03.000Z', 3),
+    ])
+    await sync.reconcile()
+    expect(displayed.map((card) => card.id)).toEqual(['a'])
+    sync.stop()
+  })
+
+  it('deduplicates compatibility refresh by loaded IDs and subscribed cycle', async () => {
+    const earlySchemes = deferred<ReturnType<typeof scheme>[]>()
+    const earlyStats = deferred<ReturnType<typeof stats>>()
+    let loadedIds: string[] = []
+    api.fetchRunningSchemesByIds
+      .mockReturnValueOnce(earlySchemes.promise)
+      .mockResolvedValueOnce([scheme('a', '2026-08-18T00:00:01.000Z')])
+      .mockResolvedValueOnce([scheme('a', '2026-08-18T00:00:02.000Z')])
+    api.fetchCloudCenterStats.mockReturnValueOnce(earlyStats.promise)
+    const onUpdate = vi.fn()
+    const { startCloudRunningSync } = await loadSubject()
+    const sync = startCloudRunningSync(() => loadedIds, onUpdate)
+
+    ws.onConnected?.()
+    loadedIds = ['a']
+    const loadedRefresh = sync.refresh()
+    earlySchemes.resolve([])
+    earlyStats.resolve(stats(0))
+    await loadedRefresh
+    expect(api.fetchRunningSchemesByIds).toHaveBeenCalledTimes(2)
+    expect(api.fetchRunningSchemesByIds).toHaveBeenNthCalledWith(1, [])
+    expect(api.fetchRunningSchemesByIds).toHaveBeenNthCalledWith(2, ['a'])
+    expect(api.fetchCloudCenterStats).toHaveBeenCalledTimes(1)
+
+    expect(onUpdate).toHaveBeenCalledTimes(1)
+    expect(onUpdate.mock.calls[0]?.[0].map((card: CloudSchemeCard) => card.id)).toEqual(['a'])
+
+    await sync.refresh()
+    expect(api.fetchRunningSchemesByIds).toHaveBeenCalledTimes(2)
+    expect(api.fetchCloudCenterStats).toHaveBeenCalledTimes(1)
+
+    ws.onDisconnected?.()
+    ws.onConnected?.()
+    await sync.refresh()
+    expect(api.fetchRunningSchemesByIds).toHaveBeenCalledTimes(3)
+    expect(api.fetchCloudCenterStats).toHaveBeenCalledTimes(2)
     sync.stop()
   })
 })

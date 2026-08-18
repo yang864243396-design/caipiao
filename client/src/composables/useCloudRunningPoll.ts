@@ -15,6 +15,7 @@ import {
   fetchCloudCenterStats,
   fetchRunningSchemesByIds,
   instanceToDisplay,
+  markCloudSchemePatch,
   type CloudCenterStatsDto,
   type CloudSchemeCard,
 } from '@/api/cloud/center'
@@ -76,6 +77,7 @@ export function startCloudRunningSync(
   handlers: CloudRunningSyncHandlers | ((cards: CloudSchemeCard[]) => void),
   options?: { legacyFallbackMs?: number } | number,
 ): CloudRunningSync {
+  const compatibilityHandler = typeof handlers === 'function' ? handlers : null
   const resolvedHandlers: CloudRunningSyncHandlers = typeof handlers === 'function'
     ? { onSchemes: (cards) => handlers(cards), onStats: () => undefined }
     : handlers
@@ -93,6 +95,10 @@ export function startCloudRunningSync(
   let subscribedCycle = 0
   let startedCycle = 0
   let queuedCycle = 0
+  let activeReconcileKey = ''
+  let activeReconcileCycle = -1
+  let lastCompletedKey = ''
+  let lastCompletedCycle = -1
   const versions = new Map<string, string>()
   const token = getAccessToken()
 
@@ -102,6 +108,22 @@ export function startCloudRunningSync(
 
   function loadedIDs(): string[] {
     return Array.from(new Set(getLoadedIds().filter(Boolean)))
+  }
+
+  function loadedIDsKey(ids: string[]): string {
+    return [...ids].sort().join('\u0000')
+  }
+
+  function emitSchemes(
+    cards: CloudSchemeCard[],
+    removedIds: string[],
+    partial: boolean,
+  ): void {
+    if (compatibilityHandler) {
+      compatibilityHandler(partial ? markCloudSchemePatch(cards, removedIds) : cards)
+      return
+    }
+    resolvedHandlers.onSchemes(cards, removedIds)
   }
 
   function applySchemeSnapshot(payload: WsSchemeInstancesSnapshotPayload): void {
@@ -129,7 +151,7 @@ export function startCloudRunningSync(
     })
 
     if (cards.length || removedIds.length) {
-      resolvedHandlers.onSchemes(cards, removedIds)
+      emitSchemes(cards, removedIds, true)
     }
   }
 
@@ -142,24 +164,29 @@ export function startCloudRunningSync(
     else applyStatsSnapshot(message.payload)
   }
 
-  async function performReconciliation(): Promise<void> {
-    const ids = loadedIDs()
+  async function performReconciliation(ids: string[], includeStats: boolean): Promise<boolean> {
     try {
-      const [rows, stats] = await Promise.all([
-        fetchRunningSchemesByIds(ids),
-        fetchCloudCenterStats(),
-      ])
-      if (stopped) return
+      const rowsPromise = fetchRunningSchemesByIds(ids)
+      const [rows, stats] = includeStats
+        ? await Promise.all([rowsPromise, fetchCloudCenterStats()])
+        : [await rowsPromise, null]
+      if (stopped) return false
+      if (compatibilityHandler && loadedIDsKey(loadedIDs()) !== loadedIDsKey(ids)) {
+        if (stats) resolvedHandlers.onStats(stats)
+        return true
+      }
 
       const cards = rows.map(instanceToDisplay)
       const returnedIDs = new Set(cards.map((card) => card.id))
       const removedIds = ids.filter((id) => !returnedIDs.has(id))
       for (const card of cards) versions.set(card.id, card.updatedAt)
       for (const id of removedIds) versions.delete(id)
-      resolvedHandlers.onSchemes(cards, removedIds)
-      resolvedHandlers.onStats(stats)
+      emitSchemes(cards, removedIds, false)
+      if (stats) resolvedHandlers.onStats(stats)
+      return true
     } catch {
-      // 保留上次有效状态；缓冲的实时快照仍在 finally 中继续应用。
+      // Keep the last valid state and allow a later reconciliation to retry.
+      return false
     } finally {
       const buffered = bufferedSchemeMessages
       bufferedSchemeMessages = []
@@ -167,13 +194,25 @@ export function startCloudRunningSync(
     }
   }
 
-  function startReconciliation(): Promise<void> {
+  function startReconciliation(includeStats = true): Promise<void> {
     if (stopped) return Promise.resolve()
     if (reconcilePromise) return reconcilePromise
 
-    const running = performReconciliation()
+    const ids = loadedIDs()
+    const key = loadedIDsKey(ids)
+    const cycle = subscribedCycle
+    activeReconcileKey = key
+    activeReconcileCycle = cycle
+    const running = performReconciliation(ids, includeStats).then((completed) => {
+      if (completed) {
+        lastCompletedKey = key
+        lastCompletedCycle = cycle
+      }
+    })
     reconcilePromise = running.finally(() => {
       reconcilePromise = null
+      activeReconcileKey = ''
+      activeReconcileCycle = -1
       if (!stopped && queuedCycle > startedCycle) {
         startedCycle = queuedCycle
         void startReconciliation()
@@ -184,6 +223,25 @@ export function startCloudRunningSync(
 
   function reconcile(): Promise<void> {
     return startReconciliation()
+  }
+
+  function compatibilityRefresh(): Promise<void> {
+    if (!compatibilityHandler || !realtimeMode || subscribedCycle === 0) {
+      return startReconciliation(compatibilityHandler ? false : true)
+    }
+
+    const key = loadedIDsKey(loadedIDs())
+    const cycle = subscribedCycle
+    if (reconcilePromise) {
+      if (activeReconcileKey === key && activeReconcileCycle === cycle) {
+        return reconcilePromise
+      }
+      return reconcilePromise.then(() => compatibilityRefresh())
+    }
+    if (lastCompletedKey === key && lastCompletedCycle === cycle) {
+      return Promise.resolve()
+    }
+    return startReconciliation(false)
   }
 
   function requestCycleReconciliation(cycle: number): void {
@@ -259,7 +317,7 @@ export function startCloudRunningSync(
     bufferedSchemeMessages = []
   }
 
-  return { stop, reconcile, refresh: reconcile }
+  return { stop, reconcile, refresh: compatibilityRefresh }
 }
 
 export function cloudRunningPollMs(): number {

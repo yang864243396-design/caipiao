@@ -660,15 +660,28 @@ export function instanceToDisplay(row: CloudRunningScheme) {
 
 export type CloudSchemeCard = ReturnType<typeof instanceToDisplay>
 
+const cloudSchemePatchMeta = new WeakMap<CloudSchemeCard[], ReadonlySet<string>>()
+
+/** Task 9 transition adapter for partial WebSocket card updates. */
+export function markCloudSchemePatch(
+  cards: CloudSchemeCard[],
+  removedIds: string[],
+): CloudSchemeCard[] {
+  cloudSchemePatchMeta.set(cards, new Set(removedIds))
+  return cards
+}
+
 /** 轮询/操作后合并列表，保持用户当前看到的顺序，不因 updated_at 重排 */
 export function mergeCloudSchemesStable(
   prev: CloudSchemeCard[],
   incoming: CloudSchemeCard[],
 ): CloudSchemeCard[] {
   if (prev.length === 0) return incoming
+  const patchRemovedIds = cloudSchemePatchMeta.get(incoming)
   const byId = new Map(incoming.map((s) => [s.id, s]))
   const merged: CloudSchemeCard[] = []
   for (const item of prev) {
+    if (patchRemovedIds?.has(item.id)) continue
     const next = byId.get(item.id)
     if (next) {
       const prevTime = Date.parse(item.updatedAt)
@@ -678,6 +691,8 @@ export function mergeCloudSchemesStable(
         : Boolean(item.updatedAt && next.updatedAt && next.updatedAt < item.updatedAt)
       merged.push(nextIsOlder ? item : mergeSchemeCountdownOnPoll(item, next))
       byId.delete(item.id)
+    } else if (patchRemovedIds) {
+      merged.push(item)
     }
   }
   for (const item of incoming) {
