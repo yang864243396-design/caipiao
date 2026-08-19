@@ -90,11 +90,59 @@ func (s *Service) GroupsWithFilter(ctx context.Context, memberID int64, f Groups
 	} else if limit > 200 {
 		limit = 200
 	}
-	rows := s.loadRowsFiltered(ctx, memberID, f, since, until)
-	allGroups := groupByScheme(rows)
-	page, err := paginateGroups(allGroups, limit, f.Cursor)
+	if s.q != nil && memberID > 0 {
+		return s.groupsWithFilterFromDB(ctx, memberID, f, since, until, dateFrom, dateTo, days, limit)
+	}
+	return s.groupsWithFilterFromMemory(f, since, until, dateFrom, dateTo, days, limit)
+}
+
+func (s *Service) groupsWithFilterFromDB(
+	ctx context.Context,
+	memberID int64,
+	f GroupsFilter,
+	since, until time.Time,
+	dateFrom, dateTo string,
+	days, limit int,
+) (GroupsResult, error) {
+	offset, err := parsePageOffset(f.Cursor, limit)
 	if err != nil {
 		return GroupsResult{}, err
+	}
+	filter, err := s.databaseFilter(ctx, memberID, f.Mode, f.LotteryCode, since, until)
+	if err != nil {
+		return GroupsResult{}, err
+	}
+	stats, err := s.q.SummarizeCloudBetRecordGroups(ctx, filter)
+	if err != nil {
+		return GroupsResult{}, err
+	}
+	fetchLimit := limit
+	if fetchLimit <= 0 {
+		fetchLimit = int(^uint32(0) >> 1)
+	} else {
+		fetchLimit++
+	}
+	rows, err := s.q.ListCloudBetRecordGroupsPage(ctx, filter, int32(offset), int32(fetchLimit))
+	if err != nil {
+		return GroupsResult{}, err
+	}
+	hasMore := limit > 0 && len(rows) > limit
+	if hasMore {
+		rows = rows[:limit]
+	}
+	groups := make([]Group, len(rows))
+	for i, row := range rows {
+		summary := summaryFromAggregate(row.CloudBetAggregate)
+		groups[i] = Group{
+			SchemeID: row.SchemeID, SchemeName: row.SchemeName,
+			TotalBet: summary.TotalBet, TotalPrize: summary.TotalPrize,
+			DayPnL: summary.DayPnL, WinRate: summary.WinRate,
+		}
+	}
+	var next *string
+	if hasMore {
+		value := strconv.Itoa(offset + limit)
+		next = &value
 	}
 	mode := Mode(f.Mode)
 	if f.Mode == "" {
@@ -105,8 +153,32 @@ func (s *Service) GroupsWithFilter(ctx context.Context, memberID int64, f Groups
 		Days:     days,
 		DateFrom: dateFrom,
 		DateTo:   dateTo,
-		Summary:  summarize(rows),
-		Groups:   page,
+		Summary:  summaryFromAggregate(stats),
+		Groups: GroupsPage{
+			Items: groups,
+			Page:  PageMeta{NextCursor: next, HasMore: hasMore},
+		},
+	}, nil
+}
+
+func (s *Service) groupsWithFilterFromMemory(
+	f GroupsFilter,
+	since, until time.Time,
+	dateFrom, dateTo string,
+	days, limit int,
+) (GroupsResult, error) {
+	rows := s.loadRowsFiltered(context.Background(), 0, f, since, until)
+	page, err := paginateGroups(groupByScheme(rows), limit, f.Cursor)
+	if err != nil {
+		return GroupsResult{}, err
+	}
+	mode := Mode(f.Mode)
+	if f.Mode == "" {
+		mode = ""
+	}
+	return GroupsResult{
+		Mode: mode, Days: days, DateFrom: dateFrom, DateTo: dateTo,
+		Summary: summarize(rows), Groups: page,
 	}, nil
 }
 
@@ -165,17 +237,69 @@ func (s *Service) Detail(
 	if limit > 200 {
 		limit = 200
 	}
+	offset, err := parsePageOffset(cursor, limit)
+	if err != nil {
+		return DetailResult{}, false, err
+	}
+	if s.q != nil && memberID > 0 {
+		return s.detailFromDB(ctx, memberID, schemeID, mode, days, limit, offset)
+	}
+	return s.detailFromMemory(ctx, memberID, schemeID, mode, days, limit, offset)
+}
+
+func (s *Service) detailFromDB(
+	ctx context.Context,
+	memberID int64,
+	schemeID string,
+	mode Mode,
+	days, limit, offset int,
+) (DetailResult, bool, error) {
+	dateFrom, dateTo, since, until := timeutil.NaturalDaysMeta(days)
+	filter, err := s.databaseFilter(ctx, memberID, string(mode), "", since, until)
+	if err != nil {
+		return DetailResult{}, false, err
+	}
+	stats, err := s.q.SummarizeCloudBetRecordsByScheme(ctx, filter, schemeID)
+	if err != nil {
+		return DetailResult{}, false, err
+	}
+	if stats.TotalRows == 0 {
+		return DetailResult{}, false, nil
+	}
+	rows, err := s.q.ListCloudBetRecordsBySchemePage(ctx, filter, schemeID, int32(offset), int32(limit+1))
+	if err != nil {
+		return DetailResult{}, false, err
+	}
+	hasMore := len(rows) > limit
+	if hasMore {
+		rows = rows[:limit]
+	}
+	var next *string
+	if hasMore {
+		value := strconv.Itoa(offset + limit)
+		next = &value
+	}
+	return DetailResult{
+		SchemeID: schemeID, SchemeName: stats.SchemeName,
+		Mode: mode, Days: days, DateFrom: dateFrom, DateTo: dateTo,
+		Summary: summaryFromAggregate(stats),
+		Records: Page{
+			Items: itemsFromFilteredRows(rows),
+			Page:  PageMeta{NextCursor: next, HasMore: hasMore},
+		},
+	}, true, nil
+}
+
+func (s *Service) detailFromMemory(
+	ctx context.Context,
+	memberID int64,
+	schemeID string,
+	mode Mode,
+	days, limit, offset int,
+) (DetailResult, bool, error) {
 	all := filterScheme(s.loadRows(ctx, memberID, mode, days), schemeID)
 	if len(all) == 0 {
 		return DetailResult{}, false, nil
-	}
-	offset := 0
-	if cursor != "" {
-		n, err := strconv.Atoi(cursor)
-		if err != nil || n < 0 {
-			return DetailResult{}, false, fmt.Errorf("invalid cursor")
-		}
-		offset = n
 	}
 	if offset > len(all) {
 		offset = len(all)
@@ -222,6 +346,68 @@ func (s *Service) Detail(
 			Page:  PageMeta{NextCursor: next, HasMore: hasMore},
 		},
 	}, true, nil
+}
+
+func (s *Service) databaseFilter(
+	ctx context.Context,
+	memberID int64,
+	mode, lotteryCode string,
+	since, until time.Time,
+) (sqlcdb.CloudBetRecordFilter, error) {
+	filter := sqlcdb.CloudBetRecordFilter{
+		MemberID: memberID,
+		SinceAt:  pgtype.Timestamptz{Time: since, Valid: true},
+		UntilAt:  pgtype.Timestamptz{Time: until, Valid: true},
+	}
+	if mode = strings.TrimSpace(mode); mode != "" {
+		filter.SimBet = pgtype.Bool{Bool: mode == string(ModeSim), Valid: true}
+	}
+	if lotteryCode = strings.TrimSpace(lotteryCode); lotteryCode != "" {
+		filter.LotteryCode = pgtype.Text{String: lotteryCode, Valid: true}
+	}
+	guajiID, err := member.LookupActiveGuajiAccountID(ctx, s.q, memberID)
+	if err != nil {
+		return sqlcdb.CloudBetRecordFilter{}, err
+	}
+	filter.GuajiAccountID = guajiID
+	return filter, nil
+}
+
+func parsePageOffset(cursor string, limit int) (int, error) {
+	if limit <= 0 || strings.TrimSpace(cursor) == "" {
+		return 0, nil
+	}
+	offset, err := strconv.Atoi(cursor)
+	if err != nil || offset < 0 {
+		return 0, fmt.Errorf("invalid cursor")
+	}
+	return offset, nil
+}
+
+func summaryFromAggregate(aggregate sqlcdb.CloudBetAggregate) Summary {
+	winRate := 0.0
+	if aggregate.TotalRows > 0 {
+		winRate = round1(float64(aggregate.HitRows) / float64(aggregate.TotalRows) * 100)
+	}
+	return Summary{
+		TotalBet: round2(aggregate.TotalBet), TotalPrize: round2(aggregate.TotalPrize),
+		DayPnL: round2(aggregate.PnL), WinRate: winRate,
+	}
+}
+
+func itemsFromFilteredRows(rows []sqlcdb.ListCloudBetRecordsFilteredRow) []Item {
+	items := make([]Item, len(rows))
+	for i, row := range rowsFromDBFiltered(rows) {
+		displayPeriod := resolveBetRecordPeriods(row)
+		items[i] = Item{
+			ID: thirdPartyBetOrderNo(row.ThirdPartyBetID), RecordNo: strings.TrimSpace(row.ID),
+			Period: displayPeriod, Periods: displayPeriod, PlayType: row.PlayType,
+			Multiplier: formatMultiplierDisplay(row.Multiplier), Round: formatRoundDisplay(row.Round),
+			Amount: truncateBetAmount(row.Amount), PnL: round2(row.PnL),
+			Status: row.Status, BetContent: row.BetContent,
+		}
+	}
+	return items
 }
 
 func (s *Service) loadRows(ctx context.Context, memberID int64, mode Mode, days int) []Row {
