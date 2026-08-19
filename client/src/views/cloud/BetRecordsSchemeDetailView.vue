@@ -2,6 +2,8 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { getAccessToken } from '@/api/client'
+import { WS_CLIENT_BASE, WS_CLIENT_ENABLED } from '@/api/config'
 import {
   BET_RECORD_DETAIL_PAGE_SIZE,
   fetchBetRecordDetail,
@@ -16,6 +18,8 @@ import {
   setBetListMemoryCache,
   takeBetListRestore,
 } from '@/composables/useBetListRestore'
+import { cloudRunningPollMs } from '@/composables/useCloudRunningPoll'
+import { connectClientWs, isCloudRefreshEvent } from '@/composables/ws/useClientWs'
 
 type SchemeBetListCache = {
   schemeName: string
@@ -40,6 +44,11 @@ const nextCursor = ref<string | null>(null)
 const loadSentinel = ref<HTMLElement | null>(null)
 
 let loadObserver: IntersectionObserver | null = null
+let stopLiveWs: (() => void) | null = null
+let livePollTimer: ReturnType<typeof window.setInterval> | null = null
+let silentRefreshInFlight = false
+let silentRefreshQueued = false
+let liveRefreshStopped = true
 
 function resetPagination(): void {
   nextCursor.value = null
@@ -202,11 +211,63 @@ async function silentRefresh(keepScrollY: number): Promise<void> {
   }
 }
 
+function requestSilentRefresh(): void {
+  if (liveRefreshStopped) return
+  if (silentRefreshInFlight) {
+    silentRefreshQueued = true
+    return
+  }
+  silentRefreshInFlight = true
+  void silentRefresh(window.scrollY).finally(() => {
+    silentRefreshInFlight = false
+    if (silentRefreshQueued) {
+      silentRefreshQueued = false
+      requestSilentRefresh()
+    }
+  })
+}
+
+function restartLivePoll(wsConnected: boolean): void {
+  if (liveRefreshStopped) return
+  if (livePollTimer) window.clearInterval(livePollTimer)
+  livePollTimer = window.setInterval(requestSilentRefresh, cloudRunningPollMs(wsConnected))
+}
+
+function startLiveRefresh(): void {
+  if (liveRefreshStopped) return
+  restartLivePoll(false)
+  const token = getAccessToken()
+  if (!WS_CLIENT_ENABLED || !WS_CLIENT_BASE || !token) return
+  stopLiveWs = connectClientWs(
+    WS_CLIENT_BASE,
+    token,
+    (env) => {
+      if (isCloudRefreshEvent(env)) requestSilentRefresh()
+    },
+    {
+      onConnected: () => restartLivePoll(true),
+      onDisconnected: () => restartLivePoll(false),
+    },
+  )
+}
+
+function stopLiveRefresh(): void {
+  liveRefreshStopped = true
+  stopLiveWs?.()
+  stopLiveWs = null
+  if (livePollTimer) {
+    window.clearInterval(livePollTimer)
+    livePollTimer = null
+  }
+}
+
 onMounted(() => {
-  void bootstrap()
+  liveRefreshStopped = false
+  void bootstrap().finally(startLiveRefresh)
 })
 
 onUnmounted(() => {
+  stopLiveRefresh()
   loadObserver?.disconnect()
   loadObserver = null
 })

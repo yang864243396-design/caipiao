@@ -366,8 +366,11 @@ export function startCloudRunningSync(
   return { stop, reconcile, refresh: compatibilityRefresh }
 }
 
-export function cloudRunningPollMs(): number {
-  return FALLBACK_POLL_MS
+export function cloudRunningPollMs(
+  wsConnected = false,
+  fallbackMs = FALLBACK_POLL_MS,
+): number {
+  return wsConnected ? WS_CONNECTED_POLL_MS : fallbackMs
 }
 
 /** @deprecated 使用 startCloudRunningSync */

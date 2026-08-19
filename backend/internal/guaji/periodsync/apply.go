@@ -59,7 +59,7 @@ func tryApplyOpenPeriod(lotteryCode string, periods []guaji.LottPeriod, open gua
 	}
 	periodDurationSec := guaji.LottPeriodDurationSec(periods, lotteryCode, open, closeAt)
 	openStartAt, _ := guaji.ParseGuajiPeriodTimeForLottery(lotteryCode, open.StartTime)
-	return lottery.TryUpdatePeriodsScheduleFullWithDurationAt(
+	applied := lottery.TryUpdatePeriodsScheduleFullWithDurationAt(
 		lotteryCode,
 		currentPeriod,
 		currentPeriod,
@@ -70,6 +70,12 @@ func tryApplyOpenPeriod(lotteryCode string, periods []guaji.LottPeriod, open gua
 		openStartAt,
 		now,
 	)
+	if applied && !openStartAt.IsZero() && closeAt.Equal(openStartAt.UTC()) {
+		if realCloseAt, err := guaji.ParseGuajiPeriodTimeForLottery(lotteryCode, open.EndTime); err == nil {
+			lottery.RememberPeriodsRealClose(lotteryCode, currentPeriod, realCloseAt, open.EndTime)
+		}
+	}
+	return applied
 }
 
 // pickPeriodForCache 选取写入缓存的可投期：当前期仍有效则保持，避免同步时在多期间来回切换。

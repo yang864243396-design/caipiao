@@ -174,3 +174,64 @@ func TestTryUpdatePeriodsScheduleFullWithDurationAt_rejectsAnchoredPastClose(t *
 		t.Fatal("expected reject when anchor clamps to past closeAt")
 	}
 }
+
+func TestTryUpdatePeriodsScheduleFullWithDurationAt_promotesProvisionalCloseOnce(t *testing.T) {
+	code := "period_provisional_promotion_test"
+	period := "P100"
+	startAt := time.Date(2026, 8, 18, 3, 0, 0, 0, time.UTC)
+	endAt := startAt.Add(3 * time.Second)
+
+	if ok := TryUpdatePeriodsScheduleFullWithDurationAt(
+		code, period, period, startAt, startAt, 3,
+		FormatUTCWallClock(startAt), startAt, startAt.Add(-time.Second),
+	); !ok {
+		t.Fatal("expected future-period provisional close to be stored")
+	}
+	if ps, ok := PeriodsScheduleFor(code); !ok || !ps.CloseAt.Equal(startAt) {
+		t.Fatalf("provisional schedule=%+v ok=%v, want closeAt=%v", ps, ok, startAt)
+	}
+
+	if ok := TryUpdatePeriodsScheduleFullWithDurationAt(
+		code, period, period, endAt, endAt, 3,
+		FormatUTCWallClock(endAt), startAt, startAt.Add(500*time.Millisecond),
+	); !ok {
+		t.Fatal("expected started period to promote provisional close to real end")
+	}
+	ps, ok := PeriodsScheduleFor(code)
+	if !ok || !ps.CloseAt.Equal(endAt) {
+		t.Fatalf("promoted schedule=%+v ok=%v, want closeAt=%v", ps, ok, endAt)
+	}
+
+	laterClose := endAt.Add(30 * time.Second)
+	if ok := TryUpdatePeriodsScheduleFullWithDurationAt(
+		code, period, period, laterClose, laterClose, 3,
+		FormatUTCWallClock(laterClose), startAt, startAt.Add(time.Second),
+	); !ok {
+		t.Fatal("anchored active period should remain valid while original close is open")
+	}
+	ps, _ = PeriodsScheduleFor(code)
+	if !ps.CloseAt.Equal(endAt) {
+		t.Fatalf("active close moved to %v, want anchored %v", ps.CloseAt, endAt)
+	}
+}
+
+func TestPromoteProvisionalPeriod_usesRememberedRealClose(t *testing.T) {
+	code := "period_ws_promotion_test"
+	period := "P200"
+	startAt := time.Date(2026, 8, 18, 4, 0, 0, 0, time.UTC)
+	endAt := startAt.Add(3 * time.Second)
+	if ok := TryUpdatePeriodsScheduleFullWithDurationAt(
+		code, period, period, startAt, startAt, 3,
+		FormatUTCWallClock(startAt), startAt, startAt.Add(-time.Second),
+	); !ok {
+		t.Fatal("expected provisional schedule")
+	}
+	RememberPeriodsRealClose(code, period, endAt, FormatUTCWallClock(endAt))
+	if !PromoteProvisionalPeriod(code, startAt.Add(300*time.Millisecond)) {
+		t.Fatal("expected draw event to promote provisional period")
+	}
+	ps, ok := PeriodsScheduleFor(code)
+	if !ok || ps.ProvisionalClose || !ps.CloseAt.Equal(endAt) || ps.CloseEndTimeRaw != FormatUTCWallClock(endAt) {
+		t.Fatalf("promoted schedule=%+v ok=%v", ps, ok)
+	}
+}

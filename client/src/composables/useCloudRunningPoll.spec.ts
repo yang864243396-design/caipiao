@@ -408,3 +408,20 @@ describe('startCloudRunningSync', () => {
     sync.stop()
   })
 })
+
+describe('cloudRunningPollMs', () => {
+  it('uses the fallback interval until websocket is connected', async () => {
+    const { cloudRunningPollMs } = await loadSubject()
+    expect(cloudRunningPollMs(false)).toBe(15_000)
+  })
+
+  it('uses the slow safety interval while websocket is connected', async () => {
+    const { cloudRunningPollMs } = await loadSubject()
+    expect(cloudRunningPollMs(true)).toBe(60_000)
+  })
+
+  it('preserves the caller fallback interval while disconnected', async () => {
+    const { cloudRunningPollMs } = await loadSubject()
+    expect(cloudRunningPollMs(false, 7_500)).toBe(7_500)
+  })
+})

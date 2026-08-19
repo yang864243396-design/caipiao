@@ -255,6 +255,67 @@ func TestSettlePayoutBatchRowsCountsHistoricalOnlyAfterCommitAndCleanup(t *testi
 	}
 }
 
+func TestSettlePayoutBatchRowsContinuesAfterOneHistoricalFailure(t *testing.T) {
+	badLookup := errors.New("historical web bet not found")
+	rows := []sqlcdb.ListPendingGuajiBetOrdersRow{
+		payoutBatchTestRow("101"),
+		payoutBatchTestRow("102"),
+		payoutBatchTestRow("103"),
+	}
+	items := map[string]guaji.WebBetRecord{
+		"103": {ID: 103, Settled: true},
+	}
+	historicalCalls := 0
+	recentCommits := 0
+	settled, err := settlePayoutBatchRows(
+		rows,
+		items,
+		func(row sqlcdb.ListPendingGuajiBetOrdersRow, _ *guaji.BetSettlement) error {
+			recentCommits++
+			return nil
+		},
+		func(row sqlcdb.ListPendingGuajiBetOrdersRow) (bool, error) {
+			historicalCalls++
+			if row.ThirdPartyBetID.String == "101" {
+				return false, badLookup
+			}
+			return false, nil
+		},
+	)
+	if settled != 1 {
+		t.Fatalf("settled=%d, want later recent row to settle", settled)
+	}
+	if historicalCalls != 2 || recentCommits != 1 {
+		t.Fatalf("historicalCalls=%d recentCommits=%d, want 2 and 1", historicalCalls, recentCommits)
+	}
+	if !errors.Is(err, badLookup) {
+		t.Fatalf("err=%v, want bad historical lookup cause", err)
+	}
+}
+
+func TestSettlePayoutBatchRowsBoundsHistoricalRecoveryWork(t *testing.T) {
+	rows := []sqlcdb.ListPendingGuajiBetOrdersRow{
+		payoutBatchTestRow("101"),
+		payoutBatchTestRow("102"),
+		payoutBatchTestRow("103"),
+		payoutBatchTestRow("104"),
+	}
+	calls := 0
+	settled, err := settlePayoutBatchRowsWithHistoricalBudget(
+		rows,
+		map[string]guaji.WebBetRecord{},
+		func(sqlcdb.ListPendingGuajiBetOrdersRow, *guaji.BetSettlement) error { return nil },
+		func(sqlcdb.ListPendingGuajiBetOrdersRow) (bool, error) {
+			calls++
+			return false, nil
+		},
+		2,
+	)
+	if err != nil || settled != 0 || calls != 2 {
+		t.Fatalf("settled=%d calls=%d err=%v, want 0, 2, nil", settled, calls, err)
+	}
+}
+
 func payoutBatchTestRow(betID string) sqlcdb.ListPendingGuajiBetOrdersRow {
 	return sqlcdb.ListPendingGuajiBetOrdersRow{
 		ThirdPartyBetID: pgtype.Text{String: betID, Valid: true},

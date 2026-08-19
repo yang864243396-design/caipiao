@@ -154,7 +154,19 @@ func publishedRuleSubIDs(rule playRule) []string {
 }
 
 func (w *Worker) NotifyStrategyDraw(ctx context.Context, lotteryCode, periodNo string) {
-	if w != nil && w.strategyProcessor != nil {
+	if w == nil {
+		return
+	}
+	lotteryCode = strings.TrimSpace(lotteryCode)
+	if lotteryCode == "" {
+		return
+	}
+	// A draw event can arrive immediately after the next period starts. Upgrade
+	// only a previously remembered provisional close and coalesce a period
+	// refresh; strategy lifecycle ownership remains with StrategyProcessor.
+	lottery.PromoteProvisionalPeriod(lotteryCode, time.Now().UTC())
+	w.requestPeriodRefresh(lotteryCode)
+	if w.strategyProcessor != nil {
 		w.strategyProcessor.NotifyDraw(ctx, lotteryCode, periodNo)
 	}
 }
