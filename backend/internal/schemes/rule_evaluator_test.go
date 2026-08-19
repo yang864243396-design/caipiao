@@ -63,6 +63,28 @@ func TestFrozenFastSSCHashTailBigSmallUsesFinalDigit(t *testing.T) {
 	}
 }
 
+func TestFrozenFastSSCHashTailOddEvenUsesFinalDigit(t *testing.T) {
+	snapshot := playrules.Snapshot{
+		Locator:        playrules.Locator{TemplateCode: "fast_ssc_std", TypeID: "g017", SubID: "387"},
+		EvaluatorKey:   "ssc.attribute",
+		EvaluationSpec: []byte(`{"mode":"attribute","numberMin":0,"numberMax":9,"segmentStart":0,"segmentLen":5,"betMode":"danshuang","catalogSubId":"387"}`),
+	}
+	odd, err := evaluateFrozenRule(snapshot, playRule{}, []string{"5", "5", "6", "5", "3"}, "单", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !odd.Hit || odd.BetUnits != 1 {
+		t.Fatalf("odd evaluation = %+v, want one hit from final digit 3", odd)
+	}
+	even, err := evaluateFrozenRule(snapshot, playRule{}, []string{"5", "5", "6", "5", "3"}, "双", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if even.Hit {
+		t.Fatalf("even evaluation = %+v, want miss from final digit 3", even)
+	}
+}
+
 func TestFrozenLHCGuoguanRulePreservesEmptyPositions(t *testing.T) {
 	snapshot := frozenSnapshot(t, "lhc_std", "lhc.guoguan", map[string]any{
 		"mode": "guoguan", "numberMin": 1, "numberMax": 49, "betMode": "guoguan",

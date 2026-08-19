@@ -53,3 +53,27 @@ func TestFastSSCHashTailBigSmallRuleIsPublishedByMigration(t *testing.T) {
 		}
 	}
 }
+
+func TestFastSSCHashTailOddEvenRuleIsPublishedByMigration(t *testing.T) {
+	path := filepath.Join("..", "..", "migrations", "00153_publish_fast_ssc_hash_tail_odd_even.sql")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read hash tail odd/even rule migration: %v", err)
+	}
+	sql := string(data)
+	for _, want := range []string{
+		"'fast_ssc_std'",
+		"'g017'",
+		"'387'",
+		"'ssc.attribute'",
+		`"betMode":"danshuang"`,
+		`"semantic":"final_digit_odd_even"`,
+		"strategy_enabled",
+		"TRUE",
+		"'published'",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("hash tail odd/even rule migration missing %q", want)
+		}
+	}
+}
