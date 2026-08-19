@@ -174,6 +174,7 @@ func (w *Worker) placeGuajiSchemeBet(
 	var betRes guajibet.Result
 	var placeErr error
 	for attempt := 1; attempt <= guajiPlaceSafeRetryAttempts; attempt++ {
+		upstreamVerified := false
 		if guajiPrePlaceVerificationNeeded(inst.LotteryCode, periodNo, time.Now()) {
 			if verifyErr := w.verifyGuajiPeriodBeforePlace(ctx, inst.LotteryCode, account, periodNo); verifyErr != nil {
 				if attempt == 1 {
@@ -183,14 +184,15 @@ func (w *Worker) placeGuajiSchemeBet(
 				// claim rather than releasing it and risking a duplicate retry.
 				return schemeGuajiBetMeta{}, verifyErr
 			}
+			// A nil verifier is a safe no-op in test or degraded deployments; it
+			// must not be allowed to bypass the websocket phase guard.
+			upstreamVerified = w != nil && w.periodVerifier != nil
 		}
 		// A wait for a shared place slot or a retry backoff can consume the final
 		// part of a very short period. Recheck immediately before every request;
 		// never let the upstream roll this bet into the next issue.
 		placeCheckAt := time.Now()
-		if !guajiBetPeriodMatches(inst.LotteryCode, periodNo) ||
-			!guajiBetPeriodHasSafeWindowAt(inst.LotteryCode, placeCheckAt) ||
-			!guajiShortPeriodWSWindowAllowsAt(inst.LotteryCode, periodNo, placeCheckAt) {
+		if !guajiFinalPeriodSafetyAllows(inst.LotteryCode, periodNo, placeCheckAt, upstreamVerified) {
 			err := fmt.Errorf("%w: period %s is too close to close", guajibet.ErrPeriodClosed, periodNo)
 			if attempt == 1 {
 				return schemeGuajiBetMeta{}, preflightPlaceErr(err)

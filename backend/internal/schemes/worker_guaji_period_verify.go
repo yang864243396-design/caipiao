@@ -56,6 +56,17 @@ func guajiShortPeriodSharedSnapshotsAllowDirectPlaceAt(lotteryCode, targetPeriod
 	return guajiShortPeriodWSWindowAllowsAt(lotteryCode, targetPeriod, now)
 }
 
+// guajiFinalPeriodSafetyAllows keeps the current period and close-window
+// checks mandatory. A successful member-level verification may only replace
+// the shared draw websocket phase check, which can lag on very short games.
+func guajiFinalPeriodSafetyAllows(lotteryCode, targetPeriod string, now time.Time, upstreamVerified bool) bool {
+	if !guajiBetPeriodMatches(lotteryCode, targetPeriod) ||
+		!guajiBetPeriodHasSafeWindowAt(lotteryCode, now) {
+		return false
+	}
+	return upstreamVerified || guajiShortPeriodWSWindowAllowsAt(lotteryCode, targetPeriod, now)
+}
+
 func (w *Worker) verifyGuajiPeriodBeforePlace(ctx context.Context, lotteryCode, memberAccount, targetPeriod string) error {
 	if w == nil || w.periodVerifier == nil {
 		return nil

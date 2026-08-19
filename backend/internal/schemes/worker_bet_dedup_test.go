@@ -82,6 +82,36 @@ func TestGuajiBetPeriodHasSafeWindowAt(t *testing.T) {
 	}
 }
 
+func TestGuajiFinalPeriodSafetyAllowsVerifiedShortPeriodWSLag(t *testing.T) {
+	code := "guaji_verified_short_period_ws_lag_test"
+	now := time.Now().UTC()
+	lottery.ClearPeriodsSchedule(code)
+	t.Cleanup(func() { lottery.ClearPeriodsSchedule(code) })
+
+	// The account-level periods probe has confirmed P9 is still open, while the
+	// shared draw websocket is one period behind. The provider confirmation may
+	// bypass only the stale WS phase check; the current period and close window
+	// must still be valid locally.
+	lottery.UpdatePeriodsScheduleFullWithDuration(
+		code, "P9", "P9", now, now.Add(2*time.Second), 6, "", now,
+	)
+	lottery.UpdatePeriodState(code, "P7", "P8", now, 6)
+
+	if guajiFinalPeriodSafetyAllows(code, "P9", now, false) {
+		t.Fatal("unverified WS lag must still reject placement")
+	}
+	if !guajiFinalPeriodSafetyAllows(code, "P9", now, true) {
+		t.Fatal("verified current period with a safe close window should tolerate stale WS phase")
+	}
+
+	lottery.UpdatePeriodsScheduleFullWithDuration(
+		code, "P10", "P10", now, now.Add(2*time.Second), 6, "", now,
+	)
+	if guajiFinalPeriodSafetyAllows(code, "P9", now, true) {
+		t.Fatal("an upstream verification must never bypass a mismatched current period")
+	}
+}
+
 func TestGuajiShortPeriodWSWindowRejectsRequestAtActualDrawBoundary(t *testing.T) {
 	code := "guaji_ws_close_guard_3s_test"
 	now := time.Now().UTC()
