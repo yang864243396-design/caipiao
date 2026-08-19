@@ -28,6 +28,17 @@ func TestParseGuajiPeriodTimeForLottery_tronBeijing(t *testing.T) {
 	}
 }
 
+func TestParseGuajiPeriodTimeForLottery_tron6sBeijing(t *testing.T) {
+	tm, err := ParseGuajiPeriodTimeForLottery("tron_ffc_6s", "2026-08-19 09:22:57")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 8, 19, 1, 22, 57, 0, time.UTC)
+	if !tm.Equal(want) {
+		t.Fatalf("got %v want %v", tm, want)
+	}
+}
+
 func TestParseGuajiPeriodTimeForLottery_hashUtc(t *testing.T) {
 	tm, err := ParseGuajiPeriodTimeForLottery("hash_ffc_1m", "2026-06-21 06:40:00")
 	if err != nil {

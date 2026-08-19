@@ -51,7 +51,7 @@ func TestSchemeStartPeriodEnded_fromSnapshot(t *testing.T) {
 
 
 
-func TestSchemeStartPeriodEnded_waitsDespiteOpenPeriodAdvanced(t *testing.T) {
+func TestSchemeStartPeriodEnded_activatesWhenOpenPeriodAdvanced(t *testing.T) {
 
 	code := "scheme_start_wait_close_test"
 
@@ -81,9 +81,9 @@ func TestSchemeStartPeriodEnded_waitsDespiteOpenPeriodAdvanced(t *testing.T) {
 
 	}
 
-	if schemeStartPeriodEnded(inst, nil, time.Now()) {
+	if !schemeStartPeriodEnded(inst, nil, time.Now()) {
 
-		t.Fatal("must wait until skip close_at even if current period advanced")
+		t.Fatal("current open period after skipped period must activate")
 
 	}
 
@@ -187,5 +187,22 @@ func TestSchemeStartPeriodEnded_openPastSkippedWithoutCloseAt(t *testing.T) {
 	}
 	if !schemeStartPeriodEnded(inst, nil, time.Now()) {
 		t.Fatal("current open after skipped period without closeAt should activate")
+	}
+}
+
+func TestSchemeStartPeriodEnded_openPastSkippedWithStaleFutureSnapshot(t *testing.T) {
+	code := "scheme_start_stale_snapshot_test"
+	skipped := "115010"
+	current := "115011"
+	now := time.Now().UTC()
+	lottery.UpdatePeriodsScheduleFull(code, current, skipped, now.Add(20*time.Second), now.Add(40*time.Second))
+
+	inst := sqlcdb.SchemeInstance{
+		LotteryCode:      code,
+		StartSkipPeriod:  pgtype.Text{String: skipped, Valid: true},
+		StartSkipCloseAt: pgtype.Timestamptz{Time: now.Add(8 * time.Hour), Valid: true},
+	}
+	if !schemeStartPeriodEnded(inst, nil, now) {
+		t.Fatal("current open period after skipped period must override a stale future close_at snapshot")
 	}
 }

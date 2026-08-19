@@ -50,12 +50,12 @@ func schemeStartPeriodEnded(inst sqlcdb.SchemeInstance, cfgBytes []byte, now tim
 	if skipped == "" {
 		return evaluateSchemeScheduleGate(cfgBytes, now) == schemeScheduleOK
 	}
+	if cur, ok := lottery.StrictOpenIssueForGuajiBet(inst.LotteryCode); ok && issueAfter(cur, skipped) {
+		return evaluateSchemeScheduleGate(cfgBytes, now) == schemeScheduleOK
+	}
 	closeAt, ok := skipPeriodCloseAt(inst, skipped)
 	if ok && !closeAt.IsZero() {
 		return !now.Before(closeAt)
-	}
-	if cur, ok := lottery.StrictOpenIssueForGuajiBet(inst.LotteryCode); ok && issueAfter(cur, skipped) {
-		return evaluateSchemeScheduleGate(cfgBytes, now) == schemeScheduleOK
 	}
 	return false
 }

@@ -11,9 +11,7 @@ import (
 func PeriodWallClockLocation(lotteryCode string) *time.Location {
 	code := strings.ToLower(strings.TrimSpace(lotteryCode))
 	switch {
-	case strings.HasPrefix(code, "hash_"),
-		code == "tron_ffc_15s",
-		code == "tron_ffc_6s":
+	case strings.HasPrefix(code, "hash_"):
 		return time.UTC
 	case strings.HasPrefix(code, "tron_"),
 		strings.HasPrefix(code, "eth_"),
