@@ -108,7 +108,12 @@ func (w *Worker) Ingest(ctx context.Context, ev guaji.DrawEvent) error {
 		if intervalSec := w.drawIntervalSec(ctx, tgt.code); intervalSec > 0 {
 			lottery.UpdatePeriodState(tgt.code, ev.Periods, ev.NextPeriods, drawnAt, intervalSec)
 		}
-		_, inserted, err := lottery.PersistDrawFromBalls(ctx, w.q, w.hub, tgt.code, ev.Periods, balls, drawnAt)
+		_, inserted, err := lottery.PersistDrawFactFromBalls(ctx, w.q, w.hub, tgt.code, ev.Periods, balls, drawnAt, lottery.DrawFactMeta{
+			Source:          "draw_ws",
+			ProviderEventID: strings.TrimSpace(ev.GameKey) + ":" + strings.TrimSpace(ev.Periods),
+			ReceivedAt:      time.Now().UTC(),
+			ConfirmedAt:     drawnAt,
+		})
 		if err != nil {
 			return err
 		}

@@ -247,3 +247,63 @@ export async function patchShareSnapshot(
 export async function deleteShareSnapshot(snapshotId: string): Promise<void> {
   await requestApi(`/admin/schemes/share/${encodeURIComponent(snapshotId)}`, { method: 'DELETE' })
 }
+
+export interface SchemeBettingEventRow {
+  decisionId: number
+  outboxId?: number
+  origin?: 'scheme' | 'api'
+  schemeId: string
+  schemeName: string
+  lotteryCode: string
+  sourcePeriod: string
+  targetPeriod?: string
+  decisionStatus: 'completed' | 'blocked' | 'duplicate' | 'chain_broken'
+  mode?: 'shadow' | 'gray' | 'production'
+  outboxState?: 'pending' | 'leased' | 'sent_unknown' | 'accepted' | 'rejected' | 'expired' | 'cancelled' | 'accepted_wrong_period' | 'external_acceptance_unknown'
+  outcomeReason?: string
+  requestId?: string
+  stateVersionBefore: number
+  stateVersionAfter: number
+  localHit?: boolean
+  safeDeadlineAt?: string
+  closeAt?: string
+  decidedAt: string
+  chainState?: 'idle' | 'active' | 'blocked_requires_rearm'
+  bettingOwner: 'legacy' | 'event'
+  initialBet?: boolean
+  requestedAmount?: number
+  requestedCurrency?: string
+  attemptCount?: number
+  providerOrderNo?: string
+  acceptedPeriodNo?: string
+  providerAmount?: number
+  providerCurrency?: string
+  providerAccountId?: number
+  queuePosition?: number
+  readyCreatedAt?: string
+  attemptStartedAt?: string
+  attemptFinishedAt?: string
+  lastError?: string
+  drawSource?: string
+  drawProviderAt?: string
+  drawReceivedAt?: string
+  drawConfirmedAt?: string
+  strategyStartedAt?: string
+  strategyCompletedAt?: string
+  ruleVersion?: number
+  ruleSnapshotHash?: string
+  diagnostics: Record<string, unknown>
+}
+
+export async function fetchSchemeBettingEvents(query: {
+  schemeId?: string
+  limit?: number
+} = {}): Promise<SchemeBettingEventRow[]> {
+  const params = new URLSearchParams()
+  if (query.schemeId?.trim()) params.set('schemeId', query.schemeId.trim())
+  params.set('limit', String(query.limit ?? 100))
+  const res = await requestApi<{ items: SchemeBettingEventRow[]; mode: string }>(
+    `/admin/diagnostics/scheme-betting?${params.toString()}`,
+  )
+  return res.items
+}

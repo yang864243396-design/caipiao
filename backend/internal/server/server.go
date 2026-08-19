@@ -60,6 +60,7 @@ type Server struct {
 	workerCancel       context.CancelFunc
 	workerWait         func()
 	realtimeBus        realtimebus.Bus
+	schemeEventBus     interface{ Close() }
 	realtimeMarker     schemeevents.Marker
 	realtimePublisher  *cloudrealtime.Publisher
 	realtimeReconciler *cloudrealtime.Reconciler
@@ -93,6 +94,21 @@ func New(cfg config.Config) (*Server, error) {
 			pool = p
 			if version, err := p.ServerVersion(context.Background()); err == nil {
 				slog.Info("database connected", "postgres", version)
+			}
+			partitionCtx, cancelPartitionMaintenance := context.WithTimeout(context.Background(), 30*time.Second)
+			createdPartitions, err := db.EnsureCoreOnlinePartitions(
+				partitionCtx,
+				pool,
+				db.CorePartitionMonthsAhead,
+			)
+			cancelPartitionMaintenance()
+			if err != nil {
+				pool.Close()
+				workerCancel()
+				return nil, fmt.Errorf("core partition maintenance: %w", err)
+			}
+			if createdPartitions > 0 {
+				slog.Info("core online partitions created", "count", createdPartitions)
 			}
 			if err := games.RunLegacyCatalogPurge(context.Background(), pool); err != nil {
 				workerCancel()
@@ -168,6 +184,20 @@ func New(cfg config.Config) (*Server, error) {
 	}
 	guajiClient.TuneHTTPConcurrency(httpConns)
 	guajiAccounts := accountsvc.NewService(pool, guajiClient, cfg.Guaji.CredentialsKey, cfg.JWTSecret)
+	schemeBettingRuntime, err := newSchemeBettingDispatchRuntime(cfg, pool, guajiAccounts)
+	if err != nil {
+		cleanupFailedServerStart(workerCancel, workers.Wait, func() {
+			if realtimeBus != nil {
+				_ = realtimeBus.Close()
+			}
+		}, func() {
+			if pool != nil {
+				pool.Close()
+			}
+		})
+		return nil, fmt.Errorf("scheme betting dispatcher: %w", err)
+	}
+
 	periodSyncer := periodsync.NewSyncer(pool, guajiClient, guajiAccounts)
 	var periodWorker *periodsync.Worker
 	if pool != nil && guajiAccounts != nil && guajiClient.Enabled() {
@@ -201,6 +231,7 @@ func New(cfg config.Config) (*Server, error) {
 	}
 	injectRealtimeMarker(realtimeMarker, schemesSvc, memberSvc)
 	gamesSvc := games.NewService(pool)
+	gamesSvc.SetFormalBetSubmitter(schemeBettingRuntime)
 	if guajiAccounts != nil {
 		gamesSvc.SetGuajiBetPlacer(guajiAccounts)
 	}
@@ -232,6 +263,33 @@ func New(cfg config.Config) (*Server, error) {
 		hub:        wsHub,
 		reconciler: realtimeReconciler,
 	})
+	schemeEventBus, err := newSchemeEventBus(cfg)
+	if err != nil {
+		cleanupFailedServerStart(workerCancel, workers.Wait, func() {
+			if realtimeBus != nil {
+				_ = realtimeBus.Close()
+			}
+		}, func() {
+			if pool != nil {
+				pool.Close()
+			}
+		})
+		return nil, fmt.Errorf("scheme event bus: %w", err)
+	}
+	if schemeBettingRuntime != nil {
+		schemeBettingRuntime.SetPeriodVerifier(periodSyncer)
+		if schemeEventBus != nil {
+			schemeBettingRuntime.SetBetEventPublisher(schemeEventBus)
+		}
+		launchWorker(func() { schemeBettingRuntime.Run(workerCtx) })
+	}
+	eventLeaseOwner := strings.TrimSpace(cfg.SchemeBettingDispatcherOwner)
+	if eventLeaseOwner == "" {
+		eventLeaseOwner = fmt.Sprintf("scheme-server-%p", pool)
+	}
+	var strategyNotifier interface {
+		NotifyStrategyDraw(context.Context, string, string)
+	}
 
 	var schemeWorker *schemes.Worker
 	if pool != nil && cfg.SchemeWorkerEnabled {
@@ -240,6 +298,9 @@ func New(cfg config.Config) (*Server, error) {
 			w.SetPlaceConcurrency(cfg.SchemeWorkerPlaceConcurrency)
 			w.SetPeriodRefreshRequester(periodWorker)
 			w.SetRuleRegistry(playRuleRegistry)
+			w.SetSchemeBettingMode(cfg.SchemeBettingMode, cfg.SchemeBettingLotteries)
+			w.SetUnknownAcceptanceResolver(schemeBettingRuntime)
+			w.SetSchemeBettingBacklogProbe(schemeEventBus)
 			schemeWorker = w
 			if guajiAccounts != nil {
 				w.SetGuajiBetPlacer(guajiAccounts)
@@ -251,12 +312,46 @@ func New(cfg config.Config) (*Server, error) {
 			launchWorker(func() { bets.RunSettlementWorker(workerCtx, bw, cfg.SchemeWorkerTickSec) })
 		}
 	}
+	strategyNotifier = schemeWorker
+	if schemeEventBus != nil && schemeWorker != nil {
+		strategyNotifier = &drawEventPublisher{
+			pool: pool, bus: schemeEventBus, leaseOwner: eventLeaseOwner, leaseFor: 2 * cfg.SchemeBettingLease,
+		}
+		formalMode := strings.EqualFold(cfg.SchemeBettingMode, "gray") || strings.EqualFold(cfg.SchemeBettingMode, "production")
+		if formalMode {
+			launchWorker(func() {
+				if err := runSchemeDrawExpander(workerCtx, schemeEventBus, pool, uint32(cfg.SchemeBettingShardCount)); err != nil {
+					slog.Error("scheme draw expander stopped", "err", err)
+				}
+			})
+			for _, shardID := range cfg.SchemeBettingShards {
+				shard := uint32(shardID)
+				launchWorker(func() {
+					if err := runLeasedSchemeStrategyConsumer(
+						workerCtx, schemeEventBus, pool, shard, eventLeaseOwner, 2*cfg.SchemeBettingLease, schemeWorker,
+					); err != nil {
+						slog.Error("scheme strategy shard consumer stopped", "shard", shard, "err", err)
+					}
+				})
+			}
+		} else {
+			launchWorker(func() {
+				if err := runSchemeDrawConsumer(workerCtx, schemeEventBus, schemeWorker); err != nil {
+					slog.Error("scheme draw consumer stopped", "err", err)
+				}
+			})
+		}
+	}
+	h.SetSchemeBettingActionService(schemeWorker)
 	h.SetMaintenanceResumeScheduler(schemeWorker)
+	if historyWorker != nil {
+		historyWorker.SetStrategyNotifier(strategyNotifier)
+	}
 
 	// T3：第三方开奖 WS 订阅（GUAJI_ENABLED 时；入库与广播不依赖平台 WS 开关）
 	if pool != nil && guajiClient.Enabled() {
 		if dw := drawsync.NewWorker(pool, guajiClient, wsHub); dw != nil {
-			dw.SetStrategyNotifier(schemeWorker)
+			dw.SetStrategyNotifier(strategyNotifier)
 			launchWorker(func() { dw.Run(workerCtx) })
 		}
 	}
@@ -322,6 +417,7 @@ func New(cfg config.Config) (*Server, error) {
 		authSvc:            authSvc,
 		handler:            h,
 		guaji:              guajiClient,
+		schemeEventBus:     schemeEventBus,
 		db:                 pool,
 		workerCancel:       workerCancel,
 		workerWait:         workers.Wait,
@@ -480,10 +576,17 @@ func (s *Server) registerRoutes(wsSrv *ws.Server) {
 	api.Handle("GET /admin/reports/pnl", adminAuth(http.HandlerFunc(s.handler.AdminPnlReport)))
 	api.Handle("GET /admin/reports/daily-lottery", adminAuth(http.HandlerFunc(s.handler.AdminDailyLotteryReport)))
 
+	api.Handle("POST /admin/diagnostics/scheme-betting/{schemeId}/enable", adminAuth(http.HandlerFunc(s.handler.AdminSchemeBettingEnable)))
+	api.Handle("POST /admin/diagnostics/scheme-betting/{schemeId}/rearm", adminAuth(http.HandlerFunc(s.handler.AdminSchemeBettingRearm)))
+	api.Handle("POST /admin/diagnostics/scheme-betting/outbox/{outboxId}/cancel", adminAuth(http.HandlerFunc(s.handler.AdminSchemeBettingCancel)))
+	api.Handle("POST /admin/diagnostics/scheme-betting/outbox/{outboxId}/resolve", adminAuth(http.HandlerFunc(s.handler.AdminSchemeBettingResolveUnknown)))
 	api.Handle("GET /admin/schemes/instances", adminAuth(http.HandlerFunc(s.handler.AdminSchemeMonitorList)))
 	api.Handle("GET /admin/schemes/instances/{instanceId}/bet-history", adminAuth(http.HandlerFunc(s.handler.AdminSchemeBetHistory)))
 	api.Handle("GET /admin/diagnostics/schemes/{instanceId}/runtime", adminAuth(http.HandlerFunc(s.handler.AdminSchemeRuntimeDiagnostics)))
 	api.Handle("GET /admin/diagnostics/schemes/{instanceId}/strategy", adminAuth(http.HandlerFunc(s.handler.AdminSchemeStrategyDiagnostics)))
+	api.Handle("GET /admin/diagnostics/scheme-betting", adminAuth(http.HandlerFunc(s.handler.AdminSchemeBettingEvents)))
+	api.Handle("GET /admin/diagnostics/scheme-betting/summary", adminAuth(http.HandlerFunc(s.handler.AdminSchemeBettingSummary)))
+	api.Handle("GET /admin/diagnostics/core-partition", adminAuth(http.HandlerFunc(s.handler.AdminCorePartitionStatus)))
 	api.Handle("GET /admin/diagnostics/cloud-realtime", adminAuth(http.HandlerFunc(s.handler.AdminCloudRealtimeDiagnostics)))
 	api.Handle("POST /admin/schemes/share", adminAuth(http.HandlerFunc(s.handler.AdminCreateShareSnapshot)))
 	api.Handle("PATCH /admin/schemes/share/{snapshotId}", adminAuth(http.HandlerFunc(s.handler.AdminPatchShareSnapshot)))
@@ -548,6 +651,9 @@ func (s *Server) Close() {
 	s.closeOnce.Do(func() {
 		if s.workerCancel != nil {
 			s.workerCancel()
+		}
+		if s.schemeEventBus != nil {
+			s.schemeEventBus.Close()
 		}
 		if s.workerWait != nil {
 			s.workerWait()

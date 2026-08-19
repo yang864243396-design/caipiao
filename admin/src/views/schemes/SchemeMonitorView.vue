@@ -13,6 +13,7 @@ import { adminConfirmDialog } from '@/utils/adminConfirmDialog'
 import SchemeHistoryDrawer from '@/components/schemes/SchemeHistoryDrawer.vue'
 
 import ShareSnapshotCreateDialog from '@/components/schemes/ShareSnapshotCreateDialog.vue'
+import SchemeBettingEventsPanel from '@/components/schemes/SchemeBettingEventsPanel.vue'
 
 import { useSchemeInstancesStore } from '@/stores/schemeInstances'
 
@@ -73,7 +74,7 @@ watch(
 
 
 
-const monitorTab = ref<'user' | 'share'>('user')
+const monitorTab = ref<'user' | 'share' | 'events'>('user')
 
 
 
@@ -361,6 +362,7 @@ async function onDeleteShareSnapshot(row: SchemeShareSnapshotRow) {
       <el-tab-pane label="用户方案" name="user" />
 
       <el-tab-pane label="分享池" name="share" />
+      <el-tab-pane label="投注事件" name="events" />
 
     </el-tabs>
 
@@ -556,7 +558,7 @@ async function onDeleteShareSnapshot(row: SchemeShareSnapshotRow) {
 
 
 
-    <template v-else>
+    <template v-else-if="monitorTab === 'share'">
 
       <div style="
           display: flex;
@@ -643,6 +645,8 @@ async function onDeleteShareSnapshot(row: SchemeShareSnapshotRow) {
       </div>
 
     </template>
+
+    <SchemeBettingEventsPanel v-else />
 
 
 

@@ -1,32 +1,34 @@
 package games
 
-
-
 import (
-
 	"context"
 
 	"errors"
 
 	"fmt"
 
-
-
 	"github.com/jackc/pgx/v5"
-
-
 
 	"caipiao/backend/internal/db"
 
 	"caipiao/backend/internal/db/sqlcdb"
-
 )
-
-
 
 var ErrCatalogPurgeBlocked = errors.New("lottery catalog purge precondition failed")
 
+type catalogPurgeStep struct {
+	name string
+	fn   func(context.Context, []string) error
+}
 
+func legacyCatalogPurgeSteps(q *sqlcdb.Queries) []catalogPurgeStep {
+	return []catalogPurgeStep{
+		{"copy_hall_rank_slots", q.DeleteCopyHallRankSlotsByLotteryCodes},
+		{"scheme_templates", q.DeleteSchemeTemplatesByLotteryCodes},
+		{"lottery_scheme_option_sets", q.DeleteLotterySchemeOptionSetsByLotteryCodes},
+		{"lottery_catalog", q.DeleteLotteryCatalogByCodes},
+	}
+}
 
 // RunLegacyCatalogPurge startup 一次幂等 purge（C19、C31、C45）。
 
@@ -49,8 +51,6 @@ func RunLegacyCatalogPurge(ctx context.Context, pool *db.Pool) error {
 		return fmt.Errorf("purge state: %w", err)
 
 	}
-
-
 
 	catalogCount, err := q.CountLotteryCatalogWithTemplate(ctx)
 
@@ -83,12 +83,9 @@ func RunLegacyCatalogPurge(ctx context.Context, pool *db.Pool) error {
 			catalogCount,
 
 			subCount,
-
 		)
 
 	}
-
-
 
 	tx, err := pool.Begin(ctx)
 
@@ -100,47 +97,11 @@ func RunLegacyCatalogPurge(ctx context.Context, pool *db.Pool) error {
 
 	defer tx.Rollback(ctx)
 
-
-
 	qtx := q.WithTx(tx)
 
 	codes := LegacyLotteryCodes
 
-	steps := []struct {
-
-		name string
-
-		fn   func(context.Context, []string) error
-
-	}{
-
-		{"wallet_ledger(bet)", qtx.DeleteWalletLedgerForBetOrders},
-
-		{"wallet_ledger(chase)", qtx.DeleteWalletLedgerForChaseOrders},
-
-		{"bet_orders", qtx.DeleteBetOrdersByLotteryCodes},
-
-		{"chase_orders", qtx.DeleteChaseOrdersByLotteryCodes},
-
-		{"cloud_bet_records", qtx.DeleteCloudBetRecordsForLotteryCodes},
-
-		{"scheme_definitions", qtx.DeleteSchemeDefinitionsByLotteryCodes},
-
-		{"copy_hall_rank_slots", qtx.DeleteCopyHallRankSlotsByLotteryCodes},
-
-		{"scheme_share_snapshots", qtx.DeleteSchemeShareSnapshotsByLotteryCodes},
-
-		{"scheme_templates", qtx.DeleteSchemeTemplatesByLotteryCodes},
-
-		{"lottery_draws", qtx.DeleteLotteryDrawsByLotteryCodes},
-
-		{"lottery_scheme_option_sets", qtx.DeleteLotterySchemeOptionSetsByLotteryCodes},
-
-		{"admin_audit_logs", qtx.DeleteAdminAuditLogsForLegacyLotteries},
-
-		{"lottery_catalog", qtx.DeleteLotteryCatalogByCodes},
-
-	}
+	steps := legacyCatalogPurgeSteps(qtx)
 
 	for _, step := range steps {
 
@@ -167,4 +128,3 @@ func RunLegacyCatalogPurge(ctx context.Context, pool *db.Pool) error {
 	return nil
 
 }
-

@@ -23,6 +23,7 @@ import (
 	"caipiao/backend/internal/lottery"
 	"caipiao/backend/internal/member"
 	"caipiao/backend/internal/playrules"
+	"caipiao/backend/internal/schemebetting"
 	"caipiao/backend/internal/schemeevents"
 	"caipiao/backend/internal/ws"
 )
@@ -40,6 +41,14 @@ type guajiPeriodVerifier interface {
 	VerifyOpenPeriodForMember(ctx context.Context, lotteryCode, memberAccount string) (period string, closeAt time.Time, err error)
 }
 
+type unknownAcceptanceResolver interface {
+	ResolveUnknownEventBet(context.Context, int64, string, string, schemebetting.UnknownResolution) error
+}
+
+type schemeBettingBacklogProbe interface {
+	CheckSchemeBettingBacklog(context.Context, int32) error
+}
+
 // Worker ticks running scheme instances: countdown → bet against lottery draw + scheme config.
 type Worker struct {
 	pool              *db.Pool
@@ -52,11 +61,27 @@ type Worker struct {
 	ruleRegistry      *playrules.RegistryStore
 	strategyProcessor *StrategyProcessor
 	realtime          schemeevents.Marker
+	unknownResolver   unknownAcceptanceResolver
+	bettingBacklog    schemeBettingBacklogProbe
 	tickSec           int32
 	concurrency       int32
 	placeSem          chan struct{} // 真下单全站有界并发；nil 表示不额外限流
 	countdownReset    int32
 	betSeq            atomic.Uint64
+}
+
+func (w *Worker) SetSchemeBettingBacklogProbe(probe schemeBettingBacklogProbe) {
+	if w == nil {
+		return
+	}
+	w.bettingBacklog = probe
+}
+
+func (w *Worker) SetUnknownAcceptanceResolver(resolver unknownAcceptanceResolver) {
+	if w == nil {
+		return
+	}
+	w.unknownResolver = resolver
 }
 
 func NewWorker(pool *db.Pool, tickSec int, hub *ws.Hub, periodSync *periodsync.Syncer) *Worker {
@@ -104,6 +129,9 @@ func (w *Worker) markScheme(memberID int64, instanceID string) {
 func (w *Worker) SetRuleRegistry(registry *playrules.RegistryStore) {
 	if w == nil {
 		return
+	}
+	if w.strategyProcessor != nil {
+		w.strategyProcessor.ruleRegistry = registry
 	}
 	w.ruleRegistry = registry
 }
@@ -319,7 +347,6 @@ func (w *Worker) tickInstance(ctx context.Context, inst sqlcdb.SchemeInstance, p
 		slog.Debug("scheme worker bet skipped: bet window closed", "id", inst.ID, "lottery", inst.LotteryCode, "simBet", inst.SimBet)
 		return
 	}
-
 	if w.pauseRunningForSessionLimit(ctx, inst, def.Config) {
 		return
 	}
@@ -331,12 +358,12 @@ func (w *Worker) tickInstance(ctx context.Context, inst sqlcdb.SchemeInstance, p
 		slog.Debug("scheme worker bet skipped: awaiting previous period settlement", "id", inst.ID)
 		return
 	}
-
 	if rem, ok := lottery.PeriodsCountdownSec(inst.LotteryCode, now); ok {
 		slog.Debug("scheme worker bet window", "id", inst.ID, "lottery", inst.LotteryCode, "countdown", rem, "simBet", inst.SimBet)
 	}
 
 	if err := w.placePeriodBet(ctx, inst, w.tickSec, planMult); err != nil {
+		slog.Warn("scheme worker period bet returned error", "id", inst.ID, "err", err)
 		if errors.Is(err, errSchemeBetStopped) {
 			return
 		}
@@ -411,6 +438,16 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 	if requiresGuajiRealBet(inst) && !w.guajiRealEnabled() {
 		slog.Debug("scheme worker bet skipped: guaji required for real betting", "id", inst.ID)
 		return nil
+	}
+	if requiresGuajiRealBet(inst) {
+		owner, err := w.q.GetSchemeBettingOwner(ctx, inst.ID)
+		if err != nil {
+			return fmt.Errorf("betting owner: %w", err)
+		}
+		if !legacyOwnsFormalBet(owner) {
+			slog.Debug("legacy scheme worker is read-only for event-owned instance", "id", inst.ID)
+			return nil
+		}
 	}
 
 	def, err := w.q.GetSchemeDefinitionByID(ctx, inst.DefinitionID)
@@ -628,7 +665,7 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 	if !guajiReal {
 		reserved, err := w.reserveCloudBetPeriod(ctx, inst, draw, cfg, recordNo, recordStatus, amount, recordPnl, betContent, betMult, roundIdx, betUnits, playTypeLabel)
 		if err != nil {
-			return err
+			return fmt.Errorf("reserve simulated cloud bet: %w", err)
 		}
 		if !reserved {
 			return nil
@@ -654,7 +691,7 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 
 	tx, err := w.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("begin scheme bet application: %w", err)
 	}
 	rollbackTx := true
 	defer func() {
@@ -666,15 +703,25 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 	qtx := w.q.WithTx(tx)
 
 	if _, err := qtx.LockSchemeInstanceForBet(ctx, inst.ID); err != nil {
-		return err
+		return fmt.Errorf("lock scheme instance for bet: %w", err)
 	}
 	running, err := qtx.GetSchemeInstanceStatus(ctx, inst.ID)
 	if err != nil {
-		return err
+		return fmt.Errorf("load locked scheme status: %w", err)
 	}
 	if running != "running" {
 		slog.Debug("scheme worker bet aborted: instance no longer running", "id", inst.ID, "period", draw.IssueNo)
 		return nil
+	}
+	if guajiReal {
+		owner, err := qtx.GetSchemeBettingOwner(ctx, inst.ID)
+		if err != nil {
+			return fmt.Errorf("betting owner after lock: %w", err)
+		}
+		if !legacyOwnsFormalBet(owner) {
+			slog.Debug("legacy scheme worker bet aborted after ownership changed", "id", inst.ID, "period", draw.IssueNo)
+			return nil
+		}
 	}
 
 	// 模拟盘：期号已在 reserveCloudBetPeriod 占位；此处不可再跑 evaluateGuajiBetDedup，
@@ -980,7 +1027,7 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 			numericFromFloat(amount),
 			pgtype.Text{String: cursorPeriod, Valid: cursorPeriod != ""},
 		); err != nil {
-			return err
+			return fmt.Errorf("apply pending scheme bet: %w", err)
 		}
 	} else if _, err := qtx.ApplySchemeInstanceBet(ctx, sqlcdb.ApplySchemeInstanceBetParams{
 		ID:               inst.ID,
@@ -995,18 +1042,18 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 		CurrentPick:      nextCurrentPick,
 		LastDirection:    nextLastDirection,
 	}); err != nil {
-		return err
+		return fmt.Errorf("apply settled scheme bet: %w", err)
 	}
 
 	if trackOverall && !deferSettle {
 		if err := w.saveLookbackRuntime(ctx, qtx, inst.MemberID, inst.SimBet, overallRT, resetOverall); err != nil {
-			return err
+			return fmt.Errorf("save scheme lookback runtime: %w", err)
 		}
 	}
 
 	if (resetIndividual || resetOverall) && !deferSettle {
 		if err := w.applyLookbackResets(ctx, qtx, inst, acceptedPeriod, resetIndividual, resetOverall); err != nil {
-			return err
+			return fmt.Errorf("apply scheme lookback reset: %w", err)
 		}
 		if resetIndividual && !resetOverall {
 			slog.Info("lookback reset individual", "instanceId", inst.ID, "memberId", inst.MemberID)
@@ -1014,7 +1061,7 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return err
+		return fmt.Errorf("commit scheme bet application: %w", err)
 	}
 	rollbackTx = false
 	committed = true
@@ -1084,7 +1131,7 @@ func (w *Worker) reserveCloudBetPeriod(
 
 	dedup, err := w.evaluateGuajiBetDedup(ctx, qtx, inst)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("evaluate period dedup before reserve: %w", err)
 	}
 	if dedup.Skip {
 		if dedup.Reason == "same_third_party_period" && dedup.CurrentOpen != "" {
@@ -1127,7 +1174,7 @@ func (w *Worker) reserveCloudBetPeriod(
 		BetUnits:       betUnits,
 	})
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("reserve cloud bet period: %w", err)
 	}
 	if !ok {
 		if err := tx.Commit(ctx); err != nil {
@@ -1140,7 +1187,7 @@ func (w *Worker) reserveCloudBetPeriod(
 		return false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return false, err
+		return false, fmt.Errorf("commit cloud bet reserve: %w", err)
 	}
 	return true, nil
 }

@@ -482,6 +482,9 @@ func (w *Worker) syncOne(ctx context.Context, token string, tgt syncTarget, now 
 	if err != nil {
 		return err
 	}
+	if err := persistProviderPeriodSnapshots(ctx, w.pool, tgt.lotteryCode, periods, now); err != nil {
+		return err
+	}
 	applyPeriodsListToCache(tgt.lotteryCode, periods, now)
 	return nil
 }

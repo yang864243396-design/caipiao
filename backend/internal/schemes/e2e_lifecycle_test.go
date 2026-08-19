@@ -31,8 +31,8 @@ import (
 
 // e2eEnv 一次 E2E 用到的全部外部依赖。
 type e2eEnv struct {
-	pool    *db.Pool
-	q       *sqlcdb.Queries
+	pool     *db.Pool
+	q        *sqlcdb.Queries
 	svc      *schemes.Service
 	worker   *schemes.Worker
 	account  string
@@ -133,7 +133,7 @@ func (e *e2eEnv) injectPeriods(skipPeriod, betPeriod string) {
 	lottery.UpdatePeriodsScheduleFullWithDuration(
 		e.lottery,
 		betPeriod, skipPeriod,
-		now.Add(-time.Minute), // skipPeriod 已于 1 分钟前封盘
+		now.Add(-time.Minute),  // skipPeriod 已于 1 分钟前封盘
 		now.Add(5*time.Minute), // betPeriod 5 分钟后封盘
 		60, "", now.Add(-4*time.Minute),
 	)

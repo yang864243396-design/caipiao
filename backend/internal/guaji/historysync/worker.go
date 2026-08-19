@@ -3,6 +3,7 @@ package historysync
 import (
 	"context"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,12 +27,23 @@ type lotteryTarget struct {
 
 // Worker 周期性拉取第三方历史开奖 REST（文档 §5），写入 lottery_draws。
 type Worker struct {
-	pool     *db.Pool
-	q        *sqlcdb.Queries
-	client   *guaji.Client
-	hub      *ws.Hub
-	interval time.Duration
-	pageSize int
+	pool             *db.Pool
+	q                *sqlcdb.Queries
+	client           *guaji.Client
+	hub              *ws.Hub
+	interval         time.Duration
+	pageSize         int
+	strategyNotifier interface {
+		NotifyStrategyDraw(context.Context, string, string)
+	}
+}
+
+func (w *Worker) SetStrategyNotifier(notifier interface {
+	NotifyStrategyDraw(context.Context, string, string)
+}) {
+	if w != nil {
+		w.strategyNotifier = notifier
+	}
 }
 
 func NewWorker(pool *db.Pool, client *guaji.Client, hub *ws.Hub) *Worker {
@@ -178,12 +190,20 @@ func (w *Worker) ingestRow(ctx context.Context, tgt lotteryTarget, row guaji.His
 	if drawnAt.IsZero() {
 		drawnAt = time.Now().UTC()
 	}
-	_, inserted, err := lottery.PersistDrawFromBalls(ctx, w.q, w.hub, tgt.code, row.Periods, balls, drawnAt)
+	_, inserted, err := lottery.PersistDrawFactFromBalls(ctx, w.q, w.hub, tgt.code, row.Periods, balls, drawnAt, lottery.DrawFactMeta{
+		Source:          "history_rest",
+		ProviderEventID: strconv.FormatInt(row.ID, 10),
+		ReceivedAt:      time.Now().UTC(),
+		ConfirmedAt:     drawnAt,
+	})
 	if err != nil {
 		return 0, err
 	}
 	if inserted {
 		lottery.LogDrawCloseToIngestLatency(tgt.code, row.Periods, "history_rest", drawnAt)
+		if w.strategyNotifier != nil {
+			w.strategyNotifier.NotifyStrategyDraw(ctx, tgt.code, row.Periods)
+		}
 		return 1, nil
 	}
 	return 0, nil

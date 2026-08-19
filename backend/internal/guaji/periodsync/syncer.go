@@ -82,7 +82,11 @@ func (s *Syncer) fetchPeriodsAndApplyWithToken(ctx context.Context, lotteryCode 
 		}
 		return nil, err
 	}
-	applyPeriodsListToCache(lotteryCode, periods, time.Now())
+	observedAt := time.Now()
+	if err := persistProviderPeriodSnapshots(ctx, s.pool, lotteryCode, periods, observedAt); err != nil {
+		return nil, err
+	}
+	applyPeriodsListToCache(lotteryCode, periods, observedAt)
 	return periods, nil
 }
 

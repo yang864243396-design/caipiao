@@ -186,6 +186,7 @@ SET round_index = $2,
     pick_index = $3,
     current_pick = $4,
     last_direction = $5,
+    state_version = state_version + 1,
     updated_at = now()
 WHERE id = $1
   AND status IN ('running', 'pending')`, id, roundIndex, pickIndex, currentPick, lastDirection)
@@ -274,18 +275,32 @@ ORDER BY c.placed_at ASC, c.id ASC`, schemeID)
 }
 
 // TryClaimCloudBetPeriod 事务内占位 (scheme_id, period_no)；冲突返回 false。
+const reserveCloudBetPeriodSQL = `
+WITH lock_row AS MATERIALIZED (
+    SELECT pg_advisory_xact_lock(hashtextextended($4 || ':' || $6, 0))
+),
+inserted AS (
+    INSERT INTO cloud_bet_records (
+        record_no, member_id, sim_bet, scheme_id, scheme_name,
+        period_no, play_type, multiplier, round_label, amount, pnl, status, bet_content,
+        guaji_account_id, currency, lottery_code, lottery_label, definition_id, bet_units, placed_at
+    )
+    SELECT
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+        $14, $15, $16, $17, $18, $19, now()
+    FROM lock_row
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM cloud_bet_record_identity
+        WHERE scheme_id = $4 AND period_no = $6
+    )
+    RETURNING id
+)
+SELECT id FROM inserted`
+
 func (q *Queries) TryClaimCloudBetPeriod(ctx context.Context, arg ReserveCloudBetPeriodParams) (bool, error) {
 	var id int64
-	err := q.db.QueryRow(ctx, `
-INSERT INTO cloud_bet_records (
-    record_no, member_id, sim_bet, scheme_id, scheme_name,
-    period_no, play_type, multiplier, round_label, amount, pnl, status, bet_content,
-    guaji_account_id, currency, lottery_code, lottery_label, definition_id, bet_units, placed_at
-) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, now()
-)
-ON CONFLICT (scheme_id, period_no) DO NOTHING
-RETURNING id`,
+	err := q.db.QueryRow(ctx, reserveCloudBetPeriodSQL,
 		arg.RecordNo, arg.MemberID, arg.SimBet, arg.SchemeID, arg.SchemeName,
 		arg.PeriodNo, arg.PlayType, arg.Multiplier, arg.RoundLabel, arg.Amount, arg.Pnl,
 		arg.Status, arg.BetContent, arg.GuajiAccountID,
@@ -376,16 +391,7 @@ type ReserveCloudBetPeriodParams struct {
 // ReserveCloudBetPeriod 独立提交占位记录；冲突或已存在返回 false。
 func (q *Queries) ReserveCloudBetPeriod(ctx context.Context, arg ReserveCloudBetPeriodParams) (bool, error) {
 	var id int64
-	err := q.db.QueryRow(ctx, `
-INSERT INTO cloud_bet_records (
-    record_no, member_id, sim_bet, scheme_id, scheme_name,
-    period_no, play_type, multiplier, round_label, amount, pnl, status, bet_content,
-    guaji_account_id, currency, lottery_code, lottery_label, definition_id, bet_units, placed_at
-) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, now()
-)
-ON CONFLICT (scheme_id, period_no) DO NOTHING
-RETURNING id`,
+	err := q.db.QueryRow(ctx, reserveCloudBetPeriodSQL,
 		arg.RecordNo, arg.MemberID, arg.SimBet, arg.SchemeID, arg.SchemeName,
 		arg.PeriodNo, arg.PlayType, arg.Multiplier, arg.RoundLabel, arg.Amount, arg.Pnl,
 		arg.Status, arg.BetContent, arg.GuajiAccountID,
@@ -519,32 +525,56 @@ type InsertCloudBetRecordExParams struct {
 }
 
 func (q *Queries) InsertCloudBetRecordEx(ctx context.Context, arg InsertCloudBetRecordExParams) error {
-	_, err := q.db.Exec(ctx, `
-INSERT INTO cloud_bet_records (
-    record_no, member_id, sim_bet, scheme_id, scheme_name,
-    period_no, play_type, multiplier, round_label, amount, pnl, status, bet_content,
-    guaji_account_id, third_party_bet_id, third_party_period, bet_order_no,
-    currency, lottery_code, lottery_label, definition_id, bet_units, placed_at
-) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, now()
+	var id int64
+	err := q.db.QueryRow(ctx, `
+WITH lock_row AS MATERIALIZED (
+    SELECT pg_advisory_xact_lock(hashtextextended($4 || ':' || $6, 0))
+),
+updated AS (
+    UPDATE cloud_bet_records AS current
+    SET third_party_bet_id = COALESCE($15, current.third_party_bet_id),
+        bet_order_no = COALESCE($17, current.bet_order_no),
+        third_party_period = COALESCE($16, current.third_party_period),
+        currency = CASE WHEN $18 <> '' THEN $18 ELSE current.currency END,
+        lottery_code = CASE WHEN $19 <> '' THEN $19 ELSE current.lottery_code END,
+        lottery_label = CASE WHEN $20 <> '' THEN $20 ELSE current.lottery_label END,
+        definition_id = CASE WHEN $21 <> '' THEN $21 ELSE current.definition_id END,
+        amount = $10,
+        bet_units = COALESCE($22::int, current.bet_units),
+        play_type = CASE WHEN NULLIF(TRIM($7), '') IS NOT NULL THEN $7 ELSE current.play_type END,
+        bet_content = CASE WHEN NULLIF(TRIM($13), '') IS NOT NULL THEN $13 ELSE current.bet_content END
+    FROM lock_row
+    WHERE current.scheme_id = $4 AND current.period_no = $6
+    RETURNING current.id
+),
+inserted AS (
+    INSERT INTO cloud_bet_records (
+        record_no, member_id, sim_bet, scheme_id, scheme_name,
+        period_no, play_type, multiplier, round_label, amount, pnl, status, bet_content,
+        guaji_account_id, third_party_bet_id, third_party_period, bet_order_no,
+        currency, lottery_code, lottery_label, definition_id, bet_units, placed_at
+    )
+    SELECT
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+        $15, $16, $17, $18, $19, $20, $21, $22, now()
+    FROM lock_row
+    WHERE NOT EXISTS (SELECT 1 FROM updated)
+      AND NOT EXISTS (
+          SELECT 1
+          FROM cloud_bet_record_identity
+          WHERE scheme_id = $4 AND period_no = $6
+      )
+    RETURNING id
 )
-ON CONFLICT (scheme_id, period_no) DO UPDATE SET
-    third_party_bet_id = COALESCE(EXCLUDED.third_party_bet_id, cloud_bet_records.third_party_bet_id),
-    bet_order_no = COALESCE(EXCLUDED.bet_order_no, cloud_bet_records.bet_order_no),
-    third_party_period = COALESCE(EXCLUDED.third_party_period, cloud_bet_records.third_party_period),
-    currency = CASE WHEN EXCLUDED.currency <> '' THEN EXCLUDED.currency ELSE cloud_bet_records.currency END,
-    lottery_code = CASE WHEN EXCLUDED.lottery_code <> '' THEN EXCLUDED.lottery_code ELSE cloud_bet_records.lottery_code END,
-    lottery_label = CASE WHEN EXCLUDED.lottery_label <> '' THEN EXCLUDED.lottery_label ELSE cloud_bet_records.lottery_label END,
-    definition_id = CASE WHEN EXCLUDED.definition_id <> '' THEN EXCLUDED.definition_id ELSE cloud_bet_records.definition_id END,
-    amount = EXCLUDED.amount,
-    bet_units = COALESCE(EXCLUDED.bet_units, cloud_bet_records.bet_units),
-    play_type = CASE WHEN NULLIF(TRIM(EXCLUDED.play_type), '') IS NOT NULL THEN EXCLUDED.play_type ELSE cloud_bet_records.play_type END,
-    bet_content = CASE WHEN NULLIF(TRIM(EXCLUDED.bet_content), '') IS NOT NULL THEN EXCLUDED.bet_content ELSE cloud_bet_records.bet_content END`,
+SELECT id FROM updated
+UNION ALL
+SELECT id FROM inserted
+LIMIT 1`,
 		arg.RecordNo, arg.MemberID, arg.SimBet, arg.SchemeID, arg.SchemeName,
 		arg.PeriodNo, arg.PlayType, arg.Multiplier, arg.RoundLabel, arg.Amount, arg.Pnl, arg.Status,
 		arg.BetContent, arg.GuajiAccountID, arg.ThirdPartyBetID, arg.ThirdPartyPeriod, arg.BetOrderNo,
 		arg.Currency, arg.LotteryCode, arg.LotteryLabel, arg.DefinitionID, nullInt4(arg.BetUnits),
-	)
+	).Scan(&id)
 	return err
 }
 

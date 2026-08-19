@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -28,14 +30,18 @@ func shouldProcessFormalStrategy(candidate strategyCandidate) bool {
 // Its query is bounded and idempotent; financial settlement is intentionally
 // not part of this processor.
 type StrategyProcessor struct {
-	pool *db.Pool
-	q    *sqlcdb.Queries
-	busy atomic.Bool
+	pool             *db.Pool
+	q                *sqlcdb.Queries
+	busy             atomic.Bool
+	bettingMode      string
+	bettingLotteries map[string]struct{}
+	ruleRegistry     *playrules.RegistryStore
 
-	lifecycleMu sync.Mutex
-	closing     bool
-	recoverWait sync.WaitGroup
-	recoverFn   func(context.Context) error
+	lifecycleMu     sync.Mutex
+	closing         bool
+	recoverWait     sync.WaitGroup
+	recoverFn       func(context.Context) error
+	recoverScopedFn func(context.Context, string, string) error
 }
 
 func NewStrategyProcessor(pool *db.Pool) *StrategyProcessor {
@@ -69,8 +75,35 @@ func (p *StrategyProcessor) recoverPending(ctx context.Context) error {
 	return nil
 }
 
-func (p *StrategyProcessor) NotifyDraw(ctx context.Context, _, _ string) {
-	if p == nil || p.busy.Load() {
+func (p *StrategyProcessor) recoverPendingScope(ctx context.Context, lotteryCode, periodNo string) error {
+	if p.recoverScopedFn != nil {
+		return p.recoverScopedFn(ctx, lotteryCode, periodNo)
+	}
+	if p.q == nil {
+		if p.recoverFn != nil {
+			return p.recoverFn(ctx)
+		}
+		return nil
+	}
+	rows, err := p.q.ListPendingFormalStrategyRowsForDraw(ctx, lotteryCode, periodNo, strategyProcessorBatchSize)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if err := p.process(ctx, row); err != nil {
+			slog.Warn("scoped formal strategy process failed", "recordId", row.RecordID, "schemeId", row.SchemeID, "lottery", lotteryCode, "period", periodNo, "err", err)
+		}
+	}
+	return nil
+}
+
+func (p *StrategyProcessor) NotifyDraw(ctx context.Context, lotteryCode, periodNo string) {
+	if p == nil {
+		return
+	}
+	lotteryCode = strings.TrimSpace(lotteryCode)
+	periodNo = strings.TrimSpace(periodNo)
+	if lotteryCode == "" || periodNo == "" {
 		return
 	}
 	p.lifecycleMu.Lock()
@@ -82,7 +115,7 @@ func (p *StrategyProcessor) NotifyDraw(ctx context.Context, _, _ string) {
 	p.lifecycleMu.Unlock()
 	go func() {
 		defer p.recoverWait.Done()
-		_ = p.Recover(ctx)
+		_ = p.recoverPendingScope(ctx, lotteryCode, periodNo)
 	}()
 }
 
@@ -106,6 +139,13 @@ func (p *StrategyProcessor) process(ctx context.Context, row sqlcdb.PendingForma
 	}
 	defer tx.Rollback(ctx)
 	qtx := p.q.WithTx(tx)
+	if fence, ok := strategyLeaseFenceFromContext(ctx); ok {
+		if err := qtx.AssertSchemeBettingShardLease(
+			ctx, "strategy", fence.ShardNo, fence.Owner, fence.Epoch, time.Now().UTC(),
+		); err != nil {
+			return err
+		}
+	}
 	claimed, err := qtx.TryClaimSchemeStrategyEvaluation(ctx, sqlcdb.TryClaimSchemeStrategyEvaluationParams{InstanceID: row.SchemeID, LotteryCode: row.LotteryCode, PeriodNo: row.PeriodNo})
 	if err != nil || !claimed {
 		return err
@@ -119,6 +159,10 @@ func (p *StrategyProcessor) process(ctx context.Context, row sqlcdb.PendingForma
 			return err
 		}
 		return fmt.Errorf("strategy evaluation %d not claimable", evaluation.ID)
+	}
+	stateVersionBefore, err := qtx.LockSchemeStateVersion(ctx, row.SchemeID)
+	if err != nil {
+		return err
 	}
 	inst, err := qtx.GetSchemeInstanceFull(ctx, row.SchemeID)
 	if err != nil {
@@ -136,10 +180,23 @@ func (p *StrategyProcessor) process(ctx context.Context, row sqlcdb.PendingForma
 	if err != nil {
 		return err
 	}
-	if err := schemestate.ProcessStrategyAfterDraw(ctx, qtx, inst, row.PeriodNo, result.Hit, def.Config); err != nil {
+	formal, shadow, err := p.tryProcessFormalCandidate(ctx, qtx, row, inst, def.Config, stateVersionBefore, result)
+	if err != nil {
 		return err
 	}
-	diagnostics, err := json.Marshal(map[string]any{"source": "draw_ws_rule", "localHit": result.Hit, "winningUnits": result.WinningUnits})
+	if !formal {
+		if err := schemestate.ProcessStrategyAfterDraw(ctx, qtx, inst, row.PeriodNo, result.Hit, def.Config); err != nil {
+			return err
+		}
+		shadow, err = persistShadowDecision(ctx, qtx, row, stateVersionBefore, result.Hit, result.WinningUnits)
+	}
+	if err != nil {
+		return err
+	}
+	diagnostics, err := json.Marshal(map[string]any{
+		"source": "draw_ws_rule", "localHit": result.Hit, "winningUnits": result.WinningUnits,
+		"shadow": shadow,
+	})
 	if err != nil {
 		return err
 	}

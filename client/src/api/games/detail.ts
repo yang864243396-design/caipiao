@@ -1,4 +1,8 @@
-import { requestApi } from '@/api/client'
+import { ApiError, requestApi } from '@/api/client'
+import {
+  acquireBetRequestIdentity,
+  releaseBetRequestIdentity,
+} from './betRequestIdentity'
 
 import { ensureClientSession } from '@/api/auth'
 
@@ -155,6 +159,8 @@ export interface GameDrawsResult {
 
 export interface PlaceGameBetInput {
 
+  requestId?: string
+
   issueNo?: string
 
   amount: number
@@ -245,13 +251,20 @@ export async function placeGameBet(
 
   await ensureClientSession()
 
-  return requestApi<PlaceGameBetResult>(`/client/games/${encodeURIComponent(lotteryCode)}/bets`, {
-
-    method: 'POST',
-
-    body: input,
-
-  })
+  const identity = input.requestId ? undefined : acquireBetRequestIdentity(lotteryCode, input)
+  try {
+    const result = await requestApi<PlaceGameBetResult>(`/client/games/${encodeURIComponent(lotteryCode)}/bets`, {
+      method: 'POST',
+      body: { ...input, requestId: input.requestId ?? identity?.requestId },
+    })
+    if (identity) releaseBetRequestIdentity(identity)
+    return result
+  } catch (error) {
+    if (identity && error instanceof ApiError && error.status !== 409) {
+      releaseBetRequestIdentity(identity)
+    }
+    throw error
+  }
 
 }
 

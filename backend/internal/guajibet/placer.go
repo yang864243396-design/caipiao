@@ -23,15 +23,15 @@ var (
 // Request 由 outbound 解析 + 投注参数组装。
 type Request struct {
 	LotteryCode string // 平台彩种 code；PlaceRealBet 优先据此查 lottery_catalog.outbound_lottery_code
-	GameID     string
-	RuleID     string
-	IssueNo    string
-	Content    string
-	PlayMethod string
-	Amount     float64
-	Multiplier int
-	BetsNums   int
-	AmountUnit float64
+	GameID      string
+	RuleID      string
+	IssueNo     string
+	Content     string
+	PlayMethod  string
+	Amount      float64
+	Multiplier  int
+	BetsNums    int
+	AmountUnit  float64
 	// Currency 方案币种（USDT/TRX/CNY）；空则回退会员主币种。
 	Currency string
 	// RuleMeta 来自 sub_plays.segment_rule；非空 PlayTemplate 时用于 bets_nums / solo 计算。
@@ -44,6 +44,7 @@ type Result struct {
 	ThirdPartyBetID string
 	Periods         string // 第三方 periods 期号（防重与校验依据）
 	Currency        string
+	Amount          float64
 }
 
 // Placer 抽象第三方接单：取启用授权 Token、校验主币种余额、调用 web_bets/lott。

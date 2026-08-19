@@ -59,6 +59,7 @@ type Handler struct {
 	guajiAccounts            *accountsvc.Service
 	cmsUploads               *content.UploadStore
 	maintenanceResume        schemes.MaintenanceResumeScheduler
+	schemeBettingActions     SchemeBettingActionService
 }
 
 func (h *Handler) SetRealtimeMarker(marker schemeevents.Marker) {
@@ -122,6 +123,12 @@ func (h *Handler) SetMaintenanceResumeScheduler(s schemes.MaintenanceResumeSched
 		return
 	}
 	h.maintenanceResume = s
+}
+func (h *Handler) SetSchemeBettingActionService(service SchemeBettingActionService) {
+	if h == nil {
+		return
+	}
+	h.schemeBettingActions = service
 }
 
 func (h *Handler) scheduleMaintenanceResume() {

@@ -112,6 +112,9 @@ func (s *Service) PlaceRealBet(ctx context.Context, memberAccount string, req gu
 	if !errors.Is(err, guajibet.ErrTokenInvalid) {
 		return res, err
 	}
+	if isStrictSingleAttempt(ctx) {
+		return res, err
+	}
 	// 下注过程中令牌被上游判无效：强制自动授权最多 3 次后再试一单。
 	if ensureErr := s.ensureActiveAuth(ctx, memberAccount, true); ensureErr != nil {
 		return guajibet.Result{}, mapAuthErrToBet(ensureErr)
@@ -180,7 +183,7 @@ func (s *Service) placeRealBetWithRow(
 	}
 	item := lottBetContentForRequest(req.RuleMeta, content, unit, betsNums, mult)
 	item.RuleID = req.RuleID
-	betRes, err := s.guaji.PlaceLottBet(ctx, token, guaji.LottBetRequest{
+	betRes, err := s.placeLottBetForContext(ctx, token, guaji.LottBetRequest{
 		AutoType:    "platform",
 		BetContents: []guaji.LottBetContent{item},
 		GameID:      gameID,
@@ -217,6 +220,7 @@ func (s *Service) placeRealBetWithRow(
 		ThirdPartyBetID: betRes.ThirdPartyBetID,
 		Periods:         periods,
 		Currency:        currency,
+		Amount:          betRes.Amount,
 	}, nil
 }
 

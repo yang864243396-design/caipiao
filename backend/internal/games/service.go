@@ -2,6 +2,7 @@ package games
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"caipiao/backend/internal/db/sqlcdb"
 	"caipiao/backend/internal/guajibet"
 	"caipiao/backend/internal/member"
+	"caipiao/backend/internal/schemebettingdispatch"
 	"caipiao/backend/internal/schemes"
 	"caipiao/backend/internal/timeutil"
 )
@@ -31,6 +33,7 @@ type Service struct {
 	q          *sqlcdb.Queries
 	pool       *db.Pool
 	guajiBets  GuajiBetPlacer
+	formalBets FormalBetSubmitter
 	detailSync *detailDisplaySync
 }
 
@@ -138,6 +141,7 @@ type PageMeta struct {
 }
 
 type PlaceBetInput struct {
+	RequestID  string
 	IssueNo    string
 	Amount     float64
 	Multiplier int
@@ -489,7 +493,7 @@ func (s *Service) PlaceBet(ctx context.Context, account, lotteryCode string, in 
 		if betsNums <= 0 {
 			return PlaceBetResult{}, fmt.Errorf("%w: %w", guajibet.ErrPlaceRejected, guajibet.ErrZeroBets)
 		}
-		betRes, betErr := s.guajiBets.PlaceRealBet(ctx, account, GuajiBetRequest{
+		placeRequest := GuajiBetRequest{
 			LotteryCode: lotteryCode,
 			GameID:      gameID,
 			RuleID:      ruleID,
@@ -501,7 +505,34 @@ func (s *Service) PlaceBet(ctx context.Context, account, lotteryCode string, in 
 			AmountUnit:  amountUnit,
 			BetsNums:    betsNums,
 			RuleMeta:    ruleMeta,
-		})
+		}
+		if s.formalBets != nil {
+			requestID := strings.TrimSpace(in.RequestID)
+			if requestID == "" {
+				return PlaceBetResult{}, fmt.Errorf("%w: requestId is required for formal event betting", ErrInvalidBet)
+			}
+			var primaryCurrency string
+			if err := s.pool.QueryRow(ctx, `
+SELECT COALESCE(NULLIF(TRIM(primary_currency), ''), 'CNY')
+FROM members
+WHERE id = $1`, m.ID).Scan(&primaryCurrency); err != nil {
+				return PlaceBetResult{}, err
+			}
+			placeRequest.Currency = strings.TrimSpace(primaryCurrency)
+			orderNo = formalAPIOrderNo(m.ID, requestID)
+			result, submitErr := s.formalBets.SubmitAPIBet(ctx, schemebettingdispatch.APIBetCommand{
+				RequestID: requestID, LocalOrderNo: orderNo, MemberID: m.ID, MemberAccount: account,
+				LotteryLabel: label, LotteryCategory: lotteryCategory, BetPayload: payload, Request: placeRequest,
+			})
+			if submitErr != nil {
+				return PlaceBetResult{}, submitErr
+			}
+			return PlaceBetResult{
+				OrderNo: result.OrderNo, IssueNo: result.IssueNo, Amount: result.Amount, Status: result.Status,
+				PlacedAt: timeutil.FormatISO(result.PlacedAt), ThirdPartyBetID: result.ThirdPartyBetID,
+			}, nil
+		}
+		betRes, betErr := s.guajiBets.PlaceRealBet(ctx, account, placeRequest)
 		if betErr != nil {
 			return PlaceBetResult{}, betErr
 		}
@@ -573,6 +604,11 @@ func (s *Service) PlaceBet(ctx context.Context, account, lotteryCode string, in 
 		PlacedAt:        timeutil.FormatISO(row.PlacedAt.Time),
 		ThirdPartyBetID: tpBetID,
 	}, nil
+}
+
+func formalAPIOrderNo(memberID int64, requestID string) string {
+	digest := sha256.Sum256([]byte(strings.TrimSpace(requestID)))
+	return fmt.Sprintf("BO%d%x", memberID, digest[:12])
 }
 
 func mapDrawItem(row sqlcdb.ListLotteryDrawsRow) DrawItem {

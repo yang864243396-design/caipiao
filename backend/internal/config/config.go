@@ -29,6 +29,19 @@ type Config struct {
 	SchemeWorkerTickSec          int
 	SchemeWorkerConcurrency      int
 	SchemeWorkerPlaceConcurrency int
+	SchemeBettingMode            string
+	SchemeBettingLotteries       []string
+	SchemeBettingShards          []int32
+	SchemeBettingShardCount      int
+	SchemeBettingDispatcherOwner string
+	SchemeBettingBatch           int
+	SchemeBettingConcurrency     int
+	SchemeBettingLease           time.Duration
+	SchemeBettingPoll            time.Duration
+	SchemeEventBusEnabled        bool
+	SchemeEventStream            string
+	SchemeEventReplicas          int
+	SchemeEventMaxAge            time.Duration
 	WSEnabled                    bool
 	WSAuthViaQuery               bool
 	CloudRealtimeEnabled         bool
@@ -68,7 +81,20 @@ func Load() Config {
 		SchemeWorkerTickSec:          envInt("SCHEME_WORKER_TICK_SEC", 1),
 		SchemeWorkerConcurrency:      envInt("SCHEME_WORKER_CONCURRENCY", 32),
 		SchemeWorkerPlaceConcurrency: envInt("SCHEME_WORKER_PLACE_CONCURRENCY", 16),
+		SchemeBettingMode:            strings.ToLower(env("SCHEME_BETTING_MODE", "shadow")),
+		SchemeBettingLotteries:       splitCSV(env("SCHEME_BETTING_LOTTERIES", "")),
+		SchemeBettingShards:          splitInt32CSV(env("SCHEME_BETTING_SHARDS", "")),
+		SchemeBettingShardCount:      envInt("SCHEME_BETTING_SHARD_COUNT", 64),
+		SchemeBettingDispatcherOwner: env("SCHEME_BETTING_DISPATCHER_OWNER", ""),
+		SchemeBettingBatch:           envInt("SCHEME_BETTING_BATCH", 32),
+		SchemeBettingConcurrency:     envInt("SCHEME_BETTING_CONCURRENCY", 8),
+		SchemeBettingLease:           envDurationMS("SCHEME_BETTING_LEASE_MS", 5*time.Second),
+		SchemeBettingPoll:            envDurationMS("SCHEME_BETTING_POLL_MS", 100*time.Millisecond),
 		WSEnabled:                    envBool("WS_ENABLED", true),
+		SchemeEventBusEnabled:        envBool("SCHEME_EVENT_BUS_ENABLED", false),
+		SchemeEventStream:            env("SCHEME_EVENT_STREAM", "SCHEME_EVENTS"),
+		SchemeEventReplicas:          envInt("SCHEME_EVENT_REPLICAS", 1),
+		SchemeEventMaxAge:            envDurationMS("SCHEME_EVENT_MAX_AGE_MS", 72*time.Hour),
 		WSAuthViaQuery:               envBool("WS_AUTH_VIA_QUERY", true),
 		CloudRealtimeEnabled:         envBool("CLOUD_REALTIME_ENABLED", true),
 		CloudRealtimeBus:             env("CLOUD_REALTIME_BUS", "nats"),

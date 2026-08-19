@@ -1,0 +1,258 @@
+package sqlcdb
+
+import (
+	"context"
+	"time"
+
+	"caipiao/backend/internal/schemebetting"
+)
+
+type LeaseFormalOutboxParams struct {
+	Mode         string
+	LeaseOwner   string
+	LotteryCodes []string
+	ShardNo      int32
+	Limit        int32
+	Now          time.Time
+	LeaseUntil   time.Time
+}
+
+func (q *Queries) LeaseFormalSchemeBetOutbox(ctx context.Context, arg LeaseFormalOutboxParams) ([]schemebetting.LeasedCommand, error) {
+	if arg.Limit <= 0 {
+		arg.Limit = 32
+	}
+	rows, err := q.db.Query(ctx, `
+WITH candidates AS (
+    SELECT id
+    FROM scheme_bet_outbox
+    WHERE mode = $1
+      AND state = 'pending'
+      AND shard_no = $2
+      AND safe_deadline_at > $3
+      AND lottery_code = ANY($7::text[])
+      AND frozen_request IS NOT NULL
+      AND frozen_request_hash IS NOT NULL
+      AND command_frozen_at IS NOT NULL
+    ORDER BY safe_deadline_at, id
+    FOR UPDATE SKIP LOCKED
+    LIMIT $4
+), leased AS (
+    UPDATE scheme_bet_outbox o
+    SET state = 'leased',
+        lease_owner = $5,
+        lease_fencing_token = o.lease_fencing_token + 1,
+        lease_until = $6,
+        updated_at = $3
+    FROM candidates c
+    WHERE o.id = c.id
+	    RETURNING o.id, COALESCE(o.scheme_id, '') AS scheme_id, o.target_period_no, o.frozen_request, o.frozen_request_hash,
+	              o.close_at, o.safe_deadline_at, o.lease_owner, o.lease_fencing_token, o.lease_until
+)
+SELECT id, scheme_id, target_period_no, frozen_request, frozen_request_hash, close_at, safe_deadline_at,
+       lease_owner, lease_fencing_token, lease_until
+FROM leased
+ORDER BY safe_deadline_at, id`, arg.Mode, arg.ShardNo, arg.Now, arg.Limit, arg.LeaseOwner, arg.LeaseUntil, arg.LotteryCodes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	commands := make([]schemebetting.LeasedCommand, 0, arg.Limit)
+	for rows.Next() {
+		var command schemebetting.LeasedCommand
+		if err := rows.Scan(&command.ID, &command.SchemeID, &command.TargetPeriod, &command.FrozenRequest, &command.FrozenRequestHash,
+			&command.CloseAt, &command.SafeDeadline, &command.Lease.Owner, &command.Lease.Token, &command.Lease.Until); err != nil {
+			return nil, err
+		}
+		commands = append(commands, command)
+	}
+	return commands, rows.Err()
+}
+
+func (q *Queries) StartAttempt(ctx context.Context, command schemebetting.LeasedCommand, startedAt time.Time) (bool, error) {
+	var started bool
+	err := q.db.QueryRow(ctx, `
+WITH updated AS (
+    UPDATE scheme_bet_outbox
+    SET dispatch_started_at = $4,
+        attempt_count = attempt_count + 1,
+        updated_at = $4
+    WHERE id = $1
+      AND state = 'leased'
+      AND lease_owner = $2
+      AND lease_fencing_token = $3
+      AND lease_until > $4
+      AND dispatch_started_at IS NULL
+    RETURNING id, attempt_count, request_id, lease_fencing_token
+), inserted AS (
+    INSERT INTO scheme_bet_attempts (outbox_id, attempt_no, request_id, fencing_token, started_at, outcome)
+    SELECT id, attempt_count, request_id, lease_fencing_token, $4, 'started'
+    FROM updated
+    RETURNING id
+)
+SELECT EXISTS(SELECT 1 FROM inserted)`, command.ID, command.Lease.Owner, command.Lease.Token, startedAt).Scan(&started)
+	return started, err
+}
+
+func (q *Queries) ReleaseLease(ctx context.Context, command schemebetting.LeasedCommand, reason string, releasedAt time.Time) (bool, error) {
+	var released bool
+	err := q.db.QueryRow(ctx, `
+WITH updated AS (
+    UPDATE scheme_bet_outbox
+    SET state = 'pending',
+        lease_owner = NULL,
+        lease_until = NULL,
+        outcome_reason = NULLIF($4, ''),
+        updated_at = $5
+    WHERE id = $1
+      AND COALESCE(scheme_id, '') = $2
+      AND state = 'leased'
+      AND lease_owner = $3
+      AND lease_fencing_token = $6
+      AND dispatch_started_at IS NULL
+    RETURNING id
+)
+SELECT EXISTS(SELECT 1 FROM updated)`,
+		command.ID, command.SchemeID, command.Lease.Owner, reason, releasedAt, command.Lease.Token).Scan(&released)
+	return released, err
+}
+
+func (q *Queries) FinishAttempt(ctx context.Context, finish schemebetting.FinishDispatch) (bool, error) {
+	var finished bool
+	err := q.db.QueryRow(ctx, `
+WITH updated_outbox AS (
+    UPDATE scheme_bet_outbox
+    SET state = $4,
+        outcome_reason = NULLIF($5, ''),
+        provider_order_no = NULLIF($6, ''),
+        accepted_period_no = NULLIF($7, ''),
+        terminal_at = CASE WHEN $4 = 'sent_unknown' THEN NULL ELSE $8 END,
+        provider_account_id = NULLIF($11, 0),
+        provider_currency = NULLIF($12, ''),
+        provider_amount = NULLIF($13, 0),
+        lease_until = NULL,
+        updated_at = $8
+    WHERE id = $1
+      AND COALESCE(scheme_id, '') = $2
+      AND state = 'leased'
+      AND lease_owner = $3
+      AND lease_fencing_token = $9
+    RETURNING scheme_id, attempt_count
+), updated_attempt AS (
+    UPDATE scheme_bet_attempts a
+    SET outcome = $4,
+        finished_at = $8,
+        provider_order_no = NULLIF($6, ''),
+        accepted_period_no = NULLIF($7, ''),
+        error_message = NULLIF($5, '')
+    FROM updated_outbox u
+    WHERE a.outbox_id = $1 AND a.attempt_no = u.attempt_count
+    RETURNING a.id
+), blocked AS (
+    UPDATE scheme_instances i
+    SET strict_chain_state = 'blocked_requires_rearm', updated_at = $8
+    FROM updated_outbox u
+    WHERE i.id = u.scheme_id AND $10
+    RETURNING i.id
+)
+SELECT EXISTS(SELECT 1 FROM updated_outbox)`, finish.CommandID, finish.SchemeID, finish.LeaseOwner,
+		string(finish.State), finish.Reason, finish.ProviderOrderID, finish.AcceptedPeriod,
+		finish.FinishedAt, finish.FencingToken, finish.BlocksChain, finish.ProviderAccountID, finish.ProviderCurrency, finish.ProviderAmount).Scan(&finished)
+	return finished, err
+}
+
+func (q *Queries) MarkAbandonedStartedDispatchUnknown(ctx context.Context, now time.Time, rowLimit int32) (int64, error) {
+	if rowLimit <= 0 {
+		rowLimit = 100
+	}
+	var count int64
+	err := q.db.QueryRow(ctx, `
+WITH candidates AS (
+    SELECT id, safe_deadline_at
+    FROM scheme_bet_outbox
+    WHERE state = 'leased'
+      AND dispatch_started_at IS NOT NULL
+      AND lease_until <= $1
+    ORDER BY lease_until, id
+    FOR UPDATE SKIP LOCKED
+    LIMIT $2
+), updated AS (
+    UPDATE scheme_bet_outbox o
+    SET state = CASE WHEN o.safe_deadline_at <= $1 THEN 'external_acceptance_unknown' ELSE 'sent_unknown' END,
+        outcome_reason = CASE
+            WHEN o.safe_deadline_at <= $1 THEN 'dispatcher_lost_after_send_started_deadline_elapsed'
+            ELSE 'dispatcher_lost_after_send_started'
+        END,
+        terminal_at = CASE WHEN o.safe_deadline_at <= $1 THEN $1 ELSE NULL END,
+        lease_until = NULL,
+        updated_at = $1
+    FROM candidates c
+    WHERE o.id = c.id
+    RETURNING o.id, o.scheme_id, o.attempt_count, o.safe_deadline_at
+), attempts AS (
+    UPDATE scheme_bet_attempts a
+    SET outcome = CASE WHEN u.safe_deadline_at <= $1 THEN 'external_acceptance_unknown' ELSE 'sent_unknown' END,
+        finished_at = $1,
+        error_message = CASE
+            WHEN u.safe_deadline_at <= $1 THEN 'dispatcher_lost_after_send_started_deadline_elapsed'
+            ELSE 'dispatcher_lost_after_send_started'
+        END
+    FROM updated u
+    WHERE a.outbox_id = u.id AND a.attempt_no = u.attempt_count
+    RETURNING a.id
+), blocked AS (
+    UPDATE scheme_instances i
+    SET strict_chain_state = 'blocked_requires_rearm', updated_at = $1
+    FROM updated u
+    WHERE i.id = u.scheme_id
+    RETURNING i.id
+)
+SELECT count(*) FROM updated`, now, rowLimit).Scan(&count)
+	return count, err
+}
+
+func (q *Queries) ExpireDueFormalOutbox(ctx context.Context, now time.Time, rowLimit int32) (int64, error) {
+	if rowLimit <= 0 {
+		rowLimit = 500
+	}
+	var count int64
+	err := q.db.QueryRow(ctx, `
+WITH candidates AS (
+    SELECT id
+    FROM scheme_bet_outbox
+    WHERE mode IN ('gray', 'production')
+      AND state IN ('pending', 'sent_unknown')
+      AND safe_deadline_at <= $1
+    ORDER BY safe_deadline_at, id
+    FOR UPDATE SKIP LOCKED
+    LIMIT $2
+), updated AS (
+    UPDATE scheme_bet_outbox o
+    SET state = CASE WHEN o.state = 'sent_unknown' THEN 'external_acceptance_unknown' ELSE 'expired' END,
+        outcome_reason = CASE
+            WHEN o.state = 'sent_unknown' THEN 'reconciliation_deadline_elapsed'
+            ELSE 'safe_deadline_elapsed'
+        END,
+        terminal_at = $1,
+        updated_at = $1
+    FROM candidates c
+    WHERE o.id = c.id
+    RETURNING o.id, o.scheme_id, o.attempt_count, o.state
+), attempts AS (
+    UPDATE scheme_bet_attempts a
+    SET outcome = 'external_acceptance_unknown',
+        error_message = 'reconciliation_deadline_elapsed'
+    FROM updated u
+    WHERE u.state = 'external_acceptance_unknown'
+      AND a.outbox_id = u.id
+      AND a.attempt_no = u.attempt_count
+    RETURNING a.id
+), blocked AS (
+    UPDATE scheme_instances i
+    SET strict_chain_state = 'blocked_requires_rearm', updated_at = $1
+    FROM updated u
+    WHERE i.id = u.scheme_id
+    RETURNING i.id
+)
+SELECT count(*) FROM updated`, now, rowLimit).Scan(&count)
+	return count, err
+}

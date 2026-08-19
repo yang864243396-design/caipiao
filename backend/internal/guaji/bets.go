@@ -99,7 +99,7 @@ func (c *Client) PlaceLottBet(ctx context.Context, accessToken string, req LottB
 		return nil, err
 	}
 	res := parseLottBetResult(env, raw)
-	if res.ThirdPartyBetID == "" && res.Periods != "" {
+	if allowAmbiguousBetLookup(ctx) && res.ThirdPartyBetID == "" && res.Periods != "" {
 		amount := req.BetContents[0].BetAmount
 		if id, ferr := c.findBetIDByPeriod(ctx, accessToken, req.GameID, res.Periods, amount); ferr == nil {
 			res.ThirdPartyBetID = id

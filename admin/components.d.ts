@@ -13,6 +13,7 @@ declare module 'vue' {
   export interface GlobalComponents {
     AdminConfirmDialog: typeof import('./src/components/AdminConfirmDialog.vue')['default']
     AdminDialog: typeof import('./src/components/AdminDialog.vue')['default']
+    ElAlert: typeof import('element-plus/es')['ElAlert']
     ElAside: typeof import('element-plus/es')['ElAside']
     ElButton: typeof import('element-plus/es')['ElButton']
     ElCard: typeof import('element-plus/es')['ElCard']
@@ -54,6 +55,7 @@ declare module 'vue' {
     RichHtmlField: typeof import('./src/components/RichHtmlField.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    SchemeBettingEventsPanel: typeof import('./src/components/schemes/SchemeBettingEventsPanel.vue')['default']
     SchemeGroupInputPanel: typeof import('./src/components/schemes/SchemeGroupInputPanel.vue')['default']
     SchemeGroupPickPanel: typeof import('./src/components/schemes/SchemeGroupPickPanel.vue')['default']
     SchemeHistoryDrawer: typeof import('./src/components/schemes/SchemeHistoryDrawer.vue')['default']
