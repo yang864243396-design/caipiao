@@ -20,6 +20,9 @@ type PeriodsSchedule struct {
 	CloseEndTimeRaw   string    // 第三方 periods 原始 end_time 字符串
 	OpenStartAt       time.Time // 当前可投期 start_time（UTC 墙钟）
 	PeriodDurationSec int       // 当前可投期时长（秒），来自第三方 start/end
+	ProvisionalClose  bool      // 尚未开盘时 CloseAt 暂用 start_time；开盘后允许单向升级为真实 end_time
+	RealCloseAt       time.Time // provisional 期间保留第三方真实 end_time，供开奖事件无网络升级
+	RealCloseTimeRaw  string
 	UpdatedAt         time.Time
 }
 
@@ -31,6 +34,7 @@ type periodCloseAnchor struct {
 	CloseEndTimeRaw   string
 	OpenStartAt       time.Time
 	PeriodDurationSec int
+	ProvisionalClose  bool
 }
 
 var periodCloseAnchors sync.Map // lotteryCode+"\x00"+period -> periodCloseAnchor
@@ -77,11 +81,13 @@ func TryUpdatePeriodsScheduleFullWithDurationAt(
 		return false
 	}
 	closeAt = closeAt.UTC()
+	incomingProvisional := !openStartAt.IsZero() && closeAt.Equal(openStartAt.UTC())
 	if v, ok := periodsSchedule.Load(lotteryCode); ok {
 		if prev, ok := v.(PeriodsSchedule); ok && prev.CurrentPeriod == currentPeriod && !prev.CloseAt.IsZero() {
 			oldClose := prev.CloseAt.UTC()
 			// 同一期：禁止封盘时刻后移（第三方 end_time 偶发跳变会导致两次请求不一致）
-			if closeAt.After(oldClose) {
+			// 唯一例外是尚未开盘时以 start_time 暂存的封盘点，在开盘后升级为真实 end_time。
+			if closeAt.After(oldClose) && !(prev.ProvisionalClose && !incomingProvisional) {
 				closeAt = oldClose
 				if prev.CloseEndTimeRaw != "" {
 					closeEndTimeRaw = prev.CloseEndTimeRaw
@@ -102,6 +108,7 @@ func TryUpdatePeriodsScheduleFullWithDurationAt(
 		closeEndTimeRaw,
 		openStartAt,
 		periodDurationSec,
+		incomingProvisional,
 	)
 	if !now.IsZero() && !now.UTC().Before(closeAt) {
 		return false
@@ -114,6 +121,7 @@ func TryUpdatePeriodsScheduleFullWithDurationAt(
 		CloseEndTimeRaw:   strings.TrimSpace(closeEndTimeRaw),
 		OpenStartAt:       openStartAt.UTC(),
 		PeriodDurationSec: periodDurationSec,
+		ProvisionalClose:  incomingProvisional,
 		UpdatedAt:         time.Now().UTC(),
 	})
 	return true
@@ -126,6 +134,52 @@ func ClearPeriodsSchedule(lotteryCode string) {
 		return
 	}
 	periodsSchedule.Delete(lotteryCode)
+}
+
+// RememberPeriodsRealClose 为尚未开盘的临时快照保留同一期真实 end_time。
+// 它不改变当前可投注窗口，只供该期开始时做一次单向升级。
+func RememberPeriodsRealClose(lotteryCode, period string, realCloseAt time.Time, realCloseTimeRaw string) {
+	lotteryCode = strings.TrimSpace(lotteryCode)
+	period = strings.TrimSpace(period)
+	if lotteryCode == "" || period == "" || realCloseAt.IsZero() {
+		return
+	}
+	v, ok := periodsSchedule.Load(lotteryCode)
+	if !ok {
+		return
+	}
+	ps, ok := v.(PeriodsSchedule)
+	if !ok || ps.CurrentPeriod != period || !ps.ProvisionalClose || !realCloseAt.UTC().After(ps.CloseAt.UTC()) {
+		return
+	}
+	ps.RealCloseAt = realCloseAt.UTC()
+	ps.RealCloseTimeRaw = strings.TrimSpace(realCloseTimeRaw)
+	periodsSchedule.Store(lotteryCode, ps)
+}
+
+// PromoteProvisionalPeriod 在开奖事件到达后将已开始期从 start_time 临时封盘点
+// 升级为预先保存的真实 end_time，不请求第三方，也不允许任意延长已激活期。
+func PromoteProvisionalPeriod(lotteryCode string, now time.Time) bool {
+	lotteryCode = strings.TrimSpace(lotteryCode)
+	ps, ok := PeriodsScheduleFor(lotteryCode)
+	if !ok || !ps.ProvisionalClose || ps.RealCloseAt.IsZero() || ps.OpenStartAt.IsZero() {
+		return false
+	}
+	now = now.UTC()
+	if now.Before(ps.OpenStartAt.UTC()) || !now.Before(ps.RealCloseAt.UTC()) {
+		return false
+	}
+	return TryUpdatePeriodsScheduleFullWithDurationAt(
+		lotteryCode,
+		ps.CurrentPeriod,
+		ps.StartSkipPeriod,
+		ps.StartSkipCloseAt,
+		ps.RealCloseAt,
+		ps.PeriodDurationSec,
+		ps.RealCloseTimeRaw,
+		ps.OpenStartAt,
+		now,
+	)
 }
 
 // PeriodsScheduleFor 读取 periods 封盘快照。
@@ -407,6 +461,7 @@ func clampCloseAtWithPeriodAnchor(
 	closeEndTimeRaw string,
 	openStartAt time.Time,
 	periodDurationSec int,
+	incomingProvisional bool,
 ) (time.Time, string, time.Time, int) {
 	period = strings.TrimSpace(period)
 	if period == "" || closeAt.IsZero() {
@@ -419,6 +474,16 @@ func clampCloseAtWithPeriodAnchor(
 		anchor := v.(periodCloseAnchor)
 		if !anchor.CloseAt.IsZero() {
 			oldClose := anchor.CloseAt.UTC()
+			if anchor.ProvisionalClose && !incomingProvisional && closeAt.After(oldClose) {
+				periodCloseAnchors.Store(key, periodCloseAnchor{
+					CloseAt:           closeAt,
+					CloseEndTimeRaw:   strings.TrimSpace(closeEndTimeRaw),
+					OpenStartAt:       openStartAt.UTC(),
+					PeriodDurationSec: periodDurationSec,
+					ProvisionalClose:  false,
+				})
+				return closeAt, closeEndTimeRaw, openStartAt, periodDurationSec
+			}
 			if closeAt.After(oldClose) {
 				closeAt = oldClose
 				if anchor.CloseEndTimeRaw != "" {
@@ -438,6 +503,7 @@ func clampCloseAtWithPeriodAnchor(
 					CloseEndTimeRaw:   strings.TrimSpace(closeEndTimeRaw),
 					OpenStartAt:       openStartAt.UTC(),
 					PeriodDurationSec: periodDurationSec,
+					ProvisionalClose:  incomingProvisional,
 				}
 				periodCloseAnchors.Store(key, anchor)
 				return closeAt, closeEndTimeRaw, openStartAt, periodDurationSec
@@ -451,6 +517,7 @@ func clampCloseAtWithPeriodAnchor(
 		CloseEndTimeRaw:   strings.TrimSpace(closeEndTimeRaw),
 		OpenStartAt:       openStartAt.UTC(),
 		PeriodDurationSec: periodDurationSec,
+		ProvisionalClose:  incomingProvisional,
 	})
 	return closeAt, closeEndTimeRaw, openStartAt, periodDurationSec
 }

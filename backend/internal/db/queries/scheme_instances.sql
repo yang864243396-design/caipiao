@@ -269,6 +269,18 @@ WHERE status = 'running'
 
 ORDER BY updated_at;
 
+-- name: ListRunningSchemeInstancesByLottery :many
+SELECT
+    id, definition_id, member_id, kind, scheme_name, lottery_code, lottery_label,
+    status, status_reason, turnover, pnl, run_time_sec, lookback_pnl, session_pnl, multiplier, countdown_sec, sim_bet,
+    round_index, last_settled_issue, pick_index, current_pick, last_direction,
+    start_skip_period, start_skip_close_at,
+    created_at, updated_at
+FROM scheme_instances
+WHERE status = 'running'
+  AND lottery_code = $1
+ORDER BY updated_at;
+
 
 
 -- name: AdvanceSchemeInstanceCountdown :execrows

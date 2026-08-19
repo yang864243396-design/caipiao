@@ -450,6 +450,95 @@ func (q *Queries) ListRunningSchemeInstances(ctx context.Context) ([]ListRunning
 	return items, nil
 }
 
+const listRunningSchemeInstancesByLottery = `-- name: ListRunningSchemeInstancesByLottery :many
+SELECT
+    id, definition_id, member_id, kind, scheme_name, lottery_code, lottery_label,
+    status, status_reason, turnover, pnl, run_time_sec, lookback_pnl, session_pnl, multiplier, countdown_sec, sim_bet,
+    round_index, last_settled_issue, pick_index, current_pick, last_direction,
+    start_skip_period, start_skip_close_at,
+    created_at, updated_at
+FROM scheme_instances
+WHERE status = 'running'
+  AND lottery_code = $1
+ORDER BY updated_at
+`
+
+type ListRunningSchemeInstancesByLotteryRow struct {
+	ID               string             `json:"id"`
+	DefinitionID     string             `json:"definition_id"`
+	MemberID         int64              `json:"member_id"`
+	Kind             string             `json:"kind"`
+	SchemeName       string             `json:"scheme_name"`
+	LotteryCode      string             `json:"lottery_code"`
+	LotteryLabel     string             `json:"lottery_label"`
+	Status           string             `json:"status"`
+	StatusReason     string             `json:"status_reason"`
+	Turnover         pgtype.Numeric     `json:"turnover"`
+	Pnl              pgtype.Numeric     `json:"pnl"`
+	RunTimeSec       int32              `json:"run_time_sec"`
+	LookbackPnl      pgtype.Numeric     `json:"lookback_pnl"`
+	SessionPnl       pgtype.Numeric     `json:"session_pnl"`
+	Multiplier       pgtype.Numeric     `json:"multiplier"`
+	CountdownSec     int32              `json:"countdown_sec"`
+	SimBet           bool               `json:"sim_bet"`
+	RoundIndex       int32              `json:"round_index"`
+	LastSettledIssue pgtype.Text        `json:"last_settled_issue"`
+	PickIndex        int32              `json:"pick_index"`
+	CurrentPick      string             `json:"current_pick"`
+	LastDirection    string             `json:"last_direction"`
+	StartSkipPeriod  pgtype.Text        `json:"start_skip_period"`
+	StartSkipCloseAt pgtype.Timestamptz `json:"start_skip_close_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) ListRunningSchemeInstancesByLottery(ctx context.Context, lotteryCode string) ([]ListRunningSchemeInstancesByLotteryRow, error) {
+	rows, err := q.db.Query(ctx, listRunningSchemeInstancesByLottery, lotteryCode)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRunningSchemeInstancesByLotteryRow{}
+	for rows.Next() {
+		var i ListRunningSchemeInstancesByLotteryRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.DefinitionID,
+			&i.MemberID,
+			&i.Kind,
+			&i.SchemeName,
+			&i.LotteryCode,
+			&i.LotteryLabel,
+			&i.Status,
+			&i.StatusReason,
+			&i.Turnover,
+			&i.Pnl,
+			&i.RunTimeSec,
+			&i.LookbackPnl,
+			&i.SessionPnl,
+			&i.Multiplier,
+			&i.CountdownSec,
+			&i.SimBet,
+			&i.RoundIndex,
+			&i.LastSettledIssue,
+			&i.PickIndex,
+			&i.CurrentPick,
+			&i.LastDirection,
+			&i.StartSkipPeriod,
+			&i.StartSkipCloseAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSchemeInstancesByMember = `-- name: ListSchemeInstancesByMember :many
 
 SELECT

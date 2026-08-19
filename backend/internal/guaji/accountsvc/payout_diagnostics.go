@@ -85,6 +85,25 @@ func (s *payoutDiagnosticStore) fail(accountID int64, err error, at time.Time) {
 	s.byAccount[accountID] = diagnostic
 }
 
+func (s *payoutDiagnosticStore) partial(accountID int64, providerList, settled, unresolved int, err error, at time.Time) {
+	if s == nil || err == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.byAccount == nil {
+		s.byAccount = make(map[int64]PayoutSyncDiagnostics)
+	}
+	diagnostic := s.diagnosticForUpdateLocked(accountID)
+	diagnostic.AccountID = accountID
+	diagnostic.LastError = err.Error()
+	diagnostic.LastErrorAt = payoutDiagnosticTimePtr(at)
+	diagnostic.ProviderListCount = providerList
+	diagnostic.SettledCount = settled
+	diagnostic.ProviderUnsettledCount = unresolved
+	s.byAccount[accountID] = diagnostic
+}
+
 func (s *payoutDiagnosticStore) diagnosticForUpdateLocked(accountID int64) PayoutSyncDiagnostics {
 	if diagnostic, ok := s.byAccount[accountID]; ok {
 		return diagnostic

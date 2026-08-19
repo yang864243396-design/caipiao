@@ -62,22 +62,29 @@ export function startCloudRunningSync(
   }
 
   function startPoll(intervalMs: number) {
-    if (pollTimer) return
+    stopPoll()
     pollTimer = window.setInterval(() => {
       void refresh()
     }, intervalMs)
   }
 
   const token = getAccessToken()
-  const wsAvailable = Boolean(WS_CLIENT_ENABLED && WS_CLIENT_BASE && token)
 
-  startPoll(wsAvailable ? WS_CONNECTED_POLL_MS : pollMs)
+  startPoll(cloudRunningPollMs(false, pollMs))
 
   // 单独收窄 token / base：Boolean(...) 无法让 TS 排除 null
   if (WS_CLIENT_ENABLED && WS_CLIENT_BASE && token) {
-    stopWs = connectClientWs(WS_CLIENT_BASE, token, (env) => {
-      if (isCloudRefreshEvent(env)) void refresh()
-    })
+    stopWs = connectClientWs(
+      WS_CLIENT_BASE,
+      token,
+      (env) => {
+        if (isCloudRefreshEvent(env)) void refresh()
+      },
+      {
+        onConnected: () => startPoll(cloudRunningPollMs(true, pollMs)),
+        onDisconnected: () => startPoll(cloudRunningPollMs(false, pollMs)),
+      },
+    )
   }
 
   function stop() {
@@ -89,8 +96,8 @@ export function startCloudRunningSync(
   return { stop, refresh }
 }
 
-export function cloudRunningPollMs() {
-  return FALLBACK_POLL_MS
+export function cloudRunningPollMs(wsConnected = false, fallbackMs = FALLBACK_POLL_MS) {
+  return wsConnected ? WS_CONNECTED_POLL_MS : fallbackMs
 }
 
 /** @deprecated 使用 startCloudRunningSync */

@@ -120,6 +120,38 @@ func uniqueMemberIDs(rows []sqlcdb.ListRunningSchemeInstancesRow) []int64 {
 	return out
 }
 
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func uniqueInt64s(values []int64) []int64 {
+	seen := make(map[int64]struct{}, len(values))
+	out := make([]int64, 0, len(values))
+	for _, value := range values {
+		if value <= 0 {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
 // prioritizeOpenBetWindow 将已开盘彩种的实例排到前面（保留各组内 updated_at 顺序），
 // 有界并发打满时优先保证窗口内下注。
 func prioritizeOpenBetWindow(rows []sqlcdb.ListRunningSchemeInstancesRow) []sqlcdb.ListRunningSchemeInstancesRow {
@@ -137,6 +169,25 @@ func prioritizeOpenBetWindow(rows []sqlcdb.ListRunningSchemeInstancesRow) []sqlc
 	}
 	if len(open) == 0 || len(closed) == 0 {
 		return rows
+	}
+	return append(open, closed...)
+}
+
+func prioritizeOpenBetWindowInstances(instances []sqlcdb.SchemeInstance) []sqlcdb.SchemeInstance {
+	if len(instances) < 2 {
+		return instances
+	}
+	open := make([]sqlcdb.SchemeInstance, 0, len(instances))
+	closed := make([]sqlcdb.SchemeInstance, 0, len(instances)/2)
+	for _, inst := range instances {
+		if _, ok := lottery.StrictOpenIssueForGuajiBet(inst.LotteryCode); ok {
+			open = append(open, inst)
+		} else {
+			closed = append(closed, inst)
+		}
+	}
+	if len(open) == 0 || len(closed) == 0 {
+		return instances
 	}
 	return append(open, closed...)
 }

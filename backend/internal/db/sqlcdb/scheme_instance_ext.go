@@ -243,7 +243,7 @@ func SchemeInstanceFromMaintenanceStoppedRow(r ListMaintenanceStoppedInstancesRo
 		Turnover:         r.Turnover,
 		Pnl:              r.Pnl,
 		LookbackPnl:      r.LookbackPnl,
-		SessionPnl:         r.SessionPnl,
+		SessionPnl:       r.SessionPnl,
 		Multiplier:       r.Multiplier,
 		RunTimeSec:       r.RunTimeSec,
 		CountdownSec:     r.CountdownSec,
@@ -281,6 +281,37 @@ func SchemeInstanceFromPausedRow(r UpdateSchemeInstanceStatusToPausedRow) Scheme
 }
 
 func SchemeInstanceFromRunningRow(r ListRunningSchemeInstancesRow) SchemeInstance {
+	return SchemeInstance{
+		ID:               r.ID,
+		DefinitionID:     r.DefinitionID,
+		MemberID:         r.MemberID,
+		Kind:             r.Kind,
+		SchemeName:       r.SchemeName,
+		LotteryCode:      r.LotteryCode,
+		LotteryLabel:     r.LotteryLabel,
+		Status:           r.Status,
+		StatusReason:     r.StatusReason,
+		Turnover:         r.Turnover,
+		Pnl:              r.Pnl,
+		RunTimeSec:       r.RunTimeSec,
+		LookbackPnl:      r.LookbackPnl,
+		SessionPnl:       r.SessionPnl,
+		Multiplier:       r.Multiplier,
+		CountdownSec:     r.CountdownSec,
+		SimBet:           r.SimBet,
+		RoundIndex:       r.RoundIndex,
+		LastSettledIssue: r.LastSettledIssue,
+		PickIndex:        r.PickIndex,
+		CurrentPick:      r.CurrentPick,
+		LastDirection:    r.LastDirection,
+		StartSkipPeriod:  r.StartSkipPeriod,
+		StartSkipCloseAt: r.StartSkipCloseAt,
+		CreatedAt:        r.CreatedAt,
+		UpdatedAt:        r.UpdatedAt,
+	}
+}
+
+func SchemeInstanceFromRunningByLotteryRow(r ListRunningSchemeInstancesByLotteryRow) SchemeInstance {
 	return SchemeInstance{
 		ID:               r.ID,
 		DefinitionID:     r.DefinitionID,

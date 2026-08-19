@@ -55,6 +55,9 @@ type Worker struct {
 	placeSem          chan struct{} // 真下单全站有界并发；nil 表示不额外限流
 	countdownReset    int32
 	betSeq            atomic.Uint64
+	drawWake          chan string
+	drawWakeMu        sync.Mutex
+	drawWakePending   map[string]struct{}
 }
 
 func NewWorker(pool *db.Pool, tickSec int, hub *ws.Hub, periodSync *periodsync.Syncer) *Worker {
@@ -62,14 +65,16 @@ func NewWorker(pool *db.Pool, tickSec int, hub *ws.Hub, periodSync *periodsync.S
 		return nil
 	}
 	w := &Worker{
-		pool:           pool,
-		q:              sqlcdb.New(pool),
-		hub:            hub,
-		periodSync:     periodSync,
-		periodVerifier: periodSync,
-		tickSec:        int32(tickSec),
-		concurrency:    int32(defaultSchemeWorkerConcurrency),
-		countdownReset: defaultCountdownReset,
+		pool:            pool,
+		q:               sqlcdb.New(pool),
+		hub:             hub,
+		periodSync:      periodSync,
+		periodVerifier:  periodSync,
+		tickSec:         int32(tickSec),
+		concurrency:     int32(defaultSchemeWorkerConcurrency),
+		countdownReset:  defaultCountdownReset,
+		drawWake:        make(chan string, 64),
+		drawWakePending: make(map[string]struct{}),
 	}
 	w.SetPlaceConcurrency(defaultSchemeWorkerPlaceConcurrency)
 	w.strategyProcessor = NewStrategyProcessor(pool)
@@ -110,9 +115,68 @@ func publishedRuleSubIDs(rule playRule) []string {
 }
 
 func (w *Worker) NotifyStrategyDraw(ctx context.Context, lotteryCode, periodNo string) {
-	if w != nil && w.strategyProcessor != nil {
-		w.strategyProcessor.NotifyDraw(ctx, lotteryCode, periodNo)
+	if w == nil {
+		return
 	}
+	lotteryCode = strings.TrimSpace(lotteryCode)
+	if lotteryCode == "" {
+		return
+	}
+	lottery.PromoteProvisionalPeriod(lotteryCode, time.Now().UTC())
+	w.requestPeriodRefresh(lotteryCode)
+	go func() {
+		if w.strategyProcessor != nil {
+			if err := w.strategyProcessor.Recover(ctx); err != nil {
+				slog.Warn("scheme strategy draw recovery failed", "lottery", lotteryCode, "period", periodNo, "err", err)
+			}
+		}
+		w.enqueueDrawWake(lotteryCode)
+	}()
+}
+
+func (w *Worker) enqueueDrawWake(lotteryCode string) {
+	if w == nil || w.drawWake == nil {
+		return
+	}
+	lotteryCode = strings.TrimSpace(lotteryCode)
+	if lotteryCode == "" {
+		return
+	}
+	w.drawWakeMu.Lock()
+	if w.drawWakePending == nil {
+		w.drawWakePending = make(map[string]struct{})
+	}
+	if _, pending := w.drawWakePending[lotteryCode]; pending {
+		w.drawWakeMu.Unlock()
+		return
+	}
+	w.drawWakePending[lotteryCode] = struct{}{}
+	w.drawWakeMu.Unlock()
+	select {
+	case w.drawWake <- lotteryCode:
+	default:
+		w.drawWakeMu.Lock()
+		delete(w.drawWakePending, lotteryCode)
+		w.drawWakeMu.Unlock()
+	}
+}
+
+func (w *Worker) markDrawWakeTaken(lotteryCode string) {
+	if w == nil {
+		return
+	}
+	w.drawWakeMu.Lock()
+	delete(w.drawWakePending, strings.TrimSpace(lotteryCode))
+	w.drawWakeMu.Unlock()
+}
+
+func (w *Worker) takeDrawWake() string {
+	if w == nil || w.drawWake == nil {
+		return ""
+	}
+	lotteryCode := <-w.drawWake
+	w.markDrawWakeTaken(lotteryCode)
+	return lotteryCode
 }
 
 func (w *Worker) resolvePublishedRule(lotteryCode string, rule playRule) (playrules.Snapshot, bool) {
@@ -176,6 +240,9 @@ func (w *Worker) Run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			w.tick(ctx)
+		case lotteryCode := <-w.drawWake:
+			w.markDrawWakeTaken(lotteryCode)
+			w.tickLottery(ctx, lotteryCode)
 		}
 	}
 }
@@ -185,46 +252,11 @@ func (w *Worker) tick(ctx context.Context) {
 	if err != nil {
 		slog.Warn("scheme worker list failed", "err", err)
 	} else if len(instances) > 0 {
-		w.prefetchPeriodSync(ctx, uniqueLotteryCodes(instances))
-		instances = prioritizeOpenBetWindow(instances)
-		planMultByMember := w.preloadPlanMultipliers(ctx, uniqueMemberIDs(instances))
-		gate := newBetWindowGate(w)
-		conc := int(w.concurrency)
-		if conc <= 0 {
-			conc = defaultSchemeWorkerConcurrency
+		converted := make([]sqlcdb.SchemeInstance, 0, len(instances))
+		for _, row := range instances {
+			converted = append(converted, sqlcdb.SchemeInstanceFromRunningRow(row))
 		}
-		planOf := func(memberID int64) float64 {
-			if pm, ok := planMultByMember[memberID]; ok {
-				return pm
-			}
-			return 1
-		}
-		if conc == 1 || len(instances) == 1 {
-			for _, row := range instances {
-				inst := sqlcdb.SchemeInstanceFromRunningRow(row)
-				w.tickInstance(ctx, inst, planOf(inst.MemberID), gate)
-			}
-		} else {
-			sem := make(chan struct{}, conc)
-			var wg sync.WaitGroup
-			for _, row := range instances {
-				inst := sqlcdb.SchemeInstanceFromRunningRow(row)
-				pm := planOf(inst.MemberID)
-				wg.Add(1)
-				sem <- struct{}{}
-				go func(inst sqlcdb.SchemeInstance, planMult float64) {
-					defer wg.Done()
-					defer func() { <-sem }()
-					defer func() {
-						if r := recover(); r != nil {
-							slog.Error("scheme worker tickInstance panic", "id", inst.ID, "panic", r)
-						}
-					}()
-					w.tickInstance(ctx, inst, planMult, gate)
-				}(inst, pm)
-			}
-			wg.Wait()
-		}
+		w.tickRunningInstances(ctx, converted)
 	}
 	w.tickSimSettlements(ctx)
 	if w.strategyProcessor != nil {
@@ -233,6 +265,73 @@ func (w *Worker) tick(ctx context.Context) {
 		}
 	}
 	w.tickMaintenanceResume(ctx)
+}
+
+func (w *Worker) tickLottery(ctx context.Context, lotteryCode string) {
+	lotteryCode = strings.TrimSpace(lotteryCode)
+	if w == nil || w.q == nil || lotteryCode == "" {
+		return
+	}
+	rows, err := w.q.ListRunningSchemeInstancesByLottery(ctx, lotteryCode)
+	if err != nil {
+		slog.Warn("scheme worker draw wake list failed", "lottery", lotteryCode, "err", err)
+		return
+	}
+	instances := make([]sqlcdb.SchemeInstance, 0, len(rows))
+	for _, row := range rows {
+		instances = append(instances, sqlcdb.SchemeInstanceFromRunningByLotteryRow(row))
+	}
+	w.tickRunningInstances(ctx, instances)
+}
+
+func (w *Worker) tickRunningInstances(ctx context.Context, instances []sqlcdb.SchemeInstance) {
+	if len(instances) == 0 {
+		return
+	}
+	lotteryCodes := make([]string, 0, len(instances))
+	memberIDs := make([]int64, 0, len(instances))
+	for _, inst := range instances {
+		lotteryCodes = append(lotteryCodes, inst.LotteryCode)
+		memberIDs = append(memberIDs, inst.MemberID)
+	}
+	w.prefetchPeriodSync(ctx, uniqueStrings(lotteryCodes))
+	instances = prioritizeOpenBetWindowInstances(instances)
+	planMultByMember := w.preloadPlanMultipliers(ctx, uniqueInt64s(memberIDs))
+	gate := newBetWindowGate(w)
+	conc := int(w.concurrency)
+	if conc <= 0 {
+		conc = defaultSchemeWorkerConcurrency
+	}
+	planOf := func(memberID int64) float64 {
+		if pm, ok := planMultByMember[memberID]; ok {
+			return pm
+		}
+		return 1
+	}
+	if conc == 1 || len(instances) == 1 {
+		for _, inst := range instances {
+			w.tickInstance(ctx, inst, planOf(inst.MemberID), gate)
+		}
+	} else {
+		sem := make(chan struct{}, conc)
+		var wg sync.WaitGroup
+		for _, inst := range instances {
+			pm := planOf(inst.MemberID)
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(inst sqlcdb.SchemeInstance, planMult float64) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				defer func() {
+					if r := recover(); r != nil {
+						slog.Error("scheme worker tickInstance panic", "id", inst.ID, "panic", r)
+					}
+				}()
+				w.tickInstance(ctx, inst, planMult, gate)
+			}(inst, pm)
+		}
+		wg.Wait()
+	}
 }
 
 func (w *Worker) tickInstance(ctx context.Context, inst sqlcdb.SchemeInstance, planMult float64, gate *betWindowGate) {

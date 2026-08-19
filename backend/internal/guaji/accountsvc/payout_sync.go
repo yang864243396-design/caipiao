@@ -28,6 +28,7 @@ const (
 	payoutSyncRecentPageBudget     = 3
 	historicalSettlementFirstPage  = 4
 	historicalSettlementPageBudget = 3
+	payoutHistoricalRowsPerTick    = 3
 )
 
 // LocalDrawSettlement 本地开奖表派奖评估结果（保留类型供历史调用方编译；派奖同步不再使用本地金额）。
@@ -161,7 +162,19 @@ func settlePayoutBatchRows(
 	commitRecent func(sqlcdb.ListPendingGuajiBetOrdersRow, *guaji.BetSettlement) error,
 	syncHistorical func(sqlcdb.ListPendingGuajiBetOrdersRow) (bool, error),
 ) (int, error) {
+	return settlePayoutBatchRowsWithHistoricalBudget(rows, itemsByID, commitRecent, syncHistorical, -1)
+}
+
+func settlePayoutBatchRowsWithHistoricalBudget(
+	rows []sqlcdb.ListPendingGuajiBetOrdersRow,
+	itemsByID map[string]guaji.WebBetRecord,
+	commitRecent func(sqlcdb.ListPendingGuajiBetOrdersRow, *guaji.BetSettlement) error,
+	syncHistorical func(sqlcdb.ListPendingGuajiBetOrdersRow) (bool, error),
+	historicalBudget int,
+) (int, error) {
 	settledCount := 0
+	historicalUsed := 0
+	var batchErr error
 	for _, row := range rows {
 		betID := strings.TrimSpace(row.ThirdPartyBetID.String)
 		item, found := itemsByID[betID]
@@ -169,21 +182,37 @@ func settlePayoutBatchRows(
 			res := guaji.SettlementFromWebBet(&item)
 			if res != nil && res.Settled {
 				if err := commitRecent(row, res); err != nil {
-					return settledCount, err
+					batchErr = appendPayoutBatchError(batchErr, err)
+					continue
 				}
 				settledCount++
 			}
 			continue
 		}
+		if historicalBudget >= 0 && historicalUsed >= historicalBudget {
+			continue
+		}
+		historicalUsed++
 		settled, err := syncHistorical(row)
 		if err != nil {
-			return settledCount, err
+			batchErr = appendPayoutBatchError(batchErr, err)
+			continue
 		}
 		if settled {
 			settledCount++
 		}
 	}
-	return settledCount, nil
+	return settledCount, batchErr
+}
+
+func appendPayoutBatchError(current, next error) error {
+	if next == nil {
+		return current
+	}
+	if current == nil {
+		return next
+	}
+	return errors.Join(current, next)
 }
 
 func settleAccountPayoutBatch(
@@ -195,9 +224,12 @@ func settleAccountPayoutBatch(
 	syncHistorical func(sqlcdb.ListPendingGuajiBetOrdersRow) (bool, error),
 	at time.Time,
 ) error {
-	settledCount, err := settlePayoutBatchRows(rows, itemsByID, commitRecent, syncHistorical)
+	settledCount, err := settlePayoutBatchRowsWithHistoricalBudget(
+		rows, itemsByID, commitRecent, syncHistorical, payoutHistoricalRowsPerTick,
+	)
 	if err != nil {
-		diagnostics.fail(accountID, err, at)
+		settledCount, unresolvedCount := payoutBatchCounts(len(rows), settledCount)
+		diagnostics.partial(accountID, len(itemsByID), settledCount, unresolvedCount, err, at)
 		return err
 	}
 	settledCount, unresolvedCount := payoutBatchCounts(len(rows), settledCount)
