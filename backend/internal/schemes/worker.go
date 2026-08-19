@@ -444,6 +444,7 @@ func (w *Worker) ensureBetWindowOpen(ctx context.Context, inst sqlcdb.SchemeInst
 }
 
 func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance, delta int32, planMult float64) error {
+	var preparedStrategyVersion int64
 	if inst.StatusReason == StatusReasonAwaitNextBet {
 		return nil
 	}
@@ -460,6 +461,16 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 			slog.Debug("legacy scheme worker is read-only for event-owned instance", "id", inst.ID)
 			return nil
 		}
+		prepared, ready, err := convergeLegacyStrategyBeforeBet(ctx, w.q, w.ProcessStrategyReady, inst)
+		if err != nil {
+			return fmt.Errorf("converge previous formal strategy: %w", err)
+		}
+		if !ready {
+			slog.Debug("scheme worker bet deferred: previous strategy not ready", "id", inst.ID)
+			return nil
+		}
+		inst = prepared.Instance
+		preparedStrategyVersion = prepared.StateVersion
 	}
 
 	def, err := w.q.GetSchemeDefinitionByID(ctx, inst.DefinitionID)
@@ -732,6 +743,16 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 		}
 		if !legacyOwnsFormalBet(owner) {
 			slog.Debug("legacy scheme worker bet aborted after ownership changed", "id", inst.ID, "period", draw.IssueNo)
+			return nil
+		}
+		stateCurrent, err := legacyPreparedStateStillCurrent(
+			ctx, qtx, inst.ID, preparedStrategyVersion,
+		)
+		if err != nil {
+			return fmt.Errorf("verify formal strategy state: %w", err)
+		}
+		if !stateCurrent {
+			slog.Debug("scheme worker bet aborted: strategy state changed during calculation", "id", inst.ID, "period", draw.IssueNo)
 			return nil
 		}
 	}
