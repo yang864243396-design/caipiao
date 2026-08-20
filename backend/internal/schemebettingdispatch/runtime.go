@@ -135,22 +135,17 @@ func (transport Transport) verifyProviderTarget(ctx context.Context, command sch
 	if transport.PeriodVerifier == nil {
 		return errors.New("provider period verifier is not configured")
 	}
-	now := time.Now().UTC()
-	if transport.Now != nil {
-		now = transport.Now().UTC()
-	}
 	target := strings.TrimSpace(command.TargetPeriod)
 	if target == "" || target != strings.TrimSpace(frozen.Request.IssueNo) {
 		return errors.New("frozen target period does not match dispatch command")
 	}
 	safetyMargin := command.CloseAt.UTC().Sub(command.SafeDeadline.UTC())
-	if command.CloseAt.IsZero() || command.SafeDeadline.IsZero() || safetyMargin <= 0 || !now.Before(command.SafeDeadline.UTC()) {
+	deadline, hasDeadline := ctx.Deadline()
+	if command.CloseAt.IsZero() || command.SafeDeadline.IsZero() || safetyMargin <= 0 || !hasDeadline || time.Until(deadline) <= 0 {
 		return errors.New("dispatch target has no safe provider verification window")
 	}
-	verifyCtx, cancel := context.WithTimeout(ctx, command.SafeDeadline.UTC().Sub(now))
-	defer cancel()
 	period, closeAt, err := transport.PeriodVerifier.VerifyOpenPeriodForMember(
-		verifyCtx, frozen.Request.LotteryCode, frozen.MemberAccount,
+		ctx, frozen.Request.LotteryCode, frozen.MemberAccount,
 	)
 	if err != nil {
 		return fmt.Errorf("refresh provider period before dispatch: %w", err)
@@ -158,11 +153,7 @@ func (transport Transport) verifyProviderTarget(ctx context.Context, command sch
 	if strings.TrimSpace(period) != target {
 		return fmt.Errorf("provider open period changed from %s to %s", target, strings.TrimSpace(period))
 	}
-	now = time.Now().UTC()
-	if transport.Now != nil {
-		now = transport.Now().UTC()
-	}
-	if closeAt.IsZero() || !closeAt.UTC().After(now.Add(safetyMargin)) || !now.Before(command.SafeDeadline.UTC()) {
+	if ctx.Err() != nil || closeAt.IsZero() || closeAt.UTC().Before(command.CloseAt.UTC()) {
 		return errors.New("provider period is inside the dispatch safety margin")
 	}
 	return nil
@@ -249,6 +240,12 @@ func (runtime *Runtime) SetDispatchLimiter(limiter schemebetting.DispatchLimiter
 	runtime.dispatcher.Limiter = limiter
 }
 
+func (runtime *Runtime) SetPreSendFailureHandler(handler schemebetting.PreSendFailureHandler) {
+	if runtime != nil {
+		runtime.dispatcher.PreSendFailureHandler = handler
+	}
+}
+
 func (runtime *Runtime) SetBetEventPublisher(publisher betEventPublisher) {
 	if runtime != nil {
 		runtime.events = publisher
@@ -258,6 +255,9 @@ func (runtime *Runtime) SetBetEventPublisher(publisher betEventPublisher) {
 func (runtime *Runtime) Run(ctx context.Context) {
 	if runtime == nil {
 		return
+	}
+	if runtime.dispatcher.PreSendFailureHandler != nil {
+		go runtime.runPreSendFailureRecovery(ctx)
 	}
 	ticker := time.NewTicker(runtime.cfg.PollInterval)
 	defer ticker.Stop()
@@ -278,21 +278,21 @@ func (runtime *Runtime) runOnce(ctx context.Context) error {
 	if err := runtime.publishPendingBetEvents(ctx, now); err != nil {
 		slog.Warn("scheme betting event recovery publish failed", "err", err)
 	}
-	if _, err := runtime.q.RecoverExpiredUnstartedFormalOutbox(ctx, now, runtime.cfg.Batch); err != nil {
+	if _, err := runtime.q.RecoverExpiredUnstartedFormalOutbox(ctx, runtime.cfg.Batch); err != nil {
 		return err
 	}
-	_, sweepErr := runtime.q.MarkAbandonedStartedDispatchUnknown(ctx, now, runtime.cfg.Batch)
+	_, sweepErr := runtime.q.MarkAbandonedStartedDispatchUnknown(ctx, runtime.cfg.Batch)
 	if err := runAcceptanceRecovery(ctx, sweepErr, runtime.finalizer, runtime.cfg.Batch); err != nil {
 		return err
 	}
-	if _, err := runtime.q.ExpireDueFormalOutbox(ctx, now, runtime.cfg.Batch); err != nil {
+	if _, err := runtime.q.ExpireDueFormalOutbox(ctx, runtime.cfg.Batch); err != nil {
 		return err
 	}
 	sem := make(chan struct{}, runtime.cfg.Concurrency)
 	var workers sync.WaitGroup
 	for _, shard := range runtime.cfg.Shards {
 		_, acquired, err := runtime.q.AcquireSchemeBettingShardLease(
-			ctx, "dispatcher", shard, runtime.cfg.Owner, now, now.Add(2*runtime.cfg.LeaseDuration),
+			ctx, "dispatcher", shard, runtime.cfg.Owner, 2*runtime.cfg.LeaseDuration,
 		)
 		if err != nil {
 			return err
@@ -302,7 +302,7 @@ func (runtime *Runtime) runOnce(ctx context.Context) error {
 		}
 		commands, err := runtime.q.LeaseFormalSchemeBetOutbox(ctx, sqlcdb.LeaseFormalOutboxParams{
 			Mode: runtime.cfg.Mode, LeaseOwner: runtime.cfg.Owner, LotteryCodes: runtime.cfg.LotteryCodes, ShardNo: shard, Limit: runtime.cfg.Batch,
-			Now: now, LeaseUntil: now.Add(runtime.cfg.LeaseDuration),
+			LeaseDuration: runtime.cfg.LeaseDuration,
 		})
 		if err != nil {
 			return err
@@ -329,6 +329,57 @@ func (runtime *Runtime) runOnce(ctx context.Context) error {
 		slog.Warn("scheme betting reconcile publish failed", "err", err)
 	}
 	return nil
+}
+
+func (runtime *Runtime) runPreSendFailureRecovery(ctx context.Context) {
+	interval := runtime.cfg.PollInterval
+	if interval < 500*time.Millisecond {
+		interval = 500 * time.Millisecond
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		runtime.recoverPreSendFailures(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (runtime *Runtime) recoverPreSendFailures(ctx context.Context) {
+	if runtime == nil || runtime.dispatcher.PreSendFailureHandler == nil {
+		return
+	}
+	ids, err := runtime.q.ListPendingPreSendFailureOutboxIDs(ctx, runtime.cfg.Batch)
+	if err != nil {
+		slog.Warn("scheme betting pre-send replacement scan failed", "err", err)
+		return
+	}
+	concurrency := runtime.cfg.Concurrency
+	if concurrency <= 0 || concurrency > 4 {
+		concurrency = 4
+	}
+	sem := make(chan struct{}, concurrency)
+	var workers sync.WaitGroup
+	for _, outboxID := range ids {
+		select {
+		case <-ctx.Done():
+			workers.Wait()
+			return
+		case sem <- struct{}{}:
+		}
+		workers.Add(1)
+		go func(outboxID int64) {
+			defer workers.Done()
+			defer func() { <-sem }()
+			if err := runtime.dispatcher.PreSendFailureHandler.HandlePreSendFailure(ctx, outboxID); err != nil {
+				slog.Warn("scheme betting pre-send replacement failed", "outboxId", outboxID, "err", err)
+			}
+		}(outboxID)
+	}
+	workers.Wait()
 }
 
 func (runtime *Runtime) publishPendingBetEvents(ctx context.Context, now time.Time) error {

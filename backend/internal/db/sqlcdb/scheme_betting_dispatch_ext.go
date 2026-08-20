@@ -8,28 +8,32 @@ import (
 )
 
 type LeaseFormalOutboxParams struct {
-	Mode         string
-	LeaseOwner   string
-	LotteryCodes []string
-	ShardNo      int32
-	Limit        int32
-	Now          time.Time
-	LeaseUntil   time.Time
+	Mode          string
+	LeaseOwner    string
+	LotteryCodes  []string
+	ShardNo       int32
+	Limit         int32
+	LeaseDuration time.Duration
 }
 
 func (q *Queries) LeaseFormalSchemeBetOutbox(ctx context.Context, arg LeaseFormalOutboxParams) ([]schemebetting.LeasedCommand, error) {
 	if arg.Limit <= 0 {
 		arg.Limit = 32
 	}
+	if arg.LeaseDuration <= 0 {
+		return nil, nil
+	}
 	rows, err := q.db.Query(ctx, `
-WITH candidates AS (
+WITH db_now AS MATERIALIZED (
+    SELECT clock_timestamp() AS value
+), candidates AS (
     SELECT id
     FROM scheme_bet_outbox
     WHERE mode = $1
       AND state = 'pending'
       AND shard_no = $2
-      AND safe_deadline_at > $3
-      AND lottery_code = ANY($7::text[])
+      AND safe_deadline_at > (SELECT value FROM db_now)
+      AND lottery_code = ANY($3::text[])
       AND frozen_request IS NOT NULL
       AND frozen_request_hash IS NOT NULL
       AND command_frozen_at IS NOT NULL
@@ -41,9 +45,9 @@ WITH candidates AS (
     SET state = 'leased',
         lease_owner = $5,
         lease_fencing_token = o.lease_fencing_token + 1,
-        lease_until = $6,
-        updated_at = $3
-    FROM candidates c
+        lease_until = db_now.value + ($6::bigint * interval '1 microsecond'),
+        updated_at = db_now.value
+    FROM candidates c, db_now
     WHERE o.id = c.id
 	    RETURNING o.id, COALESCE(o.scheme_id, '') AS scheme_id, o.target_period_no, o.frozen_request, o.frozen_request_hash,
 	              o.close_at, o.safe_deadline_at, o.lease_owner, o.lease_fencing_token, o.lease_until
@@ -51,7 +55,7 @@ WITH candidates AS (
 SELECT id, scheme_id, target_period_no, frozen_request, frozen_request_hash, close_at, safe_deadline_at,
        lease_owner, lease_fencing_token, lease_until
 FROM leased
-ORDER BY safe_deadline_at, id`, arg.Mode, arg.ShardNo, arg.Now, arg.Limit, arg.LeaseOwner, arg.LeaseUntil, arg.LotteryCodes)
+ORDER BY safe_deadline_at, id`, arg.Mode, arg.ShardNo, arg.LotteryCodes, arg.Limit, arg.LeaseOwner, arg.LeaseDuration.Microseconds())
 	if err != nil {
 		return nil, err
 	}
@@ -68,29 +72,43 @@ ORDER BY safe_deadline_at, id`, arg.Mode, arg.ShardNo, arg.Now, arg.Limit, arg.L
 	return commands, rows.Err()
 }
 
-func (q *Queries) StartAttempt(ctx context.Context, command schemebetting.LeasedCommand, startedAt time.Time) (bool, error) {
+func (q *Queries) StartAttempt(ctx context.Context, command schemebetting.LeasedCommand, leaseDuration time.Duration) (schemebetting.AttemptStart, error) {
+	if leaseDuration <= 0 {
+		return schemebetting.AttemptStart{}, nil
+	}
 	var started bool
+	var safeWindowSeconds float64
 	err := q.db.QueryRow(ctx, `
-WITH updated AS (
+WITH db_now AS MATERIALIZED (
+    SELECT clock_timestamp() AS value
+), updated AS (
     UPDATE scheme_bet_outbox
-    SET dispatch_started_at = $4,
+    SET dispatch_started_at = db_now.value,
         attempt_count = attempt_count + 1,
-        updated_at = $4
+        lease_until = db_now.value + ($4::bigint * interval '1 microsecond'),
+        updated_at = db_now.value
+    FROM db_now
     WHERE id = $1
       AND state = 'leased'
       AND lease_owner = $2
       AND lease_fencing_token = $3
-      AND lease_until > $4
+      AND lease_until > db_now.value
+      AND safe_deadline_at > db_now.value
       AND dispatch_started_at IS NULL
-    RETURNING id, attempt_count, request_id, lease_fencing_token
+    RETURNING id, attempt_count, request_id, lease_fencing_token, safe_deadline_at, db_now.value AS db_now
 ), inserted AS (
     INSERT INTO scheme_bet_attempts (outbox_id, attempt_no, request_id, fencing_token, started_at, outcome)
-    SELECT id, attempt_count, request_id, lease_fencing_token, $4, 'started'
+    SELECT id, attempt_count, request_id, lease_fencing_token, db_now, 'started'
     FROM updated
-    RETURNING id
+    RETURNING outbox_id
 )
-SELECT EXISTS(SELECT 1 FROM inserted)`, command.ID, command.Lease.Owner, command.Lease.Token, startedAt).Scan(&started)
-	return started, err
+SELECT EXISTS(SELECT 1 FROM inserted),
+       COALESCE((SELECT EXTRACT(EPOCH FROM (safe_deadline_at - db_now)) FROM updated LIMIT 1), 0)`,
+		command.ID, command.Lease.Owner, command.Lease.Token, leaseDuration.Microseconds()).Scan(&started, &safeWindowSeconds)
+	if err != nil {
+		return schemebetting.AttemptStart{}, err
+	}
+	return schemebetting.AttemptStart{Started: started, SafeWindow: time.Duration(safeWindowSeconds * float64(time.Second))}, nil
 }
 
 func (q *Queries) ReleaseLease(ctx context.Context, command schemebetting.LeasedCommand, reason string, releasedAt time.Time) (bool, error) {
@@ -116,24 +134,27 @@ SELECT EXISTS(SELECT 1 FROM updated)`,
 	return released, err
 }
 
-func (q *Queries) RenewLease(ctx context.Context, command schemebetting.LeasedCommand, renewedAt, leaseUntil time.Time) (bool, error) {
+func (q *Queries) RenewLease(ctx context.Context, command schemebetting.LeasedCommand, leaseDuration time.Duration) (bool, error) {
+	if leaseDuration <= 0 {
+		return false, nil
+	}
 	var renewed bool
 	err := q.db.QueryRow(ctx, `
 WITH updated AS (
     UPDATE scheme_bet_outbox
-    SET lease_until = $5,
-        updated_at = $4
+    SET lease_until = clock_timestamp() + ($4::bigint * interval '1 microsecond'),
+        updated_at = clock_timestamp()
     WHERE id = $1
       AND COALESCE(scheme_id, '') = $2
       AND state = 'leased'
       AND lease_owner = $3
-      AND lease_fencing_token = $6
+      AND lease_fencing_token = $5
       AND dispatch_started_at IS NOT NULL
-      AND lease_until > $4
+      AND lease_until > clock_timestamp()
     RETURNING id
 )
 SELECT EXISTS(SELECT 1 FROM updated)`,
-		command.ID, command.SchemeID, command.Lease.Owner, renewedAt, leaseUntil, command.Lease.Token).Scan(&renewed)
+		command.ID, command.SchemeID, command.Lease.Owner, leaseDuration.Microseconds(), command.Lease.Token).Scan(&renewed)
 	return renewed, err
 }
 
@@ -183,57 +204,59 @@ SELECT EXISTS(SELECT 1 FROM updated_outbox)`, finish.CommandID, finish.SchemeID,
 	return finished, err
 }
 
-func (q *Queries) MarkAbandonedStartedDispatchUnknown(ctx context.Context, now time.Time, rowLimit int32) (int64, error) {
+func (q *Queries) MarkAbandonedStartedDispatchUnknown(ctx context.Context, rowLimit int32) (int64, error) {
 	if rowLimit <= 0 {
 		rowLimit = 100
 	}
 	var count int64
 	err := q.db.QueryRow(ctx, `
-WITH candidates AS (
+WITH db_now AS MATERIALIZED (
+    SELECT clock_timestamp() AS value
+), candidates AS (
     SELECT id, safe_deadline_at
     FROM scheme_bet_outbox
     WHERE state = 'leased'
       AND dispatch_started_at IS NOT NULL
-      AND lease_until <= $1
+      AND lease_until <= (SELECT value FROM db_now)
     ORDER BY lease_until, id
     FOR UPDATE SKIP LOCKED
-    LIMIT $2
+    LIMIT $1
 ), updated AS (
     UPDATE scheme_bet_outbox o
-    SET state = CASE WHEN o.safe_deadline_at <= $1 THEN 'external_acceptance_unknown' ELSE 'sent_unknown' END,
+    SET state = CASE WHEN o.safe_deadline_at <= db_now.value THEN 'external_acceptance_unknown' ELSE 'sent_unknown' END,
         outcome_reason = CASE
-            WHEN o.safe_deadline_at <= $1 THEN 'dispatcher_lost_after_send_started_deadline_elapsed'
+            WHEN o.safe_deadline_at <= db_now.value THEN 'dispatcher_lost_after_send_started_deadline_elapsed'
             ELSE 'dispatcher_lost_after_send_started'
         END,
-        terminal_at = CASE WHEN o.safe_deadline_at <= $1 THEN $1 ELSE NULL END,
-        last_error = CASE
-            WHEN o.safe_deadline_at <= $1 THEN 'dispatcher_lost_after_send_started_deadline_elapsed'
+        terminal_at = CASE WHEN o.safe_deadline_at <= db_now.value THEN db_now.value ELSE NULL END,
+        last_error = COALESCE(NULLIF(o.last_error, ''), CASE
+            WHEN o.safe_deadline_at <= db_now.value THEN 'dispatcher_lost_after_send_started_deadline_elapsed'
             ELSE 'dispatcher_lost_after_send_started'
-        END,
+        END),
         lease_until = NULL,
-        updated_at = $1
-    FROM candidates c
+        updated_at = db_now.value
+    FROM candidates c, db_now
     WHERE o.id = c.id
     RETURNING o.id, o.scheme_id, o.attempt_count, o.safe_deadline_at
 ), attempts AS (
     UPDATE scheme_bet_attempts a
-    SET outcome = CASE WHEN u.safe_deadline_at <= $1 THEN 'external_acceptance_unknown' ELSE 'sent_unknown' END,
-        finished_at = $1,
+    SET outcome = CASE WHEN u.safe_deadline_at <= db_now.value THEN 'external_acceptance_unknown' ELSE 'sent_unknown' END,
+        finished_at = db_now.value,
         error_message = COALESCE(NULLIF(a.error_message, ''), CASE
-            WHEN u.safe_deadline_at <= $1 THEN 'dispatcher_lost_after_send_started_deadline_elapsed'
+            WHEN u.safe_deadline_at <= db_now.value THEN 'dispatcher_lost_after_send_started_deadline_elapsed'
             ELSE 'dispatcher_lost_after_send_started'
         END)
-    FROM updated u
+    FROM updated u, db_now
     WHERE a.outbox_id = u.id AND a.attempt_no = u.attempt_count
     RETURNING a.id
 ), blocked AS (
     UPDATE scheme_instances i
-    SET strict_chain_state = 'blocked_requires_rearm', updated_at = $1
-    FROM updated u
+    SET strict_chain_state = 'blocked_requires_rearm', updated_at = db_now.value
+    FROM updated u, db_now
     WHERE i.id = u.scheme_id
     RETURNING i.id
 )
-SELECT count(*) FROM updated`, now, rowLimit).Scan(&count)
+SELECT count(*) FROM updated`, rowLimit).Scan(&count)
 	return count, err
 }
 
@@ -241,62 +264,66 @@ SELECT count(*) FROM updated`, now, rowLimit).Scan(&count)
 // stall after it has leased a command but before StartAttempt was committed.
 // Such a row has never started an outbound request: retry it while the safety
 // window remains open, otherwise expire it and block the strict chain.
-func (q *Queries) RecoverExpiredUnstartedFormalOutbox(ctx context.Context, now time.Time, rowLimit int32) (int64, error) {
+func (q *Queries) RecoverExpiredUnstartedFormalOutbox(ctx context.Context, rowLimit int32) (int64, error) {
 	if rowLimit <= 0 {
 		rowLimit = 100
 	}
 	var count int64
 	err := q.db.QueryRow(ctx, `
-WITH candidates AS (
+WITH db_now AS MATERIALIZED (
+    SELECT clock_timestamp() AS value
+), candidates AS (
     SELECT id, safe_deadline_at
     FROM scheme_bet_outbox
     WHERE mode IN ('gray', 'production')
       AND state = 'leased'
       AND dispatch_started_at IS NULL
-      AND lease_until <= $1
+      AND lease_until <= (SELECT value FROM db_now)
     ORDER BY lease_until, id
     FOR UPDATE SKIP LOCKED
-    LIMIT $2
+    LIMIT $1
 ), updated AS (
     UPDATE scheme_bet_outbox o
-    SET state = CASE WHEN o.safe_deadline_at <= $1 THEN 'expired' ELSE 'pending' END,
+    SET state = CASE WHEN o.safe_deadline_at <= db_now.value THEN 'expired' ELSE 'pending' END,
         outcome_reason = CASE
-            WHEN o.safe_deadline_at <= $1 THEN 'dispatcher_lost_before_start_deadline_elapsed'
+            WHEN o.safe_deadline_at <= db_now.value THEN 'dispatcher_lost_before_start_deadline_elapsed'
             ELSE 'dispatcher_lost_before_start'
         END,
         lease_owner = NULL,
         lease_until = NULL,
-        terminal_at = CASE WHEN o.safe_deadline_at <= $1 THEN $1 ELSE NULL END,
-        updated_at = $1
-    FROM candidates c
+        terminal_at = CASE WHEN o.safe_deadline_at <= db_now.value THEN db_now.value ELSE NULL END,
+        updated_at = db_now.value
+    FROM candidates c, db_now
     WHERE o.id = c.id
     RETURNING o.id, o.scheme_id, o.state
 ), blocked AS (
     UPDATE scheme_instances i
-    SET strict_chain_state = 'blocked_requires_rearm', updated_at = $1
-    FROM updated u
+    SET strict_chain_state = 'blocked_requires_rearm', updated_at = db_now.value
+    FROM updated u, db_now
     WHERE i.id = u.scheme_id AND u.state = 'expired'
     RETURNING i.id
 )
-SELECT count(*) FROM updated`, now, rowLimit).Scan(&count)
+SELECT count(*) FROM updated`, rowLimit).Scan(&count)
 	return count, err
 }
 
-func (q *Queries) ExpireDueFormalOutbox(ctx context.Context, now time.Time, rowLimit int32) (int64, error) {
+func (q *Queries) ExpireDueFormalOutbox(ctx context.Context, rowLimit int32) (int64, error) {
 	if rowLimit <= 0 {
 		rowLimit = 500
 	}
 	var count int64
 	err := q.db.QueryRow(ctx, `
-WITH candidates AS (
+WITH db_now AS MATERIALIZED (
+    SELECT clock_timestamp() AS value
+), candidates AS (
     SELECT id
     FROM scheme_bet_outbox
     WHERE mode IN ('gray', 'production')
       AND state IN ('pending', 'sent_unknown')
-      AND safe_deadline_at <= $1
+      AND safe_deadline_at <= (SELECT value FROM db_now)
     ORDER BY safe_deadline_at, id
     FOR UPDATE SKIP LOCKED
-    LIMIT $2
+    LIMIT $1
 ), updated AS (
     UPDATE scheme_bet_outbox o
     SET state = CASE WHEN o.state = 'sent_unknown' THEN 'external_acceptance_unknown' ELSE 'expired' END,
@@ -304,9 +331,9 @@ WITH candidates AS (
             WHEN o.state = 'sent_unknown' THEN 'reconciliation_deadline_elapsed'
             ELSE 'safe_deadline_elapsed'
         END,
-        terminal_at = $1,
-        updated_at = $1
-    FROM candidates c
+        terminal_at = db_now.value,
+        updated_at = db_now.value
+    FROM candidates c, db_now
     WHERE o.id = c.id
     RETURNING o.id, o.scheme_id, o.attempt_count, o.state
 ), attempts AS (
@@ -320,11 +347,11 @@ WITH candidates AS (
     RETURNING a.id
 ), blocked AS (
     UPDATE scheme_instances i
-    SET strict_chain_state = 'blocked_requires_rearm', updated_at = $1
-    FROM updated u
+    SET strict_chain_state = 'blocked_requires_rearm', updated_at = db_now.value
+    FROM updated u, db_now
     WHERE i.id = u.scheme_id
     RETURNING i.id
 )
-SELECT count(*) FROM updated`, now, rowLimit).Scan(&count)
+SELECT count(*) FROM updated`, rowLimit).Scan(&count)
 	return count, err
 }

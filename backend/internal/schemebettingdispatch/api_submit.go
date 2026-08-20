@@ -132,7 +132,7 @@ func (runtime *Runtime) SubmitAPIBet(ctx context.Context, command APIBetCommand)
 	shardIndex := int(schemebetting.ShardForScheme(command.MemberAccount, uint32(len(runtime.cfg.Shards))))
 	shardNo := runtime.cfg.Shards[shardIndex]
 	_, shardAcquired, err := runtime.q.AcquireSchemeBettingShardLease(
-		ctx, "dispatcher", shardNo, runtime.cfg.Owner, now, now.Add(2*runtime.cfg.LeaseDuration),
+		ctx, "dispatcher", shardNo, runtime.cfg.Owner, 2*runtime.cfg.LeaseDuration,
 	)
 	if err != nil {
 		return APIBetResult{}, err
@@ -161,7 +161,7 @@ func (runtime *Runtime) SubmitAPIBet(ctx context.Context, command APIBetCommand)
 			_ = runtime.q.MarkBetReadyPublishFailed(ctx, outboxID)
 		}
 	}
-	leased, acquired, err := runtime.q.LeaseFormalOutboxByID(ctx, outboxID, runtime.cfg.Owner, now, now.Add(runtime.cfg.LeaseDuration))
+	leased, acquired, err := runtime.q.LeaseFormalOutboxByID(ctx, outboxID, runtime.cfg.Owner, runtime.cfg.LeaseDuration)
 	if err != nil {
 		return APIBetResult{}, err
 	}

@@ -3,6 +3,7 @@ package schemebetting
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -42,8 +43,13 @@ type FinishDispatch struct {
 	BlocksChain       bool
 }
 
+type AttemptStart struct {
+	Started    bool
+	SafeWindow time.Duration
+}
+
 type DispatchStore interface {
-	StartAttempt(ctx context.Context, command LeasedCommand, startedAt time.Time) (bool, error)
+	StartAttempt(ctx context.Context, command LeasedCommand, leaseDuration time.Duration) (AttemptStart, error)
 	FinishAttempt(ctx context.Context, finish FinishDispatch) (bool, error)
 }
 
@@ -52,7 +58,7 @@ type LeaseReleaseStore interface {
 }
 
 type LeaseRenewStore interface {
-	RenewLease(ctx context.Context, command LeasedCommand, renewedAt, leaseUntil time.Time) (bool, error)
+	RenewLease(ctx context.Context, command LeasedCommand, leaseDuration time.Duration) (bool, error)
 }
 
 type DispatchLimiter interface {
@@ -67,6 +73,10 @@ type AcceptedFinalizer interface {
 	FinalizeAccepted(ctx context.Context, outboxID int64) error
 }
 
+type PreSendFailureHandler interface {
+	HandlePreSendFailure(ctx context.Context, outboxID int64) error
+}
+
 type definitelyNotSent interface {
 	DefinitelyNotSent() bool
 }
@@ -79,6 +89,7 @@ type Dispatcher struct {
 	Now                    func() time.Time
 	LeaseDuration          time.Duration
 	LeaseHeartbeatInterval time.Duration
+	PreSendFailureHandler  PreSendFailureHandler
 }
 
 func (d Dispatcher) Dispatch(ctx context.Context, command LeasedCommand) error {
@@ -89,19 +100,11 @@ func (d Dispatcher) Dispatch(ctx context.Context, command LeasedCommand) error {
 	if d.Now != nil {
 		now = d.Now().UTC()
 	}
-	if !now.Before(command.SafeDeadline.UTC()) {
-		_, err := d.Store.FinishAttempt(ctx, FinishDispatch{
-			CommandID: command.ID, SchemeID: command.SchemeID, LeaseOwner: command.Lease.Owner,
-			FencingToken: command.Lease.Token, State: OutboxExpired, Reason: "safe_deadline_elapsed",
-			FinishedAt: now, BlocksChain: true,
-		})
-		return err
-	}
-	if !command.Lease.CanCommit(command.Lease.Owner, command.Lease.Token, now) {
-		return ErrStaleLease
-	}
 	if command.ID <= 0 || strings.TrimSpace(command.TargetPeriod) == "" || len(command.FrozenRequest) == 0 || command.FrozenRequestHash == "" || CanonicalJSONPayloadHash(command.FrozenRequest) != command.FrozenRequestHash {
 		return ErrInvalidCommand
+	}
+	if strings.TrimSpace(command.Lease.Owner) == "" || command.Lease.Token <= 0 {
+		return ErrStaleLease
 	}
 	if d.Limiter != nil {
 		allowed, err := d.Limiter.Allow(ctx, command, now)
@@ -123,17 +126,19 @@ func (d Dispatcher) Dispatch(ctx context.Context, command LeasedCommand) error {
 			return nil
 		}
 	}
-	started, err := d.Store.StartAttempt(ctx, command, now)
+	start, err := d.Store.StartAttempt(ctx, command, d.LeaseDuration)
 	if err != nil {
 		return err
 	}
-	if !started {
+	if !start.Started || start.SafeWindow <= 0 {
 		return ErrStaleLease
 	}
 
-	stopHeartbeat := d.startLeaseHeartbeat(ctx, command)
-	providerResult, placeErr := d.Transport.PlaceOnce(ctx, command)
-	stopHeartbeat()
+	placeCtx, cancelPlace := context.WithTimeout(ctx, start.SafeWindow)
+	defer cancelPlace()
+	stopHeartbeat := d.startLeaseHeartbeat(placeCtx, cancelPlace, command)
+	providerResult, placeErr := d.Transport.PlaceOnce(placeCtx, command)
+	heartbeatErr := stopHeartbeat()
 	observation := DispatchObservation{RequestStarted: true, Err: placeErr}
 	if placeErr == nil {
 		observation.Result = &providerResult
@@ -144,6 +149,9 @@ func (d Dispatcher) Dispatch(ctx context.Context, command LeasedCommand) error {
 		}
 	}
 	resolution := ResolveDispatchOutcome(command.TargetPeriod, observation)
+	if resolution.Reason == "provider_pre_send_failed" && d.PreSendFailureHandler == nil {
+		resolution.BlocksChain = true
+	}
 	finishedAt := time.Now().UTC()
 	if d.Now != nil {
 		finishedAt = d.Now().UTC()
@@ -153,7 +161,7 @@ func (d Dispatcher) Dispatch(ctx context.Context, command LeasedCommand) error {
 		FencingToken: command.Lease.Token, State: resolution.State, Reason: resolution.Reason,
 		ProviderOrderID: strings.TrimSpace(providerResult.OrderID), AcceptedPeriod: strings.TrimSpace(providerResult.PeriodNo),
 		ProviderAmount: providerResult.Amount, ProviderAccountID: providerResult.AccountID, ProviderCurrency: providerResult.Currency,
-		ErrorDetail: boundedDispatchError(placeErr), FinishedAt: finishedAt, BlocksChain: resolution.BlocksChain,
+		ErrorDetail: boundedDispatchErrors(placeErr, heartbeatErr), FinishedAt: finishedAt, BlocksChain: resolution.BlocksChain,
 	})
 	if err != nil {
 		return err
@@ -163,6 +171,11 @@ func (d Dispatcher) Dispatch(ctx context.Context, command LeasedCommand) error {
 	}
 	if resolution.State == OutboxAccepted && d.Finalizer != nil {
 		if err := d.Finalizer.FinalizeAccepted(ctx, command.ID); err != nil {
+			return err
+		}
+	}
+	if resolution.Reason == "provider_pre_send_failed" && d.PreSendFailureHandler != nil {
+		if err := d.PreSendFailureHandler.HandlePreSendFailure(ctx, command.ID); err != nil {
 			return err
 		}
 	}
@@ -182,13 +195,27 @@ func boundedDispatchError(err error) string {
 	return detail
 }
 
-func (d Dispatcher) startLeaseHeartbeat(ctx context.Context, command LeasedCommand) func() {
+func boundedDispatchErrors(errs ...error) string {
+	parts := make([]string, 0, len(errs))
+	for _, err := range errs {
+		if err != nil {
+			parts = append(parts, strings.TrimSpace(err.Error()))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return boundedDispatchError(errors.New(strings.Join(parts, "; ")))
+}
+
+func (d Dispatcher) startLeaseHeartbeat(ctx context.Context, cancelProvider context.CancelFunc, command LeasedCommand) func() error {
 	renewer, ok := d.Store.(LeaseRenewStore)
 	if !ok || d.LeaseDuration <= 0 || d.LeaseHeartbeatInterval <= 0 {
-		return func() {}
+		return func() error { return nil }
 	}
 	heartbeatCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
+	var heartbeatErr error
 	go func() {
 		defer close(done)
 		ticker := time.NewTicker(d.LeaseHeartbeatInterval)
@@ -197,22 +224,26 @@ func (d Dispatcher) startLeaseHeartbeat(ctx context.Context, command LeasedComma
 			select {
 			case <-heartbeatCtx.Done():
 				return
-			case renewedAt := <-ticker.C:
-				renewedAt = renewedAt.UTC()
-				renewed, err := renewer.RenewLease(heartbeatCtx, command, renewedAt, renewedAt.Add(d.LeaseDuration))
+			case <-ticker.C:
+				renewed, err := renewer.RenewLease(heartbeatCtx, command, d.LeaseDuration)
 				if err != nil {
-					slog.Warn("scheme betting dispatch lease heartbeat failed", "outboxId", command.ID, "schemeId", command.SchemeID, "err", err)
-					continue
+					heartbeatErr = fmt.Errorf("lease heartbeat failed owner=%s token=%d: %w", command.Lease.Owner, command.Lease.Token, err)
+					slog.Warn("scheme betting dispatch lease heartbeat failed", "outboxId", command.ID, "schemeId", command.SchemeID, "owner", command.Lease.Owner, "token", command.Lease.Token, "err", err)
+					cancelProvider()
+					return
 				}
 				if !renewed {
-					slog.Warn("scheme betting dispatch lease heartbeat lost", "outboxId", command.ID, "schemeId", command.SchemeID)
+					heartbeatErr = fmt.Errorf("lease heartbeat lost owner=%s token=%d", command.Lease.Owner, command.Lease.Token)
+					slog.Warn("scheme betting dispatch lease heartbeat lost", "outboxId", command.ID, "schemeId", command.SchemeID, "owner", command.Lease.Owner, "token", command.Lease.Token)
+					cancelProvider()
 					return
 				}
 			}
 		}
 	}()
-	return func() {
+	return func() error {
 		cancel()
 		<-done
+		return heartbeatErr
 	}
 }

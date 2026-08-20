@@ -56,7 +56,7 @@ func TestResolveDispatchOutcomeAllowsOnlyProvenPreSendFailure(t *testing.T) {
 		Err:               errors.New("local validation failed"),
 		DefinitelyNotSent: true,
 	})
-	if got.State != OutboxRejected || !got.BlocksChain || got.Retryable {
+	if got.State != OutboxRejected || got.Reason != "provider_pre_send_failed" || got.BlocksChain || got.Retryable {
 		t.Fatalf("pre-send failure = %+v", got)
 	}
 }

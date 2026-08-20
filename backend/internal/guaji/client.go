@@ -13,11 +13,45 @@ import (
 	"time"
 )
 
-type definitelyNotSentError struct{ err error }
+type requestTransportError struct {
+	Operation      string
+	Phase          string
+	RequestWritten bool
+	Duration       time.Duration
+	Cause          error
+}
 
-func (e definitelyNotSentError) Error() string           { return e.err.Error() }
-func (e definitelyNotSentError) Unwrap() error           { return e.err }
-func (e definitelyNotSentError) DefinitelyNotSent() bool { return true }
+func (e *requestTransportError) Error() string {
+	return fmt.Sprintf("guaji transport operation=%s phase=%s request_written=%t duration_ms=%d: %v",
+		e.Operation, e.Phase, e.RequestWritten, e.Duration.Milliseconds(), e.Cause)
+}
+
+func (e *requestTransportError) Unwrap() error { return e.Cause }
+
+func (e *requestTransportError) DefinitelyNotSent() bool { return !e.RequestWritten }
+
+const (
+	requestPhaseConnect int32 = iota
+	requestPhaseDNS
+	requestPhaseTLS
+	requestPhaseWrite
+	requestPhaseResponse
+)
+
+func requestPhaseName(phase int32) string {
+	switch phase {
+	case requestPhaseDNS:
+		return "dns"
+	case requestPhaseTLS:
+		return "tls"
+	case requestPhaseWrite:
+		return "write"
+	case requestPhaseResponse:
+		return "response"
+	default:
+		return "connect"
+	}
+}
 
 // Client is the Guaji third-party HTTP adapter (T0 skeleton).
 type Client struct {
@@ -85,6 +119,7 @@ func (c *Client) doJSON(ctx context.Context, method, baseURL, path, bearer strin
 // doJSONRaw 与 doJSON 相同，但额外返回原始响应体（用于裸对象接口如 users/i/info）。
 func (c *Client) doJSONRaw(ctx context.Context, method, baseURL, path, bearer string, body any) (envelope, []byte, error) {
 	var out envelope
+	startedAt := time.Now()
 	if !c.cfg.Enabled {
 		return out, nil, ErrMisconfigured("GUAJI_ENABLED=false")
 	}
@@ -119,19 +154,36 @@ func (c *Client) doJSONRaw(ctx context.Context, method, baseURL, path, bearer st
 	}
 
 	var requestWritten atomic.Bool
+	var requestPhase atomic.Int32
+	requestPhase.Store(requestPhaseConnect)
 	trace := &httptrace.ClientTrace{
-		WroteRequest: func(httptrace.WroteRequestInfo) {
-			requestWritten.Store(true)
+		DNSStart: func(httptrace.DNSStartInfo) {
+			requestPhase.Store(requestPhaseDNS)
+		},
+		ConnectStart: func(string, string) {
+			requestPhase.Store(requestPhaseConnect)
+		},
+		TLSHandshakeStart: func() {
+			requestPhase.Store(requestPhaseTLS)
+		},
+		WroteRequest: func(info httptrace.WroteRequestInfo) {
+			requestPhase.Store(requestPhaseWrite)
+			if info.Err == nil {
+				requestWritten.Store(true)
+				requestPhase.Store(requestPhaseResponse)
+			}
+		},
+		GotFirstResponseByte: func() {
+			requestPhase.Store(requestPhaseResponse)
 		},
 	}
 	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 	resp, err := c.http.Do(req)
 	if err != nil {
-		wrapped := fmt.Errorf("guaji http %s %s: %w", method, path, err)
-		if !requestWritten.Load() {
-			return out, nil, definitelyNotSentError{err: wrapped}
+		return out, nil, &requestTransportError{
+			Operation: method + " " + path, Phase: requestPhaseName(requestPhase.Load()),
+			RequestWritten: requestWritten.Load(), Duration: time.Since(startedAt), Cause: err,
 		}
-		return out, nil, wrapped
 	}
 	defer resp.Body.Close()
 

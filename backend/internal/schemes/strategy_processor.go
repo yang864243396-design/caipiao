@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -140,9 +139,7 @@ func (p *StrategyProcessor) process(ctx context.Context, row sqlcdb.PendingForma
 	defer tx.Rollback(ctx)
 	qtx := p.q.WithTx(tx)
 	if fence, ok := strategyLeaseFenceFromContext(ctx); ok {
-		if err := qtx.AssertSchemeBettingShardLease(
-			ctx, "strategy", fence.ShardNo, fence.Owner, fence.Epoch, time.Now().UTC(),
-		); err != nil {
+		if err := qtx.AssertSchemeBettingShardLease(ctx, "strategy", fence.ShardNo, fence.Owner, fence.Epoch); err != nil {
 			return err
 		}
 	}

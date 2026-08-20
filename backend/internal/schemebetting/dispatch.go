@@ -49,7 +49,7 @@ func ResolveDispatchOutcome(targetPeriod string, observation DispatchObservation
 		return DispatchResolution{State: OutboxAccepted, Reason: "accepted"}
 	}
 	if observation.DefinitelyNotSent {
-		return DispatchResolution{State: OutboxRejected, Reason: "definitive_pre_send_failure", BlocksChain: true}
+		return DispatchResolution{State: OutboxRejected, Reason: "provider_pre_send_failed"}
 	}
 	return DispatchResolution{State: OutboxSentUnknown, Reason: "provider_acceptance_pending_reconciliation", BlocksChain: true}
 }

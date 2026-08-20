@@ -7,13 +7,16 @@ import (
 )
 
 func (q *Queries) AcquireSchemeBettingShardLease(
-	ctx context.Context, leaseKind string, shardNo int32, owner string, now, leaseUntil time.Time,
+	ctx context.Context, leaseKind string, shardNo int32, owner string, leaseDuration time.Duration,
 ) (int64, bool, error) {
+	if leaseDuration <= 0 {
+		return 0, false, nil
+	}
 	var epoch int64
 	err := q.db.QueryRow(ctx, `
 INSERT INTO scheme_betting_shard_leases
     (lease_kind, shard_no, lease_owner, lease_epoch, lease_until, updated_at)
-VALUES ($1, $2, $3, 1, $5, $4)
+VALUES ($1, $2, $3, 1, clock_timestamp() + ($4::bigint * interval '1 microsecond'), clock_timestamp())
 ON CONFLICT (lease_kind, shard_no) DO UPDATE
 SET lease_owner = EXCLUDED.lease_owner,
     lease_epoch = CASE
@@ -24,8 +27,8 @@ SET lease_owner = EXCLUDED.lease_owner,
     lease_until = EXCLUDED.lease_until,
     updated_at = EXCLUDED.updated_at
 WHERE scheme_betting_shard_leases.lease_owner = EXCLUDED.lease_owner
-   OR scheme_betting_shard_leases.lease_until <= $4
-RETURNING lease_epoch`, leaseKind, shardNo, owner, now, leaseUntil).Scan(&epoch)
+   OR scheme_betting_shard_leases.lease_until <= clock_timestamp()
+RETURNING lease_epoch`, leaseKind, shardNo, owner, leaseDuration.Microseconds()).Scan(&epoch)
 	if err != nil {
 		if isNoRowsError(err) {
 			return 0, false, nil
@@ -36,14 +39,14 @@ RETURNING lease_epoch`, leaseKind, shardNo, owner, now, leaseUntil).Scan(&epoch)
 }
 
 func (q *Queries) AssertSchemeBettingShardLease(
-	ctx context.Context, leaseKind string, shardNo int32, owner string, epoch int64, now time.Time,
+	ctx context.Context, leaseKind string, shardNo int32, owner string, epoch int64,
 ) error {
 	var held bool
 	if err := q.db.QueryRow(ctx, `
-SELECT lease_owner = $3 AND lease_epoch = $4 AND lease_until > $5
+SELECT lease_owner = $3 AND lease_epoch = $4 AND lease_until > clock_timestamp()
 FROM scheme_betting_shard_leases
 WHERE lease_kind = $1 AND shard_no = $2
-FOR SHARE`, leaseKind, shardNo, owner, epoch, now).Scan(&held); err != nil {
+FOR SHARE`, leaseKind, shardNo, owner, epoch).Scan(&held); err != nil {
 		return err
 	}
 	if !held {

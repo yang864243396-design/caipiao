@@ -281,7 +281,6 @@ func New(cfg config.Config) (*Server, error) {
 		if schemeEventBus != nil {
 			schemeBettingRuntime.SetBetEventPublisher(schemeEventBus)
 		}
-		launchWorker(func() { schemeBettingRuntime.Run(workerCtx) })
 	}
 	eventLeaseOwner := strings.TrimSpace(cfg.SchemeBettingDispatcherOwner)
 	if eventLeaseOwner == "" {
@@ -313,6 +312,12 @@ func New(cfg config.Config) (*Server, error) {
 		}
 	}
 	strategyNotifier = schemeWorker
+	if schemeBettingRuntime != nil {
+		if schemeWorker != nil {
+			schemeBettingRuntime.SetPreSendFailureHandler(schemeWorker)
+		}
+		launchWorker(func() { schemeBettingRuntime.Run(workerCtx) })
+	}
 	if schemeEventBus != nil && schemeWorker != nil {
 		strategyNotifier = &drawEventPublisher{
 			pool: pool, bus: schemeEventBus, leaseOwner: eventLeaseOwner, leaseFor: 2 * cfg.SchemeBettingLease,

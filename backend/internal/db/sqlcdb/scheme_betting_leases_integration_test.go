@@ -28,28 +28,42 @@ func TestSchemeBettingLeaseFencingAgainstMigratedSchema(t *testing.T) {
 	shard := int32(2147483000)
 	_, _ = pool.Exec(ctx, `DELETE FROM scheme_betting_shard_leases WHERE lease_kind = 'dispatcher' AND shard_no = $1`, shard)
 	defer pool.Exec(ctx, `DELETE FROM scheme_betting_shard_leases WHERE lease_kind = 'dispatcher' AND shard_no = $1`, shard)
-	now := time.Now().UTC()
-	epochA, acquired, err := q.AcquireSchemeBettingShardLease(ctx, "dispatcher", shard, "lease-test-a", now, now.Add(time.Second))
+	epochA, acquired, err := q.AcquireSchemeBettingShardLease(ctx, "dispatcher", shard, "lease-test-a", time.Second)
 	if err != nil || !acquired || epochA <= 0 {
 		t.Fatalf("first shard lease epoch=%d acquired=%v err=%v", epochA, acquired, err)
 	}
-	if _, acquired, err := q.AcquireSchemeBettingShardLease(ctx, "dispatcher", shard, "lease-test-b", now.Add(100*time.Millisecond), now.Add(time.Second)); err != nil || acquired {
+	if _, acquired, err := q.AcquireSchemeBettingShardLease(ctx, "dispatcher", shard, "lease-test-b", time.Second); err != nil || acquired {
 		t.Fatalf("competing shard lease acquired=%v err=%v", acquired, err)
 	}
-	if err := q.AssertSchemeBettingShardLease(ctx, "dispatcher", shard, "lease-test-a", epochA, now.Add(200*time.Millisecond)); err != nil {
+	if err := q.AssertSchemeBettingShardLease(ctx, "dispatcher", shard, "lease-test-a", epochA); err != nil {
 		t.Fatalf("current shard fence rejected: %v", err)
 	}
-	epochB, acquired, err := q.AcquireSchemeBettingShardLease(ctx, "dispatcher", shard, "lease-test-b", now.Add(2*time.Second), now.Add(3*time.Second))
+	var leaseUsesDBClock bool
+	if err := pool.QueryRow(ctx, `
+SELECT lease_until > clock_timestamp()
+   AND lease_until <= clock_timestamp() + interval '2 seconds'
+FROM scheme_betting_shard_leases
+WHERE lease_kind = 'dispatcher' AND shard_no = $1`, shard).Scan(&leaseUsesDBClock); err != nil || !leaseUsesDBClock {
+		t.Fatalf("dispatcher shard lease is not based on database clock: value=%v err=%v", leaseUsesDBClock, err)
+	}
+	if _, err := pool.Exec(ctx, `
+UPDATE scheme_betting_shard_leases
+SET lease_until = clock_timestamp() - interval '1 second'
+WHERE lease_kind = 'dispatcher' AND shard_no = $1`, shard); err != nil {
+		t.Fatal(err)
+	}
+	epochB, acquired, err := q.AcquireSchemeBettingShardLease(ctx, "dispatcher", shard, "lease-test-b", time.Second)
 	if err != nil || !acquired || epochB <= epochA {
 		t.Fatalf("takeover shard lease epochA=%d epochB=%d acquired=%v err=%v", epochA, epochB, acquired, err)
 	}
-	if err := q.AssertSchemeBettingShardLease(ctx, "dispatcher", shard, "lease-test-a", epochA, now.Add(2*time.Second)); err == nil {
+	if err := q.AssertSchemeBettingShardLease(ctx, "dispatcher", shard, "lease-test-a", epochA); err == nil {
 		t.Fatal("stale shard epoch must be rejected")
 	}
 
 	lottery := "lease_test_lottery"
 	_, _ = pool.Exec(ctx, `DELETE FROM scheme_betting_draw_leases WHERE lottery_code = $1`, lottery)
 	defer pool.Exec(ctx, `DELETE FROM scheme_betting_draw_leases WHERE lottery_code = $1`, lottery)
+	now := time.Now().UTC()
 	drawEpochA, acquired, err := q.AcquireSchemeBettingDrawLease(ctx, lottery, "lease-test-a", now, now.Add(time.Second))
 	if err != nil || !acquired {
 		t.Fatalf("first draw lease epoch=%d acquired=%v err=%v", drawEpochA, acquired, err)

@@ -49,21 +49,28 @@ WHERE request_id = $1 AND origin = 'api'`, arg.RequestID).Scan(&id, &payloadHash
 	return id, payloadHash, err
 }
 
-func (q *Queries) LeaseFormalOutboxByID(ctx context.Context, id int64, owner string, now, leaseUntil time.Time) (schemebetting.LeasedCommand, bool, error) {
+func (q *Queries) LeaseFormalOutboxByID(ctx context.Context, id int64, owner string, leaseDuration time.Duration) (schemebetting.LeasedCommand, bool, error) {
+	if leaseDuration <= 0 {
+		return schemebetting.LeasedCommand{}, false, nil
+	}
 	var command schemebetting.LeasedCommand
 	err := q.db.QueryRow(ctx, `
-UPDATE scheme_bet_outbox
+WITH db_now AS MATERIALIZED (
+    SELECT clock_timestamp() AS value
+)
+UPDATE scheme_bet_outbox o
 SET state = 'leased',
     lease_owner = $2,
     lease_fencing_token = lease_fencing_token + 1,
-    lease_until = $4,
-    updated_at = $3
+    lease_until = db_now.value + ($3::bigint * interval '1 microsecond'),
+    updated_at = db_now.value
+FROM db_now
 WHERE id = $1
   AND state = 'pending'
-  AND safe_deadline_at > $3
+  AND safe_deadline_at > db_now.value
 RETURNING id, COALESCE(scheme_id, ''), target_period_no, frozen_request, frozen_request_hash,
           close_at, safe_deadline_at, lease_owner, lease_fencing_token, lease_until`,
-		id, owner, now, leaseUntil).Scan(
+		id, owner, leaseDuration.Microseconds()).Scan(
 		&command.ID, &command.SchemeID, &command.TargetPeriod, &command.FrozenRequest, &command.FrozenRequestHash,
 		&command.CloseAt, &command.SafeDeadline, &command.Lease.Owner, &command.Lease.Token, &command.Lease.Until,
 	)

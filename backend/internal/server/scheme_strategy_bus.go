@@ -106,9 +106,8 @@ func runLeasedSchemeStrategyConsumer(
 	retry := time.NewTicker(leaseDuration / 3)
 	defer retry.Stop()
 	for {
-		now := time.Now().UTC()
 		epoch, acquired, err := q.AcquireSchemeBettingShardLease(
-			ctx, "strategy", int32(shard), owner, now, now.Add(leaseDuration),
+			ctx, "strategy", int32(shard), owner, leaseDuration,
 		)
 		if err != nil {
 			return err
@@ -162,9 +161,8 @@ func holdSchemeStrategyShardLease(
 			<-done
 			return nil
 		case <-renew.C:
-			now := time.Now().UTC()
 			_, held, err := q.AcquireSchemeBettingShardLease(
-				ctx, "strategy", int32(shard), owner, now, now.Add(leaseDuration),
+				ctx, "strategy", int32(shard), owner, leaseDuration,
 			)
 			if err == nil && held {
 				continue

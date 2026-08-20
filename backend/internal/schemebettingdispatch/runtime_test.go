@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,12 @@ type fakeSinglePlacer struct {
 	err    error
 }
 
+type fakeDefinitelyNotSentError struct{ err error }
+
+func (err fakeDefinitelyNotSentError) Error() string           { return err.err.Error() }
+func (err fakeDefinitelyNotSentError) Unwrap() error           { return err.err }
+func (err fakeDefinitelyNotSentError) DefinitelyNotSent() bool { return true }
+
 type fakeAcceptedRecovery struct {
 	calls int
 	err   error
@@ -29,6 +36,13 @@ type fakePeriodVerifier struct {
 	period  string
 	closeAt time.Time
 	err     error
+}
+
+func transportTestContext(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	t.Cleanup(cancel)
+	return ctx
 }
 
 func (verifier *fakePeriodVerifier) VerifyOpenPeriodForMember(context.Context, string, string) (string, time.Time, error) {
@@ -57,7 +71,7 @@ func TestTransportUsesSingleAttemptPlacerAndPreservesProviderPeriod(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := (Transport{Placer: placer, PeriodVerifier: verifier, Now: func() time.Time { return now }}).PlaceOnce(context.Background(), schemebetting.LeasedCommand{
+	result, err := (Transport{Placer: placer, PeriodVerifier: verifier, Now: func() time.Time { return now }}).PlaceOnce(transportTestContext(t), schemebetting.LeasedCommand{
 		TargetPeriod: "provider-T", FrozenRequest: frozen, CloseAt: now.Add(3 * time.Second), SafeDeadline: now.Add(1500 * time.Millisecond),
 	})
 	if err != nil {
@@ -74,14 +88,14 @@ func TestTransportMarksOnlyDefinitiveRejectAsNotSent(t *testing.T) {
 	frozen, _ := json.Marshal(FrozenGuajiRequest{RequestID: "request-1", MemberAccount: "member-1", Request: guajibet.Request{LotteryCode: "lottery", IssueNo: "T"}})
 	transport := Transport{Placer: placer, PeriodVerifier: &fakePeriodVerifier{period: "T", closeAt: now.Add(3 * time.Second)}, Now: func() time.Time { return now }}
 	command := schemebetting.LeasedCommand{TargetPeriod: "T", FrozenRequest: frozen, CloseAt: now.Add(3 * time.Second), SafeDeadline: now.Add(time.Second)}
-	_, err := transport.PlaceOnce(context.Background(), command)
+	_, err := transport.PlaceOnce(transportTestContext(t), command)
 	var safe interface{ DefinitelyNotSent() bool }
 	if !errors.As(err, &safe) || !safe.DefinitelyNotSent() {
 		t.Fatalf("definitive rejection not classified: %v", err)
 	}
 
 	placer.err = guajibet.ErrPlaceRejected
-	_, err = transport.PlaceOnce(context.Background(), command)
+	_, err = transport.PlaceOnce(transportTestContext(t), command)
 	if errors.As(err, &safe) {
 		t.Fatalf("ambiguous placement error classified as safe: %v", err)
 	}
@@ -95,12 +109,33 @@ func TestTransportQualifiesPlacementFailurePhaseWithoutBreakingErrorIdentity(t *
 	transport := Transport{Placer: placer, PeriodVerifier: &fakePeriodVerifier{period: "T", closeAt: now.Add(3 * time.Second)}, Now: func() time.Time { return now }}
 	command := schemebetting.LeasedCommand{TargetPeriod: "T", FrozenRequest: frozen, CloseAt: now.Add(3 * time.Second), SafeDeadline: now.Add(time.Second)}
 
-	_, err := transport.PlaceOnce(context.Background(), command)
+	_, err := transport.PlaceOnce(transportTestContext(t), command)
 	if !errors.Is(err, placementErr) {
 		t.Fatalf("error identity lost: %v", err)
 	}
 	if err == nil || !strings.Contains(err.Error(), "provider placement") {
 		t.Fatalf("placement phase missing: %v", err)
+	}
+}
+
+func TestTransportPreservesWrappedDefinitelyNotSentPlacementEvidence(t *testing.T) {
+	now := time.Date(2026, 8, 20, 13, 36, 18, 0, time.UTC)
+	transportErr := errors.New("tls handshake timeout")
+	placer := &fakeSinglePlacer{err: fmt.Errorf("account place: %w", fakeDefinitelyNotSentError{err: transportErr})}
+	frozen, _ := json.Marshal(FrozenGuajiRequest{RequestID: "request-1", MemberAccount: "member-1", Request: guajibet.Request{LotteryCode: "lottery", IssueNo: "T"}})
+	transport := Transport{Placer: placer, PeriodVerifier: &fakePeriodVerifier{period: "T", closeAt: now.Add(3 * time.Second)}, Now: func() time.Time { return now }}
+	command := schemebetting.LeasedCommand{TargetPeriod: "T", FrozenRequest: frozen, CloseAt: now.Add(3 * time.Second), SafeDeadline: now.Add(time.Second)}
+
+	_, err := transport.PlaceOnce(transportTestContext(t), command)
+	if !errors.Is(err, transportErr) {
+		t.Fatalf("transport error identity lost: %v", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "provider placement failed") {
+		t.Fatalf("placement phase missing: %v", err)
+	}
+	var marker interface{ DefinitelyNotSent() bool }
+	if !errors.As(err, &marker) || !marker.DefinitelyNotSent() {
+		t.Fatalf("pre-send evidence lost: %T %v", err, err)
 	}
 }
 
@@ -112,7 +147,7 @@ func TestTransportQualifiesPeriodVerificationFailureWithDuration(t *testing.T) {
 	transport := Transport{Placer: placer, PeriodVerifier: &fakePeriodVerifier{err: verifyErr}, Now: func() time.Time { return now }}
 	command := schemebetting.LeasedCommand{TargetPeriod: "T", FrozenRequest: frozen, CloseAt: now.Add(3 * time.Second), SafeDeadline: now.Add(time.Second)}
 
-	_, err := transport.PlaceOnce(context.Background(), command)
+	_, err := transport.PlaceOnce(transportTestContext(t), command)
 	if !errors.Is(err, verifyErr) {
 		t.Fatalf("error identity lost: %v", err)
 	}
@@ -141,7 +176,7 @@ func TestTransportRejectsChangedOrUnsafeProviderPeriodBeforePlacement(t *testing
 		{period: "T", closeAt: now.Add(1500 * time.Millisecond)},
 	} {
 		placer := &fakeSinglePlacer{}
-		_, err := (Transport{Placer: placer, PeriodVerifier: verifier, Now: func() time.Time { return now }}).PlaceOnce(context.Background(), command)
+		_, err := (Transport{Placer: placer, PeriodVerifier: verifier, Now: func() time.Time { return now }}).PlaceOnce(transportTestContext(t), command)
 		var safe interface{ DefinitelyNotSent() bool }
 		if !errors.As(err, &safe) || !safe.DefinitelyNotSent() {
 			t.Fatalf("pre-send validation error=%v", err)
@@ -149,6 +184,27 @@ func TestTransportRejectsChangedOrUnsafeProviderPeriodBeforePlacement(t *testing
 		if placer.calls != 0 {
 			t.Fatal("provider placement called after failed period validation")
 		}
+	}
+}
+
+func TestTransportUsesDispatcherDeadlineInsteadOfHostWallClock(t *testing.T) {
+	providerNow := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	hostNow := providerNow.Add(3 * time.Second)
+	closeAt := providerNow.Add(3 * time.Second)
+	safeDeadline := providerNow.Add(time.Second)
+	placer := &fakeSinglePlacer{result: guajibet.Result{ThirdPartyBetID: "order-9", Periods: "T"}}
+	verifier := &fakePeriodVerifier{period: "T", closeAt: closeAt}
+	frozen, _ := json.Marshal(FrozenGuajiRequest{RequestID: "request-1", MemberAccount: "member-1", Request: guajibet.Request{LotteryCode: "lottery", IssueNo: "T"}})
+	command := schemebetting.LeasedCommand{TargetPeriod: "T", FrozenRequest: frozen, CloseAt: closeAt, SafeDeadline: safeDeadline}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	result, err := (Transport{Placer: placer, PeriodVerifier: verifier, Now: func() time.Time { return hostNow }}).PlaceOnce(ctx, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verifier.calls != 1 || placer.calls != 1 || result.OrderID != "order-9" {
+		t.Fatalf("verify=%d place=%d result=%+v", verifier.calls, placer.calls, result)
 	}
 }
 

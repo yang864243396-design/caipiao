@@ -4,19 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
 type fakeDispatchStore struct {
-	started  int
-	finished []FinishDispatch
-	startOK  bool
-	released int
-	mu       sync.Mutex
-	renewed  int
-	renewCh  chan struct{}
+	started         int
+	finished        []FinishDispatch
+	startOK         bool
+	startSafeWindow time.Duration
+	released        int
+	mu              sync.Mutex
+	renewed         int
+	renewCh         chan struct{}
+	renewLost       bool
+	renewErr        error
 }
 
 func (s *fakeDispatchStore) ReleaseLease(context.Context, LeasedCommand, string, time.Time) (bool, error) {
@@ -28,13 +32,29 @@ type fakeDispatchLimiter struct {
 	allowed bool
 }
 
+type fakePreSendFailureHandler struct {
+	calls    int
+	outboxID int64
+	err      error
+}
+
+func (handler *fakePreSendFailureHandler) HandlePreSendFailure(_ context.Context, outboxID int64) error {
+	handler.calls++
+	handler.outboxID = outboxID
+	return handler.err
+}
+
 func (l fakeDispatchLimiter) Allow(context.Context, LeasedCommand, time.Time) (bool, error) {
 	return l.allowed, nil
 }
 
-func (s *fakeDispatchStore) StartAttempt(context.Context, LeasedCommand, time.Time) (bool, error) {
+func (s *fakeDispatchStore) StartAttempt(context.Context, LeasedCommand, time.Duration) (AttemptStart, error) {
 	s.started++
-	return s.startOK, nil
+	safeWindow := s.startSafeWindow
+	if safeWindow <= 0 {
+		safeWindow = time.Second
+	}
+	return AttemptStart{Started: s.startOK, SafeWindow: safeWindow}, nil
 }
 
 func (s *fakeDispatchStore) FinishAttempt(_ context.Context, finish FinishDispatch) (bool, error) {
@@ -42,10 +62,12 @@ func (s *fakeDispatchStore) FinishAttempt(_ context.Context, finish FinishDispat
 	return true, nil
 }
 
-func (s *fakeDispatchStore) RenewLease(_ context.Context, _ LeasedCommand, _, _ time.Time) (bool, error) {
+func (s *fakeDispatchStore) RenewLease(_ context.Context, _ LeasedCommand, _ time.Duration) (bool, error) {
 	s.mu.Lock()
 	s.renewed++
 	ch := s.renewCh
+	lost := s.renewLost
+	err := s.renewErr
 	s.mu.Unlock()
 	if ch != nil {
 		select {
@@ -53,7 +75,10 @@ func (s *fakeDispatchStore) RenewLease(_ context.Context, _ LeasedCommand, _, _ 
 		default:
 		}
 	}
-	return true, nil
+	if err != nil {
+		return false, err
+	}
+	return !lost, nil
 }
 
 func (s *fakeDispatchStore) renewalCount() int {
@@ -71,6 +96,18 @@ type fakeSingleAttemptTransport struct {
 type blockingUntilRenewedTransport struct {
 	renewed <-chan struct{}
 	calls   int
+}
+
+type deadlineObservingTransport struct {
+	calls       int
+	hadDeadline bool
+}
+
+func (transport *deadlineObservingTransport) PlaceOnce(ctx context.Context, _ LeasedCommand) (ProviderAcceptance, error) {
+	transport.calls++
+	_, transport.hadDeadline = ctx.Deadline()
+	<-ctx.Done()
+	return ProviderAcceptance{}, ctx.Err()
 }
 
 func (t *blockingUntilRenewedTransport) PlaceOnce(ctx context.Context, _ LeasedCommand) (ProviderAcceptance, error) {
@@ -137,25 +174,42 @@ func TestDispatcherAcceptsFrozenRequestAfterJSONBKeyReorder(t *testing.T) {
 	}
 }
 
-func TestDispatcherDoesNotCallProviderAfterDeadlineOrStaleFence(t *testing.T) {
+func TestDispatcherDoesNotCallProviderWhenDatabaseAttemptStartCASLoses(t *testing.T) {
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
-	for _, command := range []LeasedCommand{
-		{ID: 1, SafeDeadline: now, Lease: LeaseFence{Owner: "node", Token: 1, Until: now.Add(time.Second)}},
-		{ID: 2, SafeDeadline: now.Add(time.Second), Lease: LeaseFence{Owner: "node", Token: 1, Until: now}},
-	} {
-		store := &fakeDispatchStore{startOK: true}
-		transport := &fakeSingleAttemptTransport{}
-		d := Dispatcher{Store: store, Transport: transport, Now: func() time.Time { return now }}
-		err := d.Dispatch(context.Background(), command)
-		if command.ID == 1 && err != nil {
-			t.Fatal(err)
-		}
-		if command.ID == 2 && !errors.Is(err, ErrStaleLease) {
-			t.Fatalf("stale lease error=%v", err)
-		}
-		if transport.calls != 0 {
-			t.Fatalf("provider called for command %d", command.ID)
-		}
+	store := &fakeDispatchStore{startOK: false}
+	transport := &fakeSingleAttemptTransport{}
+	d := Dispatcher{Store: store, Transport: transport, Now: func() time.Time { return now }}
+	command := LeasedCommand{
+		ID: 2, TargetPeriod: "T", FrozenRequest: []byte(`{}`), FrozenRequestHash: PayloadHash([]byte(`{}`)),
+		SafeDeadline: now.Add(-time.Second), Lease: LeaseFence{Owner: "node", Token: 1, Until: now.Add(-time.Second)},
+	}
+	err := d.Dispatch(context.Background(), command)
+	if !errors.Is(err, ErrStaleLease) {
+		t.Fatalf("stale lease error=%v", err)
+	}
+	if transport.calls != 0 {
+		t.Fatal("provider called after database attempt-start CAS loss")
+	}
+}
+
+func TestDispatcherUsesDatabaseSafeWindowInsteadOfHostClock(t *testing.T) {
+	hostNow := time.Date(2026, 8, 20, 12, 0, 2, 0, time.UTC)
+	store := &fakeDispatchStore{startOK: true, startSafeWindow: 20 * time.Millisecond}
+	transport := &deadlineObservingTransport{}
+	d := Dispatcher{Store: store, Transport: transport, Now: func() time.Time { return hostNow }}
+	command := LeasedCommand{
+		ID: 15, SchemeID: "scheme-1", TargetPeriod: "T", FrozenRequest: []byte(`{}`), FrozenRequestHash: PayloadHash([]byte(`{}`)),
+		SafeDeadline: hostNow.Add(-time.Second), Lease: LeaseFence{Owner: "node", Token: 7, Until: hostNow.Add(-time.Second)},
+	}
+
+	if err := d.Dispatch(context.Background(), command); err != nil {
+		t.Fatal(err)
+	}
+	if store.started != 1 || transport.calls != 1 || !transport.hadDeadline {
+		t.Fatalf("started=%d calls=%d deadline=%v", store.started, transport.calls, transport.hadDeadline)
+	}
+	if len(store.finished) != 1 || store.finished[0].State != OutboxSentUnknown {
+		t.Fatalf("finish=%+v", store.finished)
 	}
 }
 
@@ -224,11 +278,40 @@ func TestDispatcherRenewsLeaseWhileProviderCallIsInFlight(t *testing.T) {
 	}
 }
 
+func TestDispatcherCancelsProviderAndRecordsHeartbeatLoss(t *testing.T) {
+	now := time.Now().UTC()
+	store := &fakeDispatchStore{startOK: true, startSafeWindow: time.Second, renewLost: true}
+	transport := &deadlineObservingTransport{}
+	d := Dispatcher{
+		Store: store, Transport: transport, Now: func() time.Time { return now },
+		LeaseDuration: 30 * time.Millisecond, LeaseHeartbeatInterval: time.Millisecond,
+	}
+	command := LeasedCommand{
+		ID: 16, SchemeID: "scheme-1", TargetPeriod: "T", FrozenRequest: []byte(`{}`), FrozenRequestHash: PayloadHash([]byte(`{}`)),
+		SafeDeadline: now.Add(time.Second), Lease: LeaseFence{Owner: "node-a", Token: 8, Until: now.Add(30 * time.Millisecond)},
+	}
+
+	if err := d.Dispatch(context.Background(), command); err != nil {
+		t.Fatal(err)
+	}
+	if transport.calls != 1 || store.renewalCount() != 1 {
+		t.Fatalf("provider calls=%d renewals=%d", transport.calls, store.renewalCount())
+	}
+	if len(store.finished) != 1 || store.finished[0].State != OutboxSentUnknown {
+		t.Fatalf("finish=%+v", store.finished)
+	}
+	detail := store.finished[0].ErrorDetail
+	if !strings.Contains(detail, "lease heartbeat lost") || !strings.Contains(detail, "owner=node-a") || !strings.Contains(detail, "token=8") {
+		t.Fatalf("heartbeat evidence missing: %q", detail)
+	}
+}
+
 func TestDispatcherRecognizesWrappedDefinitelyNotSentError(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	store := &fakeDispatchStore{startOK: true}
 	transport := &fakeSingleAttemptTransport{err: fmt.Errorf("place bet: %w", testDefinitelyNotSentError{err: errors.New("tls handshake failed before write")})}
-	d := Dispatcher{Store: store, Transport: transport, Now: func() time.Time { return now }}
+	handler := &fakePreSendFailureHandler{}
+	d := Dispatcher{Store: store, Transport: transport, PreSendFailureHandler: handler, Now: func() time.Time { return now }}
 	command := LeasedCommand{
 		ID: 13, SchemeID: "scheme-1", TargetPeriod: "T", FrozenRequest: []byte(`{}`), FrozenRequestHash: PayloadHash([]byte(`{}`)),
 		SafeDeadline: now.Add(time.Second), Lease: LeaseFence{Owner: "node", Token: 5, Until: now.Add(time.Second)},
@@ -237,7 +320,28 @@ func TestDispatcherRecognizesWrappedDefinitelyNotSentError(t *testing.T) {
 	if err := d.Dispatch(context.Background(), command); err != nil {
 		t.Fatal(err)
 	}
-	if len(store.finished) != 1 || store.finished[0].State != OutboxRejected || store.finished[0].Reason != "definitive_pre_send_failure" {
+	if len(store.finished) != 1 || store.finished[0].State != OutboxRejected || store.finished[0].Reason != "provider_pre_send_failed" || store.finished[0].BlocksChain {
+		t.Fatalf("finish=%+v", store.finished)
+	}
+	if handler.calls != 1 || handler.outboxID != command.ID {
+		t.Fatalf("replacement handler calls=%d outbox=%d", handler.calls, handler.outboxID)
+	}
+}
+
+func TestDispatcherBlocksPreSendFailureWhenReplacementHandlerIsUnavailable(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	store := &fakeDispatchStore{startOK: true}
+	transport := &fakeSingleAttemptTransport{err: testDefinitelyNotSentError{err: errors.New("connect failed before write")}}
+	d := Dispatcher{Store: store, Transport: transport, Now: func() time.Time { return now }}
+	command := LeasedCommand{
+		ID: 17, SchemeID: "scheme-1", TargetPeriod: "T", FrozenRequest: []byte(`{}`), FrozenRequestHash: PayloadHash([]byte(`{}`)),
+		SafeDeadline: now.Add(time.Second), Lease: LeaseFence{Owner: "node", Token: 9, Until: now.Add(time.Second)},
+	}
+
+	if err := d.Dispatch(context.Background(), command); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.finished) != 1 || !store.finished[0].BlocksChain {
 		t.Fatalf("finish=%+v", store.finished)
 	}
 }
