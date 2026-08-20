@@ -22,14 +22,19 @@ func (q *Queries) ListOpenProviderPeriodSnapshots(ctx context.Context, lotteryCo
 		rowLimit = 8
 	}
 	rows, err := q.db.Query(ctx, `
-SELECT DISTINCT ON (period_no) id, period_no, open_at, close_at, observed_at
-FROM provider_period_snapshots
-WHERE lottery_code = $1
-  AND period_no <> $2
-  AND (open_at IS NULL OR open_at <= $3)
+WITH latest AS (
+    SELECT DISTINCT ON (period_no) id, period_no, open_at, close_at, observed_at
+    FROM provider_period_snapshots
+    WHERE lottery_code = $1
+      AND period_no <> $2
+      AND observed_at >= $4
+    ORDER BY period_no, observed_at DESC, id DESC
+)
+SELECT id, period_no, open_at, close_at, observed_at
+FROM latest
+WHERE (open_at IS NULL OR open_at <= $3)
   AND close_at > $3
-  AND observed_at >= $4
-ORDER BY period_no, observed_at DESC, id DESC
+ORDER BY period_no
 LIMIT $5`, lotteryCode, sourcePeriod, now, observedAfter, rowLimit)
 	if err != nil {
 		return nil, err
