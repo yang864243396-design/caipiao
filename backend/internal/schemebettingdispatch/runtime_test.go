@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,6 +84,47 @@ func TestTransportMarksOnlyDefinitiveRejectAsNotSent(t *testing.T) {
 	_, err = transport.PlaceOnce(context.Background(), command)
 	if errors.As(err, &safe) {
 		t.Fatalf("ambiguous placement error classified as safe: %v", err)
+	}
+}
+
+func TestTransportQualifiesPlacementFailurePhaseWithoutBreakingErrorIdentity(t *testing.T) {
+	now := time.Date(2026, 8, 20, 13, 36, 18, 0, time.UTC)
+	placementErr := errors.New("response timeout after request write")
+	placer := &fakeSinglePlacer{err: placementErr}
+	frozen, _ := json.Marshal(FrozenGuajiRequest{RequestID: "request-1", MemberAccount: "member-1", Request: guajibet.Request{LotteryCode: "lottery", IssueNo: "T"}})
+	transport := Transport{Placer: placer, PeriodVerifier: &fakePeriodVerifier{period: "T", closeAt: now.Add(3 * time.Second)}, Now: func() time.Time { return now }}
+	command := schemebetting.LeasedCommand{TargetPeriod: "T", FrozenRequest: frozen, CloseAt: now.Add(3 * time.Second), SafeDeadline: now.Add(time.Second)}
+
+	_, err := transport.PlaceOnce(context.Background(), command)
+	if !errors.Is(err, placementErr) {
+		t.Fatalf("error identity lost: %v", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "provider placement") {
+		t.Fatalf("placement phase missing: %v", err)
+	}
+}
+
+func TestTransportQualifiesPeriodVerificationFailureWithDuration(t *testing.T) {
+	now := time.Date(2026, 8, 20, 13, 36, 18, 0, time.UTC)
+	verifyErr := errors.New("period refresh timeout")
+	placer := &fakeSinglePlacer{}
+	frozen, _ := json.Marshal(FrozenGuajiRequest{RequestID: "request-1", MemberAccount: "member-1", Request: guajibet.Request{LotteryCode: "lottery", IssueNo: "T"}})
+	transport := Transport{Placer: placer, PeriodVerifier: &fakePeriodVerifier{err: verifyErr}, Now: func() time.Time { return now }}
+	command := schemebetting.LeasedCommand{TargetPeriod: "T", FrozenRequest: frozen, CloseAt: now.Add(3 * time.Second), SafeDeadline: now.Add(time.Second)}
+
+	_, err := transport.PlaceOnce(context.Background(), command)
+	if !errors.Is(err, verifyErr) {
+		t.Fatalf("error identity lost: %v", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "provider period verification failed (verify_ms=") {
+		t.Fatalf("verification phase duration missing: %v", err)
+	}
+	var safe interface{ DefinitelyNotSent() bool }
+	if !errors.As(err, &safe) || !safe.DefinitelyNotSent() {
+		t.Fatalf("verification failure not classified pre-send: %v", err)
+	}
+	if placer.calls != 0 {
+		t.Fatalf("placement calls=%d", placer.calls)
 	}
 }
 

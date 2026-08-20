@@ -37,6 +37,7 @@ type FinishDispatch struct {
 	ProviderAmount    float64
 	ProviderAccountID int64
 	ProviderCurrency  string
+	ErrorDetail       string
 	FinishedAt        time.Time
 	BlocksChain       bool
 }
@@ -151,7 +152,8 @@ func (d Dispatcher) Dispatch(ctx context.Context, command LeasedCommand) error {
 		CommandID: command.ID, SchemeID: command.SchemeID, LeaseOwner: command.Lease.Owner,
 		FencingToken: command.Lease.Token, State: resolution.State, Reason: resolution.Reason,
 		ProviderOrderID: strings.TrimSpace(providerResult.OrderID), AcceptedPeriod: strings.TrimSpace(providerResult.PeriodNo),
-		ProviderAmount: providerResult.Amount, ProviderAccountID: providerResult.AccountID, ProviderCurrency: providerResult.Currency, FinishedAt: finishedAt, BlocksChain: resolution.BlocksChain,
+		ProviderAmount: providerResult.Amount, ProviderAccountID: providerResult.AccountID, ProviderCurrency: providerResult.Currency,
+		ErrorDetail: boundedDispatchError(placeErr), FinishedAt: finishedAt, BlocksChain: resolution.BlocksChain,
 	})
 	if err != nil {
 		return err
@@ -165,6 +167,19 @@ func (d Dispatcher) Dispatch(ctx context.Context, command LeasedCommand) error {
 		}
 	}
 	return nil
+}
+
+func boundedDispatchError(err error) string {
+	if err == nil {
+		return ""
+	}
+	const maxRunes = 2000
+	detail := strings.TrimSpace(err.Error())
+	runes := []rune(detail)
+	if len(runes) > maxRunes {
+		detail = string(runes[:maxRunes])
+	}
+	return detail
 }
 
 func (d Dispatcher) startLeaseHeartbeat(ctx context.Context, command LeasedCommand) func() {

@@ -103,14 +103,11 @@ func (s *Syncer) VerifyOpenPeriodForMember(ctx context.Context, lotteryCode, mem
 	if lotteryCode == "" || memberAccount == "" {
 		return "", time.Time{}, fmt.Errorf("empty lottery code or member account")
 	}
-	key := lotteryCode + "\x00" + memberAccount
-	cache := s.prePlaceVerifications
-	if cache == nil {
-		cache = newPrePlaceVerifyCache(500 * time.Millisecond)
-		s.prePlaceVerifications = cache
-	}
-	result, err := cache.getOrRefresh(ctx, key, time.Now(), func(ctx context.Context) (prePlaceVerifyResult, error) {
-		token, err := s.accounts.MemberAccessToken(ctx, memberAccount)
+	result, err := s.verifyOpenPeriod(ctx, lotteryCode, time.Now(), func(ctx context.Context) (prePlaceVerifyResult, error) {
+		// Periods are lottery-global. Use the shared healthy read token so one
+		// member's expired authorization cannot poison every waiter in the
+		// lottery-scoped refresh flight. Placement still uses memberAccount.
+		token, err := s.accounts.SyncAccessToken(ctx)
 		if err != nil {
 			return prePlaceVerifyResult{}, err
 		}

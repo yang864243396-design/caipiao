@@ -104,15 +104,27 @@ func (transport Transport) PlaceOnce(ctx context.Context, command schemebetting.
 		strings.TrimSpace(frozen.Request.LotteryCode) == "" || strings.TrimSpace(frozen.Request.IssueNo) == "" {
 		return schemebetting.ProviderAcceptance{}, definitelyNotSentError{err: errors.New("frozen request identity is incomplete")}
 	}
+	verifyStarted := time.Now()
 	if err := transport.verifyProviderTarget(ctx, command, frozen); err != nil {
-		return schemebetting.ProviderAcceptance{}, definitelyNotSentError{err: err}
-	}
-	result, err := transport.Placer.PlaceRealBetOnce(ctx, frozen.MemberAccount, frozen.Request)
-	if err != nil {
-		if isDefinitiveProviderReject(err) {
-			return schemebetting.ProviderAcceptance{}, definitelyNotSentError{err: err}
+		verifyDuration := time.Since(verifyStarted)
+		return schemebetting.ProviderAcceptance{}, definitelyNotSentError{
+			err: fmt.Errorf("provider period verification failed (verify_ms=%d): %w", verifyDuration.Milliseconds(), err),
 		}
-		return schemebetting.ProviderAcceptance{}, err
+	}
+	verifyDuration := time.Since(verifyStarted)
+	placeStarted := time.Now()
+	result, err := transport.Placer.PlaceRealBetOnce(ctx, frozen.MemberAccount, frozen.Request)
+	placeDuration := time.Since(placeStarted)
+	if err != nil {
+		phaseErr := fmt.Errorf("provider placement failed (verify_ms=%d place_ms=%d): %w", verifyDuration.Milliseconds(), placeDuration.Milliseconds(), err)
+		if isDefinitiveProviderReject(err) {
+			return schemebetting.ProviderAcceptance{}, definitelyNotSentError{err: phaseErr}
+		}
+		return schemebetting.ProviderAcceptance{}, phaseErr
+	}
+	if verifyDuration > time.Second || placeDuration > time.Second {
+		slog.Warn("scheme provider placement slow", "schemeId", command.SchemeID, "outboxId", command.ID,
+			"verifyMs", verifyDuration.Milliseconds(), "placeMs", placeDuration.Milliseconds())
 	}
 	return schemebetting.ProviderAcceptance{
 		OrderID: strings.TrimSpace(result.ThirdPartyBetID), PeriodNo: strings.TrimSpace(result.Periods), Amount: result.Amount, AccountID: result.GuajiAccountID, Currency: result.Currency,

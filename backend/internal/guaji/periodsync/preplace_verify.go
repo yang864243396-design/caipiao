@@ -2,13 +2,17 @@ package periodsync
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
+
+	"caipiao/backend/internal/lottery"
 )
 
-// prePlaceVerifyResult is the upstream-confirmed current open period. It is
-// intentionally independent from the global display cache so a caller can
-// reject a stale target before it reaches PlaceBet.
+const prePlaceSharedRefreshTimeout = 1200 * time.Millisecond
+
+// prePlaceVerifyResult is the provider-derived current open period. It may
+// come from the fresh lottery-wide schedule or a coalesced upstream refresh.
 type prePlaceVerifyResult struct {
 	Period  string
 	CloseAt time.Time
@@ -26,14 +30,48 @@ type prePlaceVerifyFlight struct {
 }
 
 // prePlaceVerifyCache coalesces a short-lived upstream confirmation by
-// lottery and third-party account. A busy account therefore causes one
-// periods request, not one request for every running scheme.
+// lottery. Provider periods are global for a lottery, so users and schemes
+// must not amplify one stale snapshot into separate upstream requests.
 type prePlaceVerifyCache struct {
 	ttl time.Duration
 
 	mu       sync.Mutex
 	recent   map[string]prePlaceVerifyEntry
 	inFlight map[string]*prePlaceVerifyFlight
+}
+
+func freshSharedOpenPeriod(lotteryCode string, now time.Time) (prePlaceVerifyResult, bool) {
+	lotteryCode = strings.TrimSpace(lotteryCode)
+	now = now.UTC()
+	if lotteryCode == "" || !lottery.PeriodsScheduleFresh(lotteryCode, lottery.PeriodsFallbackStaleAge, now) {
+		return prePlaceVerifyResult{}, false
+	}
+	snapshot, ok := lottery.PeriodsScheduleFor(lotteryCode)
+	if !ok || strings.TrimSpace(snapshot.CurrentPeriod) == "" || snapshot.CloseAt.IsZero() || !now.Before(snapshot.CloseAt.UTC()) {
+		return prePlaceVerifyResult{}, false
+	}
+	return prePlaceVerifyResult{Period: strings.TrimSpace(snapshot.CurrentPeriod), CloseAt: snapshot.CloseAt.UTC()}, true
+}
+
+func (s *Syncer) verifyOpenPeriod(
+	ctx context.Context,
+	lotteryCode string,
+	now time.Time,
+	refresh func(context.Context) (prePlaceVerifyResult, error),
+) (prePlaceVerifyResult, error) {
+	if result, ok := freshSharedOpenPeriod(lotteryCode, now); ok {
+		return result, nil
+	}
+	cache := s.prePlaceVerifications
+	if cache == nil {
+		cache = newPrePlaceVerifyCache(time.Second)
+		s.prePlaceVerifications = cache
+	}
+	return cache.getOrRefresh(ctx, strings.TrimSpace(lotteryCode), now, func(leaderCtx context.Context) (prePlaceVerifyResult, error) {
+		sharedCtx, cancel := context.WithTimeout(context.WithoutCancel(leaderCtx), prePlaceSharedRefreshTimeout)
+		defer cancel()
+		return refresh(sharedCtx)
+	})
 }
 
 func newPrePlaceVerifyCache(ttl time.Duration) *prePlaceVerifyCache {

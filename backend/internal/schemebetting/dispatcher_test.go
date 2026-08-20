@@ -180,6 +180,28 @@ func TestDispatcherMapsTransportTimeoutToUnknownWithoutRetry(t *testing.T) {
 	}
 }
 
+func TestDispatcherPreservesAmbiguousTransportErrorDetail(t *testing.T) {
+	now := time.Date(2026, 8, 20, 13, 36, 18, 0, time.UTC)
+	store := &fakeDispatchStore{startOK: true}
+	transportErr := errors.New("provider response timeout after request write")
+	transport := &fakeSingleAttemptTransport{err: transportErr}
+	d := Dispatcher{Store: store, Transport: transport, Now: func() time.Time { return now }}
+	command := LeasedCommand{
+		ID: 14, SchemeID: "scheme-1", TargetPeriod: "T", FrozenRequest: []byte(`{}`), FrozenRequestHash: PayloadHash([]byte(`{}`)),
+		SafeDeadline: now.Add(time.Second), Lease: LeaseFence{Owner: "node", Token: 6, Until: now.Add(time.Second)},
+	}
+
+	if err := d.Dispatch(context.Background(), command); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.finished) != 1 || store.finished[0].State != OutboxSentUnknown {
+		t.Fatalf("finish=%+v", store.finished)
+	}
+	if store.finished[0].ErrorDetail != transportErr.Error() {
+		t.Fatalf("error detail=%q", store.finished[0].ErrorDetail)
+	}
+}
+
 func TestDispatcherRenewsLeaseWhileProviderCallIsInFlight(t *testing.T) {
 	now := time.Now().UTC()
 	renewed := make(chan struct{}, 1)

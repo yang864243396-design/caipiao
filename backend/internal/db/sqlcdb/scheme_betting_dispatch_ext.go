@@ -150,6 +150,7 @@ WITH updated_outbox AS (
         provider_account_id = NULLIF($11, 0),
         provider_currency = NULLIF($12, ''),
         provider_amount = NULLIF($13, 0),
+        last_error = NULLIF($14, ''),
         lease_until = NULL,
         updated_at = $8
     WHERE id = $1
@@ -164,7 +165,7 @@ WITH updated_outbox AS (
         finished_at = $8,
         provider_order_no = NULLIF($6, ''),
         accepted_period_no = NULLIF($7, ''),
-        error_message = NULLIF($5, '')
+        error_message = COALESCE(NULLIF($14, ''), NULLIF($5, ''))
     FROM updated_outbox u
     WHERE a.outbox_id = $1 AND a.attempt_no = u.attempt_count
     RETURNING a.id
@@ -177,7 +178,8 @@ WITH updated_outbox AS (
 )
 SELECT EXISTS(SELECT 1 FROM updated_outbox)`, finish.CommandID, finish.SchemeID, finish.LeaseOwner,
 		string(finish.State), finish.Reason, finish.ProviderOrderID, finish.AcceptedPeriod,
-		finish.FinishedAt, finish.FencingToken, finish.BlocksChain, finish.ProviderAccountID, finish.ProviderCurrency, finish.ProviderAmount).Scan(&finished)
+		finish.FinishedAt, finish.FencingToken, finish.BlocksChain, finish.ProviderAccountID, finish.ProviderCurrency, finish.ProviderAmount,
+		finish.ErrorDetail).Scan(&finished)
 	return finished, err
 }
 
@@ -204,6 +206,10 @@ WITH candidates AS (
             ELSE 'dispatcher_lost_after_send_started'
         END,
         terminal_at = CASE WHEN o.safe_deadline_at <= $1 THEN $1 ELSE NULL END,
+        last_error = CASE
+            WHEN o.safe_deadline_at <= $1 THEN 'dispatcher_lost_after_send_started_deadline_elapsed'
+            ELSE 'dispatcher_lost_after_send_started'
+        END,
         lease_until = NULL,
         updated_at = $1
     FROM candidates c
@@ -213,10 +219,10 @@ WITH candidates AS (
     UPDATE scheme_bet_attempts a
     SET outcome = CASE WHEN u.safe_deadline_at <= $1 THEN 'external_acceptance_unknown' ELSE 'sent_unknown' END,
         finished_at = $1,
-        error_message = CASE
+        error_message = COALESCE(NULLIF(a.error_message, ''), CASE
             WHEN u.safe_deadline_at <= $1 THEN 'dispatcher_lost_after_send_started_deadline_elapsed'
             ELSE 'dispatcher_lost_after_send_started'
-        END
+        END)
     FROM updated u
     WHERE a.outbox_id = u.id AND a.attempt_no = u.attempt_count
     RETURNING a.id
@@ -306,7 +312,7 @@ WITH candidates AS (
 ), attempts AS (
     UPDATE scheme_bet_attempts a
     SET outcome = 'external_acceptance_unknown',
-        error_message = 'reconciliation_deadline_elapsed'
+        error_message = COALESCE(NULLIF(a.error_message, ''), 'reconciliation_deadline_elapsed')
     FROM updated u
     WHERE u.state = 'external_acceptance_unknown'
       AND a.outbox_id = u.id
