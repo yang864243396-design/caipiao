@@ -169,17 +169,17 @@ func (q *Queries) FinishAttempt(ctx context.Context, finish schemebetting.Finish
 	err := q.db.QueryRow(ctx, `
 WITH updated_outbox AS (
     UPDATE scheme_bet_outbox
-    SET state = $4,
+    SET state = $4::varchar(32),
         outcome_reason = NULLIF($5, ''),
         provider_order_no = NULLIF($6, ''),
         accepted_period_no = NULLIF($7, ''),
-        terminal_at = CASE WHEN $4 = 'sent_unknown' THEN NULL ELSE $8 END,
+        terminal_at = CASE WHEN $4::varchar(32) = 'sent_unknown' THEN NULL ELSE $8::timestamptz END,
         provider_account_id = NULLIF($11, 0),
         provider_currency = NULLIF($12, ''),
         provider_amount = NULLIF($13, 0),
         last_error = NULLIF($14, ''),
         lease_until = NULL,
-        updated_at = $8
+        updated_at = $8::timestamptz
     WHERE id = $1
       AND COALESCE(scheme_id, '') = $2
       AND state = 'leased'
@@ -188,8 +188,8 @@ WITH updated_outbox AS (
     RETURNING scheme_id, attempt_count
 ), updated_attempt AS (
     UPDATE scheme_bet_attempts a
-    SET outcome = $4,
-        finished_at = $8,
+    SET outcome = $4::varchar(32),
+        finished_at = $8::timestamptz,
         provider_order_no = NULLIF($6, ''),
         accepted_period_no = NULLIF($7, ''),
         error_message = COALESCE(NULLIF($14, ''), NULLIF($5, ''))
@@ -198,7 +198,7 @@ WITH updated_outbox AS (
     RETURNING a.id
 ), blocked AS (
     UPDATE scheme_instances i
-    SET strict_chain_state = 'blocked_requires_rearm', updated_at = $8
+    SET strict_chain_state = 'blocked_requires_rearm', updated_at = $8::timestamptz
     FROM updated_outbox u
     WHERE i.id = u.scheme_id AND $10
     RETURNING i.id

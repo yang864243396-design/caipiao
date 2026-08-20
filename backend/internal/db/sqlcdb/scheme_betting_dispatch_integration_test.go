@@ -13,6 +13,7 @@ import (
 	"caipiao/backend/internal/config"
 	"caipiao/backend/internal/db"
 	"caipiao/backend/internal/db/sqlcdb"
+	"caipiao/backend/internal/schemebetting"
 )
 
 func TestDispatchQueriesAgainstMigratedSchema(t *testing.T) {
@@ -67,6 +68,35 @@ func TestDispatchQueriesAgainstMigratedSchema(t *testing.T) {
 		if err := pool.QueryRow(context.Background(), `SELECT to_regclass('public.' || $1) IS NOT NULL`, table).Scan(&exists); err != nil || !exists {
 			t.Fatalf("table %s exists=%v err=%v", table, exists, err)
 		}
+	}
+}
+
+func TestFinishAttemptSQLParsesAgainstMigratedSchema(t *testing.T) {
+	_ = godotenv.Load("../../../.env")
+	cfg := config.Load()
+	if cfg.DatabaseURL == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+	pool, err := db.Connect(context.Background(), cfg.DatabaseURL, 2, 0)
+	if err != nil {
+		t.Skipf("database unavailable: %v", err)
+	}
+	defer pool.Close()
+
+	finished, err := sqlcdb.New(pool).FinishAttempt(context.Background(), schemebetting.FinishDispatch{
+		CommandID:    -1,
+		SchemeID:     "schema-probe",
+		LeaseOwner:   "schema-probe",
+		FencingToken: -1,
+		State:        schemebetting.OutboxRejected,
+		Reason:       "schema_probe",
+		FinishedAt:   time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("finish attempt query must parse against migrated schema: %v", err)
+	}
+	if finished {
+		t.Fatal("schema probe unexpectedly finished an outbox row")
 	}
 }
 
