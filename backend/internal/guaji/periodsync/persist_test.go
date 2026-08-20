@@ -30,7 +30,7 @@ func TestBuildProviderPeriodSnapshotsCanonicalAndStable(t *testing.T) {
 	}
 }
 
-func TestBuildProviderPeriodSnapshotsTreatsNextStartAsCurrentBetClose(t *testing.T) {
+func TestBuildProviderPeriodSnapshotsSynthesizesCurrentBetWindow(t *testing.T) {
 	now := time.Date(2026, 8, 20, 2, 41, 2, 0, time.UTC)
 	snapshots := buildProviderPeriodSnapshots("tron_ffc_6s", []guaji.LottPeriod{{
 		Period: "10114251203740", StartTime: "2026-08-20 10:41:08", EndTime: "2026-08-20 10:41:14",
@@ -38,8 +38,8 @@ func TestBuildProviderPeriodSnapshotsTreatsNextStartAsCurrentBetClose(t *testing
 	if len(snapshots) != 1 {
 		t.Fatalf("snapshots=%d", len(snapshots))
 	}
-	if !snapshots[0].OpenAt.IsZero() {
-		t.Fatalf("future provider start must represent an already-open current bet window: %s", snapshots[0].OpenAt)
+	if !snapshots[0].OpenAt.Equal(now) {
+		t.Fatalf("synthetic open=%s want=%s", snapshots[0].OpenAt, now)
 	}
 	wantClose := now.Add(6 * time.Second)
 	if !snapshots[0].CloseAt.Equal(wantClose) {
@@ -57,8 +57,8 @@ func TestBuildProviderPeriodSnapshotsKeepsLaterFuturePeriodsClosed(t *testing.T)
 	if len(snapshots) != 3 {
 		t.Fatalf("snapshots=%d want=3", len(snapshots))
 	}
-	if !snapshots[0].OpenAt.IsZero() {
-		t.Fatalf("first provider period must represent the current bet window: %s", snapshots[0].OpenAt)
+	if !snapshots[0].OpenAt.Equal(now) {
+		t.Fatalf("first synthetic open=%s want=%s", snapshots[0].OpenAt, now)
 	}
 	if want := now.Add(6 * time.Second); !snapshots[0].CloseAt.Equal(want) {
 		t.Fatalf("first close=%s want=%s", snapshots[0].CloseAt, want)

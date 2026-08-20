@@ -56,8 +56,12 @@ func buildProviderPeriodSnapshots(lotteryCode string, periods []guaji.LottPeriod
 		// resolver may represent that current window. Later future periods must
 		// keep their real open_at so the dispatcher cannot select them early.
 		if periodNo == selectedPeriodNo && !openAt.IsZero() && openAt.After(observedAt) {
-			openAt = time.Time{}
+			periodDuration := closeAt.Sub(openAt)
 			closeAt = selectedCloseAt
+			openAt = closeAt.Add(-periodDuration)
+			if openAt.After(observedAt) {
+				openAt = observedAt
+			}
 		}
 		canonical := struct {
 			LotteryCode string `json:"lotteryCode"`
