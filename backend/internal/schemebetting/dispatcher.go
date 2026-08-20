@@ -136,7 +136,7 @@ func (d Dispatcher) Dispatch(ctx context.Context, command LeasedCommand) error {
 
 	placeCtx, cancelPlace := context.WithTimeout(ctx, start.SafeWindow)
 	defer cancelPlace()
-	stopHeartbeat := d.startLeaseHeartbeat(placeCtx, cancelPlace, command)
+	stopHeartbeat := d.startLeaseHeartbeat(ctx, cancelPlace, command)
 	providerResult, placeErr := d.Transport.PlaceOnce(placeCtx, command)
 	heartbeatErr := stopHeartbeat()
 	observation := DispatchObservation{RequestStarted: true, Err: placeErr}

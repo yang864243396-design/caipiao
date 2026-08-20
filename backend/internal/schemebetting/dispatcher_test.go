@@ -103,10 +103,37 @@ type deadlineObservingTransport struct {
 	hadDeadline bool
 }
 
+type lingeringAfterDeadlineTransport struct {
+	renewedAfterDeadline <-chan struct{}
+	calls                int
+	sawRenewal           bool
+}
+
 func (transport *deadlineObservingTransport) PlaceOnce(ctx context.Context, _ LeasedCommand) (ProviderAcceptance, error) {
 	transport.calls++
 	_, transport.hadDeadline = ctx.Deadline()
 	<-ctx.Done()
+	return ProviderAcceptance{}, ctx.Err()
+}
+
+func (transport *lingeringAfterDeadlineTransport) PlaceOnce(ctx context.Context, _ LeasedCommand) (ProviderAcceptance, error) {
+	transport.calls++
+	<-ctx.Done()
+	for {
+		select {
+		case <-transport.renewedAfterDeadline:
+			continue
+		default:
+			goto drained
+		}
+	}
+
+drained:
+	select {
+	case <-transport.renewedAfterDeadline:
+		transport.sawRenewal = true
+	case <-time.After(50 * time.Millisecond):
+	}
 	return ProviderAcceptance{}, ctx.Err()
 }
 
@@ -275,6 +302,31 @@ func TestDispatcherRenewsLeaseWhileProviderCallIsInFlight(t *testing.T) {
 	}
 	if transport.calls != 1 || store.renewalCount() == 0 || len(store.finished) != 1 || store.finished[0].State != OutboxAccepted {
 		t.Fatalf("calls=%d renewals=%d finish=%+v", transport.calls, store.renewalCount(), store.finished)
+	}
+}
+
+func TestDispatcherKeepsLeaseAliveUntilTimedOutTransportReturns(t *testing.T) {
+	now := time.Now().UTC()
+	renewed := make(chan struct{}, 16)
+	store := &fakeDispatchStore{startOK: true, startSafeWindow: 15 * time.Millisecond, renewCh: renewed}
+	transport := &lingeringAfterDeadlineTransport{renewedAfterDeadline: renewed}
+	d := Dispatcher{
+		Store: store, Transport: transport, Now: func() time.Time { return now },
+		LeaseDuration: 30 * time.Millisecond, LeaseHeartbeatInterval: 2 * time.Millisecond,
+	}
+	command := LeasedCommand{
+		ID: 18, SchemeID: "scheme-1", TargetPeriod: "T", FrozenRequest: []byte(`{}`), FrozenRequestHash: PayloadHash([]byte(`{}`)),
+		SafeDeadline: now.Add(time.Second), Lease: LeaseFence{Owner: "node", Token: 10, Until: now.Add(30 * time.Millisecond)},
+	}
+
+	if err := d.Dispatch(context.Background(), command); err != nil {
+		t.Fatal(err)
+	}
+	if transport.calls != 1 || !transport.sawRenewal {
+		t.Fatalf("provider calls=%d renewal after provider deadline=%v", transport.calls, transport.sawRenewal)
+	}
+	if len(store.finished) != 1 || store.finished[0].State != OutboxSentUnknown {
+		t.Fatalf("finish=%+v", store.finished)
 	}
 }
 
