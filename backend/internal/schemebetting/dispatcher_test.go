@@ -3,6 +3,8 @@ package schemebetting
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -12,6 +14,9 @@ type fakeDispatchStore struct {
 	finished []FinishDispatch
 	startOK  bool
 	released int
+	mu       sync.Mutex
+	renewed  int
+	renewCh  chan struct{}
 }
 
 func (s *fakeDispatchStore) ReleaseLease(context.Context, LeasedCommand, string, time.Time) (bool, error) {
@@ -37,11 +42,54 @@ func (s *fakeDispatchStore) FinishAttempt(_ context.Context, finish FinishDispat
 	return true, nil
 }
 
+func (s *fakeDispatchStore) RenewLease(_ context.Context, _ LeasedCommand, _, _ time.Time) (bool, error) {
+	s.mu.Lock()
+	s.renewed++
+	ch := s.renewCh
+	s.mu.Unlock()
+	if ch != nil {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+	return true, nil
+}
+
+func (s *fakeDispatchStore) renewalCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.renewed
+}
+
 type fakeSingleAttemptTransport struct {
 	calls  int
 	result ProviderAcceptance
 	err    error
 }
+
+type blockingUntilRenewedTransport struct {
+	renewed <-chan struct{}
+	calls   int
+}
+
+func (t *blockingUntilRenewedTransport) PlaceOnce(ctx context.Context, _ LeasedCommand) (ProviderAcceptance, error) {
+	t.calls++
+	select {
+	case <-ctx.Done():
+		return ProviderAcceptance{}, ctx.Err()
+	case <-t.renewed:
+		return ProviderAcceptance{OrderID: "order-after-renewal", PeriodNo: "T", Amount: 2, AccountID: 8, Currency: "CNY"}, nil
+	case <-time.After(time.Second):
+		return ProviderAcceptance{}, errors.New("lease was not renewed while provider call was in flight")
+	}
+}
+
+type testDefinitelyNotSentError struct{ err error }
+
+func (e testDefinitelyNotSentError) Error() string           { return e.err.Error() }
+func (e testDefinitelyNotSentError) Unwrap() error           { return e.err }
+func (e testDefinitelyNotSentError) DefinitelyNotSent() bool { return true }
 
 func (t *fakeSingleAttemptTransport) PlaceOnce(context.Context, LeasedCommand) (ProviderAcceptance, error) {
 	t.calls++
@@ -129,6 +177,46 @@ func TestDispatcherMapsTransportTimeoutToUnknownWithoutRetry(t *testing.T) {
 	}
 	if transport.calls != 1 {
 		t.Fatalf("provider was called again after ambiguous acceptance: %d", transport.calls)
+	}
+}
+
+func TestDispatcherRenewsLeaseWhileProviderCallIsInFlight(t *testing.T) {
+	now := time.Now().UTC()
+	renewed := make(chan struct{}, 1)
+	store := &fakeDispatchStore{startOK: true, renewCh: renewed}
+	transport := &blockingUntilRenewedTransport{renewed: renewed}
+	d := Dispatcher{
+		Store: store, Transport: transport, Now: func() time.Time { return now },
+		LeaseDuration: 30 * time.Millisecond, LeaseHeartbeatInterval: time.Millisecond,
+	}
+	command := LeasedCommand{
+		ID: 12, SchemeID: "scheme-1", TargetPeriod: "T", FrozenRequest: []byte(`{}`), FrozenRequestHash: PayloadHash([]byte(`{}`)),
+		SafeDeadline: now.Add(time.Second), Lease: LeaseFence{Owner: "node", Token: 4, Until: now.Add(30 * time.Millisecond)},
+	}
+
+	if err := d.Dispatch(context.Background(), command); err != nil {
+		t.Fatal(err)
+	}
+	if transport.calls != 1 || store.renewalCount() == 0 || len(store.finished) != 1 || store.finished[0].State != OutboxAccepted {
+		t.Fatalf("calls=%d renewals=%d finish=%+v", transport.calls, store.renewalCount(), store.finished)
+	}
+}
+
+func TestDispatcherRecognizesWrappedDefinitelyNotSentError(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	store := &fakeDispatchStore{startOK: true}
+	transport := &fakeSingleAttemptTransport{err: fmt.Errorf("place bet: %w", testDefinitelyNotSentError{err: errors.New("tls handshake failed before write")})}
+	d := Dispatcher{Store: store, Transport: transport, Now: func() time.Time { return now }}
+	command := LeasedCommand{
+		ID: 13, SchemeID: "scheme-1", TargetPeriod: "T", FrozenRequest: []byte(`{}`), FrozenRequestHash: PayloadHash([]byte(`{}`)),
+		SafeDeadline: now.Add(time.Second), Lease: LeaseFence{Owner: "node", Token: 5, Until: now.Add(time.Second)},
+	}
+
+	if err := d.Dispatch(context.Background(), command); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.finished) != 1 || store.finished[0].State != OutboxRejected || store.finished[0].Reason != "definitive_pre_send_failure" {
+		t.Fatalf("finish=%+v", store.finished)
 	}
 }
 

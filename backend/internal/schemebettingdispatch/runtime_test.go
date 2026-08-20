@@ -120,6 +120,19 @@ func TestRuntimeRequiresFormalModeAndExplicitShards(t *testing.T) {
 	}
 }
 
+func TestRuntimeConfiguresDispatchLeaseHeartbeat(t *testing.T) {
+	leaseDuration := 9 * time.Second
+	runtime, err := New(&sqlcdb.Queries{}, &fakeSinglePlacer{}, Config{
+		Mode: "gray", Owner: "node", LotteryCodes: []string{"tron_ffc_6s"}, Shards: []int32{0}, LeaseDuration: leaseDuration,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.dispatcher.LeaseDuration != leaseDuration || runtime.dispatcher.LeaseHeartbeatInterval != 3*time.Second {
+		t.Fatalf("lease=%v heartbeat=%v", runtime.dispatcher.LeaseDuration, runtime.dispatcher.LeaseHeartbeatInterval)
+	}
+}
+
 func TestRunAcceptanceRecoveryAfterSuccessfulAbandonedDispatchSweep(t *testing.T) {
 	recovery := &fakeAcceptedRecovery{}
 	if err := runAcceptanceRecovery(context.Background(), nil, recovery, 32); err != nil {

@@ -195,7 +195,10 @@ func New(q *sqlcdb.Queries, placer guajibet.SingleAttemptPlacer, cfg Config) (*R
 		return nil, err
 	}
 	runtime := &Runtime{q: q, cfg: normalized}
-	runtime.dispatcher = schemebetting.Dispatcher{Store: q, Transport: Transport{Placer: placer}}
+	runtime.dispatcher = schemebetting.Dispatcher{
+		Store: q, Transport: Transport{Placer: placer},
+		LeaseDuration: normalized.LeaseDuration, LeaseHeartbeatInterval: normalized.LeaseDuration / 3,
+	}
 	return runtime, nil
 }
 

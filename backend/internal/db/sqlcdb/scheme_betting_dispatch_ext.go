@@ -116,6 +116,27 @@ SELECT EXISTS(SELECT 1 FROM updated)`,
 	return released, err
 }
 
+func (q *Queries) RenewLease(ctx context.Context, command schemebetting.LeasedCommand, renewedAt, leaseUntil time.Time) (bool, error) {
+	var renewed bool
+	err := q.db.QueryRow(ctx, `
+WITH updated AS (
+    UPDATE scheme_bet_outbox
+    SET lease_until = $5,
+        updated_at = $4
+    WHERE id = $1
+      AND COALESCE(scheme_id, '') = $2
+      AND state = 'leased'
+      AND lease_owner = $3
+      AND lease_fencing_token = $6
+      AND dispatch_started_at IS NOT NULL
+      AND lease_until > $4
+    RETURNING id
+)
+SELECT EXISTS(SELECT 1 FROM updated)`,
+		command.ID, command.SchemeID, command.Lease.Owner, renewedAt, leaseUntil, command.Lease.Token).Scan(&renewed)
+	return renewed, err
+}
+
 func (q *Queries) FinishAttempt(ctx context.Context, finish schemebetting.FinishDispatch) (bool, error) {
 	var finished bool
 	err := q.db.QueryRow(ctx, `

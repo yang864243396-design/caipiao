@@ -3,6 +3,7 @@ package schemebetting
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 )
@@ -49,6 +50,10 @@ type LeaseReleaseStore interface {
 	ReleaseLease(ctx context.Context, command LeasedCommand, reason string, releasedAt time.Time) (bool, error)
 }
 
+type LeaseRenewStore interface {
+	RenewLease(ctx context.Context, command LeasedCommand, renewedAt, leaseUntil time.Time) (bool, error)
+}
+
 type DispatchLimiter interface {
 	Allow(ctx context.Context, command LeasedCommand, now time.Time) (bool, error)
 }
@@ -66,11 +71,13 @@ type definitelyNotSent interface {
 }
 
 type Dispatcher struct {
-	Store     DispatchStore
-	Transport SingleAttemptTransport
-	Finalizer AcceptedFinalizer
-	Limiter   DispatchLimiter
-	Now       func() time.Time
+	Store                  DispatchStore
+	Transport              SingleAttemptTransport
+	Finalizer              AcceptedFinalizer
+	Limiter                DispatchLimiter
+	Now                    func() time.Time
+	LeaseDuration          time.Duration
+	LeaseHeartbeatInterval time.Duration
 }
 
 func (d Dispatcher) Dispatch(ctx context.Context, command LeasedCommand) error {
@@ -123,19 +130,28 @@ func (d Dispatcher) Dispatch(ctx context.Context, command LeasedCommand) error {
 		return ErrStaleLease
 	}
 
+	stopHeartbeat := d.startLeaseHeartbeat(ctx, command)
 	providerResult, placeErr := d.Transport.PlaceOnce(ctx, command)
+	stopHeartbeat()
 	observation := DispatchObservation{RequestStarted: true, Err: placeErr}
 	if placeErr == nil {
 		observation.Result = &providerResult
-	} else if safe, ok := placeErr.(definitelyNotSent); ok && safe.DefinitelyNotSent() {
-		observation.DefinitelyNotSent = true
+	} else {
+		var safe definitelyNotSent
+		if errors.As(placeErr, &safe) && safe.DefinitelyNotSent() {
+			observation.DefinitelyNotSent = true
+		}
 	}
 	resolution := ResolveDispatchOutcome(command.TargetPeriod, observation)
+	finishedAt := time.Now().UTC()
+	if d.Now != nil {
+		finishedAt = d.Now().UTC()
+	}
 	finished, err := d.Store.FinishAttempt(ctx, FinishDispatch{
 		CommandID: command.ID, SchemeID: command.SchemeID, LeaseOwner: command.Lease.Owner,
 		FencingToken: command.Lease.Token, State: resolution.State, Reason: resolution.Reason,
 		ProviderOrderID: strings.TrimSpace(providerResult.OrderID), AcceptedPeriod: strings.TrimSpace(providerResult.PeriodNo),
-		ProviderAmount: providerResult.Amount, ProviderAccountID: providerResult.AccountID, ProviderCurrency: providerResult.Currency, FinishedAt: now, BlocksChain: resolution.BlocksChain,
+		ProviderAmount: providerResult.Amount, ProviderAccountID: providerResult.AccountID, ProviderCurrency: providerResult.Currency, FinishedAt: finishedAt, BlocksChain: resolution.BlocksChain,
 	})
 	if err != nil {
 		return err
@@ -149,4 +165,39 @@ func (d Dispatcher) Dispatch(ctx context.Context, command LeasedCommand) error {
 		}
 	}
 	return nil
+}
+
+func (d Dispatcher) startLeaseHeartbeat(ctx context.Context, command LeasedCommand) func() {
+	renewer, ok := d.Store.(LeaseRenewStore)
+	if !ok || d.LeaseDuration <= 0 || d.LeaseHeartbeatInterval <= 0 {
+		return func() {}
+	}
+	heartbeatCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(d.LeaseHeartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-heartbeatCtx.Done():
+				return
+			case renewedAt := <-ticker.C:
+				renewedAt = renewedAt.UTC()
+				renewed, err := renewer.RenewLease(heartbeatCtx, command, renewedAt, renewedAt.Add(d.LeaseDuration))
+				if err != nil {
+					slog.Warn("scheme betting dispatch lease heartbeat failed", "outboxId", command.ID, "schemeId", command.SchemeID, "err", err)
+					continue
+				}
+				if !renewed {
+					slog.Warn("scheme betting dispatch lease heartbeat lost", "outboxId", command.ID, "schemeId", command.SchemeID)
+					return
+				}
+			}
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
 }

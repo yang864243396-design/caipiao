@@ -7,13 +7,21 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
+type definitelyNotSentError struct{ err error }
+
+func (e definitelyNotSentError) Error() string           { return e.err.Error() }
+func (e definitelyNotSentError) Unwrap() error           { return e.err }
+func (e definitelyNotSentError) DefinitelyNotSent() bool { return true }
+
 // Client is the Guaji third-party HTTP adapter (T0 skeleton).
 type Client struct {
-	cfg Config
+	cfg  Config
 	http *http.Client
 }
 
@@ -110,9 +118,20 @@ func (c *Client) doJSONRaw(ctx context.Context, method, baseURL, path, bearer st
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
+	var requestWritten atomic.Bool
+	trace := &httptrace.ClientTrace{
+		WroteRequest: func(httptrace.WroteRequestInfo) {
+			requestWritten.Store(true)
+		},
+	}
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return out, nil, fmt.Errorf("guaji http %s %s: %w", method, path, err)
+		wrapped := fmt.Errorf("guaji http %s %s: %w", method, path, err)
+		if !requestWritten.Load() {
+			return out, nil, definitelyNotSentError{err: wrapped}
+		}
+		return out, nil, wrapped
 	}
 	defer resp.Body.Close()
 

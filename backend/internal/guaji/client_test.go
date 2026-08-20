@@ -3,6 +3,7 @@ package guaji_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,6 +12,10 @@ import (
 
 	"caipiao/backend/internal/guaji"
 )
+
+type definitelyNotSent interface {
+	DefinitelyNotSent() bool
+}
 
 func TestLoginSuccess(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -161,5 +166,50 @@ func TestConfigValidRequiresAuthBaseOnProd(t *testing.T) {
 	}
 	if err := cfg.Valid(); err == nil {
 		t.Fatal("expected misconfigured error")
+	}
+}
+
+func TestClientMarksConnectFailureBeforeRequestWriteAsDefinitelyNotSent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	baseURL := srv.URL
+	srv.Close()
+	c := guaji.NewClient(guaji.Config{
+		Enabled: true, HTTPBase: baseURL, AuthBase: baseURL, WSBase: "wss://example.test", HTTPTimeout: time.Second,
+	})
+
+	err := c.PingAuthEndpoint(context.Background())
+	if err == nil {
+		t.Fatal("expected connection failure")
+	}
+	var safe definitelyNotSent
+	if !errors.As(err, &safe) || !safe.DefinitelyNotSent() {
+		t.Fatalf("error was not classified as definitely not sent: %T %v", err, err)
+	}
+}
+
+func TestClientDoesNotMarkFailureAfterRequestWriteAsDefinitelyNotSent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatal("response writer does not support hijacking")
+		}
+		conn, _, err := hijacker.Hijack()
+		if err != nil {
+			t.Fatalf("hijack: %v", err)
+		}
+		_ = conn.Close()
+	}))
+	defer srv.Close()
+	c := guaji.NewClient(guaji.Config{
+		Enabled: true, HTTPBase: srv.URL, AuthBase: srv.URL, WSBase: "wss://example.test", HTTPTimeout: time.Second,
+	})
+
+	err := c.PingAuthEndpoint(context.Background())
+	if err == nil {
+		t.Fatal("expected response failure")
+	}
+	var safe definitelyNotSent
+	if errors.As(err, &safe) && safe.DefinitelyNotSent() {
+		t.Fatalf("request was written but error was classified safe to retry: %T %v", err, err)
 	}
 }
