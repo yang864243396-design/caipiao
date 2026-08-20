@@ -92,7 +92,7 @@ func (d Dispatcher) Dispatch(ctx context.Context, command LeasedCommand) error {
 	if !command.Lease.CanCommit(command.Lease.Owner, command.Lease.Token, now) {
 		return ErrStaleLease
 	}
-	if command.ID <= 0 || strings.TrimSpace(command.TargetPeriod) == "" || len(command.FrozenRequest) == 0 || command.FrozenRequestHash == "" || PayloadHash(command.FrozenRequest) != command.FrozenRequestHash {
+	if command.ID <= 0 || strings.TrimSpace(command.TargetPeriod) == "" || len(command.FrozenRequest) == 0 || command.FrozenRequestHash == "" || CanonicalJSONPayloadHash(command.FrozenRequest) != command.FrozenRequestHash {
 		return ErrInvalidCommand
 	}
 	if d.Limiter != nil {

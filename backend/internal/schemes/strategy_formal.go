@@ -140,7 +140,7 @@ func (p *StrategyProcessor) tryProcessFormalCandidate(
 		DecisionID: decisionID, SchemeID: row.SchemeID, MemberID: inst.MemberID, LotteryCode: row.LotteryCode,
 		SourcePeriodNo: row.PeriodNo, TargetPeriodNo: command.TargetPeriod, Mode: mode,
 		RequestID: command.RequestID, PayloadHash: command.PayloadHash, Payload: command.Payload,
-		FrozenRequest: frozen, FrozenRequestHash: schemebetting.PayloadHash(frozen), ProviderSnapshotID: command.ProviderSnapshotID,
+		FrozenRequest: frozen, FrozenRequestHash: schemebetting.CanonicalJSONPayloadHash(frozen), ProviderSnapshotID: command.ProviderSnapshotID,
 		CloseAt: command.CloseAt, SafeDeadlineAt: command.SafeDeadline, ShardNo: int32(command.ShardNo),
 		SourceStateVersion: stateVersionBefore + 1, InitialBet: false,
 		ChainID: execution.ChainID, ChainSeq: execution.ChainSeq + 1,

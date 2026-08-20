@@ -68,6 +68,27 @@ func TestDispatcherMakesExactlyOneCallAndCommitsAccepted(t *testing.T) {
 	}
 }
 
+func TestDispatcherAcceptsFrozenRequestAfterJSONBKeyReorder(t *testing.T) {
+	now := time.Date(2026, 8, 20, 3, 31, 30, 0, time.UTC)
+	written := []byte(`{"requestId":"sb-1","request":{"issueNo":"10114251404243","amount":0.2},"rule":{"version":1}}`)
+	readBack := []byte(`{"rule":{"version":1},"request":{"amount":0.2,"issueNo":"10114251404243"},"requestId":"sb-1"}`)
+	store := &fakeDispatchStore{startOK: true}
+	transport := &fakeSingleAttemptTransport{result: ProviderAcceptance{OrderID: "order-1", PeriodNo: "10114251404243"}}
+	d := Dispatcher{Store: store, Transport: transport, Now: func() time.Time { return now }}
+	command := LeasedCommand{
+		ID: 11, SchemeID: "scheme-1", TargetPeriod: "10114251404243",
+		FrozenRequest: readBack, FrozenRequestHash: CanonicalJSONPayloadHash(written),
+		SafeDeadline: now.Add(time.Second), Lease: LeaseFence{Owner: "node-a", Token: 1, Until: now.Add(2 * time.Second)},
+	}
+
+	if err := d.Dispatch(context.Background(), command); err != nil {
+		t.Fatal(err)
+	}
+	if store.started != 1 || transport.calls != 1 {
+		t.Fatalf("start=%d providerCalls=%d", store.started, transport.calls)
+	}
+}
+
 func TestDispatcherDoesNotCallProviderAfterDeadlineOrStaleFence(t *testing.T) {
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	for _, command := range []LeasedCommand{

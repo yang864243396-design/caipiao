@@ -81,3 +81,15 @@ func TestCommandIdentityAndShardAreDeterministic(t *testing.T) {
 		t.Fatal("scheme shard must be stable")
 	}
 }
+
+func TestCanonicalJSONPayloadHashIgnoresJSONBObjectKeyOrder(t *testing.T) {
+	written := []byte(`{"requestId":"sb-1","request":{"lotteryCode":"tron_ffc_6s","amount":0.2},"rule":{"version":1,"tags":["a","b"]}}`)
+	readBack := []byte(`{"rule":{"tags":["a","b"],"version":1},"request":{"amount":0.2,"lotteryCode":"tron_ffc_6s"},"requestId":"sb-1"}`)
+
+	if PayloadHash(written) == PayloadHash(readBack) {
+		t.Fatal("test setup must use different raw JSON byte order")
+	}
+	if got, want := CanonicalJSONPayloadHash(readBack), CanonicalJSONPayloadHash(written); got != want {
+		t.Fatalf("canonical hash differs after JSONB key reorder: got=%s want=%s", got, want)
+	}
+}

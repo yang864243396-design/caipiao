@@ -128,7 +128,7 @@ func (runtime *Runtime) SubmitAPIBet(ctx context.Context, command APIBetCommand)
 	if err != nil {
 		return APIBetResult{}, err
 	}
-	frozenHash := schemebetting.PayloadHash(frozen)
+	frozenHash := schemebetting.CanonicalJSONPayloadHash(frozen)
 	shardIndex := int(schemebetting.ShardForScheme(command.MemberAccount, uint32(len(runtime.cfg.Shards))))
 	shardNo := runtime.cfg.Shards[shardIndex]
 	_, shardAcquired, err := runtime.q.AcquireSchemeBettingShardLease(

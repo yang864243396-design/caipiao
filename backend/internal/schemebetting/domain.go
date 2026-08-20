@@ -3,6 +3,7 @@ package schemebetting
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"hash/fnv"
 	"sort"
 	"strconv"
@@ -121,6 +122,22 @@ func CommandIdentity(schemeID, sourcePeriod, targetPeriod string, stateVersion i
 func PayloadHash(payload []byte) string {
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
+}
+
+// CanonicalJSONPayloadHash keeps a JSON request hash stable after PostgreSQL
+// JSONB parses and reorders object keys during a store/load round trip.
+// Invalid JSON falls back to byte hashing so callers can retain the existing
+// integrity behavior for non-JSON payloads.
+func CanonicalJSONPayloadHash(payload []byte) string {
+	var value any
+	if err := json.Unmarshal(payload, &value); err != nil {
+		return PayloadHash(payload)
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return PayloadHash(payload)
+	}
+	return PayloadHash(canonical)
 }
 
 func ShardForScheme(schemeID string, shardCount uint32) uint32 {

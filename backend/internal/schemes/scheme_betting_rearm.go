@@ -146,7 +146,7 @@ func (w *Worker) startEventSchemeChain(ctx context.Context, schemeID, actor, rea
 		DecisionID: decisionID, SchemeID: schemeID, MemberID: inst.MemberID, LotteryCode: inst.LotteryCode,
 		SourcePeriodNo: sourcePeriod, TargetPeriodNo: command.TargetPeriod, Mode: mode,
 		RequestID: command.RequestID, PayloadHash: command.PayloadHash, Payload: command.Payload,
-		FrozenRequest: frozen, FrozenRequestHash: schemebetting.PayloadHash(frozen), ProviderSnapshotID: command.ProviderSnapshotID,
+		FrozenRequest: frozen, FrozenRequestHash: schemebetting.CanonicalJSONPayloadHash(frozen), ProviderSnapshotID: command.ProviderSnapshotID,
 		CloseAt: command.CloseAt, SafeDeadlineAt: command.SafeDeadline, ShardNo: int32(command.ShardNo),
 		SourceStateVersion: stateVersion, InitialBet: true, ChainID: chainID, ChainSeq: 1,
 	}); err != nil {
