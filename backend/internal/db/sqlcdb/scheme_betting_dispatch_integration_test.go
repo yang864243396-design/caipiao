@@ -175,6 +175,24 @@ WHERE id = $1`, outboxID).Scan(&protectedLeaseSeconds); err != nil {
 	if renewed, err := q.RenewLease(ctx, stale, 2*time.Second); err != nil || renewed {
 		t.Fatalf("stale fencing token renewed=%v err=%v", renewed, err)
 	}
+	const finishFailureEvidence = "finish_attempt_failed: deadlock detected while updating scheme terminal state"
+	if recorded, err := q.RecordFinishAttemptFailure(ctx, commands[0], finishFailureEvidence); err != nil || !recorded {
+		t.Fatalf("recorded finish failure=%v err=%v", recorded, err)
+	}
+	var failureState, outboxFailure, attemptFailure string
+	if err := tx.QueryRow(ctx, `
+SELECT o.state, COALESCE(o.last_error, ''), COALESCE(a.error_message, '')
+FROM scheme_bet_outbox o
+JOIN scheme_bet_attempts a ON a.outbox_id = o.id AND a.attempt_no = o.attempt_count
+WHERE o.id = $1`, outboxID).Scan(&failureState, &outboxFailure, &attemptFailure); err != nil {
+		t.Fatal(err)
+	}
+	if failureState != "leased" || outboxFailure != finishFailureEvidence || attemptFailure != finishFailureEvidence {
+		t.Fatalf("state=%s outbox_error=%q attempt_error=%q", failureState, outboxFailure, attemptFailure)
+	}
+	if recorded, err := q.RecordFinishAttemptFailure(ctx, stale, "stale owner must not overwrite evidence"); err != nil || recorded {
+		t.Fatalf("stale finish failure recorded=%v err=%v", recorded, err)
+	}
 	const originalEvidence = "provider placement failed phase=tls request_written=true"
 	if _, err := tx.Exec(ctx, `
 UPDATE scheme_bet_outbox

@@ -11,17 +11,20 @@ import (
 )
 
 type fakeDispatchStore struct {
-	started         int
-	finished        []FinishDispatch
-	startOK         bool
-	startSafeWindow time.Duration
-	released        int
-	mu              sync.Mutex
-	renewed         int
-	renewCh         chan struct{}
-	renewBlock      chan struct{}
-	renewLost       bool
-	renewErr        error
+	started          int
+	finished         []FinishDispatch
+	finishErr        error
+	recordedFailure  []string
+	recordContextErr error
+	startOK          bool
+	startSafeWindow  time.Duration
+	released         int
+	mu               sync.Mutex
+	renewed          int
+	renewCh          chan struct{}
+	renewBlock       chan struct{}
+	renewLost        bool
+	renewErr         error
 }
 
 func (s *fakeDispatchStore) ReleaseLease(context.Context, LeasedCommand, string, time.Time) (bool, error) {
@@ -60,6 +63,15 @@ func (s *fakeDispatchStore) StartAttempt(context.Context, LeasedCommand, time.Du
 
 func (s *fakeDispatchStore) FinishAttempt(_ context.Context, finish FinishDispatch) (bool, error) {
 	s.finished = append(s.finished, finish)
+	if s.finishErr != nil {
+		return false, s.finishErr
+	}
+	return true, nil
+}
+
+func (s *fakeDispatchStore) RecordFinishAttemptFailure(ctx context.Context, _ LeasedCommand, detail string) (bool, error) {
+	s.recordContextErr = ctx.Err()
+	s.recordedFailure = append(s.recordedFailure, detail)
 	return true, nil
 }
 
@@ -180,6 +192,34 @@ func TestDispatcherMakesExactlyOneCallAndCommitsAccepted(t *testing.T) {
 	}
 	if store.finished[0].State != OutboxAccepted || store.finished[0].ProviderOrderID != "order-1" {
 		t.Fatalf("finish=%+v", store.finished[0])
+	}
+}
+
+func TestDispatcherPersistsFinishAttemptFailureWithIndependentContext(t *testing.T) {
+	now := time.Date(2026, 8, 20, 17, 18, 50, 0, time.UTC)
+	finishErr := errors.New("deadlock detected while updating scheme terminal state")
+	store := &fakeDispatchStore{startOK: true, finishErr: finishErr}
+	transport := &fakeSingleAttemptTransport{result: ProviderAcceptance{OrderID: "order-1", PeriodNo: "T", Amount: 2, AccountID: 8, Currency: "USDT"}}
+	d := Dispatcher{Store: store, Transport: transport, Now: func() time.Time { return now }}
+	command := LeasedCommand{
+		ID: 639, SchemeID: "scheme-1", TargetPeriod: "T", FrozenRequest: []byte(`{}`), FrozenRequestHash: PayloadHash([]byte(`{}`)),
+		SafeDeadline: now.Add(time.Second), Lease: LeaseFence{Owner: "node", Token: 13, Until: now.Add(time.Second)},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := d.Dispatch(ctx, command)
+	if !errors.Is(err, finishErr) {
+		t.Fatalf("dispatch error=%v", err)
+	}
+	if len(store.recordedFailure) != 1 {
+		t.Fatalf("recorded failures=%v", store.recordedFailure)
+	}
+	if store.recordContextErr != nil {
+		t.Fatalf("failure recorder inherited cancelled dispatch context: %v", store.recordContextErr)
+	}
+	if detail := store.recordedFailure[0]; !strings.Contains(detail, "finish_attempt_failed") || !strings.Contains(detail, finishErr.Error()) {
+		t.Fatalf("failure detail=%q", detail)
 	}
 }
 

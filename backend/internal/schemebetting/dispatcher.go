@@ -16,7 +16,10 @@ var (
 	ErrDispatcherConfig = errors.New("scheme betting dispatcher is not configured")
 )
 
-const leaseHeartbeatShutdownTimeout = 100 * time.Millisecond
+const (
+	leaseHeartbeatShutdownTimeout = 100 * time.Millisecond
+	finishFailureRecordTimeout    = 2 * time.Second
+)
 
 type LeasedCommand struct {
 	ID                int64
@@ -139,6 +142,10 @@ type PreSendFailureHandler interface {
 	HandlePreSendFailure(ctx context.Context, outboxID int64) error
 }
 
+type FinishAttemptFailureRecorder interface {
+	RecordFinishAttemptFailure(ctx context.Context, command LeasedCommand, detail string) (bool, error)
+}
+
 type definitelyNotSent interface {
 	DefinitelyNotSent() bool
 }
@@ -245,6 +252,7 @@ func (d Dispatcher) Dispatch(ctx context.Context, command LeasedCommand) error {
 		ErrorDetail: boundedDispatchErrors(placeErr, heartbeatErr), FinishedAt: finishedAt, BlocksChain: resolution.BlocksChain,
 	})
 	if err != nil {
+		d.recordFinishAttemptFailure(command, err)
 		return err
 	}
 	if !finished {
@@ -261,6 +269,24 @@ func (d Dispatcher) Dispatch(ctx context.Context, command LeasedCommand) error {
 		}
 	}
 	return nil
+}
+
+func (d Dispatcher) recordFinishAttemptFailure(command LeasedCommand, finishErr error) {
+	recorder, ok := d.Store.(FinishAttemptFailureRecorder)
+	if !ok || finishErr == nil {
+		return
+	}
+	detail := boundedDispatchError(fmt.Errorf("finish_attempt_failed: %w", finishErr))
+	ctx, cancel := context.WithTimeout(context.Background(), finishFailureRecordTimeout)
+	defer cancel()
+	recorded, err := recorder.RecordFinishAttemptFailure(ctx, command, detail)
+	if err != nil {
+		slog.Error("scheme betting finish failure evidence persistence failed", "outboxId", command.ID, "schemeId", command.SchemeID, "err", err)
+		return
+	}
+	if !recorded {
+		slog.Warn("scheme betting finish failure evidence rejected by fencing", "outboxId", command.ID, "schemeId", command.SchemeID, "owner", command.Lease.Owner, "token", command.Lease.Token)
+	}
 }
 
 func boundedDispatchError(err error) string {

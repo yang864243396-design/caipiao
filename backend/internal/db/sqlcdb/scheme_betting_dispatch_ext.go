@@ -210,6 +210,41 @@ SELECT EXISTS(SELECT 1 FROM updated_outbox)`, finish.CommandID, finish.SchemeID,
 	return finished, err
 }
 
+// RecordFinishAttemptFailure preserves the database error that prevented the
+// dispatcher from committing a terminal outcome. It deliberately leaves the
+// outbox leased so the normal fenced recovery state machine remains authoritative.
+func (q *Queries) RecordFinishAttemptFailure(ctx context.Context, command schemebetting.LeasedCommand, detail string) (bool, error) {
+	var recorded bool
+	err := q.db.QueryRow(ctx, `
+WITH updated_outbox AS (
+    UPDATE scheme_bet_outbox
+    SET last_error = CASE
+            WHEN NULLIF(last_error, '') IS NULL THEN $5
+            ELSE left(last_error || '; ' || $5, 4000)
+        END,
+        updated_at = clock_timestamp()
+    WHERE id = $1
+      AND COALESCE(scheme_id, '') = $2
+      AND state = 'leased'
+      AND lease_owner = $3
+      AND lease_fencing_token = $4
+      AND dispatch_started_at IS NOT NULL
+    RETURNING id, attempt_count
+), updated_attempt AS (
+    UPDATE scheme_bet_attempts a
+    SET error_message = CASE
+            WHEN NULLIF(a.error_message, '') IS NULL THEN $5
+            ELSE left(a.error_message || '; ' || $5, 4000)
+        END
+    FROM updated_outbox u
+    WHERE a.outbox_id = u.id AND a.attempt_no = u.attempt_count
+    RETURNING a.id
+)
+SELECT EXISTS(SELECT 1 FROM updated_outbox)`,
+		command.ID, command.SchemeID, command.Lease.Owner, command.Lease.Token, detail).Scan(&recorded)
+	return recorded, err
+}
+
 func (q *Queries) MarkAbandonedStartedDispatchUnknown(ctx context.Context, rowLimit int32) (int64, error) {
 	if rowLimit <= 0 {
 		rowLimit = 100
