@@ -123,3 +123,48 @@ VALUES ($1, 'preloaded-period', $2, $3, $4, 'test', 'preloaded', '{}'::jsonb)`,
 		t.Fatalf("rows=%+v want preloaded current period", rows)
 	}
 }
+
+func TestListOpenProviderPeriodSnapshotsUsesDatabaseClock(t *testing.T) {
+	_ = godotenv.Load("../../../.env")
+	cfg := config.Load()
+	if cfg.DatabaseURL == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+	pool, err := db.Connect(context.Background(), cfg.DatabaseURL, 2, 0)
+	if err != nil {
+		t.Skipf("database unavailable: %v", err)
+	}
+	defer pool.Close()
+
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var databaseNow time.Time
+	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&databaseNow); err != nil {
+		t.Fatal(err)
+	}
+	databaseNow = databaseNow.UTC()
+	lotteryCode := fmt.Sprintf("__db_clock_%d", databaseNow.UnixNano())
+	if _, err := tx.Exec(ctx, `
+INSERT INTO provider_period_snapshots
+    (lottery_code, period_no, open_at, close_at, observed_at, source, snapshot_hash, raw_payload)
+VALUES ($1, 'db-current-period', $2, $3, $4, 'test', 'db-clock', '{}'::jsonb)`,
+		lotteryCode, databaseNow.Add(-time.Second), databaseNow.Add(5*time.Second), databaseNow.Add(-7*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	applicationNow := databaseNow.Add(-3 * time.Second)
+	rows, err := sqlcdb.New(tx).ListOpenProviderPeriodSnapshots(
+		ctx, lotteryCode, "source-period", applicationNow, applicationNow.Add(-6*time.Second), 8,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].PeriodNo != "db-current-period" {
+		t.Fatalf("rows=%+v want database-current period despite application clock skew", rows)
+	}
+}

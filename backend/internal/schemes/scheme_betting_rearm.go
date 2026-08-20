@@ -86,6 +86,9 @@ func (w *Worker) startEventSchemeChain(ctx context.Context, schemeID, actor, rea
 	if err != nil {
 		return err
 	}
+	if len(periodRows) > 0 && !periodRows[0].DatabaseNow.IsZero() {
+		now = periodRows[0].DatabaseNow.UTC()
+	}
 	snapshots := make([]schemebetting.PeriodSnapshot, 0, len(periodRows))
 	for _, item := range periodRows {
 		openAt := time.Time{}

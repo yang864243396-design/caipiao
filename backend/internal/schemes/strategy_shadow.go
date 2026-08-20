@@ -29,6 +29,9 @@ func persistShadowDecision(ctx context.Context, q *sqlcdb.Queries, row sqlcdb.Pe
 	if err != nil {
 		return result, err
 	}
+	if len(periodRows) > 0 && !periodRows[0].DatabaseNow.IsZero() {
+		now = periodRows[0].DatabaseNow.UTC()
+	}
 	snapshots := make([]schemebetting.PeriodSnapshot, 0, len(periodRows))
 	for _, item := range periodRows {
 		openAt := time.Time{}

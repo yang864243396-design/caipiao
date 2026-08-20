@@ -10,11 +10,12 @@ import (
 )
 
 type ProviderPeriodSnapshotRow struct {
-	ID         int64
-	PeriodNo   string
-	OpenAt     pgtype.Timestamptz
-	CloseAt    time.Time
-	ObservedAt time.Time
+	ID          int64
+	PeriodNo    string
+	OpenAt      pgtype.Timestamptz
+	CloseAt     time.Time
+	ObservedAt  time.Time
+	DatabaseNow time.Time
 }
 
 func (q *Queries) ListOpenProviderPeriodSnapshots(ctx context.Context, lotteryCode, sourcePeriod string, now, observedAfter time.Time, rowLimit int32) ([]ProviderPeriodSnapshotRow, error) {
@@ -22,13 +23,20 @@ func (q *Queries) ListOpenProviderPeriodSnapshots(ctx context.Context, lotteryCo
 		rowLimit = 8
 	}
 	rows, err := q.db.Query(ctx, `
-SELECT p.id, p.period_no, p.open_at, p.close_at, p.observed_at
+WITH db_now AS MATERIALIZED (
+    SELECT clock_timestamp() AS value
+)
+SELECT p.id, p.period_no, p.open_at, p.close_at, p.observed_at, db_now.value
 FROM provider_period_snapshots p
+CROSS JOIN db_now
 WHERE p.lottery_code = $1
   AND p.period_no <> $2
-  AND (p.open_at IS NULL OR p.open_at <= $3)
-  AND p.close_at > $3
-  AND (p.observed_at >= $4 OR (p.open_at IS NOT NULL AND p.observed_at <= p.open_at))
+  AND (p.open_at IS NULL OR p.open_at <= db_now.value)
+  AND p.close_at > db_now.value
+  AND (
+      p.observed_at >= db_now.value - GREATEST($3::timestamptz - $4::timestamptz, interval '0')
+      OR (p.open_at IS NOT NULL AND p.observed_at <= p.open_at)
+  )
   AND NOT EXISTS (
       SELECT 1
       FROM provider_period_snapshots newer
@@ -45,7 +53,7 @@ LIMIT $5`, lotteryCode, sourcePeriod, now, observedAfter, rowLimit)
 	out := make([]ProviderPeriodSnapshotRow, 0, rowLimit)
 	for rows.Next() {
 		var row ProviderPeriodSnapshotRow
-		if err := rows.Scan(&row.ID, &row.PeriodNo, &row.OpenAt, &row.CloseAt, &row.ObservedAt); err != nil {
+		if err := rows.Scan(&row.ID, &row.PeriodNo, &row.OpenAt, &row.CloseAt, &row.ObservedAt, &row.DatabaseNow); err != nil {
 			return nil, err
 		}
 		out = append(out, row)
