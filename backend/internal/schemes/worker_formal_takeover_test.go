@@ -10,15 +10,24 @@ import (
 )
 
 type fakeFormalEventEnabler struct {
-	calls  int
-	scheme string
-	actor  string
-	reason string
-	err    error
+	calls      int
+	rearmCalls int
+	scheme     string
+	actor      string
+	reason     string
+	err        error
 }
 
 func (f *fakeFormalEventEnabler) EnableEventScheme(_ context.Context, schemeID, actor, reason string) error {
 	f.calls++
+	f.scheme = schemeID
+	f.actor = actor
+	f.reason = reason
+	return f.err
+}
+
+func (f *fakeFormalEventEnabler) RearmEventScheme(_ context.Context, schemeID, actor, reason string) error {
+	f.rearmCalls++
 	f.scheme = schemeID
 	f.actor = actor
 	f.reason = reason
@@ -97,6 +106,24 @@ func TestWorkerStartupTakeoverOnlyIncludesEligibleLegacyFormalSchemes(t *testing
 	}
 	if enabler.calls != 1 || enabler.scheme != "eligible" {
 		t.Fatalf("unexpected startup takeover call: %+v", enabler)
+	}
+}
+
+func TestWorkerStartupTakeoverRearmsBlockedEventScheme(t *testing.T) {
+	enabler := &fakeFormalEventEnabler{}
+	w := &Worker{strategyProcessor: &StrategyProcessor{}, formalEventEnabler: enabler}
+	w.SetSchemeBettingMode("gray", []string{"tron_ffc_6s"})
+
+	result := w.takeOverStartupFormalSchemes(context.Background(), []startupFormalScheme{
+		{instance: sqlcdb.SchemeInstance{ID: "blocked", LotteryCode: "tron_ffc_6s"}, owner: "event", chainState: "blocked_requires_rearm"},
+		{instance: sqlcdb.SchemeInstance{ID: "active", LotteryCode: "tron_ffc_6s"}, owner: "event", chainState: "active"},
+	})
+
+	if result.Attempted != 1 || result.Transferred != 1 || result.Deferred != 0 {
+		t.Fatalf("unexpected startup rearm result: %+v", result)
+	}
+	if enabler.rearmCalls != 1 || enabler.calls != 0 || enabler.scheme != "blocked" {
+		t.Fatalf("unexpected startup rearm call: %+v", enabler)
 	}
 }
 

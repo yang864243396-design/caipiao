@@ -20,10 +20,45 @@ func (q *Queries) ListUnpublishedBetReady(ctx context.Context, limit int32) ([]P
 SELECT id, request_id, shard_no, safe_deadline_at
 FROM scheme_bet_outbox
 WHERE mode IN ('gray', 'production')
+  AND state = 'pending'
   AND ready_published_at IS NULL
   AND ready_next_attempt_at <= now()
 ORDER BY safe_deadline_at, id
 LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]PendingBetReadyEvent, 0, limit)
+	for rows.Next() {
+		var event PendingBetReadyEvent
+		if err := rows.Scan(&event.OutboxID, &event.RequestID, &event.ShardNo, &event.SafeDeadline); err != nil {
+			return nil, err
+		}
+		result = append(result, event)
+	}
+	return result, rows.Err()
+}
+
+// ListPendingFormalBetWakeups is the low-frequency database safety net for
+// JetStream delivery. It scans the assigned shard set once, rather than doing
+// two round trips for every shard on every hot tick.
+func (q *Queries) ListPendingFormalBetWakeups(
+	ctx context.Context, mode string, lotteryCodes []string, shards []int32, limit int32,
+) ([]PendingBetReadyEvent, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := q.db.Query(ctx, `
+SELECT id, request_id, shard_no, safe_deadline_at
+FROM scheme_bet_outbox
+WHERE mode = $1
+  AND state = 'pending'
+  AND lottery_code = ANY($2::text[])
+  AND shard_no = ANY($3::integer[])
+  AND safe_deadline_at > clock_timestamp()
+ORDER BY safe_deadline_at, id
+LIMIT $4`, mode, lotteryCodes, shards, limit)
 	if err != nil {
 		return nil, err
 	}

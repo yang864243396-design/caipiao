@@ -15,8 +15,9 @@ const (
 )
 
 type startupFormalScheme struct {
-	instance sqlcdb.SchemeInstance
-	owner    string
+	instance   sqlcdb.SchemeInstance
+	owner      string
+	chainState string
 }
 
 type startupFormalTakeoverResult struct {
@@ -93,7 +94,7 @@ func (w *Worker) takeOverRunningFormalSchemes(ctx context.Context) startupFormal
 			lookupDeferred++
 			continue
 		}
-		candidates = append(candidates, startupFormalScheme{instance: inst, owner: execution.Owner})
+		candidates = append(candidates, startupFormalScheme{instance: inst, owner: execution.Owner, chainState: execution.ChainState})
 	}
 	result := w.takeOverStartupFormalSchemes(ctx, candidates)
 	result.Eligible += lookupDeferred
@@ -113,7 +114,9 @@ func (w *Worker) formalEventModeConfigured() bool {
 func (w *Worker) takeOverStartupFormalSchemes(ctx context.Context, candidates []startupFormalScheme) startupFormalTakeoverResult {
 	eligible := make([]startupFormalScheme, 0, len(candidates))
 	for _, candidate := range candidates {
-		if requiresGuajiRealBet(candidate.instance) && candidate.owner == "legacy" && w.formalEventModeForLottery(candidate.instance.LotteryCode) {
+		legacyCandidate := candidate.owner == "legacy"
+		blockedEventCandidate := candidate.owner == "event" && candidate.chainState == "blocked_requires_rearm"
+		if requiresGuajiRealBet(candidate.instance) && (legacyCandidate || blockedEventCandidate) && w.formalEventModeForLottery(candidate.instance.LotteryCode) {
 			eligible = append(eligible, candidate)
 		}
 	}
@@ -134,7 +137,16 @@ func (w *Worker) takeOverStartupFormalSchemes(ctx context.Context, candidates []
 	for i := 0; i < workers; i++ {
 		go func() {
 			for candidate := range jobs {
-				_, err := w.takeOverLegacyFormalScheme(ctx, candidate.instance, candidate.owner)
+				var err error
+				if candidate.owner == "event" {
+					enabler := w.formalEventEnabler
+					if enabler == nil {
+						enabler = w
+					}
+					err = enabler.RearmEventScheme(ctx, candidate.instance.ID, "system", "automatic recovery of proven unsent event chain")
+				} else {
+					_, err = w.takeOverLegacyFormalScheme(ctx, candidate.instance, candidate.owner)
+				}
 				results <- attemptResult{schemeID: candidate.instance.ID, err: err}
 			}
 		}()

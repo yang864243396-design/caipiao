@@ -42,6 +42,11 @@ func TestDispatchQueriesAgainstMigratedSchema(t *testing.T) {
 	if _, acquired, err := q.LeaseFormalOutboxByID(context.Background(), -1, "schema-probe", time.Second); err != nil || acquired {
 		t.Fatalf("lease formal outbox by id acquired=%v err=%v", acquired, err)
 	}
+	if _, acquired, err := q.LeaseFormalEventOutboxByID(context.Background(), sqlcdb.LeaseFormalEventOutboxParams{
+		ID: -1, Mode: "gray", Owner: "schema-probe", LotteryCodes: []string{"__schema_probe__"}, ShardNo: -1, LeaseDuration: time.Second,
+	}); err != nil || acquired {
+		t.Fatalf("lease formal event outbox by id acquired=%v err=%v", acquired, err)
+	}
 	if _, err := q.RecoverExpiredUnstartedFormalOutbox(context.Background(), 1); err != nil {
 		t.Fatalf("recover expired unstarted outbox: %v", err)
 	}
@@ -53,6 +58,9 @@ func TestDispatchQueriesAgainstMigratedSchema(t *testing.T) {
 	}
 	if _, err := q.ListPendingPreSendFailureOutboxIDs(context.Background(), 1); err != nil {
 		t.Fatalf("list pre-send replacement candidates: %v", err)
+	}
+	if _, err := q.ListPendingFormalBetWakeups(context.Background(), "gray", []string{"__schema_probe__"}, []int32{-1}, 1); err != nil {
+		t.Fatalf("list pending formal bet wakeups: %v", err)
 	}
 	if _, found, err := q.GetPreSendFailureOutbox(context.Background(), -1); err != nil || found {
 		t.Fatalf("get pre-send replacement candidate found=%v err=%v", found, err)
@@ -153,15 +161,15 @@ RETURNING id`, memberID, lotteryCode, unique+"-period", unique, unique+"-hash", 
 	}
 
 	q := sqlcdb.New(tx)
-	commands, err := q.LeaseFormalSchemeBetOutbox(ctx, sqlcdb.LeaseFormalOutboxParams{
-		Mode: "gray", LeaseOwner: "db-clock-owner", LotteryCodes: []string{lotteryCode},
-		ShardNo: shardNo, Limit: 1, LeaseDuration: 1500 * time.Millisecond,
+	command, acquired, err := q.LeaseFormalEventOutboxByID(ctx, sqlcdb.LeaseFormalEventOutboxParams{
+		ID: outboxID, RequestID: unique, Mode: "gray", Owner: "db-clock-owner", LotteryCodes: []string{lotteryCode},
+		ShardNo: shardNo, LeaseDuration: 1500 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(commands) != 1 || commands[0].ID != outboxID {
-		t.Fatalf("leased commands=%+v want outbox=%d", commands, outboxID)
+	if !acquired || command.ID != outboxID {
+		t.Fatalf("leased command=%+v acquired=%v want outbox=%d", command, acquired, outboxID)
 	}
 	var leaseRemainingSeconds float64
 	if err := tx.QueryRow(ctx, `SELECT EXTRACT(EPOCH FROM (lease_until - clock_timestamp())) FROM scheme_bet_outbox WHERE id = $1`, outboxID).Scan(&leaseRemainingSeconds); err != nil {
@@ -171,7 +179,7 @@ RETURNING id`, memberID, lotteryCode, unique+"-period", unique, unique+"-hash", 
 		t.Fatalf("lease remaining=%f seconds", leaseRemainingSeconds)
 	}
 
-	start, err := q.StartAttempt(ctx, commands[0], 2*time.Second)
+	start, err := q.StartAttempt(ctx, command, 2*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +196,7 @@ WHERE id = $1`, outboxID).Scan(&protectedLeaseSeconds); err != nil {
 	if protectedLeaseSeconds < 1.9 {
 		t.Fatalf("started attempt lease only protects %.3f seconds past safe deadline, want at least 1.9", protectedLeaseSeconds)
 	}
-	if renewed, err := q.RenewLease(ctx, commands[0], 2*time.Second); err != nil || !renewed {
+	if renewed, err := q.RenewLease(ctx, command, 2*time.Second); err != nil || !renewed {
 		t.Fatalf("renewed=%v err=%v", renewed, err)
 	}
 	if err := tx.QueryRow(ctx, `
@@ -200,13 +208,13 @@ WHERE id = $1`, outboxID).Scan(&protectedLeaseSeconds); err != nil {
 	if protectedLeaseSeconds < 1.9 {
 		t.Fatalf("heartbeat shortened protected attempt lease to %.3f seconds past safe deadline", protectedLeaseSeconds)
 	}
-	stale := commands[0]
+	stale := command
 	stale.Lease.Token++
 	if renewed, err := q.RenewLease(ctx, stale, 2*time.Second); err != nil || renewed {
 		t.Fatalf("stale fencing token renewed=%v err=%v", renewed, err)
 	}
 	const finishFailureEvidence = "finish_attempt_failed: deadlock detected while updating scheme terminal state"
-	if recorded, err := q.RecordFinishAttemptFailure(ctx, commands[0], finishFailureEvidence); err != nil || !recorded {
+	if recorded, err := q.RecordFinishAttemptFailure(ctx, command, finishFailureEvidence); err != nil || !recorded {
 		t.Fatalf("recorded finish failure=%v err=%v", recorded, err)
 	}
 	var failureState, outboxFailure, attemptFailure string

@@ -91,3 +91,24 @@ func TestStrategyBacklogCapacityIncludesPendingAndUnacked(t *testing.T) {
 		t.Fatal("capacity equality must reject admission")
 	}
 }
+
+func TestValidateBetReadyRejectsWrongShardAndIncompleteIdentity(t *testing.T) {
+	deadline := time.Now().Add(time.Second)
+	for _, event := range []BetReady{
+		{OutboxID: 0, RequestID: "request-7", ShardNo: 2, SafeDeadline: deadline},
+		{OutboxID: 7, RequestID: "", ShardNo: 2, SafeDeadline: deadline},
+		{OutboxID: 7, RequestID: "request-7", ShardNo: 3, SafeDeadline: deadline},
+		{OutboxID: 7, RequestID: "request-7", ShardNo: 2},
+	} {
+		if err := validateBetReady(event, 2); err == nil {
+			t.Fatalf("event should be rejected: %+v", event)
+		}
+	}
+}
+
+func TestValidateBetReadyAcceptsExactShardEvent(t *testing.T) {
+	event := BetReady{OutboxID: 7, RequestID: "request-7", ShardNo: 2, SafeDeadline: time.Now().Add(time.Second)}
+	if err := validateBetReady(event, 2); err != nil {
+		t.Fatal(err)
+	}
+}

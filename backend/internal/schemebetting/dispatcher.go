@@ -12,6 +12,7 @@ import (
 
 var (
 	ErrStaleLease       = errors.New("scheme betting lease is stale")
+	ErrDispatchDeferred = errors.New("scheme betting dispatch deferred")
 	ErrInvalidCommand   = errors.New("scheme betting command is incomplete")
 	ErrDispatcherConfig = errors.New("scheme betting dispatcher is not configured")
 )
@@ -192,7 +193,7 @@ func (d Dispatcher) Dispatch(ctx context.Context, command LeasedCommand) error {
 			if !released {
 				return ErrStaleLease
 			}
-			return nil
+			return ErrDispatchDeferred
 		}
 	}
 	start, err := d.Store.StartAttempt(ctx, command, d.LeaseDuration)

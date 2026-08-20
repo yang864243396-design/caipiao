@@ -543,8 +543,8 @@ func TestDispatcherReleasesLeaseWhenRateLimitIsUnavailable(t *testing.T) {
 		ID: 10, TargetPeriod: "T", FrozenRequest: []byte(`{}`), FrozenRequestHash: PayloadHash([]byte(`{}`)),
 		SafeDeadline: now.Add(time.Second), Lease: LeaseFence{Owner: "node", Token: 3, Until: now.Add(time.Second)},
 	}
-	if err := d.Dispatch(context.Background(), command); err != nil {
-		t.Fatal(err)
+	if err := d.Dispatch(context.Background(), command); !errors.Is(err, ErrDispatchDeferred) {
+		t.Fatalf("error=%v want deferred", err)
 	}
 	if store.released != 1 || store.started != 0 || transport.calls != 0 || len(store.finished) != 0 {
 		t.Fatalf("released=%d started=%d calls=%d finished=%d", store.released, store.started, transport.calls, len(store.finished))

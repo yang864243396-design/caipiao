@@ -51,6 +51,7 @@ type schemeBettingBacklogProbe interface {
 
 type formalEventEnabler interface {
 	EnableEventScheme(context.Context, string, string, string) error
+	RearmEventScheme(context.Context, string, string, string) error
 }
 
 // Worker ticks running scheme instances: countdown → bet against lottery draw + scheme config.

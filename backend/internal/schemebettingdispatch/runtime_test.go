@@ -293,3 +293,12 @@ func TestRunAcceptanceRecoveryStopsOnAbandonedDispatchSweepFailure(t *testing.T)
 		t.Fatalf("recovery calls=%d want 0", recovery.calls)
 	}
 }
+
+func TestRecoveryPollDoesNotRepeatHotShardScanCadence(t *testing.T) {
+	if got := recoveryPollInterval(100 * time.Millisecond); got != time.Second {
+		t.Fatalf("recovery interval=%v want=1s", got)
+	}
+	if got := recoveryPollInterval(3 * time.Second); got != 3*time.Second {
+		t.Fatalf("recovery interval=%v want=3s", got)
+	}
+}

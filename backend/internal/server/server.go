@@ -338,6 +338,14 @@ func New(cfg config.Config) (*Server, error) {
 						slog.Error("scheme strategy shard consumer stopped", "shard", shard, "err", err)
 					}
 				})
+				betShard := shardID
+				launchWorker(func() {
+					if err := runLeasedSchemeBetReadyConsumer(
+						workerCtx, schemeEventBus, pool, betShard, eventLeaseOwner, 2*cfg.SchemeBettingLease, schemeBettingRuntime,
+					); err != nil {
+						slog.Error("scheme bet-ready shard consumer stopped", "shard", betShard, "err", err)
+					}
+				})
 			}
 		} else {
 			launchWorker(func() {

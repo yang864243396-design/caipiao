@@ -2,9 +2,11 @@ package sqlcdb
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"caipiao/backend/internal/schemebetting"
+	"github.com/jackc/pgx/v5"
 )
 
 type LeaseFormalOutboxParams struct {
@@ -14,6 +16,60 @@ type LeaseFormalOutboxParams struct {
 	ShardNo       int32
 	Limit         int32
 	LeaseDuration time.Duration
+}
+
+type LeaseFormalEventOutboxParams struct {
+	ID            int64
+	RequestID     string
+	Mode          string
+	Owner         string
+	LotteryCodes  []string
+	ShardNo       int32
+	LeaseDuration time.Duration
+}
+
+// LeaseFormalEventOutboxByID is the JetStream hot path. The event is only a
+// wake-up hint; every authoritative routing field is checked again in the
+// database before a fenced lease is granted.
+func (q *Queries) LeaseFormalEventOutboxByID(ctx context.Context, arg LeaseFormalEventOutboxParams) (schemebetting.LeasedCommand, bool, error) {
+	if arg.ID <= 0 || arg.LeaseDuration <= 0 {
+		return schemebetting.LeasedCommand{}, false, nil
+	}
+	var command schemebetting.LeasedCommand
+	err := q.db.QueryRow(ctx, `
+WITH db_now AS MATERIALIZED (
+    SELECT clock_timestamp() AS value
+)
+UPDATE scheme_bet_outbox o
+SET state = 'leased',
+    lease_owner = $3,
+    lease_fencing_token = lease_fencing_token + 1,
+    lease_until = db_now.value + ($6::bigint * interval '1 microsecond'),
+    updated_at = db_now.value
+FROM db_now
+WHERE o.id = $1
+  AND o.request_id = $7
+  AND o.mode = $2
+  AND o.state = 'pending'
+  AND o.shard_no = $4
+  AND o.lottery_code = ANY($5::text[])
+  AND o.safe_deadline_at > db_now.value
+  AND o.frozen_request IS NOT NULL
+  AND o.frozen_request_hash IS NOT NULL
+  AND o.command_frozen_at IS NOT NULL
+RETURNING o.id, COALESCE(o.scheme_id, ''), o.target_period_no, o.frozen_request, o.frozen_request_hash,
+          o.close_at, o.safe_deadline_at, o.lease_owner, o.lease_fencing_token, o.lease_until`,
+		arg.ID, arg.Mode, arg.Owner, arg.ShardNo, arg.LotteryCodes, arg.LeaseDuration.Microseconds(), arg.RequestID).Scan(
+		&command.ID, &command.SchemeID, &command.TargetPeriod, &command.FrozenRequest, &command.FrozenRequestHash,
+		&command.CloseAt, &command.SafeDeadline, &command.Lease.Owner, &command.Lease.Token, &command.Lease.Until,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return schemebetting.LeasedCommand{}, false, nil
+		}
+		return schemebetting.LeasedCommand{}, false, err
+	}
+	return command, true, nil
 }
 
 func (q *Queries) LeaseFormalSchemeBetOutbox(ctx context.Context, arg LeaseFormalOutboxParams) ([]schemebetting.LeasedCommand, error) {
@@ -337,12 +393,6 @@ WITH db_now AS MATERIALIZED (
     FROM candidates c, db_now
     WHERE o.id = c.id
     RETURNING o.id, o.scheme_id, o.state
-), blocked AS (
-    UPDATE scheme_instances i
-    SET strict_chain_state = 'blocked_requires_rearm', updated_at = db_now.value
-    FROM updated u, db_now
-    WHERE i.id = u.scheme_id AND u.state = 'expired'
-    RETURNING i.id
 )
 SELECT count(*) FROM updated`, rowLimit).Scan(&count)
 	return count, err
@@ -390,7 +440,7 @@ WITH db_now AS MATERIALIZED (
     UPDATE scheme_instances i
     SET strict_chain_state = 'blocked_requires_rearm', updated_at = db_now.value
     FROM updated u, db_now
-    WHERE i.id = u.scheme_id
+    WHERE i.id = u.scheme_id AND u.state = 'external_acceptance_unknown'
     RETURNING i.id
 )
 SELECT count(*) FROM updated`, rowLimit).Scan(&count)

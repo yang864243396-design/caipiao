@@ -247,7 +247,7 @@ func (bus *Bus) ConsumeDraws(ctx context.Context, durable string, handler DrawHa
 			return
 		}
 		if err := handler(ctx, event); err != nil {
-			bus.retryOrDeadLetter(ctx, message, "handler_error")
+			bus.retryOrDeadLetterAfter(ctx, message, "handler_error", 100*time.Millisecond)
 			return
 		}
 		_ = message.Ack()
@@ -296,6 +296,50 @@ func (bus *Bus) ConsumeStrategyReady(ctx context.Context, shard uint32, durable 
 	return ctx.Err()
 }
 
+type BetReadyHandler func(context.Context, BetReady) error
+
+func validateBetReady(event BetReady, shard int32) error {
+	if event.OutboxID <= 0 || strings.TrimSpace(event.RequestID) == "" || event.SafeDeadline.IsZero() {
+		return errors.New("scheme bet-ready event identity is incomplete")
+	}
+	if event.ShardNo != shard {
+		return errors.New("scheme bet-ready event has wrong shard")
+	}
+	return nil
+}
+
+// ConsumeBetReady shares one durable queue per shard across dispatcher nodes.
+// The event contains identity only; the consumer must load and fence the
+// authoritative command from PostgreSQL before it can place a bet.
+func (bus *Bus) ConsumeBetReady(ctx context.Context, shard int32, durable string, handler BetReadyHandler) error {
+	if bus == nil || handler == nil || shard < 0 || strings.TrimSpace(durable) == "" {
+		return errors.New("scheme bet-ready consumer configuration is incomplete")
+	}
+	durable = strings.TrimSpace(durable)
+	sub, err := bus.js.QueueSubscribe(bus.BetReadySubject(shard), durable, func(message *nats.Msg) {
+		var event BetReady
+		if err := json.Unmarshal(message.Data, &event); err != nil {
+			bus.deadLetterAndTerminate(ctx, message, "invalid_json")
+			return
+		}
+		if err := validateBetReady(event, shard); err != nil {
+			bus.deadLetterAndTerminate(ctx, message, "invalid_bet_ready")
+			return
+		}
+		if err := handler(ctx, event); err != nil {
+			bus.retryOrDeadLetter(ctx, message, "handler_error")
+			return
+		}
+		_ = message.Ack()
+	}, nats.Durable(durable), nats.ManualAck(), nats.AckExplicit(), nats.BindStream(bus.stream), nats.MaxAckPending(256))
+	if err != nil {
+		return errors.New("scheme bet-ready consumer unavailable")
+	}
+	defer sub.Unsubscribe()
+	<-ctx.Done()
+	return ctx.Err()
+}
+
 const maxConsumerDeliveries = uint64(10)
 
 func newDeadLetter(message *nats.Msg, failureClass string, failedAt time.Time) DeadLetter {
@@ -314,9 +358,17 @@ func newDeadLetter(message *nats.Msg, failureClass string, failedAt time.Time) D
 }
 
 func (bus *Bus) retryOrDeadLetter(ctx context.Context, message *nats.Msg, failureClass string) {
+	bus.retryOrDeadLetterAfter(ctx, message, failureClass, 0)
+}
+
+func (bus *Bus) retryOrDeadLetterAfter(ctx context.Context, message *nats.Msg, failureClass string, delay time.Duration) {
 	metadata, err := message.Metadata()
 	if err == nil && metadata != nil && metadata.NumDelivered >= maxConsumerDeliveries {
 		bus.deadLetterAndTerminate(ctx, message, failureClass)
+		return
+	}
+	if delay > 0 {
+		_ = message.NakWithDelay(delay)
 		return
 	}
 	_ = message.Nak()

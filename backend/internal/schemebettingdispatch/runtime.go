@@ -14,6 +14,7 @@ import (
 	"caipiao/backend/internal/guaji"
 	"caipiao/backend/internal/guajibet"
 	"caipiao/backend/internal/schemebetting"
+	"caipiao/backend/internal/schemeeventbus"
 )
 
 type Config struct {
@@ -280,6 +281,51 @@ func (runtime *Runtime) SetBetEventPublisher(publisher betEventPublisher) {
 	}
 }
 
+func (runtime *Runtime) ownsShard(shard int32) bool {
+	if runtime == nil {
+		return false
+	}
+	for _, configured := range runtime.cfg.Shards {
+		if configured == shard {
+			return true
+		}
+	}
+	return false
+}
+
+// HandleBetReady is the primary formal dispatch path. JetStream only wakes
+// the exact command; PostgreSQL revalidates mode, lottery, shard, deadline,
+// request identity, and fencing before any provider call is possible.
+func (runtime *Runtime) HandleBetReady(ctx context.Context, event schemeeventbus.BetReady) error {
+	if runtime == nil || event.OutboxID <= 0 || strings.TrimSpace(event.RequestID) == "" || !runtime.ownsShard(event.ShardNo) {
+		return errors.New("scheme bet-ready event is outside dispatcher ownership")
+	}
+	_, held, err := runtime.q.AcquireSchemeBettingShardLease(
+		ctx, "dispatcher", event.ShardNo, runtime.cfg.Owner, 2*runtime.cfg.LeaseDuration,
+	)
+	if err != nil {
+		return err
+	}
+	if !held {
+		return schemebetting.ErrDispatchDeferred
+	}
+	command, acquired, err := runtime.q.LeaseFormalEventOutboxByID(ctx, sqlcdb.LeaseFormalEventOutboxParams{
+		ID: event.OutboxID, RequestID: event.RequestID, Mode: runtime.cfg.Mode, Owner: runtime.cfg.Owner,
+		LotteryCodes: runtime.cfg.LotteryCodes, ShardNo: event.ShardNo, LeaseDuration: runtime.cfg.LeaseDuration,
+	})
+	if err != nil {
+		return err
+	}
+	if !acquired {
+		return nil
+	}
+	err = runtime.dispatcher.Dispatch(ctx, command)
+	if errors.Is(err, schemebetting.ErrStaleLease) {
+		return nil
+	}
+	return err
+}
+
 func (runtime *Runtime) Run(ctx context.Context) {
 	if runtime == nil {
 		return
@@ -287,10 +333,13 @@ func (runtime *Runtime) Run(ctx context.Context) {
 	if runtime.dispatcher.PreSendFailureHandler != nil {
 		go runtime.runPreSendFailureRecovery(ctx)
 	}
-	ticker := time.NewTicker(runtime.cfg.PollInterval)
+	if runtime.events != nil {
+		go runtime.runBetEventPublisher(ctx)
+	}
+	ticker := time.NewTicker(recoveryPollInterval(runtime.cfg.PollInterval))
 	defer ticker.Stop()
 	for {
-		if err := runtime.runOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		if err := runtime.runMaintenanceOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("scheme betting dispatcher cycle failed", "err", err)
 		}
 		select {
@@ -301,11 +350,33 @@ func (runtime *Runtime) Run(ctx context.Context) {
 	}
 }
 
-func (runtime *Runtime) runOnce(ctx context.Context) error {
-	now := time.Now().UTC()
-	if err := runtime.publishPendingBetEvents(ctx, now); err != nil {
-		slog.Warn("scheme betting event recovery publish failed", "err", err)
+func recoveryPollInterval(configured time.Duration) time.Duration {
+	if configured < time.Second {
+		return time.Second
 	}
+	return configured
+}
+
+func (runtime *Runtime) runBetEventPublisher(ctx context.Context) {
+	publish := func() {
+		if err := runtime.publishPendingBetEvents(ctx, time.Now().UTC()); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Warn("scheme betting event recovery publish failed", "err", err)
+		}
+	}
+	publish()
+	ticker := time.NewTicker(runtime.cfg.PollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			publish()
+		}
+	}
+}
+
+func (runtime *Runtime) runMaintenanceOnce(ctx context.Context) error {
 	if _, err := runtime.q.RecoverExpiredUnstartedFormalOutbox(ctx, runtime.cfg.Batch); err != nil {
 		return err
 	}
@@ -316,46 +387,38 @@ func (runtime *Runtime) runOnce(ctx context.Context) error {
 	if _, err := runtime.q.ExpireDueFormalOutbox(ctx, runtime.cfg.Batch); err != nil {
 		return err
 	}
+	return runtime.dispatchPendingFallback(ctx)
+}
+
+func (runtime *Runtime) dispatchPendingFallback(ctx context.Context) error {
+	events, err := runtime.q.ListPendingFormalBetWakeups(
+		ctx, runtime.cfg.Mode, runtime.cfg.LotteryCodes, runtime.cfg.Shards, runtime.cfg.Batch,
+	)
+	if err != nil {
+		return err
+	}
 	sem := make(chan struct{}, runtime.cfg.Concurrency)
 	var workers sync.WaitGroup
-	for _, shard := range runtime.cfg.Shards {
-		_, acquired, err := runtime.q.AcquireSchemeBettingShardLease(
-			ctx, "dispatcher", shard, runtime.cfg.Owner, 2*runtime.cfg.LeaseDuration,
-		)
-		if err != nil {
-			return err
+	for _, event := range events {
+		select {
+		case <-ctx.Done():
+			workers.Wait()
+			return ctx.Err()
+		case sem <- struct{}{}:
 		}
-		if !acquired {
-			continue
-		}
-		commands, err := runtime.q.LeaseFormalSchemeBetOutbox(ctx, sqlcdb.LeaseFormalOutboxParams{
-			Mode: runtime.cfg.Mode, LeaseOwner: runtime.cfg.Owner, LotteryCodes: runtime.cfg.LotteryCodes, ShardNo: shard, Limit: runtime.cfg.Batch,
-			LeaseDuration: runtime.cfg.LeaseDuration,
-		})
-		if err != nil {
-			return err
-		}
-		for _, command := range commands {
-			select {
-			case <-ctx.Done():
-				workers.Wait()
-				return ctx.Err()
-			case sem <- struct{}{}:
+		workers.Add(1)
+		go func(event sqlcdb.PendingBetReadyEvent) {
+			defer workers.Done()
+			defer func() { <-sem }()
+			err := runtime.HandleBetReady(ctx, schemeeventbus.BetReady{
+				OutboxID: event.OutboxID, RequestID: event.RequestID, ShardNo: event.ShardNo, SafeDeadline: event.SafeDeadline,
+			})
+			if err != nil && !errors.Is(err, schemebetting.ErrStaleLease) && !errors.Is(err, schemebetting.ErrDispatchDeferred) {
+				slog.Error("scheme betting fallback dispatch failed", "outboxId", event.OutboxID, "err", err)
 			}
-			workers.Add(1)
-			go func(command schemebetting.LeasedCommand) {
-				defer workers.Done()
-				defer func() { <-sem }()
-				if err := runtime.dispatcher.Dispatch(ctx, command); err != nil && !errors.Is(err, schemebetting.ErrStaleLease) {
-					slog.Error("scheme betting dispatch failed", "outboxId", command.ID, "schemeId", command.SchemeID, "err", err)
-				}
-			}(command)
-		}
+		}(event)
 	}
 	workers.Wait()
-	if err := runtime.publishPendingBetEvents(ctx, time.Now().UTC()); err != nil {
-		slog.Warn("scheme betting reconcile publish failed", "err", err)
-	}
 	return nil
 }
 

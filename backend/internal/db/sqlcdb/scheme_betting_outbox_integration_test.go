@@ -57,7 +57,11 @@ func TestListOpenProviderPeriodSnapshotsUsesLatestPeriodFact(t *testing.T) {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	now := time.Now().UTC().Truncate(time.Millisecond)
+	var now time.Time
+	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		t.Fatal(err)
+	}
+	now = now.UTC().Truncate(time.Millisecond)
 	lotteryCode := fmt.Sprintf("__latest_fact_%d", now.UnixNano())
 	periodNo := "future-period"
 	for _, snapshot := range []struct {
@@ -105,7 +109,11 @@ func TestListOpenProviderPeriodSnapshotsReturnsPreloadedCurrentPeriod(t *testing
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	now := time.Now().UTC().Truncate(time.Millisecond)
+	var now time.Time
+	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		t.Fatal(err)
+	}
+	now = now.UTC().Truncate(time.Millisecond)
 	lotteryCode := fmt.Sprintf("__preloaded_%d", now.UnixNano())
 	if _, err := tx.Exec(ctx, `
 INSERT INTO provider_period_snapshots

@@ -14,12 +14,18 @@ import (
 
 var errNoFreshPreSendReplacementTarget = errors.New("no fresh provider target for pre-send replacement")
 
+type permanentPreSendReplacementError struct{ err error }
+
+func (err permanentPreSendReplacementError) Error() string { return err.err.Error() }
+func (err permanentPreSendReplacementError) Unwrap() error { return err.err }
+
 func (w *Worker) HandlePreSendFailure(ctx context.Context, outboxID int64) error {
 	schemeID, err := w.reschedulePreSendFailure(ctx, outboxID)
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, errNoFreshPreSendReplacementTarget) && w != nil && w.q != nil {
+	var permanent permanentPreSendReplacementError
+	if !errors.As(err, &permanent) && w != nil && w.q != nil {
 		return w.q.DeferPreSendFailureReschedule(ctx, outboxID, err.Error())
 	}
 	if schemeID != "" && w != nil && w.q != nil {
@@ -91,11 +97,14 @@ func (w *Worker) reschedulePreSendFailure(ctx context.Context, outboxID int64) (
 		Now: now, Budget: shadowDeadlineBudget(target), ShardCount: shadowOutboxShardCount,
 	})
 	if err != nil {
-		return failed.SchemeID, err
+		if strings.Contains(err.Error(), "no safe dispatch window") {
+			return failed.SchemeID, errNoFreshPreSendReplacementTarget
+		}
+		return failed.SchemeID, permanentPreSendReplacementError{err: err}
 	}
 	frozen, err := w.strategyProcessor.buildFormalFrozenRequest(ctx, q, inst, command.TargetPeriod, command.RequestID)
 	if err != nil {
-		return failed.SchemeID, fmt.Errorf("freeze pre-send replacement: %w", err)
+		return failed.SchemeID, permanentPreSendReplacementError{err: fmt.Errorf("freeze pre-send replacement: %w", err)}
 	}
 	diagnostics, err := json.Marshal(map[string]any{
 		"mode": failed.Mode, "preSendReplacement": true, "failedOutboxId": outboxID,
