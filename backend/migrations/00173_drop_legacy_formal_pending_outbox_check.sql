@@ -3,6 +3,7 @@
 -- mode = 'shadow' OR state <> 'pending'.  Formal gray/production commands
 -- are intentionally created pending, so remove every legacy copy by meaning
 -- rather than by its unstable generated constraint name (for example check1).
+-- +goose StatementBegin
 DO $migration$
 DECLARE
     constraint_name TEXT;
@@ -18,6 +19,7 @@ BEGIN
     END LOOP;
 END
 $migration$;
+-- +goose StatementEnd
 
 -- +goose Down
 -- Restoring the legacy restriction would invalidate active formal pending rows.

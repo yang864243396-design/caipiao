@@ -13,6 +13,8 @@ func TestEventDrivenFormalPendingConstraintMigrationContracts(t *testing.T) {
 	}
 	sql := string(b)
 	for _, want := range []string{
+		"-- +goose StatementBegin",
+		"-- +goose StatementEnd",
 		"pg_constraint",
 		"scheme_bet_outbox",
 		"state <> 'pending'",
