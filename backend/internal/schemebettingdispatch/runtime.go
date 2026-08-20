@@ -263,6 +263,9 @@ func (runtime *Runtime) runOnce(ctx context.Context) error {
 	if err := runtime.publishPendingBetEvents(ctx, now); err != nil {
 		slog.Warn("scheme betting event recovery publish failed", "err", err)
 	}
+	if _, err := runtime.q.RecoverExpiredUnstartedFormalOutbox(ctx, now, runtime.cfg.Batch); err != nil {
+		return err
+	}
 	_, sweepErr := runtime.q.MarkAbandonedStartedDispatchUnknown(ctx, now, runtime.cfg.Batch)
 	if err := runAcceptanceRecovery(ctx, sweepErr, runtime.finalizer, runtime.cfg.Batch); err != nil {
 		return err

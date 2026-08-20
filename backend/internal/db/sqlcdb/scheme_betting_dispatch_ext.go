@@ -210,6 +210,51 @@ SELECT count(*) FROM updated`, now, rowLimit).Scan(&count)
 	return count, err
 }
 
+// RecoverExpiredUnstartedFormalOutbox handles a dispatcher crash or pre-send
+// stall after it has leased a command but before StartAttempt was committed.
+// Such a row has never started an outbound request: retry it while the safety
+// window remains open, otherwise expire it and block the strict chain.
+func (q *Queries) RecoverExpiredUnstartedFormalOutbox(ctx context.Context, now time.Time, rowLimit int32) (int64, error) {
+	if rowLimit <= 0 {
+		rowLimit = 100
+	}
+	var count int64
+	err := q.db.QueryRow(ctx, `
+WITH candidates AS (
+    SELECT id, safe_deadline_at
+    FROM scheme_bet_outbox
+    WHERE mode IN ('gray', 'production')
+      AND state = 'leased'
+      AND dispatch_started_at IS NULL
+      AND lease_until <= $1
+    ORDER BY lease_until, id
+    FOR UPDATE SKIP LOCKED
+    LIMIT $2
+), updated AS (
+    UPDATE scheme_bet_outbox o
+    SET state = CASE WHEN o.safe_deadline_at <= $1 THEN 'expired' ELSE 'pending' END,
+        outcome_reason = CASE
+            WHEN o.safe_deadline_at <= $1 THEN 'dispatcher_lost_before_start_deadline_elapsed'
+            ELSE 'dispatcher_lost_before_start'
+        END,
+        lease_owner = NULL,
+        lease_until = NULL,
+        terminal_at = CASE WHEN o.safe_deadline_at <= $1 THEN $1 ELSE NULL END,
+        updated_at = $1
+    FROM candidates c
+    WHERE o.id = c.id
+    RETURNING o.id, o.scheme_id, o.state
+), blocked AS (
+    UPDATE scheme_instances i
+    SET strict_chain_state = 'blocked_requires_rearm', updated_at = $1
+    FROM updated u
+    WHERE i.id = u.scheme_id AND u.state = 'expired'
+    RETURNING i.id
+)
+SELECT count(*) FROM updated`, now, rowLimit).Scan(&count)
+	return count, err
+}
+
 func (q *Queries) ExpireDueFormalOutbox(ctx context.Context, now time.Time, rowLimit int32) (int64, error) {
 	if rowLimit <= 0 {
 		rowLimit = 500
