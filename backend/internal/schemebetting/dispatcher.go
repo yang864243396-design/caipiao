@@ -16,6 +16,8 @@ var (
 	ErrDispatcherConfig = errors.New("scheme betting dispatcher is not configured")
 )
 
+const leaseHeartbeatShutdownTimeout = 100 * time.Millisecond
+
 type LeasedCommand struct {
 	ID                int64
 	SchemeID          string
@@ -293,28 +295,29 @@ func (d Dispatcher) startLeaseHeartbeat(ctx context.Context, cancelProvider cont
 		return func() error { return nil }
 	}
 	heartbeatCtx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	var heartbeatErr error
+	done := make(chan error, 1)
 	go func() {
-		defer close(done)
 		ticker := time.NewTicker(d.LeaseHeartbeatInterval)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-heartbeatCtx.Done():
+				done <- nil
 				return
 			case <-ticker.C:
 				renewed, err := renewer.RenewLease(heartbeatCtx, command, d.LeaseDuration)
 				if err != nil {
-					heartbeatErr = fmt.Errorf("lease heartbeat failed owner=%s token=%d: %w", command.Lease.Owner, command.Lease.Token, err)
+					heartbeatErr := fmt.Errorf("lease heartbeat failed owner=%s token=%d: %w", command.Lease.Owner, command.Lease.Token, err)
 					slog.Warn("scheme betting dispatch lease heartbeat failed", "outboxId", command.ID, "schemeId", command.SchemeID, "owner", command.Lease.Owner, "token", command.Lease.Token, "err", err)
 					cancelProvider()
+					done <- heartbeatErr
 					return
 				}
 				if !renewed {
-					heartbeatErr = fmt.Errorf("lease heartbeat lost owner=%s token=%d", command.Lease.Owner, command.Lease.Token)
+					heartbeatErr := fmt.Errorf("lease heartbeat lost owner=%s token=%d", command.Lease.Owner, command.Lease.Token)
 					slog.Warn("scheme betting dispatch lease heartbeat lost", "outboxId", command.ID, "schemeId", command.SchemeID, "owner", command.Lease.Owner, "token", command.Lease.Token)
 					cancelProvider()
+					done <- heartbeatErr
 					return
 				}
 			}
@@ -322,7 +325,14 @@ func (d Dispatcher) startLeaseHeartbeat(ctx context.Context, cancelProvider cont
 	}()
 	return func() error {
 		cancel()
-		<-done
-		return heartbeatErr
+		timer := time.NewTimer(leaseHeartbeatShutdownTimeout)
+		defer timer.Stop()
+		select {
+		case heartbeatErr := <-done:
+			return heartbeatErr
+		case <-timer.C:
+			return fmt.Errorf("lease heartbeat shutdown timed out after %s owner=%s token=%d",
+				leaseHeartbeatShutdownTimeout, command.Lease.Owner, command.Lease.Token)
+		}
 	}
 }

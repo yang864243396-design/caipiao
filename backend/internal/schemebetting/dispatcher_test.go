@@ -19,6 +19,7 @@ type fakeDispatchStore struct {
 	mu              sync.Mutex
 	renewed         int
 	renewCh         chan struct{}
+	renewBlock      chan struct{}
 	renewLost       bool
 	renewErr        error
 }
@@ -66,6 +67,7 @@ func (s *fakeDispatchStore) RenewLease(_ context.Context, _ LeasedCommand, _ tim
 	s.mu.Lock()
 	s.renewed++
 	ch := s.renewCh
+	block := s.renewBlock
 	lost := s.renewLost
 	err := s.renewErr
 	s.mu.Unlock()
@@ -74,6 +76,9 @@ func (s *fakeDispatchStore) RenewLease(_ context.Context, _ LeasedCommand, _ tim
 		case ch <- struct{}{}:
 		default:
 		}
+	}
+	if block != nil {
+		<-block
 	}
 	if err != nil {
 		return false, err
@@ -374,6 +379,47 @@ func TestDispatcherWatchdogBlocksWhenBetRequestWasWritten(t *testing.T) {
 	}
 	if handler.calls != 0 {
 		t.Fatalf("written request triggered replacement calls=%d", handler.calls)
+	}
+}
+
+func TestDispatcherWatchdogDoesNotWaitForeverForHeartbeatShutdown(t *testing.T) {
+	now := time.Now().UTC()
+	heartbeatRelease := make(chan struct{})
+	store := &fakeDispatchStore{
+		startOK: true, startSafeWindow: 15 * time.Millisecond, renewBlock: heartbeatRelease,
+	}
+	transport := &blockingProgressTransport{
+		stage: "provider_account_preparation", writeKnown: true,
+		started: make(chan struct{}), release: make(chan struct{}),
+	}
+	handler := &fakePreSendFailureHandler{}
+	d := Dispatcher{
+		Store: store, Transport: transport, PreSendFailureHandler: handler, Now: func() time.Time { return now },
+		LeaseDuration: 30 * time.Millisecond, LeaseHeartbeatInterval: time.Millisecond,
+	}
+	command := LeasedCommand{
+		ID: 21, SchemeID: "scheme-1", TargetPeriod: "T", FrozenRequest: []byte(`{}`), FrozenRequestHash: PayloadHash([]byte(`{}`)),
+		SafeDeadline: now.Add(time.Second), Lease: LeaseFence{Owner: "node", Token: 13, Until: now.Add(time.Second)},
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- d.Dispatch(context.Background(), command) }()
+	<-transport.started
+	defer close(transport.release)
+	defer close(heartbeatRelease)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("watchdog remained blocked waiting for heartbeat shutdown")
+	}
+	if len(store.finished) != 1 || store.finished[0].State != OutboxRejected {
+		t.Fatalf("finish=%+v", store.finished)
+	}
+	if !strings.Contains(store.finished[0].ErrorDetail, "lease heartbeat shutdown timed out") {
+		t.Fatalf("heartbeat shutdown evidence missing: %q", store.finished[0].ErrorDetail)
 	}
 }
 
