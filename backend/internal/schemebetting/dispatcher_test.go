@@ -103,37 +103,35 @@ type deadlineObservingTransport struct {
 	hadDeadline bool
 }
 
-type lingeringAfterDeadlineTransport struct {
-	renewedAfterDeadline <-chan struct{}
-	calls                int
-	sawRenewal           bool
+type blockingProgressTransport struct {
+	stage          string
+	requestWritten bool
+	writeKnown     bool
+	started        chan struct{}
+	release        chan struct{}
+}
+
+func (transport *blockingProgressTransport) PlaceOnce(ctx context.Context, _ LeasedCommand) (ProviderAcceptance, error) {
+	close(transport.started)
+	<-transport.release
+	return ProviderAcceptance{}, ctx.Err()
+}
+
+func (transport *blockingProgressTransport) PlaceOnceWithProgress(
+	ctx context.Context,
+	_ LeasedCommand,
+	report func(stage string, requestWritten, writeKnown bool),
+) (ProviderAcceptance, error) {
+	report(transport.stage, transport.requestWritten, transport.writeKnown)
+	close(transport.started)
+	<-transport.release
+	return ProviderAcceptance{}, ctx.Err()
 }
 
 func (transport *deadlineObservingTransport) PlaceOnce(ctx context.Context, _ LeasedCommand) (ProviderAcceptance, error) {
 	transport.calls++
 	_, transport.hadDeadline = ctx.Deadline()
 	<-ctx.Done()
-	return ProviderAcceptance{}, ctx.Err()
-}
-
-func (transport *lingeringAfterDeadlineTransport) PlaceOnce(ctx context.Context, _ LeasedCommand) (ProviderAcceptance, error) {
-	transport.calls++
-	<-ctx.Done()
-	for {
-		select {
-		case <-transport.renewedAfterDeadline:
-			continue
-		default:
-			goto drained
-		}
-	}
-
-drained:
-	select {
-	case <-transport.renewedAfterDeadline:
-		transport.sawRenewal = true
-	case <-time.After(50 * time.Millisecond):
-	}
 	return ProviderAcceptance{}, ctx.Err()
 }
 
@@ -305,28 +303,77 @@ func TestDispatcherRenewsLeaseWhileProviderCallIsInFlight(t *testing.T) {
 	}
 }
 
-func TestDispatcherKeepsLeaseAliveUntilTimedOutTransportReturns(t *testing.T) {
+func TestDispatcherWatchdogReschedulesWhenBetRequestWasNotWritten(t *testing.T) {
 	now := time.Now().UTC()
-	renewed := make(chan struct{}, 16)
-	store := &fakeDispatchStore{startOK: true, startSafeWindow: 15 * time.Millisecond, renewCh: renewed}
-	transport := &lingeringAfterDeadlineTransport{renewedAfterDeadline: renewed}
-	d := Dispatcher{
-		Store: store, Transport: transport, Now: func() time.Time { return now },
-		LeaseDuration: 30 * time.Millisecond, LeaseHeartbeatInterval: 2 * time.Millisecond,
+	store := &fakeDispatchStore{startOK: true, startSafeWindow: 15 * time.Millisecond}
+	transport := &blockingProgressTransport{
+		stage: "provider_account_preparation", writeKnown: true,
+		started: make(chan struct{}), release: make(chan struct{}),
 	}
+	handler := &fakePreSendFailureHandler{}
+	d := Dispatcher{Store: store, Transport: transport, PreSendFailureHandler: handler, Now: func() time.Time { return now }}
 	command := LeasedCommand{
-		ID: 18, SchemeID: "scheme-1", TargetPeriod: "T", FrozenRequest: []byte(`{}`), FrozenRequestHash: PayloadHash([]byte(`{}`)),
-		SafeDeadline: now.Add(time.Second), Lease: LeaseFence{Owner: "node", Token: 10, Until: now.Add(30 * time.Millisecond)},
+		ID: 19, SchemeID: "scheme-1", TargetPeriod: "T", FrozenRequest: []byte(`{}`), FrozenRequestHash: PayloadHash([]byte(`{}`)),
+		SafeDeadline: now.Add(time.Second), Lease: LeaseFence{Owner: "node", Token: 11, Until: now.Add(time.Second)},
 	}
 
-	if err := d.Dispatch(context.Background(), command); err != nil {
-		t.Fatal(err)
+	done := make(chan error, 1)
+	go func() { done <- d.Dispatch(context.Background(), command) }()
+	<-transport.started
+	defer close(transport.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("dispatcher remained blocked after the database safe window elapsed")
 	}
-	if transport.calls != 1 || !transport.sawRenewal {
-		t.Fatalf("provider calls=%d renewal after provider deadline=%v", transport.calls, transport.sawRenewal)
-	}
-	if len(store.finished) != 1 || store.finished[0].State != OutboxSentUnknown {
+	if len(store.finished) != 1 || store.finished[0].State != OutboxRejected || store.finished[0].Reason != "provider_pre_send_failed" {
 		t.Fatalf("finish=%+v", store.finished)
+	}
+	if !strings.Contains(store.finished[0].ErrorDetail, "stage=provider_account_preparation") || !strings.Contains(store.finished[0].ErrorDetail, "request_written=false") {
+		t.Fatalf("error detail=%q", store.finished[0].ErrorDetail)
+	}
+	if handler.calls != 1 || handler.outboxID != command.ID {
+		t.Fatalf("replacement calls=%d outbox=%d", handler.calls, handler.outboxID)
+	}
+}
+
+func TestDispatcherWatchdogBlocksWhenBetRequestWasWritten(t *testing.T) {
+	now := time.Now().UTC()
+	store := &fakeDispatchStore{startOK: true, startSafeWindow: 15 * time.Millisecond}
+	transport := &blockingProgressTransport{
+		stage: "provider_bet_response", requestWritten: true, writeKnown: true,
+		started: make(chan struct{}), release: make(chan struct{}),
+	}
+	handler := &fakePreSendFailureHandler{}
+	d := Dispatcher{Store: store, Transport: transport, PreSendFailureHandler: handler, Now: func() time.Time { return now }}
+	command := LeasedCommand{
+		ID: 20, SchemeID: "scheme-1", TargetPeriod: "T", FrozenRequest: []byte(`{}`), FrozenRequestHash: PayloadHash([]byte(`{}`)),
+		SafeDeadline: now.Add(time.Second), Lease: LeaseFence{Owner: "node", Token: 12, Until: now.Add(time.Second)},
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- d.Dispatch(context.Background(), command) }()
+	<-transport.started
+	defer close(transport.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("dispatcher remained blocked after a written request exceeded the database safe window")
+	}
+	if len(store.finished) != 1 || store.finished[0].State != OutboxSentUnknown || !store.finished[0].BlocksChain {
+		t.Fatalf("finish=%+v", store.finished)
+	}
+	if !strings.Contains(store.finished[0].ErrorDetail, "stage=provider_bet_response") || !strings.Contains(store.finished[0].ErrorDetail, "request_written=true") {
+		t.Fatalf("error detail=%q", store.finished[0].ErrorDetail)
+	}
+	if handler.calls != 0 {
+		t.Fatalf("written request triggered replacement calls=%d", handler.calls)
 	}
 }
 

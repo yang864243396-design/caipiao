@@ -156,15 +156,25 @@ func (c *Client) doJSONRaw(ctx context.Context, method, baseURL, path, bearer st
 	var requestWritten atomic.Bool
 	var requestPhase atomic.Int32
 	requestPhase.Store(requestPhaseConnect)
+	operation := method + " " + path
+	reportProgress := func() {
+		ReportRequestProgress(ctx, RequestProgress{
+			Operation: operation, Phase: requestPhaseName(requestPhase.Load()), RequestWritten: requestWritten.Load(),
+		})
+	}
+	reportProgress()
 	trace := &httptrace.ClientTrace{
 		DNSStart: func(httptrace.DNSStartInfo) {
 			requestPhase.Store(requestPhaseDNS)
+			reportProgress()
 		},
 		ConnectStart: func(string, string) {
 			requestPhase.Store(requestPhaseConnect)
+			reportProgress()
 		},
 		TLSHandshakeStart: func() {
 			requestPhase.Store(requestPhaseTLS)
+			reportProgress()
 		},
 		WroteRequest: func(info httptrace.WroteRequestInfo) {
 			requestPhase.Store(requestPhaseWrite)
@@ -172,16 +182,18 @@ func (c *Client) doJSONRaw(ctx context.Context, method, baseURL, path, bearer st
 				requestWritten.Store(true)
 				requestPhase.Store(requestPhaseResponse)
 			}
+			reportProgress()
 		},
 		GotFirstResponseByte: func() {
 			requestPhase.Store(requestPhaseResponse)
+			reportProgress()
 		},
 	}
 	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return out, nil, &requestTransportError{
-			Operation: method + " " + path, Phase: requestPhaseName(requestPhase.Load()),
+			Operation: operation, Phase: requestPhaseName(requestPhase.Load()),
 			RequestWritten: requestWritten.Load(), Duration: time.Since(startedAt), Cause: err,
 		}
 	}

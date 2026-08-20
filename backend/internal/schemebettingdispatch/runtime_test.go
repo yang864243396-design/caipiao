@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"caipiao/backend/internal/db/sqlcdb"
+	"caipiao/backend/internal/guaji"
 	"caipiao/backend/internal/guajibet"
 	"caipiao/backend/internal/schemebetting"
 )
@@ -18,6 +19,17 @@ type fakeSinglePlacer struct {
 	calls  int
 	result guajibet.Result
 	err    error
+}
+
+type progressReportingPlacer struct {
+	progress guaji.RequestProgress
+	result   guajibet.Result
+}
+
+func (placer *progressReportingPlacer) Enabled() bool { return true }
+func (placer *progressReportingPlacer) PlaceRealBetOnce(ctx context.Context, _ string, _ guajibet.Request) (guajibet.Result, error) {
+	guaji.ReportRequestProgress(ctx, placer.progress)
+	return placer.result, nil
 }
 
 type fakeDefinitelyNotSentError struct{ err error }
@@ -79,6 +91,36 @@ func TestTransportUsesSingleAttemptPlacerAndPreservesProviderPeriod(t *testing.T
 	}
 	if verifier.calls != 1 || placer.calls != 1 || result.OrderID != "order-8" || result.PeriodNo != "provider-T" {
 		t.Fatalf("calls=%d result=%+v", placer.calls, result)
+	}
+}
+
+func TestTransportReportsOnlyBetRequestWriteProgress(t *testing.T) {
+	now := time.Date(2026, 8, 20, 16, 45, 41, 0, time.UTC)
+	placer := &progressReportingPlacer{
+		progress: guaji.RequestProgress{Operation: "POST /api/web_bets/lott", Phase: "response", RequestWritten: true},
+		result:   guajibet.Result{ThirdPartyBetID: "order-progress", Periods: "T"},
+	}
+	frozen, _ := json.Marshal(FrozenGuajiRequest{
+		RequestID: "request-progress", MemberAccount: "member-1", Request: guajibet.Request{LotteryCode: "lottery", IssueNo: "T"},
+	})
+	command := schemebetting.LeasedCommand{TargetPeriod: "T", FrozenRequest: frozen, CloseAt: now.Add(3 * time.Second), SafeDeadline: now.Add(time.Second)}
+	var stages []string
+	var written, known bool
+
+	result, err := (Transport{
+		Placer: placer, PeriodVerifier: &fakePeriodVerifier{period: "T", closeAt: now.Add(3 * time.Second)}, Now: func() time.Time { return now },
+	}).PlaceOnceWithProgress(transportTestContext(t), command, func(stage string, requestWritten, writeKnown bool) {
+		stages = append(stages, stage)
+		written, known = requestWritten, writeKnown
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.OrderID != "order-progress" || len(stages) < 2 {
+		t.Fatalf("result=%+v stages=%v", result, stages)
+	}
+	if stages[len(stages)-1] != "provider_bet_response" || !written || !known {
+		t.Fatalf("last stage=%q written=%v known=%v all=%v", stages[len(stages)-1], written, known, stages)
 	}
 }
 

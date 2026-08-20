@@ -84,3 +84,28 @@ func TestDoJSONRawSuccessfulWriteCallbackRemainsAmbiguous(t *testing.T) {
 		t.Fatalf("transport detail=%+v", detail)
 	}
 }
+
+func TestDoJSONRawReportsRequestProgressToObserver(t *testing.T) {
+	client := newTraceTestClient(traceRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		trace := httptrace.ContextClientTrace(req.Context())
+		if trace == nil || trace.WroteRequest == nil {
+			t.Fatal("request write trace is not installed")
+		}
+		trace.WroteRequest(httptrace.WroteRequestInfo{})
+		return nil, context.DeadlineExceeded
+	}))
+
+	var observed []RequestProgress
+	ctx := WithRequestProgressObserver(context.Background(), func(progress RequestProgress) {
+		observed = append(observed, progress)
+	})
+	_, _, _ = client.doJSONRaw(ctx, http.MethodPost, client.cfg.HTTPBase, "/api/web_bets/lott", "token", map[string]int{"game_id": 74})
+
+	if len(observed) == 0 {
+		t.Fatal("request progress observer was not called")
+	}
+	last := observed[len(observed)-1]
+	if last.Operation != "POST /api/web_bets/lott" || last.Phase != "response" || !last.RequestWritten {
+		t.Fatalf("last progress=%+v all=%+v", last, observed)
+	}
+}

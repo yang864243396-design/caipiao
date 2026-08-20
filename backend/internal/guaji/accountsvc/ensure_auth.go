@@ -43,7 +43,7 @@ func (s *Service) ensureActiveAuth(ctx context.Context, memberAccount string, fo
 	}
 
 	key := fmt.Sprintf("auto-reauth:%d", m)
-	_, sfErr, shared := s.autoReauthSF.Do(key, func() (any, error) {
+	sfErr, shared := s.waitAutoReauthFlight(ctx, key, func() (any, error) {
 		return nil, s.doAutoReauthAttempts(ctx, memberAccount, m, force)
 	})
 	if shared {
@@ -58,6 +58,19 @@ func (s *Service) ensureActiveAuth(ctx context.Context, memberAccount string, fo
 		return nil
 	}
 	return sfErr
+}
+
+func (s *Service) waitAutoReauthFlight(ctx context.Context, key string, fn func() (any, error)) (error, bool) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	result := s.autoReauthSF.DoChan(key, fn)
+	select {
+	case <-ctx.Done():
+		return ctx.Err(), false
+	case call := <-result:
+		return call.Err, call.Shared
+	}
 }
 
 func (s *Service) doAutoReauthAttempts(ctx context.Context, memberAccount string, memberID int64, force bool) error {

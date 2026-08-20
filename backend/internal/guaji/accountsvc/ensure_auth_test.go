@@ -1,8 +1,10 @@
 package accountsvc
 
 import (
+	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestMapAuthErrToBet(t *testing.T) {
@@ -71,4 +73,32 @@ func TestEnsureActiveAuthUnavailable(t *testing.T) {
 	if err := s.EnsureActiveAuth(nil, "x"); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("got %v want ErrUnavailable", err)
 	}
+}
+
+func TestAutoReauthSingleflightWaitHonorsCallerCancellation(t *testing.T) {
+	s := &Service{}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		err, _ := s.waitAutoReauthFlight(ctx, "member-1", func() (any, error) {
+			close(started)
+			<-release
+			return nil, nil
+		})
+		done <- err
+	}()
+	<-started
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("error=%v want context deadline exceeded", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("singleflight waiter ignored caller cancellation")
+	}
+	close(release)
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"caipiao/backend/internal/db/sqlcdb"
+	"caipiao/backend/internal/guaji"
 	"caipiao/backend/internal/guajibet"
 	"caipiao/backend/internal/schemebetting"
 )
@@ -93,6 +94,17 @@ func (e definitelyNotSentError) Unwrap() error           { return e.err }
 func (e definitelyNotSentError) DefinitelyNotSent() bool { return true }
 
 func (transport Transport) PlaceOnce(ctx context.Context, command schemebetting.LeasedCommand) (schemebetting.ProviderAcceptance, error) {
+	return transport.PlaceOnceWithProgress(ctx, command, nil)
+}
+
+func (transport Transport) PlaceOnceWithProgress(
+	ctx context.Context,
+	command schemebetting.LeasedCommand,
+	report func(stage string, requestWritten, writeKnown bool),
+) (schemebetting.ProviderAcceptance, error) {
+	if report == nil {
+		report = func(string, bool, bool) {}
+	}
 	if transport.Placer == nil || !transport.Placer.Enabled() {
 		return schemebetting.ProviderAcceptance{}, definitelyNotSentError{err: errors.New("guaji single-attempt placer is disabled")}
 	}
@@ -104,6 +116,7 @@ func (transport Transport) PlaceOnce(ctx context.Context, command schemebetting.
 		strings.TrimSpace(frozen.Request.LotteryCode) == "" || strings.TrimSpace(frozen.Request.IssueNo) == "" {
 		return schemebetting.ProviderAcceptance{}, definitelyNotSentError{err: errors.New("frozen request identity is incomplete")}
 	}
+	report("provider_period_verification", false, true)
 	verifyStarted := time.Now()
 	if err := transport.verifyProviderTarget(ctx, command, frozen); err != nil {
 		verifyDuration := time.Since(verifyStarted)
@@ -112,8 +125,22 @@ func (transport Transport) PlaceOnce(ctx context.Context, command schemebetting.
 		}
 	}
 	verifyDuration := time.Since(verifyStarted)
+	if err := ctx.Err(); err != nil {
+		return schemebetting.ProviderAcceptance{}, definitelyNotSentError{err: fmt.Errorf("provider placement cancelled before request: %w", err)}
+	}
+	report("provider_account_preparation", false, true)
+	placementCtx := guaji.WithRequestProgressObserver(ctx, func(progress guaji.RequestProgress) {
+		if strings.TrimSpace(progress.Operation) != "POST /api/web_bets/lott" {
+			return
+		}
+		phase := strings.TrimSpace(progress.Phase)
+		if phase == "" {
+			phase = "unknown"
+		}
+		report("provider_bet_"+phase, progress.RequestWritten, true)
+	})
 	placeStarted := time.Now()
-	result, err := transport.Placer.PlaceRealBetOnce(ctx, frozen.MemberAccount, frozen.Request)
+	result, err := transport.Placer.PlaceRealBetOnce(placementCtx, frozen.MemberAccount, frozen.Request)
 	placeDuration := time.Since(placeStarted)
 	if err != nil {
 		phaseErr := fmt.Errorf("provider placement failed (verify_ms=%d place_ms=%d): %w", verifyDuration.Milliseconds(), placeDuration.Milliseconds(), err)
@@ -122,6 +149,7 @@ func (transport Transport) PlaceOnce(ctx context.Context, command schemebetting.
 		}
 		return schemebetting.ProviderAcceptance{}, phaseErr
 	}
+	report("provider_bet_response", true, true)
 	if verifyDuration > time.Second || placeDuration > time.Second {
 		slog.Warn("scheme provider placement slow", "schemeId", command.SchemeID, "outboxId", command.ID,
 			"verifyMs", verifyDuration.Milliseconds(), "placeMs", placeDuration.Milliseconds())

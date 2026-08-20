@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -67,6 +68,65 @@ type DispatchLimiter interface {
 
 type SingleAttemptTransport interface {
 	PlaceOnce(ctx context.Context, command LeasedCommand) (ProviderAcceptance, error)
+}
+
+type progressSingleAttemptTransport interface {
+	PlaceOnceWithProgress(
+		ctx context.Context,
+		command LeasedCommand,
+		report func(stage string, requestWritten, writeKnown bool),
+	) (ProviderAcceptance, error)
+}
+
+type dispatchProgress struct {
+	mu             sync.Mutex
+	stage          string
+	requestWritten bool
+	writeKnown     bool
+}
+
+func (progress *dispatchProgress) report(stage string, requestWritten, writeKnown bool) {
+	progress.mu.Lock()
+	progress.stage = strings.TrimSpace(stage)
+	progress.requestWritten = requestWritten
+	progress.writeKnown = writeKnown
+	progress.mu.Unlock()
+}
+
+func (progress *dispatchProgress) deadlineError(cause error) error {
+	progress.mu.Lock()
+	defer progress.mu.Unlock()
+	return dispatchDeadlineError{
+		stage: progress.stage, requestWritten: progress.requestWritten,
+		writeKnown: progress.writeKnown, cause: cause,
+	}
+}
+
+type dispatchDeadlineError struct {
+	stage          string
+	requestWritten bool
+	writeKnown     bool
+	cause          error
+}
+
+func (err dispatchDeadlineError) Error() string {
+	stage := strings.TrimSpace(err.stage)
+	if stage == "" {
+		stage = "unknown"
+	}
+	return fmt.Sprintf("provider placement exceeded safe deadline stage=%s request_written=%t write_known=%t: %v",
+		stage, err.requestWritten, err.writeKnown, err.cause)
+}
+
+func (err dispatchDeadlineError) Unwrap() error { return err.cause }
+
+func (err dispatchDeadlineError) DefinitelyNotSent() bool {
+	return err.writeKnown && !err.requestWritten
+}
+
+type placeCallResult struct {
+	acceptance ProviderAcceptance
+	err        error
 }
 
 type AcceptedFinalizer interface {
@@ -137,7 +197,26 @@ func (d Dispatcher) Dispatch(ctx context.Context, command LeasedCommand) error {
 	placeCtx, cancelPlace := context.WithTimeout(ctx, start.SafeWindow)
 	defer cancelPlace()
 	stopHeartbeat := d.startLeaseHeartbeat(ctx, cancelPlace, command)
-	providerResult, placeErr := d.Transport.PlaceOnce(placeCtx, command)
+	progress := &dispatchProgress{}
+	placeDone := make(chan placeCallResult, 1)
+	go func() {
+		var result ProviderAcceptance
+		var err error
+		if observed, ok := d.Transport.(progressSingleAttemptTransport); ok {
+			result, err = observed.PlaceOnceWithProgress(placeCtx, command, progress.report)
+		} else {
+			result, err = d.Transport.PlaceOnce(placeCtx, command)
+		}
+		placeDone <- placeCallResult{acceptance: result, err: err}
+	}()
+	var providerResult ProviderAcceptance
+	var placeErr error
+	select {
+	case call := <-placeDone:
+		providerResult, placeErr = call.acceptance, call.err
+	case <-placeCtx.Done():
+		placeErr = progress.deadlineError(placeCtx.Err())
+	}
 	heartbeatErr := stopHeartbeat()
 	observation := DispatchObservation{RequestStarted: true, Err: placeErr}
 	if placeErr == nil {
