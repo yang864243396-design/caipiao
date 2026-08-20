@@ -341,6 +341,9 @@ func New(cfg config.Config) (*Server, error) {
 				}
 			})
 		}
+		if formalMode {
+			launchWorker(func() { schemeWorker.TakeOverRunningFormalSchemes(workerCtx) })
+		}
 	}
 	h.SetSchemeBettingActionService(schemeWorker)
 	h.SetMaintenanceResumeScheduler(schemeWorker)

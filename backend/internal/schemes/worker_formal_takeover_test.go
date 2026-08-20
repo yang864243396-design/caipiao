@@ -78,3 +78,23 @@ func TestWorkerDefersFailedFormalTakeoverWithoutLegacyFallback(t *testing.T) {
 		t.Fatal("failed takeover must not permit a legacy fallback bet")
 	}
 }
+
+func TestWorkerStartupTakeoverOnlyIncludesEligibleLegacyFormalSchemes(t *testing.T) {
+	enabler := &fakeFormalEventEnabler{}
+	w := &Worker{strategyProcessor: &StrategyProcessor{}, formalEventEnabler: enabler}
+	w.SetSchemeBettingMode("gray", []string{"tron_ffc_6s"})
+
+	result := w.takeOverStartupFormalSchemes(context.Background(), []startupFormalScheme{
+		{instance: sqlcdb.SchemeInstance{ID: "eligible", LotteryCode: "tron_ffc_6s"}, owner: "legacy"},
+		{instance: sqlcdb.SchemeInstance{ID: "simulated", LotteryCode: "tron_ffc_6s", SimBet: true}, owner: "legacy"},
+		{instance: sqlcdb.SchemeInstance{ID: "other-lottery", LotteryCode: "tron_ffc_3s"}, owner: "legacy"},
+		{instance: sqlcdb.SchemeInstance{ID: "event-owned", LotteryCode: "tron_ffc_6s"}, owner: "event"},
+	})
+
+	if result.Attempted != 1 || result.Transferred != 1 || result.Deferred != 0 {
+		t.Fatalf("unexpected startup takeover result: %+v", result)
+	}
+	if enabler.calls != 1 || enabler.scheme != "eligible" {
+		t.Fatalf("unexpected startup takeover call: %+v", enabler)
+	}
+}
