@@ -50,7 +50,11 @@ func freshSharedOpenPeriod(lotteryCode string, now time.Time) (prePlaceVerifyRes
 	if !ok || strings.TrimSpace(snapshot.CurrentPeriod) == "" || snapshot.CloseAt.IsZero() || !now.Before(snapshot.CloseAt.UTC()) {
 		return prePlaceVerifyResult{}, false
 	}
-	return prePlaceVerifyResult{Period: strings.TrimSpace(snapshot.CurrentPeriod), CloseAt: snapshot.CloseAt.UTC()}, true
+	closeAt := snapshot.CloseAt.UTC()
+	if snapshot.ProvisionalClose && snapshot.RealCloseAt.UTC().After(closeAt) {
+		closeAt = snapshot.RealCloseAt.UTC()
+	}
+	return prePlaceVerifyResult{Period: strings.TrimSpace(snapshot.CurrentPeriod), CloseAt: closeAt}, true
 }
 
 func (s *Syncer) verifyOpenPeriod(

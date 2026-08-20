@@ -35,6 +35,30 @@ func TestVerifyOpenPeriodUsesFreshSharedScheduleWithoutRefresh(t *testing.T) {
 	}
 }
 
+func TestFreshSharedOpenPeriodUsesRememberedRealCloseForProvisionalPeriod(t *testing.T) {
+	code := fmt.Sprintf("test_provisional_real_close_%d", time.Now().UnixNano())
+	lottery.ClearPeriodsSchedule(code)
+	t.Cleanup(func() { lottery.ClearPeriodsSchedule(code) })
+
+	now := time.Now().UTC()
+	openAt := now.Add(2 * time.Second)
+	realCloseAt := openAt.Add(6 * time.Second)
+	if !lottery.TryUpdatePeriodsScheduleFullWithDurationAt(
+		code, "P250", "P250", openAt, openAt, 6, openAt.Format("2006-01-02 15:04:05"), openAt, now,
+	) {
+		t.Fatal("provisional schedule was not stored")
+	}
+	lottery.RememberPeriodsRealClose(code, "P250", realCloseAt, realCloseAt.Format("2006-01-02 15:04:05"))
+
+	result, ok := freshSharedOpenPeriod(code, now)
+	if !ok {
+		t.Fatal("expected fresh provisional period")
+	}
+	if result.Period != "P250" || !result.CloseAt.Equal(realCloseAt) {
+		t.Fatalf("result=%+v want real close %s", result, realCloseAt)
+	}
+}
+
 func TestVerifyOpenPeriodCoalescesStaleRefreshByLottery(t *testing.T) {
 	code := fmt.Sprintf("test_shared_refresh_ffc_%d", time.Now().UnixNano())
 	lottery.ClearPeriodsSchedule(code)
