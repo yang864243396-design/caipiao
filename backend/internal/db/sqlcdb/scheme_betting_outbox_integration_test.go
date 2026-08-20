@@ -168,3 +168,47 @@ VALUES ($1, 'db-current-period', $2, $3, $4, 'test', 'db-clock', '{}'::jsonb)`,
 		t.Fatalf("rows=%+v want database-current period despite application clock skew", rows)
 	}
 }
+
+func TestGetPreSendReplacementProviderPeriodAllowsProviderConfirmedEarlyPeriod(t *testing.T) {
+	_ = godotenv.Load("../../../.env")
+	cfg := config.Load()
+	if cfg.DatabaseURL == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+	pool, err := db.Connect(context.Background(), cfg.DatabaseURL, 2, 0)
+	if err != nil {
+		t.Skipf("database unavailable: %v", err)
+	}
+	defer pool.Close()
+
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+
+	now := time.Now().UTC()
+	lotteryCode := fmt.Sprintf("presend_hint_%d", now.UnixNano())
+	periodNo := "P-next"
+	var insertedID int64
+	err = tx.QueryRow(ctx, `
+INSERT INTO provider_period_snapshots
+    (lottery_code, period_no, open_at, close_at, observed_at, source, snapshot_hash, raw_payload)
+VALUES ($1, $2, $3, $4, $5, 'test', $6, '{}'::jsonb)
+RETURNING id`, lotteryCode, periodNo, now.Add(2*time.Second), now.Add(8*time.Second), now, "hint-hash").Scan(&insertedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	row, found, err := sqlcdb.New(tx).GetPreSendReplacementProviderPeriod(ctx, lotteryCode, periodNo, 6*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || row.ID != insertedID || row.PeriodNo != periodNo {
+		t.Fatalf("found=%v row=%+v", found, row)
+	}
+	if row.DatabaseNow.IsZero() {
+		t.Fatal("database clock was not returned")
+	}
+}
