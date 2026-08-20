@@ -49,25 +49,30 @@ type schemeBettingBacklogProbe interface {
 	CheckSchemeBettingBacklog(context.Context, int32) error
 }
 
+type formalEventEnabler interface {
+	EnableEventScheme(context.Context, string, string, string) error
+}
+
 // Worker ticks running scheme instances: countdown → bet against lottery draw + scheme config.
 type Worker struct {
-	pool              *db.Pool
-	q                 *sqlcdb.Queries
-	hub               *ws.Hub
-	guajiBets         guajiBetPlacer
-	periodSync        *periodsync.Syncer
-	periodRefresh     periodRefreshRequester
-	periodVerifier    guajiPeriodVerifier
-	ruleRegistry      *playrules.RegistryStore
-	strategyProcessor *StrategyProcessor
-	realtime          schemeevents.Marker
-	unknownResolver   unknownAcceptanceResolver
-	bettingBacklog    schemeBettingBacklogProbe
-	tickSec           int32
-	concurrency       int32
-	placeSem          chan struct{} // 真下单全站有界并发；nil 表示不额外限流
-	countdownReset    int32
-	betSeq            atomic.Uint64
+	pool               *db.Pool
+	q                  *sqlcdb.Queries
+	hub                *ws.Hub
+	guajiBets          guajiBetPlacer
+	periodSync         *periodsync.Syncer
+	periodRefresh      periodRefreshRequester
+	periodVerifier     guajiPeriodVerifier
+	ruleRegistry       *playrules.RegistryStore
+	strategyProcessor  *StrategyProcessor
+	realtime           schemeevents.Marker
+	unknownResolver    unknownAcceptanceResolver
+	bettingBacklog     schemeBettingBacklogProbe
+	formalEventEnabler formalEventEnabler
+	tickSec            int32
+	concurrency        int32
+	placeSem           chan struct{} // 真下单全站有界并发；nil 表示不额外限流
+	countdownReset     int32
+	betSeq             atomic.Uint64
 }
 
 func (w *Worker) SetSchemeBettingBacklogProbe(probe schemeBettingBacklogProbe) {
@@ -457,7 +462,15 @@ func (w *Worker) placePeriodBet(ctx context.Context, inst sqlcdb.SchemeInstance,
 		if err != nil {
 			return fmt.Errorf("betting owner: %w", err)
 		}
-		if !legacyOwnsFormalBet(owner) {
+		if takenOver, takeoverErr := w.takeOverLegacyFormalScheme(ctx, inst, owner); takenOver {
+			if takeoverErr != nil {
+				slog.Warn("scheme worker event takeover deferred", "id", inst.ID, "lottery", inst.LotteryCode, "err", takeoverErr)
+			} else {
+				slog.Info("scheme worker transferred formal scheme to event chain", "id", inst.ID, "lottery", inst.LotteryCode)
+			}
+			return nil
+		}
+		if !legacyFormalBetAllowed(owner, w.formalEventModeForLottery(inst.LotteryCode)) {
 			slog.Debug("legacy scheme worker is read-only for event-owned instance", "id", inst.ID)
 			return nil
 		}
