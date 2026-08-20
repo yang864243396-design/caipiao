@@ -148,8 +148,27 @@ RETURNING id`, memberID, lotteryCode, unique+"-period", unique, unique+"-hash", 
 	if !start.Started || start.SafeWindow <= 0 || start.SafeWindow > 5*time.Second {
 		t.Fatalf("attempt start=%+v", start)
 	}
+	var protectedLeaseSeconds float64
+	if err := tx.QueryRow(ctx, `
+SELECT EXTRACT(EPOCH FROM (lease_until - safe_deadline_at))
+FROM scheme_bet_outbox
+WHERE id = $1`, outboxID).Scan(&protectedLeaseSeconds); err != nil {
+		t.Fatal(err)
+	}
+	if protectedLeaseSeconds < 1.9 {
+		t.Fatalf("started attempt lease only protects %.3f seconds past safe deadline, want at least 1.9", protectedLeaseSeconds)
+	}
 	if renewed, err := q.RenewLease(ctx, commands[0], 2*time.Second); err != nil || !renewed {
 		t.Fatalf("renewed=%v err=%v", renewed, err)
+	}
+	if err := tx.QueryRow(ctx, `
+SELECT EXTRACT(EPOCH FROM (lease_until - safe_deadline_at))
+FROM scheme_bet_outbox
+WHERE id = $1`, outboxID).Scan(&protectedLeaseSeconds); err != nil {
+		t.Fatal(err)
+	}
+	if protectedLeaseSeconds < 1.9 {
+		t.Fatalf("heartbeat shortened protected attempt lease to %.3f seconds past safe deadline", protectedLeaseSeconds)
 	}
 	stale := commands[0]
 	stale.Lease.Token++

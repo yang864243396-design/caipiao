@@ -85,7 +85,10 @@ WITH db_now AS MATERIALIZED (
     UPDATE scheme_bet_outbox
     SET dispatch_started_at = db_now.value,
         attempt_count = attempt_count + 1,
-        lease_until = db_now.value + ($4::bigint * interval '1 microsecond'),
+        lease_until = GREATEST(
+            db_now.value + ($4::bigint * interval '1 microsecond'),
+            safe_deadline_at + ($4::bigint * interval '1 microsecond')
+        ),
         updated_at = db_now.value
     FROM db_now
     WHERE id = $1
@@ -142,7 +145,10 @@ func (q *Queries) RenewLease(ctx context.Context, command schemebetting.LeasedCo
 	err := q.db.QueryRow(ctx, `
 WITH updated AS (
     UPDATE scheme_bet_outbox
-    SET lease_until = clock_timestamp() + ($4::bigint * interval '1 microsecond'),
+    SET lease_until = GREATEST(
+            lease_until,
+            clock_timestamp() + ($4::bigint * interval '1 microsecond')
+        ),
         updated_at = clock_timestamp()
     WHERE id = $1
       AND COALESCE(scheme_id, '') = $2
