@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"caipiao/backend/internal/db/sqlcdb"
 )
@@ -96,5 +97,34 @@ func TestWorkerStartupTakeoverOnlyIncludesEligibleLegacyFormalSchemes(t *testing
 	}
 	if enabler.calls != 1 || enabler.scheme != "eligible" {
 		t.Fatalf("unexpected startup takeover call: %+v", enabler)
+	}
+}
+
+func TestRunStartupFormalTakeoverRetriesDeferredSchemes(t *testing.T) {
+	attempts := 0
+	waits := 0
+	result := runStartupFormalTakeover(
+		context.Background(),
+		func(context.Context) startupFormalTakeoverResult {
+			attempts++
+			if attempts == 1 {
+				return startupFormalTakeoverResult{Eligible: 1, Attempted: 1, Deferred: 1}
+			}
+			return startupFormalTakeoverResult{Eligible: 1, Attempted: 1, Transferred: 1}
+		},
+		func(_ context.Context, delay time.Duration) bool {
+			waits++
+			if delay <= 0 {
+				t.Fatalf("retry delay must be positive: %s", delay)
+			}
+			return true
+		},
+	)
+
+	if attempts != 2 || waits != 1 {
+		t.Fatalf("attempts=%d waits=%d", attempts, waits)
+	}
+	if result.Transferred != 1 || result.Deferred != 0 {
+		t.Fatalf("unexpected final result: %+v", result)
 	}
 }

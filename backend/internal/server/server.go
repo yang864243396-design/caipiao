@@ -342,7 +342,7 @@ func New(cfg config.Config) (*Server, error) {
 			})
 		}
 		if formalMode {
-			launchWorker(func() { schemeWorker.TakeOverRunningFormalSchemes(workerCtx) })
+			launchWorker(func() { schemeWorker.RunStartupFormalTakeover(workerCtx) })
 		}
 	}
 	h.SetSchemeBettingActionService(schemeWorker)

@@ -3,11 +3,16 @@ package schemes
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"caipiao/backend/internal/db/sqlcdb"
 )
 
-const startupFormalTakeoverConcurrency = 8
+const (
+	startupFormalTakeoverConcurrency  = 8
+	startupFormalTakeoverRetryInitial = 500 * time.Millisecond
+	startupFormalTakeoverRetryMax     = 30 * time.Second
+)
 
 type startupFormalScheme struct {
 	instance sqlcdb.SchemeInstance
@@ -15,24 +20,68 @@ type startupFormalScheme struct {
 }
 
 type startupFormalTakeoverResult struct {
+	Eligible    int
 	Attempted   int
 	Transferred int
 	Deferred    int
 }
 
-// TakeOverRunningFormalSchemes transfers already-running formal schemes into
-// the configured event chain once per backend start. The regular worker also
-// retains its per-bet handoff as a safety net for schemes started later.
-func (w *Worker) TakeOverRunningFormalSchemes(ctx context.Context) {
+// RunStartupFormalTakeover transfers already-running formal schemes into the
+// configured event chain. It retries safely while startup dependencies (fresh
+// periods, event consumers, and capacity) are becoming ready.
+func (w *Worker) RunStartupFormalTakeover(ctx context.Context) {
 	if w == nil || w.q == nil || !w.formalEventModeConfigured() {
 		return
+	}
+	result := runStartupFormalTakeover(ctx, w.takeOverRunningFormalSchemes, waitStartupFormalTakeoverRetry)
+	if result.Attempted > 0 || result.Deferred > 0 {
+		slog.Info("scheme startup event takeover stopped", "eligible", result.Eligible, "attempted", result.Attempted, "transferred", result.Transferred, "deferred", result.Deferred)
+	}
+}
+
+func waitStartupFormalTakeoverRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func runStartupFormalTakeover(
+	ctx context.Context,
+	attempt func(context.Context) startupFormalTakeoverResult,
+	wait func(context.Context, time.Duration) bool,
+) startupFormalTakeoverResult {
+	delay := startupFormalTakeoverRetryInitial
+	for {
+		result := attempt(ctx)
+		if result.Eligible == 0 || result.Deferred == 0 {
+			return result
+		}
+		if !wait(ctx, delay) {
+			return result
+		}
+		delay *= 2
+		if delay > startupFormalTakeoverRetryMax {
+			delay = startupFormalTakeoverRetryMax
+		}
+	}
+}
+
+func (w *Worker) takeOverRunningFormalSchemes(ctx context.Context) startupFormalTakeoverResult {
+	if w == nil || w.q == nil || !w.formalEventModeConfigured() {
+		return startupFormalTakeoverResult{}
 	}
 	rows, err := w.q.ListRunningSchemeInstances(ctx)
 	if err != nil {
 		slog.Warn("scheme startup event takeover list failed", "err", err)
-		return
+		return startupFormalTakeoverResult{Eligible: 1, Deferred: 1}
 	}
 	candidates := make([]startupFormalScheme, 0, len(rows))
+	lookupDeferred := 0
 	for _, row := range rows {
 		inst := sqlcdb.SchemeInstanceFromRunningRow(row)
 		if !requiresGuajiRealBet(inst) || !w.formalEventModeForLottery(inst.LotteryCode) {
@@ -41,14 +90,18 @@ func (w *Worker) TakeOverRunningFormalSchemes(ctx context.Context) {
 		execution, err := w.q.GetSchemeBettingExecutionState(ctx, inst.ID)
 		if err != nil {
 			slog.Warn("scheme startup event takeover state lookup failed", "id", inst.ID, "err", err)
+			lookupDeferred++
 			continue
 		}
 		candidates = append(candidates, startupFormalScheme{instance: inst, owner: execution.Owner})
 	}
 	result := w.takeOverStartupFormalSchemes(ctx, candidates)
-	if result.Attempted > 0 || result.Deferred > 0 {
-		slog.Info("scheme startup event takeover completed", "attempted", result.Attempted, "transferred", result.Transferred, "deferred", result.Deferred)
+	result.Eligible += lookupDeferred
+	result.Deferred += lookupDeferred
+	if result.Deferred > 0 {
+		slog.Warn("scheme startup event takeover deferred", "eligible", result.Eligible, "attempted", result.Attempted, "transferred", result.Transferred, "deferred", result.Deferred)
 	}
+	return result
 }
 
 func (w *Worker) formalEventModeConfigured() bool {
@@ -73,12 +126,16 @@ func (w *Worker) takeOverStartupFormalSchemes(ctx context.Context, candidates []
 		workers = len(eligible)
 	}
 	jobs := make(chan startupFormalScheme)
-	results := make(chan error, len(eligible))
+	type attemptResult struct {
+		schemeID string
+		err      error
+	}
+	results := make(chan attemptResult, len(eligible))
 	for i := 0; i < workers; i++ {
 		go func() {
 			for candidate := range jobs {
 				_, err := w.takeOverLegacyFormalScheme(ctx, candidate.instance, candidate.owner)
-				results <- err
+				results <- attemptResult{schemeID: candidate.instance.ID, err: err}
 			}
 		}()
 	}
@@ -93,13 +150,14 @@ func (w *Worker) takeOverStartupFormalSchemes(ctx context.Context, candidates []
 		}
 	}()
 
-	result := startupFormalTakeoverResult{}
+	result := startupFormalTakeoverResult{Eligible: len(eligible)}
 	for range eligible {
 		select {
-		case err := <-results:
+		case attempt := <-results:
 			result.Attempted++
-			if err != nil {
+			if attempt.err != nil {
 				result.Deferred++
+				slog.Warn("scheme startup event takeover attempt deferred", "id", attempt.schemeID, "err", attempt.err)
 			} else {
 				result.Transferred++
 			}
