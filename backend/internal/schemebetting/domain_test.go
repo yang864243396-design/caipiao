@@ -25,10 +25,25 @@ func TestSelectTargetPeriodRejectsStaleOrClosedSnapshot(t *testing.T) {
 	now := time.Date(2026, 8, 19, 12, 0, 3, 0, time.UTC)
 	snapshots := []PeriodSnapshot{
 		{PeriodNo: "closed", OpenAt: now.Add(-5 * time.Second), CloseAt: now, ObservedAt: now},
-		{PeriodNo: "stale", OpenAt: now.Add(-time.Second), CloseAt: now.Add(10 * time.Second), ObservedAt: now.Add(-3 * time.Second)},
+		{PeriodNo: "stale", OpenAt: now.Add(-5 * time.Second), CloseAt: now.Add(10 * time.Second), ObservedAt: now.Add(-3 * time.Second)},
 	}
 	if got, ok := SelectTargetPeriod(snapshots, "source", now, 2*time.Second); ok {
 		t.Fatalf("unexpected target %+v", got)
+	}
+}
+
+func TestSelectTargetPeriodUsesPreloadedScheduleAfterItOpens(t *testing.T) {
+	now := time.Date(2026, 8, 20, 10, 20, 12, 0, time.UTC)
+	snapshots := []PeriodSnapshot{{
+		PeriodNo: "10114252703326", OpenAt: now, CloseAt: now.Add(6 * time.Second), ObservedAt: now.Add(-7 * time.Second),
+	}}
+
+	got, ok := SelectTargetPeriod(snapshots, "source", now, 6*time.Second)
+	if !ok {
+		t.Fatal("a schedule observed before open must remain usable during its open window")
+	}
+	if got.PeriodNo != "10114252703326" {
+		t.Fatalf("target=%q", got.PeriodNo)
 	}
 }
 

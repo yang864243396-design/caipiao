@@ -85,3 +85,41 @@ VALUES ($1, $2, $3, $4, $5, 'test', $6, '{}'::jsonb)`,
 		t.Fatalf("open snapshots=%d want=0; an older eligible fact must not override the latest future fact", len(rows))
 	}
 }
+
+func TestListOpenProviderPeriodSnapshotsReturnsPreloadedCurrentPeriod(t *testing.T) {
+	_ = godotenv.Load("../../../.env")
+	cfg := config.Load()
+	if cfg.DatabaseURL == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+	pool, err := db.Connect(context.Background(), cfg.DatabaseURL, 2, 0)
+	if err != nil {
+		t.Skipf("database unavailable: %v", err)
+	}
+	defer pool.Close()
+
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	lotteryCode := fmt.Sprintf("__preloaded_%d", now.UnixNano())
+	if _, err := tx.Exec(ctx, `
+INSERT INTO provider_period_snapshots
+    (lottery_code, period_no, open_at, close_at, observed_at, source, snapshot_hash, raw_payload)
+VALUES ($1, 'preloaded-period', $2, $3, $4, 'test', 'preloaded', '{}'::jsonb)`,
+		lotteryCode, now, now.Add(6*time.Second), now.Add(-7*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := sqlcdb.New(tx).ListOpenProviderPeriodSnapshots(ctx, lotteryCode, "source-period", now, now.Add(-6*time.Second), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].PeriodNo != "preloaded-period" {
+		t.Fatalf("rows=%+v want preloaded current period", rows)
+	}
+}

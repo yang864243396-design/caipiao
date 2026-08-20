@@ -30,7 +30,10 @@ func SelectTargetPeriod(snapshots []PeriodSnapshot, sourcePeriod string, now tim
 		if !snapshot.OpenAt.IsZero() && now.Before(snapshot.OpenAt.UTC()) {
 			continue
 		}
-		if snapshot.ObservedAt.IsZero() || (maxAge > 0 && now.Sub(snapshot.ObservedAt.UTC()) > maxAge) {
+		observedAt := snapshot.ObservedAt.UTC()
+		preloadedCurrent := !snapshot.OpenAt.IsZero() && !observedAt.After(snapshot.OpenAt.UTC()) &&
+			!now.Before(snapshot.OpenAt.UTC()) && now.Before(snapshot.CloseAt.UTC())
+		if snapshot.ObservedAt.IsZero() || (maxAge > 0 && now.Sub(observedAt) > maxAge && !preloadedCurrent) {
 			continue
 		}
 		candidates = append(candidates, snapshot)
