@@ -47,6 +47,35 @@ func TestBuildProviderPeriodSnapshotsTreatsNextStartAsCurrentBetClose(t *testing
 	}
 }
 
+func TestBuildProviderPeriodSnapshotsKeepsLaterFuturePeriodsClosed(t *testing.T) {
+	now := time.Date(2026, 8, 20, 2, 41, 2, 0, time.UTC)
+	snapshots := buildProviderPeriodSnapshots("tron_ffc_6s", []guaji.LottPeriod{
+		{Period: "10114251203740", StartTime: "2026-08-20 10:41:08", EndTime: "2026-08-20 10:41:14"},
+		{Period: "10114251203741", StartTime: "2026-08-20 10:41:14", EndTime: "2026-08-20 10:41:20"},
+		{Period: "10114251203742", StartTime: "2026-08-20 10:41:20", EndTime: "2026-08-20 10:41:26"},
+	}, now)
+	if len(snapshots) != 3 {
+		t.Fatalf("snapshots=%d want=3", len(snapshots))
+	}
+	if !snapshots[0].OpenAt.IsZero() {
+		t.Fatalf("first provider period must represent the current bet window: %s", snapshots[0].OpenAt)
+	}
+	if want := now.Add(6 * time.Second); !snapshots[0].CloseAt.Equal(want) {
+		t.Fatalf("first close=%s want=%s", snapshots[0].CloseAt, want)
+	}
+
+	wantOpen := []time.Time{
+		time.Date(2026, 8, 20, 2, 41, 14, 0, time.UTC),
+		time.Date(2026, 8, 20, 2, 41, 20, 0, time.UTC),
+	}
+	for index, want := range wantOpen {
+		got := snapshots[index+1].OpenAt
+		if !got.Equal(want) {
+			t.Fatalf("snapshot[%d] open=%s want=%s", index+1, got, want)
+		}
+	}
+}
+
 func TestBuildProviderPeriodSnapshotsHashChangesWithCloseTime(t *testing.T) {
 	// Use an already-open provider period: before its start, the effective
 	// current-window close is start_time and end_time is intentionally ignored.

@@ -32,6 +32,11 @@ func buildProviderPeriodSnapshots(lotteryCode string, periods []guaji.LottPeriod
 	} else {
 		observedAt = observedAt.UTC()
 	}
+	selectedPeriod, selectedCloseAt, selectedOK := guaji.PickOpenLottPeriod(periods, lotteryCode, observedAt)
+	selectedPeriodNo := ""
+	if selectedOK {
+		selectedPeriodNo = strings.TrimSpace(selectedPeriod.Period)
+	}
 	out := make([]providerPeriodSnapshot, 0, len(periods))
 	for _, period := range periods {
 		periodNo := strings.TrimSpace(period.Period)
@@ -47,16 +52,12 @@ func buildProviderPeriodSnapshots(lotteryCode string, periods []guaji.LottPeriod
 			openAt = time.Time{}
 		}
 		// The provider can omit the currently open period and return the next
-		// period instead. The real-bet path treats that next start_time as the
-		// current betting window's close; persist the same effective window so
-		// event-driven schemes can select the identical provider period.
-		if !openAt.IsZero() && openAt.After(observedAt) {
-			effectiveCloseAt, _, ok := guaji.EffectiveBetCloseAt(lotteryCode, period, observedAt)
-			if !ok {
-				continue
-			}
+		// period instead. Only the period selected by the shared provider-period
+		// resolver may represent that current window. Later future periods must
+		// keep their real open_at so the dispatcher cannot select them early.
+		if periodNo == selectedPeriodNo && !openAt.IsZero() && openAt.After(observedAt) {
 			openAt = time.Time{}
-			closeAt = effectiveCloseAt
+			closeAt = selectedCloseAt
 		}
 		canonical := struct {
 			LotteryCode string `json:"lotteryCode"`
