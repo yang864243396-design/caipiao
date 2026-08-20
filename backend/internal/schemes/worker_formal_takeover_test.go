@@ -155,3 +155,9 @@ func TestRunStartupFormalTakeoverRetriesDeferredSchemes(t *testing.T) {
 		t.Fatalf("unexpected final result: %+v", result)
 	}
 }
+
+func TestStartupFormalTakeoverRetryMaxEscapesSixSecondCloseWindow(t *testing.T) {
+	if startupFormalTakeoverRetryMax > 2*time.Second {
+		t.Fatalf("retry max=%s can strand a 6s scheme near close", startupFormalTakeoverRetryMax)
+	}
+}

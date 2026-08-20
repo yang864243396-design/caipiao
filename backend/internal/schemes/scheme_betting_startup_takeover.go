@@ -11,7 +11,9 @@ import (
 const (
 	startupFormalTakeoverConcurrency  = 8
 	startupFormalTakeoverRetryInitial = 500 * time.Millisecond
-	startupFormalTakeoverRetryMax     = 30 * time.Second
+	// Keep this below the shortest 6-second lottery window. A 30-second cap
+	// phase-locks retries to the same close-window position forever.
+	startupFormalTakeoverRetryMax = 2 * time.Second
 )
 
 type startupFormalScheme struct {
