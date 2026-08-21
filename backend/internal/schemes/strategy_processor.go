@@ -144,8 +144,11 @@ func (p *StrategyProcessor) process(ctx context.Context, row sqlcdb.PendingForma
 		}
 	}
 	claimed, err := qtx.TryClaimSchemeStrategyEvaluation(ctx, sqlcdb.TryClaimSchemeStrategyEvaluationParams{InstanceID: row.SchemeID, LotteryCode: row.LotteryCode, PeriodNo: row.PeriodNo})
-	if err != nil || !claimed {
+	if err != nil {
 		return err
+	}
+	if !claimed {
+		return p.validateExistingFormalPhaseOneConflict(ctx, qtx, row.RecordID, row.SchemeID, row.LotteryCode, row.PeriodNo, nil)
 	}
 	evaluation, err := qtx.GetSchemeStrategyEvaluation(ctx, sqlcdb.GetSchemeStrategyEvaluationParams{InstanceID: row.SchemeID, PeriodNo: row.PeriodNo})
 	if err != nil {

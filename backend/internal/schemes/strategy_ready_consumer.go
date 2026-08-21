@@ -24,8 +24,23 @@ func (p *StrategyProcessor) ProcessStrategyReady(ctx context.Context, recordID i
 	row, found, err := p.q.PendingFormalStrategyRowForSchemeDraw(
 		ctx, recordID, schemeID, lotteryCode, periodNo, expectedStateVersion,
 	)
-	if err != nil || !found {
+	if err != nil {
 		return err
+	}
+	if !found {
+		if p.formalModeForLottery(lotteryCode) == "" {
+			return nil
+		}
+		tx, err := p.pool.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback(ctx)
+		qtx := p.q.WithTx(tx)
+		if err := p.validateExistingFormalPhaseOneConflict(ctx, qtx, recordID, schemeID, lotteryCode, periodNo, &expectedStateVersion); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
 	}
 	return p.process(ctx, row)
 }

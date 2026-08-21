@@ -25,6 +25,7 @@ func (q *Queries) BlockSchemeBettingChain(ctx context.Context, schemeID, reason 
 	_, err := q.db.Exec(ctx, `
 UPDATE scheme_instances
 SET strict_chain_state = 'blocked_requires_rearm',
+    chain_block_reason = NULLIF($2, ''),
     bet_failed_detail = NULLIF($2, ''),
     updated_at = $3
 WHERE id = $1`, schemeID, reason, now)

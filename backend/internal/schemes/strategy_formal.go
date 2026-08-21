@@ -104,6 +104,7 @@ func validateExistingFormalPhaseOne(
 	decisionID int64,
 	params sqlcdb.InsertSchemePeriodDecisionParams,
 ) string {
+	executionMismatch := formalPhaseOneExecutionMismatch(existing, params)
 	switch {
 	case existing.DecisionID != decisionID:
 		return "decision id mismatch"
@@ -125,6 +126,8 @@ func validateExistingFormalPhaseOne(
 		return "decision winning units mismatch"
 	case !formalPhaseOneStatusMatches(params.Status, existing.Status):
 		return "decision status is not a completed phase-one state"
+	case executionMismatch != "":
+		return executionMismatch
 	case !equalOptionalTime(existing.TargetDeadlineAt, params.TargetDeadlineAt):
 		return "target deadline mismatch"
 	case !existing.EvaluationStatus.Valid || (existing.EvaluationStatus.String != "completed" && existing.EvaluationStatus.String != "mismatch"):
@@ -144,6 +147,91 @@ func validateExistingFormalPhaseOne(
 	default:
 		return ""
 	}
+}
+
+func formalPhaseOneExecutionMismatch(
+	existing sqlcdb.FormalPhaseOneDecisionState,
+	params sqlcdb.InsertSchemePeriodDecisionParams,
+) string {
+	switch existing.Status {
+	case "awaiting_target", "completed":
+		if existing.ExecutionChainState != "active" {
+			return "nonterminal decision execution chain is not active"
+		}
+		if existing.ExecutionChainBlockReason.Valid {
+			return "nonterminal decision execution chain has a block reason"
+		}
+	case "chain_broken":
+		if existing.ExecutionChainState != "blocked_requires_rearm" {
+			return "terminal decision execution chain is not blocked"
+		}
+		expectedReason := formalPhaseOneBlockReason(params.Diagnostics)
+		if expectedReason == "" {
+			return "terminal decision block reason evidence is missing"
+		}
+		if !existing.ExecutionChainBlockReason.Valid || existing.ExecutionChainBlockReason.String != expectedReason {
+			return "terminal decision execution chain block reason mismatch"
+		}
+	case "missed_contiguous_period":
+		if existing.ExecutionChainState != "blocked_requires_rearm" {
+			return "missed decision execution chain is not blocked"
+		}
+		if !existing.ExecutionChainBlockReason.Valid || existing.ExecutionChainBlockReason.String != "missed_contiguous_period" {
+			return "missed decision execution chain block reason mismatch"
+		}
+	}
+	return ""
+}
+
+func formalPhaseOneBlockReason(diagnostics []byte) string {
+	var payload struct {
+		Reason string `json:"reason"`
+	}
+	if len(diagnostics) == 0 || json.Unmarshal(diagnostics, &payload) != nil {
+		return ""
+	}
+	return strings.TrimSpace(payload.Reason)
+}
+
+func (p *StrategyProcessor) validateExistingFormalPhaseOneConflict(
+	ctx context.Context,
+	q *sqlcdb.Queries,
+	recordID int64,
+	schemeID, lotteryCode, periodNo string,
+	expectedStateVersion *int64,
+) error {
+	if p.formalModeForLottery(lotteryCode) == "" {
+		return nil
+	}
+	existing, found, err := q.GetFormalPhaseOneDecisionStateForUpdate(ctx, schemeID, periodNo)
+	if err != nil || !found {
+		return err
+	}
+	switch existing.Status {
+	case "awaiting_target", "completed", "missed_contiguous_period", "chain_broken":
+	default:
+		return nil
+	}
+	stateVersionBefore := existing.StateVersionBefore
+	if expectedStateVersion != nil {
+		stateVersionBefore = *expectedStateVersion
+	}
+	drawHash := ""
+	if existing.DrawHash.Valid {
+		drawHash = existing.DrawHash.String
+	}
+	params := sqlcdb.InsertSchemePeriodDecisionParams{
+		SchemeID: schemeID, LotteryCode: lotteryCode, SourcePeriodNo: periodNo,
+		SourceBetRecordID: recordID, DrawHash: drawHash,
+		StateVersionBefore: stateVersionBefore, StateVersionAfter: stateVersionBefore + 1,
+		RuleVersion: existing.RuleVersion, RuleSnapshotHash: existing.RuleSnapshotHash,
+		LocalHit: existing.LocalHit.Bool, WinningUnits: int(existing.WinningUnits.Int32),
+		Status: existing.Status, Diagnostics: existing.DecisionDiagnostics, TargetDeadlineAt: existing.TargetDeadlineAt,
+	}
+	if reason := validateExistingFormalPhaseOne(existing, existing.DecisionID, params); reason != "" {
+		return formalPhaseOneInconsistent(existing.DecisionID, reason)
+	}
+	return nil
 }
 
 func formalPhaseOneStatusMatches(expected, actual string) bool {

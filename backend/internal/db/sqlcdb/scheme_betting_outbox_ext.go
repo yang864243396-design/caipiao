@@ -100,8 +100,11 @@ type FormalPhaseOneDecisionState struct {
 	LocalHit                   pgtype.Bool
 	WinningUnits               pgtype.Int4
 	Status                     string
+	DecisionDiagnostics        []byte
 	TargetDeadlineAt           pgtype.Timestamptz
 	CurrentStateVersion        int64
+	ExecutionChainState        string
+	ExecutionChainBlockReason  pgtype.Text
 	EvaluationStatus           pgtype.Text
 	EvaluationCloudBetRecordID pgtype.Int8
 	EvaluationRuleVersion      pgtype.Int4
@@ -148,7 +151,8 @@ WITH locked_decision AS MATERIALIZED (
            d.source_bet_record_id, d.draw_hash,
            d.state_version_before, d.state_version_after,
            d.rule_version, d.rule_snapshot_hash, d.local_hit, d.winning_units,
-           d.status, d.target_deadline_at, i.state_version AS current_state_version
+           d.status, d.diagnostics, d.target_deadline_at, i.state_version AS current_state_version,
+           i.strict_chain_state, i.chain_block_reason
     FROM scheme_period_decisions d
     JOIN scheme_instances i ON i.id = d.scheme_id
     WHERE d.scheme_id = $1 AND d.source_period_no = $2
@@ -170,7 +174,8 @@ SELECT d.id, d.scheme_id, d.lottery_code, d.source_period_no,
        d.source_bet_record_id, d.draw_hash,
        d.state_version_before, d.state_version_after,
        d.rule_version, d.rule_snapshot_hash, d.local_hit, d.winning_units,
-       d.status, d.target_deadline_at, d.current_state_version,
+       d.status, d.diagnostics, d.target_deadline_at, d.current_state_version,
+       d.strict_chain_state, d.chain_block_reason,
        e.status, e.cloud_bet_record_id, e.rule_version, e.rule_snapshot_hash,
        e.local_hit, e.winning_units, e.completed_at,
        c.strategy_evaluated_at
@@ -181,7 +186,8 @@ LEFT JOIN locked_cloud c ON TRUE`, schemeID, sourcePeriodNo).Scan(
 		&row.SourceBetRecordID, &row.DrawHash,
 		&row.StateVersionBefore, &row.StateVersionAfter,
 		&row.RuleVersion, &row.RuleSnapshotHash, &row.LocalHit, &row.WinningUnits,
-		&row.Status, &row.TargetDeadlineAt, &row.CurrentStateVersion,
+		&row.Status, &row.DecisionDiagnostics, &row.TargetDeadlineAt, &row.CurrentStateVersion,
+		&row.ExecutionChainState, &row.ExecutionChainBlockReason,
 		&row.EvaluationStatus, &row.EvaluationCloudBetRecordID,
 		&row.EvaluationRuleVersion, &row.EvaluationRuleSnapshotHash,
 		&row.EvaluationLocalHit, &row.EvaluationWinningUnits,

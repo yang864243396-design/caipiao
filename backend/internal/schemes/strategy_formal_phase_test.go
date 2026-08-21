@@ -113,6 +113,95 @@ func TestFormalEvaluationRejectsIncompleteExistingDecisionBeforeAdvance(t *testi
 	}
 }
 
+func TestDuplicateFormalConfigurationRequiresExactTerminalChainState(t *testing.T) {
+	params := formalPhaseOneTestDecisionParams()
+	params.Status = "chain_broken"
+	params.Diagnostics = []byte(`{"reason":"contiguous_target_configuration"}`)
+	params.TargetDeadlineAt = pgtype.Timestamptz{}
+
+	tests := []struct {
+		name        string
+		chainState  string
+		blockReason pgtype.Text
+	}{
+		{name: "chain remains active", chainState: "active"},
+		{name: "wrong block reason", chainState: "blocked_requires_rearm", blockReason: pgtype.Text{String: "wrong_reason", Valid: true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			existing := matchingFormalPhaseOneDecisionState(41, params)
+			existing.ExecutionChainState = tt.chainState
+			existing.ExecutionChainBlockReason = tt.blockReason
+			store := &fakeFormalPhaseOneDecisionStore{decisionID: 41, existing: existing}
+			advanced := false
+
+			_, _, err := reserveFormalPhaseOneDecision(context.Background(), store, params, func() error {
+				advanced = true
+				return nil
+			})
+			if !errors.Is(err, ErrFormalPhaseOneInconsistentState) {
+				t.Fatalf("error = %v, want ErrFormalPhaseOneInconsistentState", err)
+			}
+			if advanced {
+				t.Fatal("malformed terminal chain advanced strategy state")
+			}
+		})
+	}
+}
+
+func TestDuplicateFormalConfigurationAcceptsExactTerminalChainState(t *testing.T) {
+	params := formalPhaseOneTestDecisionParams()
+	params.Status = "chain_broken"
+	params.Diagnostics = []byte(`{"reason":"contiguous_target_configuration"}`)
+	params.TargetDeadlineAt = pgtype.Timestamptz{}
+	store := &fakeFormalPhaseOneDecisionStore{
+		decisionID: 41,
+		existing:   matchingFormalPhaseOneDecisionState(41, params),
+	}
+
+	_, created, err := reserveFormalPhaseOneDecision(context.Background(), store, params, func() error {
+		t.Fatal("matching terminal duplicate advanced strategy state")
+		return nil
+	})
+	if err != nil || created {
+		t.Fatalf("created=%v error=%v, want existing terminal idempotent success", created, err)
+	}
+}
+
+func TestDuplicateFormalNonConfigurationBlockUsesRecordedReason(t *testing.T) {
+	params := formalPhaseOneTestDecisionParams()
+	params.Status = "chain_broken"
+	params.Diagnostics = []byte(`{"reason":"chain_not_active"}`)
+	params.TargetDeadlineAt = pgtype.Timestamptz{}
+	existing := matchingFormalPhaseOneDecisionState(41, params)
+	existing.ExecutionChainBlockReason = pgtype.Text{String: "chain_not_active", Valid: true}
+	store := &fakeFormalPhaseOneDecisionStore{decisionID: 41, existing: existing}
+
+	_, created, err := reserveFormalPhaseOneDecision(context.Background(), store, params, func() error {
+		t.Fatal("matching non-configuration terminal duplicate advanced strategy state")
+		return nil
+	})
+	if err != nil || created {
+		t.Fatalf("created=%v error=%v, want recorded terminal reason accepted", created, err)
+	}
+}
+
+func TestDuplicateFormalAwaitingRequiresActiveUnblockedChain(t *testing.T) {
+	params := formalPhaseOneTestDecisionParams()
+	existing := matchingFormalPhaseOneDecisionState(41, params)
+	existing.ExecutionChainState = "blocked_requires_rearm"
+	existing.ExecutionChainBlockReason = pgtype.Text{String: "contiguous_target_configuration", Valid: true}
+	store := &fakeFormalPhaseOneDecisionStore{decisionID: 41, existing: existing}
+
+	_, _, err := reserveFormalPhaseOneDecision(context.Background(), store, params, func() error {
+		t.Fatal("malformed awaiting duplicate advanced strategy state")
+		return nil
+	})
+	if !errors.Is(err, ErrFormalPhaseOneInconsistentState) {
+		t.Fatalf("error = %v, want ErrFormalPhaseOneInconsistentState", err)
+	}
+}
+
 type fakeFormalPhaseOneDecisionStore struct {
 	created    bool
 	decisionID int64
@@ -141,20 +230,28 @@ func formalPhaseOneTestDecisionParams() sqlcdb.InsertSchemePeriodDecisionParams 
 }
 
 func matchingFormalPhaseOneDecisionState(decisionID int64, params sqlcdb.InsertSchemePeriodDecisionParams) sqlcdb.FormalPhaseOneDecisionState {
-	return sqlcdb.FormalPhaseOneDecisionState{
+	state := sqlcdb.FormalPhaseOneDecisionState{
 		DecisionID: decisionID, SchemeID: params.SchemeID, LotteryCode: params.LotteryCode,
 		SourcePeriodNo: params.SourcePeriodNo, SourceBetRecordID: pgtype.Int8{Int64: params.SourceBetRecordID, Valid: true},
 		DrawHash:           pgtype.Text{String: params.DrawHash, Valid: true},
 		StateVersionBefore: params.StateVersionBefore, StateVersionAfter: params.StateVersionAfter,
 		RuleVersion: params.RuleVersion, RuleSnapshotHash: params.RuleSnapshotHash,
 		LocalHit: pgtype.Bool{Bool: params.LocalHit, Valid: true}, WinningUnits: pgtype.Int4{Int32: int32(params.WinningUnits), Valid: true},
-		Status: params.Status, TargetDeadlineAt: params.TargetDeadlineAt, CurrentStateVersion: params.StateVersionAfter,
+		Status: params.Status, DecisionDiagnostics: params.Diagnostics,
+		TargetDeadlineAt: params.TargetDeadlineAt, CurrentStateVersion: params.StateVersionAfter,
 		EvaluationStatus: pgtype.Text{String: "completed", Valid: true}, EvaluationCloudBetRecordID: pgtype.Int8{Int64: params.SourceBetRecordID, Valid: true},
 		EvaluationRuleVersion: params.RuleVersion, EvaluationRuleSnapshotHash: params.RuleSnapshotHash,
 		EvaluationLocalHit: pgtype.Bool{Bool: params.LocalHit, Valid: true}, EvaluationWinningUnits: pgtype.Int4{Int32: int32(params.WinningUnits), Valid: true},
 		EvaluationCompletedAt:    pgtype.Timestamptz{Time: time.Date(2026, time.August, 21, 10, 0, 1, 0, time.UTC), Valid: true},
 		CloudStrategyEvaluatedAt: pgtype.Timestamptz{Time: time.Date(2026, time.August, 21, 10, 0, 1, 0, time.UTC), Valid: true},
 	}
+	if params.Status == "chain_broken" {
+		state.ExecutionChainState = "blocked_requires_rearm"
+		state.ExecutionChainBlockReason = pgtype.Text{String: "contiguous_target_configuration", Valid: true}
+	} else {
+		state.ExecutionChainState = "active"
+	}
+	return state
 }
 
 func TestFormalEvaluationPersistsAwaitingTargetWithoutOutbox(t *testing.T) {

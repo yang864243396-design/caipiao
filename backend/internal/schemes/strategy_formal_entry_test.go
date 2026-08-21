@@ -15,6 +15,7 @@ import (
 	"caipiao/backend/internal/config"
 	"caipiao/backend/internal/db"
 	"caipiao/backend/internal/db/sqlcdb"
+	"caipiao/backend/internal/lottery"
 	"caipiao/backend/internal/playrules"
 )
 
@@ -93,6 +94,23 @@ func TestFormalEvaluationRejectsIncompletePreseededDecision(t *testing.T) {
 	}
 }
 
+func TestFormalEvaluationRejectsCompletedConfigurationDecisionWithMalformedChain(t *testing.T) {
+	f := newFormalStrategyEntryFixture(t, "", time.Now().UTC())
+	f.preseedCompletedConfigurationDecision("active", "wrong_reason")
+
+	err := f.process()
+	if !errors.Is(err, ErrFormalPhaseOneInconsistentState) {
+		t.Fatalf("ProcessStrategyReady() error = %v, want ErrFormalPhaseOneInconsistentState", err)
+	}
+	s := f.snapshot()
+	if s.StateVersion != 1 || s.RoundIndex != 1 || s.DecisionCount != 1 || s.EvaluationCount != 1 {
+		t.Fatalf("state=%d round=%d decisions=%d evaluations=%d, want unchanged 1/1/1/1", s.StateVersion, s.RoundIndex, s.DecisionCount, s.EvaluationCount)
+	}
+	if s.ChainState != "active" || !s.ChainBlockReason.Valid || s.ChainBlockReason.String != "wrong_reason" {
+		t.Fatalf("chain=%q reason=%+v, want unchanged malformed execution state", s.ChainState, s.ChainBlockReason)
+	}
+}
+
 func TestFormalEvaluationExpiredDeadlineCommitsThenMisses(t *testing.T) {
 	f := newFormalStrategyEntryFixture(t, "15s", time.Now().UTC().Add(-30*time.Second))
 	if err := f.process(); err != nil {
@@ -113,8 +131,8 @@ func TestFormalEvaluationNonPositiveIntervalTerminatesConfiguration(t *testing.T
 		t.Fatalf("ProcessStrategyReady() error = %v", err)
 	}
 	s := f.snapshot()
-	if s.StateVersion != 1 || s.RoundIndex != 1 || s.DecisionStatus != "chain_broken" || s.ChainState != "blocked_requires_rearm" {
-		t.Fatalf("state=%d round=%d decision=%q chain=%q, want terminal configuration failure", s.StateVersion, s.RoundIndex, s.DecisionStatus, s.ChainState)
+	if s.StateVersion != 1 || s.RoundIndex != 1 || s.DecisionStatus != "chain_broken" || s.ChainState != "blocked_requires_rearm" || !s.ChainBlockReason.Valid || s.ChainBlockReason.String != "contiguous_target_configuration" {
+		t.Fatalf("state=%d round=%d decision=%q chain=%q reason=%+v, want terminal configuration failure", s.StateVersion, s.RoundIndex, s.DecisionStatus, s.ChainState, s.ChainBlockReason)
 	}
 	if s.EvaluationStatus != "completed" || !s.StrategyEvaluatedAt.Valid || s.OutboxCount != 0 {
 		t.Fatalf("evaluation=%q marker=%+v outbox=%d", s.EvaluationStatus, s.StrategyEvaluatedAt, s.OutboxCount)
@@ -139,6 +157,7 @@ type formalStrategyEntrySnapshot struct {
 	StateVersion        int64
 	RoundIndex          int32
 	ChainState          string
+	ChainBlockReason    pgtype.Text
 	DecisionCount       int
 	DecisionStatus      string
 	TargetDeadlineAt    pgtype.Timestamptz
@@ -257,10 +276,46 @@ func (f *formalStrategyEntryFixture) preseedIncompleteDecision() {
 	}
 }
 
+func (f *formalStrategyEntryFixture) preseedCompletedConfigurationDecision(chainState, blockReason string) {
+	f.t.Helper()
+	if _, err := f.pool.Exec(f.ctx, `
+UPDATE scheme_instances
+SET state_version = 1,
+    round_index = 1,
+    strict_chain_state = $2,
+    chain_block_reason = NULLIF($3, '')
+WHERE id = $1`, f.schemeID, chainState, blockReason); err != nil {
+		f.t.Fatal(err)
+	}
+	_, created, err := sqlcdb.New(f.pool).InsertSchemePeriodDecision(f.ctx, sqlcdb.InsertSchemePeriodDecisionParams{
+		SchemeID: f.schemeID, LotteryCode: f.lotteryCode, SourcePeriodNo: f.periodNo,
+		SourceBetRecordID:  f.recordID,
+		DrawHash:           lottery.CanonicalDrawHash(f.lotteryCode, f.periodNo, []string{"1", "2", "3", "4", "5"}),
+		StateVersionBefore: 0, StateVersionAfter: 1,
+		RuleVersion: pgtype.Int4{Int32: 1, Valid: true}, RuleSnapshotHash: pgtype.Text{String: "formal-phase-rule", Valid: true},
+		LocalHit: true, WinningUnits: 1, Status: "chain_broken",
+		Diagnostics: []byte(`{"reason":"contiguous_target_configuration"}`),
+	})
+	if err != nil || !created {
+		f.t.Fatalf("preseed decision created=%v err=%v", created, err)
+	}
+	if _, err := f.pool.Exec(f.ctx, `
+INSERT INTO scheme_strategy_evaluations
+    (instance_id, lottery_code, period_no, cloud_bet_record_id, status,
+     rule_version, rule_snapshot_hash, local_hit, winning_units, completed_at)
+VALUES ($1, $2, $3, $4, 'completed', 1, 'formal-phase-rule', true, 1, now())`,
+		f.schemeID, f.lotteryCode, f.periodNo, f.recordID); err != nil {
+		f.t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(f.ctx, `UPDATE cloud_bet_records SET strategy_evaluated_at = now() WHERE id = $1`, f.recordID); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
 func (f *formalStrategyEntryFixture) snapshot() formalStrategyEntrySnapshot {
 	f.t.Helper()
 	var s formalStrategyEntrySnapshot
-	if err := f.pool.QueryRow(f.ctx, `SELECT state_version, round_index, strict_chain_state FROM scheme_instances WHERE id = $1`, f.schemeID).Scan(&s.StateVersion, &s.RoundIndex, &s.ChainState); err != nil {
+	if err := f.pool.QueryRow(f.ctx, `SELECT state_version, round_index, strict_chain_state, chain_block_reason FROM scheme_instances WHERE id = $1`, f.schemeID).Scan(&s.StateVersion, &s.RoundIndex, &s.ChainState, &s.ChainBlockReason); err != nil {
 		f.t.Fatal(err)
 	}
 	if err := f.pool.QueryRow(f.ctx, `
