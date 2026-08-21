@@ -2,6 +2,7 @@ package periodsync
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +47,9 @@ func freshSharedOpenPeriod(lotteryCode string, now time.Time) (prePlaceVerifyRes
 	if state, ok := lottery.FreshShortPeriodWSBetTarget(lotteryCode, "", now); ok {
 		return prePlaceVerifyResult{Period: state.NextIssue, CloseAt: state.CloseAt.UTC()}, true
 	}
+	if lottery.RequiresFreshShortPeriodWSBetTarget(lotteryCode) {
+		return prePlaceVerifyResult{}, false
+	}
 	if lotteryCode == "" || !lottery.PeriodsScheduleFresh(lotteryCode, lottery.PeriodsFallbackStaleAge, now) {
 		return prePlaceVerifyResult{}, false
 	}
@@ -68,6 +72,9 @@ func (s *Syncer) verifyOpenPeriod(
 ) (prePlaceVerifyResult, error) {
 	if result, ok := freshSharedOpenPeriod(lotteryCode, now); ok {
 		return result, nil
+	}
+	if lottery.RequiresFreshShortPeriodWSBetTarget(lotteryCode) {
+		return prePlaceVerifyResult{}, fmt.Errorf("fresh websocket period unavailable for %s", strings.TrimSpace(lotteryCode))
 	}
 	cache := s.prePlaceVerifications
 	if cache == nil {

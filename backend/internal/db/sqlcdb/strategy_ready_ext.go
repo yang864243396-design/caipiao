@@ -30,7 +30,7 @@ JOIN scheme_instances si ON si.id = c.scheme_id
 JOIN lottery_draws d ON d.lottery_code = c.lottery_code AND d.issue_no = c.period_no
 WHERE c.id > $3
   AND c.sim_bet = FALSE
-  AND c.status = 'pending'
+  AND c.status IN ('pending', 'hit', 'miss')
   AND NULLIF(TRIM(c.third_party_bet_id), '') IS NOT NULL
   AND c.rule_snapshot IS NOT NULL
   AND c.strategy_evaluated_at IS NULL
@@ -40,7 +40,7 @@ WHERE c.id > $3
       SELECT 1 FROM cloud_bet_records prior
       WHERE prior.scheme_id = c.scheme_id
         AND prior.sim_bet = FALSE
-        AND prior.status = 'pending'
+        AND prior.status IN ('pending', 'hit', 'miss')
         AND NULLIF(TRIM(prior.third_party_bet_id), '') IS NOT NULL
         AND prior.strategy_evaluated_at IS NULL
         AND (prior.placed_at < c.placed_at OR (prior.placed_at = c.placed_at AND prior.id < c.id))
@@ -70,7 +70,8 @@ func (q *Queries) PendingFormalStrategyRowForSchemeDraw(ctx context.Context, rec
 	err := q.db.QueryRow(ctx, `
 SELECT c.id, c.scheme_id, COALESCE(c.lottery_code, ''), c.period_no,
        COALESCE(c.bet_content, ''), c.rule_snapshot, c.rule_version,
-       c.rule_snapshot_hash, d.balls
+       c.rule_snapshot_hash, d.balls,
+       CASE c.status WHEN 'hit' THEN TRUE WHEN 'miss' THEN FALSE ELSE NULL END
 FROM cloud_bet_records c
 JOIN scheme_instances si ON si.id = c.scheme_id
 JOIN lottery_draws d ON d.lottery_code = c.lottery_code AND d.issue_no = c.period_no
@@ -80,7 +81,7 @@ WHERE c.scheme_id = $1
   AND c.period_no = $3
   AND si.state_version = $4
   AND c.sim_bet = FALSE
-  AND c.status = 'pending'
+  AND c.status IN ('pending', 'hit', 'miss')
   AND NULLIF(TRIM(c.third_party_bet_id), '') IS NOT NULL
   AND c.rule_snapshot IS NOT NULL
   AND c.strategy_evaluated_at IS NULL
@@ -89,7 +90,7 @@ WHERE c.scheme_id = $1
 ORDER BY c.placed_at, c.id
 LIMIT 1`, schemeID, lotteryCode, periodNo, expectedStateVersion, recordID).Scan(
 		&item.RecordID, &item.SchemeID, &item.LotteryCode, &item.PeriodNo,
-		&item.BetContent, &item.RuleSnapshot, &item.RuleVersion, &item.RuleSnapshotHash, &balls,
+		&item.BetContent, &item.RuleSnapshot, &item.RuleVersion, &item.RuleSnapshotHash, &balls, &item.ProviderHit,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

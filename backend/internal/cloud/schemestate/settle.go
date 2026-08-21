@@ -43,9 +43,9 @@ func ProcessFormalAfterSettlement(
 	return processAfterSettlement(ctx, q, inst, periodNo, pnl, hit, definitionConfig, numericFromFloat, true)
 }
 
-// ProcessFormalFinancialAfterSettlement applies the third-party financial
-// settlement and lookback bookkeeping after the draw worker has already
-// advanced strategy state for this instance/period.
+// ProcessFormalFinancialAfterSettlement applies third-party financial and
+// lookback bookkeeping without writing event-owned round or pick state. It is
+// safe whether payout or draw strategy completes first.
 func ProcessFormalFinancialAfterSettlement(
 	ctx context.Context,
 	q *sqlcdb.Queries,
@@ -116,19 +116,23 @@ func processAfterSettlement(
 	// 使定码轮换/高级定码轮换等运行类型逐期切换下注内容（与倍投轮次推进独立）。
 	applyPickIndex, applyCurrentPick, applyLastDirection := formalPickStateAfterSettlement(ctx, advanceStrategy, q, inst, periodNo, definitionConfig, hit)
 
-	if err := q.ApplySchemeInstancePickAfterSettlement(ctx, sqlcdb.ApplySchemeInstanceBetParams{
-		ID:               inst.ID,
-		CountdownSec:     inst.CountdownSec,
-		Turnover:         numericFromFloat(0),
-		Pnl:              numericFromFloat(0),
-		Multiplier:       inst.Multiplier,
-		RoundIndex:       applyRoundIndex,
-		LastSettledIssue: inst.LastSettledIssue,
-		LookbackPnl:      numericFromFloat(lookbackDelta),
-		PickIndex:        applyPickIndex,
-		CurrentPick:      applyCurrentPick,
-		LastDirection:    applyLastDirection,
-	}); err != nil {
+	if advanceStrategy {
+		if err := q.ApplySchemeInstancePickAfterSettlement(ctx, sqlcdb.ApplySchemeInstanceBetParams{
+			ID:               inst.ID,
+			CountdownSec:     inst.CountdownSec,
+			Turnover:         numericFromFloat(0),
+			Pnl:              numericFromFloat(0),
+			Multiplier:       inst.Multiplier,
+			RoundIndex:       applyRoundIndex,
+			LastSettledIssue: inst.LastSettledIssue,
+			LookbackPnl:      numericFromFloat(lookbackDelta),
+			PickIndex:        applyPickIndex,
+			CurrentPick:      applyCurrentPick,
+			LastDirection:    applyLastDirection,
+		}); err != nil {
+			return err
+		}
+	} else if err := q.ApplySchemeInstanceFinancialAfterSettlement(ctx, inst.ID, lookbackDelta); err != nil {
 		return err
 	}
 
@@ -138,7 +142,13 @@ func processAfterSettlement(
 		}
 	}
 	if lbEval.ResetIndividual || lbEval.ResetOverall {
-		if _, err := engine.ApplyInstanceResets(ctx, inst, lbEval.ResetIndividual, lbEval.ResetOverall); err != nil {
+		var err error
+		if advanceStrategy {
+			_, err = engine.ApplyInstanceResets(ctx, inst, lbEval.ResetIndividual, lbEval.ResetOverall)
+		} else {
+			_, err = engine.ApplyFinancialResets(ctx, inst, lbEval.ResetIndividual, lbEval.ResetOverall)
+		}
+		if err != nil {
 			return err
 		}
 		if lbEval.ResetIndividual && !lbEval.ResetOverall {

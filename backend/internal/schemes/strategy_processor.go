@@ -192,12 +192,17 @@ func (p *StrategyProcessor) process(ctx context.Context, row sqlcdb.PendingForma
 	}
 	diagnostics, err := json.Marshal(map[string]any{
 		"source": "draw_ws_rule", "localHit": result.Hit, "winningUnits": result.WinningUnits,
+		"providerHit": row.ProviderHit, "mismatch": row.ProviderHit.Valid && row.ProviderHit.Bool != result.Hit,
 		"shadow": shadow,
 	})
 	if err != nil {
 		return err
 	}
-	if _, err := qtx.CompleteSchemeStrategyEvaluationWithStatus(ctx, sqlcdb.CompleteSchemeStrategyEvaluationWithStatusParams{CloudBetRecordID: pgtype.Int8{Int64: row.RecordID, Valid: true}, RuleVersion: row.RuleVersion, RuleSnapshotHash: row.RuleSnapshotHash, LocalHit: pgtype.Bool{Bool: result.Hit, Valid: true}, WinningUnits: pgtype.Int4{Int32: int32(result.WinningUnits), Valid: true}, Diagnostics: diagnostics, Status: "completed", ID: evaluation.ID}); err != nil {
+	evaluationStatus := "completed"
+	if row.ProviderHit.Valid && row.ProviderHit.Bool != result.Hit {
+		evaluationStatus = "mismatch"
+	}
+	if _, err := qtx.CompleteSchemeStrategyEvaluationWithStatus(ctx, sqlcdb.CompleteSchemeStrategyEvaluationWithStatusParams{CloudBetRecordID: pgtype.Int8{Int64: row.RecordID, Valid: true}, RuleVersion: row.RuleVersion, RuleSnapshotHash: row.RuleSnapshotHash, LocalHit: pgtype.Bool{Bool: result.Hit, Valid: true}, WinningUnits: pgtype.Int4{Int32: int32(result.WinningUnits), Valid: true}, Diagnostics: diagnostics, Status: evaluationStatus, ID: evaluation.ID}); err != nil {
 		return err
 	}
 	if err := qtx.MarkCloudBetRecordStrategyEvaluated(ctx, row.RecordID); err != nil {

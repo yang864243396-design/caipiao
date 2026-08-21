@@ -122,6 +122,43 @@ func (e *Engine) ApplyInstanceResets(
 	return ids, nil
 }
 
+// ApplyFinancialResets clears only settlement-owned lookback balances. Event
+// strategy owns round and pick state and must not be overwritten by payout.
+func (e *Engine) ApplyFinancialResets(
+	ctx context.Context,
+	inst sqlcdb.SchemeInstance,
+	resetIndividual, resetOverall bool,
+) ([]string, error) {
+	if e == nil || e.q == nil {
+		return nil, nil
+	}
+	if resetIndividual && !resetOverall {
+		if err := e.q.ResetSchemeInstanceLookbackOnly(ctx, inst.ID); err != nil {
+			return nil, err
+		}
+		return []string{inst.ID}, nil
+	}
+	if !resetOverall {
+		return nil, nil
+	}
+	ids, err := e.q.ListRunningSchemeInstanceIDsByMemberSimBet(ctx, sqlcdb.ListRunningSchemeInstanceIDsByMemberSimBetParams{
+		MemberID: inst.MemberID,
+		SimBet:   inst.SimBet,
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range ids {
+		if err := e.q.ResetSchemeInstanceLookbackOnly(ctx, id); err != nil {
+			return nil, err
+		}
+	}
+	if err := e.SaveRuntime(ctx, inst.MemberID, inst.SimBet, Runtime{}, true); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
 // ProcessFormalAfterSettlement 正式盘派奖后更新 lookback_pnl 并评估复位。
 func (e *Engine) ProcessFormalAfterSettlement(
 	ctx context.Context,

@@ -177,7 +177,7 @@ VALUES ($1, 'db-current-period', $2, $3, $4, 'test', 'db-clock', '{}'::jsonb)`,
 	}
 }
 
-func TestGetPreSendReplacementProviderPeriodAllowsProviderConfirmedEarlyPeriod(t *testing.T) {
+func TestPreSendRecoveryOnlyReturnsCurrentInstanceChain(t *testing.T) {
 	_ = godotenv.Load("../../../.env")
 	cfg := config.Load()
 	if cfg.DatabaseURL == "" {
@@ -196,27 +196,105 @@ func TestGetPreSendReplacementProviderPeriodAllowsProviderConfirmedEarlyPeriod(t
 	}
 	defer tx.Rollback(ctx)
 
-	now := time.Now().UTC()
-	lotteryCode := fmt.Sprintf("presend_hint_%d", now.UnixNano())
-	periodNo := "P-next"
-	var insertedID int64
-	err = tx.QueryRow(ctx, `
+	stamp := time.Now().UnixNano()
+	account := fmt.Sprintf("chain%d", stamp%1e12)
+	definitionID := fmt.Sprintf("chain-def-%d", stamp)
+	instanceID := fmt.Sprintf("chain-inst-%d", stamp)
+	lotteryCode := fmt.Sprintf("ch%d", stamp)
+	var memberID int64
+	if err := tx.QueryRow(ctx, `
+INSERT INTO members (account, password_hash, display_name, status)
+VALUES ($1, 'test', 'chain recovery test', 'active') RETURNING id`, account).Scan(&memberID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO scheme_definitions (id, member_id, kind, scheme_name, lottery_code, lottery_label, share_status, config)
+VALUES ($1, $2, 'custom', 'chain recovery test', $3, 'test', 'private', '{}'::jsonb)`, definitionID, memberID, lotteryCode); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO scheme_instances
+    (id, definition_id, member_id, kind, scheme_name, lottery_code, lottery_label, status,
+     sim_bet, betting_owner, strict_chain_state, chain_id, chain_seq)
+VALUES ($1, $2, $3, 'custom', 'chain recovery test', $4, 'test', 'running',
+        false, 'event', 'active', 'current-chain', 4)`, instanceID, definitionID, memberID, lotteryCode); err != nil {
+		t.Fatal(err)
+	}
+	var snapshotID int64
+	if err := tx.QueryRow(ctx, `
 INSERT INTO provider_period_snapshots
     (lottery_code, period_no, open_at, close_at, observed_at, source, snapshot_hash, raw_payload)
-VALUES ($1, $2, $3, $4, $5, 'test', $6, '{}'::jsonb)
-RETURNING id`, lotteryCode, periodNo, now.Add(2*time.Second), now.Add(8*time.Second), now, "hint-hash").Scan(&insertedID)
-	if err != nil {
+VALUES ($1, 'provider-period', clock_timestamp(), clock_timestamp() + interval '1 minute',
+        clock_timestamp(), 'test', $2, '{}'::jsonb) RETURNING id`, lotteryCode, fmt.Sprintf("chain-snapshot-%d", stamp)).Scan(&snapshotID); err != nil {
 		t.Fatal(err)
 	}
 
-	row, found, err := sqlcdb.New(tx).GetPreSendReplacementProviderPeriod(ctx, lotteryCode, periodNo, 6*time.Second)
+	insertOutbox := func(sourcePeriod, targetPeriod, requestID, chainID string) int64 {
+		t.Helper()
+		var decisionID, outboxID int64
+		if err := tx.QueryRow(ctx, `
+INSERT INTO scheme_period_decisions
+    (scheme_id, lottery_code, source_period_no, state_version_before, state_version_after, status)
+VALUES ($1, $2, $3, 1, 1, 'completed') RETURNING id`, instanceID, lotteryCode, sourcePeriod).Scan(&decisionID); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.QueryRow(ctx, `
+INSERT INTO scheme_bet_outbox
+    (decision_id, scheme_id, member_id, lottery_code, source_period_no, target_period_no,
+     mode, state, request_id, payload_hash, payload, provider_snapshot_id, close_at,
+     safe_deadline_at, shard_no, outcome_reason, chain_id, chain_seq)
+VALUES ($1, $2, $3, $4, $5, $6,
+        'shadow', 'rejected', $7, $10, '{}'::jsonb, $8, clock_timestamp() + interval '1 minute',
+        clock_timestamp() + interval '30 seconds', 0, 'provider_pre_send_failed', $9, 1)
+RETURNING id`, decisionID, instanceID, memberID, lotteryCode, sourcePeriod, targetPeriod, requestID, snapshotID, chainID, "hash-"+requestID).Scan(&outboxID); err != nil {
+			t.Fatal(err)
+		}
+		return outboxID
+	}
+
+	oldID := insertOutbox("old-source", "old-target", fmt.Sprintf("old-request-%d", stamp), "old-chain")
+	currentID := insertOutbox("current-source", "current-target", fmt.Sprintf("current-request-%d", stamp), "current-chain")
+	q := sqlcdb.New(tx)
+	if _, found, err := q.GetPreSendFailureOutbox(ctx, oldID); err != nil || found {
+		t.Fatalf("old chain found=%v err=%v", found, err)
+	}
+	if row, found, err := q.GetPreSendFailureOutbox(ctx, currentID); err != nil || !found || row.ID != currentID {
+		t.Fatalf("current chain row=%+v found=%v err=%v", row, found, err)
+	} else if row.ChainID != "current-chain" {
+		t.Fatalf("current chain id=%q want current-chain", row.ChainID)
+	}
+	ids, err := q.ListPendingPreSendFailureOutboxIDs(ctx, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !found || row.ID != insertedID || row.PeriodNo != periodNo {
-		t.Fatalf("found=%v row=%+v", found, row)
+	for _, id := range ids {
+		if id == oldID {
+			t.Fatalf("old chain outbox %d was returned for recovery", oldID)
+		}
 	}
-	if row.DatabaseNow.IsZero() {
-		t.Fatal("database clock was not returned")
+	foundCurrent := false
+	for _, id := range ids {
+		foundCurrent = foundCurrent || id == currentID
+	}
+	if !foundCurrent {
+		t.Fatalf("current chain outbox %d missing from recovery ids=%v", currentID, ids)
+	}
+	blocked, err := q.BlockSchemeBettingChainIfCurrent(ctx, instanceID, "old-chain", "old failure", time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blocked {
+		t.Fatal("old chain failure blocked the current execution chain")
+	}
+	var chainState string
+	if err := tx.QueryRow(ctx, `SELECT strict_chain_state FROM scheme_instances WHERE id=$1`, instanceID).Scan(&chainState); err != nil {
+		t.Fatal(err)
+	}
+	if chainState != "active" {
+		t.Fatalf("chain state=%q want active", chainState)
+	}
+	blocked, err = q.BlockSchemeBettingChainIfCurrent(ctx, instanceID, "current-chain", "current failure", time.Now().UTC())
+	if err != nil || !blocked {
+		t.Fatalf("current chain blocked=%v err=%v", blocked, err)
 	}
 }

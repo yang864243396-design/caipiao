@@ -31,8 +31,14 @@ func (w *Worker) HandlePreSendFailure(ctx context.Context, outboxID int64) error
 	}
 	if schemeID != "" && w != nil && w.q != nil {
 		reason := boundedPreSendFailureReason(err)
-		if blockErr := w.q.BlockSchemeBettingChain(ctx, schemeID, reason, time.Now().UTC()); blockErr != nil {
-			return fmt.Errorf("%v; block failed pre-send replacement: %w", err, blockErr)
+		failed, found, lookupErr := w.q.GetPreSendFailureOutbox(ctx, outboxID)
+		if lookupErr != nil {
+			return fmt.Errorf("%v; reload failed pre-send replacement: %w", err, lookupErr)
+		}
+		if found && failed.SchemeID == schemeID {
+			if _, blockErr := w.q.BlockSchemeBettingChainIfCurrent(ctx, schemeID, failed.ChainID, reason, time.Now().UTC()); blockErr != nil {
+				return fmt.Errorf("%v; block failed pre-send replacement: %w", err, blockErr)
+			}
 		}
 	}
 	return err
@@ -64,7 +70,7 @@ func (w *Worker) reschedulePreSendFailure(ctx context.Context, outboxID int64) (
 	if err != nil {
 		return failed.SchemeID, err
 	}
-	if execution.Owner != "event" || execution.ChainState != string(schemebetting.ChainStateActive) || strings.TrimSpace(execution.ChainID) == "" {
+	if !preSendFailureBelongsToExecution(failed, execution) {
 		return failed.SchemeID, errors.New("scheme chain is not active for pre-send replacement")
 	}
 	shardNo := int32(schemebetting.ShardForScheme(failed.SchemeID, shadowOutboxShardCount))
@@ -151,6 +157,14 @@ func (w *Worker) preSendReplacementTarget(
 	now time.Time,
 ) (schemebetting.PeriodSnapshot, int64, bool, error) {
 	return providerperiodtarget.Current(ctx, q, failed.LotteryCode, failed.FailedPeriod, now)
+}
+
+func preSendFailureBelongsToExecution(failed sqlcdb.PreSendFailureOutbox, execution sqlcdb.SchemeBettingExecutionState) bool {
+	failedChainID := strings.TrimSpace(failed.ChainID)
+	return execution.Owner == "event" &&
+		execution.ChainState == string(schemebetting.ChainStateActive) &&
+		failedChainID != "" &&
+		failedChainID == strings.TrimSpace(execution.ChainID)
 }
 
 func boundedPreSendFailureReason(err error) string {

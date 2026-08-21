@@ -52,15 +52,26 @@ func PeriodStateFor(lotteryCode string) (PeriodState, bool) {
 	return st, ok
 }
 
+// RequiresFreshShortPeriodWSBetTarget reports lotteries whose formal bet
+// endpoint must be aligned from the draw websocket boundary. Their periods
+// REST feed can advertise the following issue before the bet endpoint accepts
+// it, so REST is not a safe formal-betting fallback.
+func RequiresFreshShortPeriodWSBetTarget(lotteryCode string) bool {
+	switch strings.TrimSpace(lotteryCode) {
+	case "tron_ffc_3s", "tron_ffc_6s", "tron_ffc_15s":
+		return true
+	default:
+		return false
+	}
+}
+
 // FreshShortPeriodWSBetTarget returns the provider websocket's next_periods
 // value for formal short-period betting. The periods REST feed may expose a
 // future candidate before the placement endpoint switches periods, so it must
 // not override a fresh websocket boundary for these lotteries.
 func FreshShortPeriodWSBetTarget(lotteryCode, sourcePeriod string, now time.Time) (PeriodState, bool) {
 	lotteryCode = strings.TrimSpace(lotteryCode)
-	switch lotteryCode {
-	case "tron_ffc_3s", "tron_ffc_6s", "tron_ffc_15s":
-	default:
+	if !RequiresFreshShortPeriodWSBetTarget(lotteryCode) {
 		return PeriodState{}, false
 	}
 	state, ok := PeriodStateFor(lotteryCode)

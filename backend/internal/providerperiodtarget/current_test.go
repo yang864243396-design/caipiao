@@ -135,3 +135,31 @@ func TestCurrentUsesFreshWSNextPeriodForTronSixSecondFormalTarget(t *testing.T) 
 		t.Fatalf("snapshot source=%q want guaji_draw_ws_next", recorder.params.Source)
 	}
 }
+
+func TestCurrentDoesNotFallbackToRESTForTronSixSecondFormalTarget(t *testing.T) {
+	now := time.Now().UTC()
+	code := "tron_ffc_6s"
+	currentSnapshotCache.Delete(code)
+	lottery.ClearPeriodsSchedule(code)
+	t.Cleanup(func() { lottery.ClearPeriodsSchedule(code) })
+
+	// A stale/contradictory websocket boundary must stop formal dispatch. The
+	// REST periods feed can be one issue ahead of the provider's bet endpoint.
+	lottery.UpdatePeriodState(code, "P-ws-current", "P-ws-next", now, 6)
+	lottery.UpdatePeriodsScheduleFullWithDuration(
+		code, "P-rest-future", "P-rest-future", now.Add(6*time.Second), now.Add(6*time.Second),
+		6, "", now,
+	)
+	recorder := &fakeSnapshotRecorder{id: 95}
+
+	_, _, ok, err := Current(context.Background(), recorder, code, "P-different-source", now.Add(100*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("formal short-period target fell back to the REST periods schedule")
+	}
+	if calls := recorder.calls.Load(); calls != 0 {
+		t.Fatalf("snapshot recorder calls=%d want=0", calls)
+	}
+}

@@ -49,3 +49,24 @@ func TestReconciledStrategyStatusChangesOnlyOnHitDifference(t *testing.T) {
 		t.Fatalf("skipped evaluation: got (%q,%t), want (skipped,false)", got, ok)
 	}
 }
+
+func TestPayoutSettlementDoesNotOwnStrategyForEventInstances(t *testing.T) {
+	tests := []struct {
+		name             string
+		owner            string
+		strategyAdvanced bool
+		want             bool
+	}{
+		{name: "event before draw strategy", owner: "event", strategyAdvanced: false, want: false},
+		{name: "event after draw strategy", owner: "event", strategyAdvanced: true, want: false},
+		{name: "legacy before strategy", owner: "legacy", strategyAdvanced: false, want: true},
+		{name: "legacy after strategy", owner: "legacy", strategyAdvanced: true, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := payoutSettlementOwnsStrategy(tt.owner, tt.strategyAdvanced); got != tt.want {
+				t.Fatalf("payoutSettlementOwnsStrategy(%q, %v)=%v want=%v", tt.owner, tt.strategyAdvanced, got, tt.want)
+			}
+		})
+	}
+}

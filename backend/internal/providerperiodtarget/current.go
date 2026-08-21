@@ -26,9 +26,9 @@ type snapshotCacheEntry struct {
 
 var currentSnapshotCache sync.Map // lotteryCode -> *snapshotCacheEntry
 
-// Current prefers a fresh provider websocket boundary for supported short
-// lotteries and falls back to the lottery-wide periods schedule. The selected
-// target is always copied into provider_period_snapshots for audit.
+// Current requires a fresh provider websocket boundary for supported short
+// lotteries. Other lotteries may fall back to the lottery-wide periods
+// schedule. The selected target is copied into provider_period_snapshots.
 func Current(
 	ctx context.Context,
 	recorder SnapshotRecorder,
@@ -43,6 +43,9 @@ func Current(
 	}
 	if target, ok := freshShortPeriodWSNext(lotteryCode, sourcePeriod, now); ok {
 		return recordCurrentSnapshot(ctx, recorder, lotteryCode, target, "guaji_draw_ws_next")
+	}
+	if lottery.RequiresFreshShortPeriodWSBetTarget(lotteryCode) {
+		return schemebetting.PeriodSnapshot{}, 0, false, nil
 	}
 	if !lottery.PeriodsScheduleFresh(lotteryCode, lottery.PeriodsFallbackStaleAge, now) {
 		return schemebetting.PeriodSnapshot{}, 0, false, nil

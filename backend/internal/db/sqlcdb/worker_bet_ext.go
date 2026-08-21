@@ -182,10 +182,14 @@ WHERE id = $1
 func (q *Queries) ApplySchemeInstanceStrategyAfterDraw(ctx context.Context, id string, roundIndex, pickIndex int32, currentPick, lastDirection string) error {
 	_, err := q.db.Exec(ctx, `
 UPDATE scheme_instances
-SET round_index = $2,
+SET round_index = CASE
+        WHEN lookback_round_reset_pending THEN 0
+        ELSE $2
+    END,
     pick_index = $3,
     current_pick = $4,
     last_direction = $5,
+    lookback_round_reset_pending = FALSE,
     state_version = state_version + 1,
     updated_at = now()
 WHERE id = $1
@@ -751,6 +755,7 @@ type PendingFormalStrategyRow struct {
 	RuleVersion      pgtype.Int4
 	RuleSnapshotHash pgtype.Text
 	Balls            []string
+	ProviderHit      pgtype.Bool
 }
 
 func (q *Queries) ListPendingFormalStrategyRows(ctx context.Context, rowLimit int32) ([]PendingFormalStrategyRow, error) {
@@ -760,11 +765,12 @@ func (q *Queries) ListPendingFormalStrategyRows(ctx context.Context, rowLimit in
 	rows, err := q.db.Query(ctx, `
 SELECT c.id, c.scheme_id, COALESCE(c.lottery_code, ''), c.period_no,
        COALESCE(c.bet_content, ''), c.rule_snapshot, c.rule_version,
-       c.rule_snapshot_hash, d.balls
+       c.rule_snapshot_hash, d.balls,
+       CASE c.status WHEN 'hit' THEN TRUE WHEN 'miss' THEN FALSE ELSE NULL END
 FROM cloud_bet_records c
 JOIN lottery_draws d ON d.lottery_code = c.lottery_code AND d.issue_no = c.period_no
 WHERE c.sim_bet = FALSE
-  AND c.status = 'pending'
+  AND c.status IN ('pending', 'hit', 'miss')
   AND NULLIF(TRIM(c.third_party_bet_id), '') IS NOT NULL
   AND c.rule_snapshot IS NOT NULL
   AND c.strategy_evaluated_at IS NULL
@@ -780,13 +786,54 @@ LIMIT $1`, rowLimit)
 	for rows.Next() {
 		var item PendingFormalStrategyRow
 		var balls []byte
-		if err := rows.Scan(&item.RecordID, &item.SchemeID, &item.LotteryCode, &item.PeriodNo, &item.BetContent, &item.RuleSnapshot, &item.RuleVersion, &item.RuleSnapshotHash, &balls); err != nil {
+		if err := rows.Scan(&item.RecordID, &item.SchemeID, &item.LotteryCode, &item.PeriodNo, &item.BetContent, &item.RuleSnapshot, &item.RuleVersion, &item.RuleSnapshotHash, &balls, &item.ProviderHit); err != nil {
 			return nil, err
 		}
 		item.Balls = ParseDrawBalls(balls)
 		out = append(out, item)
 	}
 	return out, rows.Err()
+}
+
+// ApplySchemeInstanceFinancialAfterSettlement applies only settlement-owned
+// lookback state. It intentionally does not write strategy fields because a
+// draw-event transaction may have advanced them after the payout worker read
+// its instance snapshot.
+func (q *Queries) ApplySchemeInstanceFinancialAfterSettlement(ctx context.Context, id string, lookbackDelta float64) error {
+	_, err := q.db.Exec(ctx, `
+UPDATE scheme_instances
+SET lookback_pnl = COALESCE(lookback_pnl, 0) + $2,
+    updated_at = now()
+WHERE id = $1
+  AND status IN ('running', 'pending')`, id, lookbackDelta)
+	return err
+}
+
+// ResetSchemeInstanceLookbackOnly clears settlement-owned lookback state and
+// schedules an event-owned round reset for the next strategy transition.
+// Legacy/simulation instances still reset their round immediately. Pick state
+// remains independent in both paths.
+func (q *Queries) ResetSchemeInstanceLookbackOnly(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, `
+UPDATE scheme_instances
+SET lookback_pnl = 0,
+    round_index = CASE
+        WHEN betting_owner = 'event'
+         AND sim_bet = FALSE
+         AND strict_chain_state = 'active'
+         AND status = 'running' THEN round_index
+        ELSE 0
+    END,
+    lookback_round_reset_pending = (
+        betting_owner = 'event'
+        AND sim_bet = FALSE
+        AND strict_chain_state = 'active'
+        AND status = 'running'
+    ),
+    updated_at = now()
+WHERE id = $1
+  AND status IN ('running', 'pending')`, id)
+	return err
 }
 
 // GetFormalCloudBetStrategyInputByOrderNo loads a real record and its draw

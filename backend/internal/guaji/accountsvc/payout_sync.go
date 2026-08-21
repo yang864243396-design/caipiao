@@ -674,6 +674,11 @@ func (w *PayoutSyncWorker) commitSettlement(
 	}
 	var afterCommitLimits func()
 	if schemeID, err := qtx.GetCloudBetSchemeIDByOrderNo(ctx, row.OrderNo); err == nil && schemeID != "" {
+		// Serialize payout bookkeeping with draw strategy for this instance.
+		// The lock is per scheme, so unrelated users and schemes remain parallel.
+		if _, lerr := qtx.LockSchemeStateVersion(ctx, schemeID); lerr != nil {
+			return lerr
+		}
 		if inst, ierr := qtx.GetSchemeInstanceFull(ctx, schemeID); ierr == nil {
 			settledMemberID = inst.MemberID
 			settledInstanceID = inst.ID
@@ -686,9 +691,17 @@ func (w *PayoutSyncWorker) commitSettlement(
 			if derr != nil {
 				return derr
 			}
+			owner, oerr := qtx.GetSchemeBettingOwner(ctx, schemeID)
+			if oerr != nil {
+				return oerr
+			}
+			strategyAdvanced := false
+			if evaluation, eerr := qtx.GetSchemeStrategyEvaluation(ctx, sqlcdb.GetSchemeStrategyEvaluationParams{InstanceID: inst.ID, PeriodNo: periodNo}); eerr == nil {
+				strategyAdvanced = evaluation.Status == "completed" || evaluation.Status == "mismatch"
+			}
 			if strategyInput, found, serr := qtx.GetFormalCloudBetStrategyInputByOrderNo(ctx, row.OrderNo); serr != nil {
 				return serr
-			} else if found {
+			} else if found && (strings.TrimSpace(owner) != "event" || strategyAdvanced) {
 				if strategyInput.PeriodNo != "" {
 					periodNo = strategyInput.PeriodNo
 				}
@@ -707,13 +720,11 @@ func (w *PayoutSyncWorker) commitSettlement(
 				}
 				// The provider remains authoritative for status/pnl/payout above;
 				// only the next strategy round uses a successfully frozen local rule.
-				hit = verdict.Hit
+				if strings.TrimSpace(owner) != "event" {
+					hit = verdict.Hit
+				}
 			}
-			strategyAdvanced := false
-			if evaluation, eerr := qtx.GetSchemeStrategyEvaluation(ctx, sqlcdb.GetSchemeStrategyEvaluationParams{InstanceID: inst.ID, PeriodNo: periodNo}); eerr == nil {
-				strategyAdvanced = evaluation.Status == "completed" || evaluation.Status == "mismatch"
-			}
-			if !strategyAdvanced {
+			if payoutSettlementOwnsStrategy(owner, strategyAdvanced) {
 				if lerr := schemestate.ProcessFormalAfterSettlement(ctx, qtx, inst, periodNo, pnl, hit, def.Config, member.NumericFromFloat); lerr != nil {
 					return lerr
 				}
@@ -764,6 +775,10 @@ func (w *PayoutSyncWorker) commitSettlement(
 	}
 	w.notifyAfterSettle(ctx, row.OrderNo)
 	return nil
+}
+
+func payoutSettlementOwnsStrategy(owner string, strategyAdvanced bool) bool {
+	return strings.TrimSpace(owner) != "event" && !strategyAdvanced
 }
 
 func (w *PayoutSyncWorker) notifyAfterSettle(ctx context.Context, orderNo string) {

@@ -3,7 +3,6 @@ package sqlcdb
 import (
 	"context"
 	"errors"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -15,12 +14,14 @@ type PreSendFailureOutbox struct {
 	FailedPeriod string
 	Mode         string
 	LastError    string
+	ChainID      string
 }
 
 func (q *Queries) GetPreSendFailureOutbox(ctx context.Context, outboxID int64) (PreSendFailureOutbox, bool, error) {
 	var row PreSendFailureOutbox
 	err := q.db.QueryRow(ctx, `
-SELECT o.id, o.scheme_id, o.lottery_code, o.target_period_no, o.mode, COALESCE(o.last_error, '')
+SELECT o.id, o.scheme_id, o.lottery_code, o.target_period_no, o.mode,
+       COALESCE(o.last_error, ''), COALESCE(o.chain_id, '')
 FROM scheme_bet_outbox o
 JOIN scheme_instances i ON i.id = o.scheme_id
 WHERE o.id = $1
@@ -30,52 +31,16 @@ WHERE o.id = $1
       (o.state = 'expired' AND o.outcome_reason IN ('safe_deadline_elapsed', 'dispatcher_lost_before_start_deadline_elapsed'))
   )
   AND i.betting_owner = 'event'
-  AND i.strict_chain_state = 'active'`, outboxID).Scan(&row.ID, &row.SchemeID, &row.LotteryCode, &row.FailedPeriod, &row.Mode, &row.LastError)
+  AND i.strict_chain_state = 'active'
+  AND NULLIF(TRIM(i.chain_id), '') IS NOT NULL
+  AND o.chain_id = i.chain_id`, outboxID).Scan(
+		&row.ID, &row.SchemeID, &row.LotteryCode, &row.FailedPeriod, &row.Mode, &row.LastError, &row.ChainID,
+	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return PreSendFailureOutbox{}, false, nil
 		}
 		return PreSendFailureOutbox{}, false, err
-	}
-	return row, true, nil
-}
-
-// GetPreSendReplacementProviderPeriod reads the latest persisted fact for the
-// exact period confirmed by the provider's pre-send verification. It
-// intentionally does not require open_at <= now: fast lotteries can switch
-// their accepted issue before the nominal start_time reaches this process.
-func (q *Queries) GetPreSendReplacementProviderPeriod(
-	ctx context.Context,
-	lotteryCode, periodNo string,
-	maxAge time.Duration,
-) (ProviderPeriodSnapshotRow, bool, error) {
-	if maxAge <= 0 {
-		maxAge = 6 * time.Second
-	}
-	var row ProviderPeriodSnapshotRow
-	err := q.db.QueryRow(ctx, `
-WITH db_now AS MATERIALIZED (
-    SELECT clock_timestamp() AS value
-)
-SELECT p.id, p.period_no, p.open_at, p.close_at, p.observed_at, db_now.value
-FROM provider_period_snapshots p
-CROSS JOIN db_now
-WHERE p.lottery_code = $1
-  AND p.period_no = $2
-  AND p.close_at > db_now.value
-  AND (
-      p.observed_at >= db_now.value - ($3::bigint * interval '1 microsecond')
-      OR (p.open_at IS NOT NULL AND p.observed_at <= p.open_at)
-  )
-ORDER BY p.observed_at DESC, p.id DESC
-LIMIT 1`, lotteryCode, periodNo, maxAge.Microseconds()).Scan(
-		&row.ID, &row.PeriodNo, &row.OpenAt, &row.CloseAt, &row.ObservedAt, &row.DatabaseNow,
-	)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ProviderPeriodSnapshotRow{}, false, nil
-		}
-		return ProviderPeriodSnapshotRow{}, false, err
 	}
 	return row, true, nil
 }
@@ -95,6 +60,8 @@ WHERE (
   )
   AND i.betting_owner = 'event'
   AND i.strict_chain_state = 'active'
+  AND NULLIF(TRIM(i.chain_id), '') IS NOT NULL
+  AND o.chain_id = i.chain_id
   AND o.reconcile_next_attempt_at <= clock_timestamp()
 ORDER BY o.updated_at, o.id
 LIMIT $1`, limit)

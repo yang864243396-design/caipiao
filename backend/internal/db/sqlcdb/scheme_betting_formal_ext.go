@@ -31,6 +31,29 @@ WHERE id = $1`, schemeID, reason, now)
 	return err
 }
 
+// BlockSchemeBettingChainIfCurrent blocks only the chain that produced the
+// failure. A concurrent rearm changes chain_id and makes this update a no-op.
+func (q *Queries) BlockSchemeBettingChainIfCurrent(
+	ctx context.Context,
+	schemeID, expectedChainID, reason string,
+	now time.Time,
+) (bool, error) {
+	tag, err := q.db.Exec(ctx, `
+UPDATE scheme_instances
+SET strict_chain_state = 'blocked_requires_rearm',
+    bet_failed_detail = NULLIF($3, ''),
+    updated_at = $4
+WHERE id = $1
+  AND betting_owner = 'event'
+  AND strict_chain_state = 'active'
+  AND NULLIF(TRIM($2), '') IS NOT NULL
+  AND chain_id = $2`, schemeID, expectedChainID, reason, now)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 type InsertFormalSchemeBetOutboxParams struct {
 	DecisionID         int64
 	SchemeID           string

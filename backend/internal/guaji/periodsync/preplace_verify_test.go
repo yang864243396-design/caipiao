@@ -62,6 +62,31 @@ func TestVerifyOpenPeriodUsesFreshWSNextForTronSixSecondBet(t *testing.T) {
 	}
 }
 
+func TestVerifyOpenPeriodRejectsRESTFallbackForTronSixSecondBet(t *testing.T) {
+	code := "tron_ffc_6s"
+	lottery.ClearPeriodsSchedule(code)
+	t.Cleanup(func() { lottery.ClearPeriodsSchedule(code) })
+	now := time.Now().UTC()
+	lottery.UpdatePeriodState(code, "P-expired", "P-expired-next", now.Add(-12*time.Second), 6)
+	lottery.UpdatePeriodsScheduleFullWithDuration(
+		code, "P-rest-future", "P-rest-future", now.Add(6*time.Second), now.Add(6*time.Second),
+		6, "", now,
+	)
+	syncer := &Syncer{prePlaceVerifications: newPrePlaceVerifyCache(time.Second)}
+	var refreshCalls atomic.Int32
+
+	_, err := syncer.verifyOpenPeriod(context.Background(), code, now, func(context.Context) (prePlaceVerifyResult, error) {
+		refreshCalls.Add(1)
+		return prePlaceVerifyResult{Period: "P-rest-refreshed", CloseAt: now.Add(6 * time.Second)}, nil
+	})
+	if err == nil {
+		t.Fatal("formal short-period verification accepted a REST-only period")
+	}
+	if calls := refreshCalls.Load(); calls != 0 {
+		t.Fatalf("REST refresh calls=%d want=0", calls)
+	}
+}
+
 func TestFreshSharedOpenPeriodUsesRememberedRealCloseForProvisionalPeriod(t *testing.T) {
 	code := fmt.Sprintf("test_provisional_real_close_%d", time.Now().UnixNano())
 	lottery.ClearPeriodsSchedule(code)
