@@ -89,7 +89,7 @@ func (runtime *Runtime) SubmitAPIBet(ctx context.Context, command APIBetCommand)
 		return APIBetResult{}, errors.New("formal API bet lottery is not allowlisted")
 	}
 	now := time.Now().UTC()
-	target, snapshotID, ok, err := providerperiodtarget.Current(ctx, runtime.q, command.Request.LotteryCode, "", now)
+	target, snapshotID, ok, err := providerperiodtarget.CurrentForInitialDispatch(ctx, runtime.q, command.Request.LotteryCode, now)
 	if err != nil {
 		return APIBetResult{}, err
 	}

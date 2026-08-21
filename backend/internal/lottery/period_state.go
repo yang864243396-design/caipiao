@@ -31,6 +31,16 @@ func UpdatePeriodState(lotteryCode, currentIssue, nextIssue string, drawnAt time
 	if lotteryCode == "" || intervalSec <= 0 {
 		return
 	}
+	currentIssue = strings.TrimSpace(currentIssue)
+	nextIssue = strings.TrimSpace(nextIssue)
+	if RequiresFreshShortPeriodWSBetTarget(lotteryCode) {
+		if currentIssue == "" || nextIssue == "" || currentIssue == nextIssue {
+			return
+		}
+		if previous, ok := PeriodStateFor(lotteryCode); ok && !formalBoundaryAdvances(previous, currentIssue, nextIssue) {
+			return
+		}
+	}
 	if drawnAt.IsZero() {
 		drawnAt = time.Now().UTC()
 	} else {
@@ -38,12 +48,59 @@ func UpdatePeriodState(lotteryCode, currentIssue, nextIssue string, drawnAt time
 	}
 	closeAt := drawnAt.Add(time.Duration(intervalSec) * time.Second)
 	periodState.Store(lotteryCode, PeriodState{
-		CurrentIssue: strings.TrimSpace(currentIssue),
-		NextIssue:    strings.TrimSpace(nextIssue),
+		CurrentIssue: currentIssue,
+		NextIssue:    nextIssue,
 		CloseAt:      closeAt,
 		UpdatedAt:    time.Now().UTC(),
 		IntervalSec:  intervalSec,
 	})
+}
+
+func formalBoundaryAdvances(previous PeriodState, currentIssue, nextIssue string) bool {
+	previousIssue := strings.TrimSpace(previous.CurrentIssue)
+	previousNextIssue := strings.TrimSpace(previous.NextIssue)
+	currentIssue = strings.TrimSpace(currentIssue)
+	nextIssue = strings.TrimSpace(nextIssue)
+	if previousIssue == "" {
+		return true
+	}
+	if currentIssue == previousIssue {
+		return false
+	}
+	if nextIssue == previousIssue {
+		return false
+	}
+	if previousNextIssue != "" && currentIssue == previousNextIssue {
+		return true
+	}
+	previousPrefix, previousSequence, previousOK := normalizedIssueSequence(previousIssue)
+	currentPrefix, currentSequence, currentOK := normalizedIssueSequence(currentIssue)
+	if !previousOK || !currentOK || currentPrefix != previousPrefix {
+		return true
+	}
+	if len(currentSequence) != len(previousSequence) {
+		return len(currentSequence) > len(previousSequence)
+	}
+	return currentSequence > previousSequence
+}
+
+func normalizedIssueSequence(issue string) (string, string, bool) {
+	if issue == "" {
+		return "", "", false
+	}
+	sequenceStart := len(issue)
+	for sequenceStart > 0 && issue[sequenceStart-1] >= '0' && issue[sequenceStart-1] <= '9' {
+		sequenceStart--
+	}
+	if sequenceStart == len(issue) {
+		return "", "", false
+	}
+	prefix := issue[:sequenceStart]
+	sequence := strings.TrimLeft(issue[sequenceStart:], "0")
+	if sequence == "" {
+		sequence = "0"
+	}
+	return prefix, sequence, true
 }
 
 // PeriodStateFor 读取彩种最新期号快照。
@@ -79,6 +136,29 @@ func RequiresFreshShortPeriodWSBetTarget(lotteryCode string) bool {
 // future candidate before the placement endpoint switches periods, so it must
 // not override a fresh websocket boundary for these lotteries.
 func FreshShortPeriodWSBetTarget(lotteryCode, sourcePeriod string, now time.Time) (PeriodState, bool) {
+	state, ok := freshShortPeriodWSState(lotteryCode, now)
+	if !ok {
+		return PeriodState{}, false
+	}
+	sourcePeriod = strings.TrimSpace(sourcePeriod)
+	if sourcePeriod == "" || state.CurrentIssue != sourcePeriod {
+		return PeriodState{}, false
+	}
+	return state, true
+}
+
+// FreshShortPeriodWSCurrentIssue returns the current issue from a fresh formal
+// short-lottery websocket boundary. Initial dispatch callers use it to anchor
+// Current without weakening source-period authorization.
+func FreshShortPeriodWSCurrentIssue(lotteryCode string, now time.Time) (string, bool) {
+	state, ok := freshShortPeriodWSState(lotteryCode, now)
+	if !ok {
+		return "", false
+	}
+	return state.CurrentIssue, true
+}
+
+func freshShortPeriodWSState(lotteryCode string, now time.Time) (PeriodState, bool) {
 	lotteryCode = strings.TrimSpace(lotteryCode)
 	if !RequiresFreshShortPeriodWSBetTarget(lotteryCode) {
 		return PeriodState{}, false
@@ -96,11 +176,7 @@ func FreshShortPeriodWSBetTarget(lotteryCode, sourcePeriod string, now time.Time
 	}
 	state.CurrentIssue = strings.TrimSpace(state.CurrentIssue)
 	state.NextIssue = strings.TrimSpace(state.NextIssue)
-	sourcePeriod = strings.TrimSpace(sourcePeriod)
-	if state.NextIssue == "" || state.NextIssue == sourcePeriod {
-		return PeriodState{}, false
-	}
-	if sourcePeriod != "" && state.CurrentIssue != sourcePeriod {
+	if state.CurrentIssue == "" || state.NextIssue == "" || state.NextIssue == state.CurrentIssue {
 		return PeriodState{}, false
 	}
 	return state, true

@@ -85,7 +85,7 @@ func (w *Worker) startEventSchemeChain(ctx context.Context, schemeID, actor, rea
 		return err
 	}
 	now := time.Now().UTC()
-	target, providerSnapshotID, ok, err := providerperiodtarget.Current(ctx, q, inst.LotteryCode, "", now)
+	target, providerSnapshotID, ok, err := providerperiodtarget.CurrentForInitialDispatch(ctx, q, inst.LotteryCode, now)
 	if err != nil {
 		return err
 	}

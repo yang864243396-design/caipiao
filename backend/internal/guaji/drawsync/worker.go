@@ -28,14 +28,15 @@ type drawSubscriber interface {
 
 // Worker 订阅第三方开奖 WS，过滤忽略彩种，按 outbound_lottery_code 反查入库并广播 WS-5（T3）。
 type Worker struct {
-	pool             *db.Pool
-	q                *sqlcdb.Queries
-	client           drawSubscriber
-	hub              *ws.Hub
-	reconnectJitter  func(time.Duration) time.Duration
-	waitRetry        func(context.Context, time.Duration) bool
-	boundaryHealth   *guaji.BoundaryHealth
-	strategyNotifier interface {
+	pool                *db.Pool
+	q                   *sqlcdb.Queries
+	client              drawSubscriber
+	hub                 *ws.Hub
+	reconnectJitter     func(time.Duration) time.Duration
+	waitRetry           func(context.Context, time.Duration) bool
+	boundaryHealth      *guaji.BoundaryHealth
+	boundaryHealthTicks func() (<-chan time.Time, func())
+	strategyNotifier    interface {
 		NotifyStrategyDraw(context.Context, string, string)
 	}
 }
@@ -112,13 +113,13 @@ func (w *Worker) superviseBoundaryHealth(ctx context.Context, cancelConnection c
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		ticker := time.NewTicker(boundaryHealthCheckInterval)
-		defer ticker.Stop()
+		ticks, stopTicks := w.newBoundaryHealthTicks()
+		defer stopTicks()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case now := <-ticker.C:
+			case now := <-ticks:
 				stale := w.boundaryHealth.Stale(now)
 				if len(stale) == 0 {
 					continue
@@ -130,6 +131,14 @@ func (w *Worker) superviseBoundaryHealth(ctx context.Context, cancelConnection c
 		}
 	}()
 	return done
+}
+
+func (w *Worker) newBoundaryHealthTicks() (<-chan time.Time, func()) {
+	if w != nil && w.boundaryHealthTicks != nil {
+		return w.boundaryHealthTicks()
+	}
+	ticker := time.NewTicker(boundaryHealthCheckInterval)
+	return ticker.C, ticker.Stop
 }
 
 type drawWSReconnectBackoff struct {

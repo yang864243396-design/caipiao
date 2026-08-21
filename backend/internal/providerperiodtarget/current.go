@@ -79,6 +79,26 @@ func Current(
 	return recordCurrentSnapshot(ctx, recorder, lotteryCode, target, "guaji_periods_current")
 }
 
+// CurrentForInitialDispatch resolves callers that do not have a persisted
+// source period. Formal short lotteries first derive a non-empty source from a
+// fresh in-memory websocket boundary; other lotteries retain REST fallback.
+func CurrentForInitialDispatch(
+	ctx context.Context,
+	recorder SnapshotRecorder,
+	lotteryCode string,
+	now time.Time,
+) (schemebetting.PeriodSnapshot, int64, bool, error) {
+	sourcePeriod := ""
+	if lottery.RequiresFreshShortPeriodWSBetTarget(lotteryCode) {
+		var ok bool
+		sourcePeriod, ok = lottery.FreshShortPeriodWSCurrentIssue(lotteryCode, now)
+		if !ok {
+			return schemebetting.PeriodSnapshot{}, 0, false, nil
+		}
+	}
+	return Current(ctx, recorder, lotteryCode, sourcePeriod, now)
+}
+
 func freshShortPeriodWSNext(lotteryCode, sourcePeriod string, now time.Time) (schemebetting.PeriodSnapshot, bool) {
 	state, ok := lottery.FreshShortPeriodWSBetTarget(lotteryCode, sourcePeriod, now)
 	if !ok {

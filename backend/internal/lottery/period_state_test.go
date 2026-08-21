@@ -48,6 +48,9 @@ func TestFreshShortPeriodWSBetTargetRequiresMatchingCurrentIssue(t *testing.T) {
 		"tron_ffc_15s": 15,
 	} {
 		UpdatePeriodState(code, "ws-current", "ws-next", now, interval)
+		if _, ok := FreshShortPeriodWSBetTarget(code, "", now.Add(100*time.Millisecond)); ok {
+			t.Fatalf("%s accepted an empty source period", code)
+		}
 		if _, ok := FreshShortPeriodWSBetTarget(code, "rest-current", now.Add(100*time.Millisecond)); ok {
 			t.Fatalf("%s accepted a target without matching WS current issue", code)
 		}
@@ -55,6 +58,67 @@ func TestFreshShortPeriodWSBetTargetRequiresMatchingCurrentIssue(t *testing.T) {
 			t.Fatalf("%s target = %+v ok=%v, want ws-next from matching boundary", code, state, ok)
 		}
 	}
+}
+
+func TestUpdatePeriodStateDoesNotRefreshDuplicateOrOlderFormalBoundary(t *testing.T) {
+	code := "tron_ffc_3s"
+	staleAt := time.Now().UTC().Add(-time.Minute)
+	seed := PeriodState{
+		CurrentIssue: "100",
+		NextIssue:    "101",
+		CloseAt:      staleAt.Add(3 * time.Second),
+		UpdatedAt:    staleAt,
+		IntervalSec:  3,
+	}
+	for name, boundary := range map[string]struct {
+		current string
+		next    string
+	}{
+		"duplicate": {current: "100", next: "101"},
+		"older":     {current: "99", next: "100"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			periodState.Store(code, seed)
+			t.Cleanup(func() { periodState.Delete(code) })
+
+			UpdatePeriodState(code, boundary.current, boundary.next, time.Now().UTC(), 3)
+			got, ok := PeriodStateFor(code)
+			if !ok || got != seed {
+				t.Fatalf("period state = %+v ok=%v, want unchanged %+v", got, ok, seed)
+			}
+			if _, fresh := FreshShortPeriodWSBetTarget(code, "100", time.Now().UTC()); fresh {
+				t.Fatal("duplicate or older boundary refreshed formal authorization")
+			}
+		})
+	}
+
+	t.Run("older prefixed issue", func(t *testing.T) {
+		prefixedSeed := seed
+		prefixedSeed.CurrentIssue = "P100"
+		prefixedSeed.NextIssue = "P101"
+		periodState.Store(code, prefixedSeed)
+		t.Cleanup(func() { periodState.Delete(code) })
+
+		UpdatePeriodState(code, "P99", "P100", time.Now().UTC(), 3)
+		got, ok := PeriodStateFor(code)
+		if !ok || got != prefixedSeed {
+			t.Fatalf("period state = %+v ok=%v, want unchanged %+v", got, ok, prefixedSeed)
+		}
+	})
+
+	t.Run("non-adjacent older prefixed issue", func(t *testing.T) {
+		prefixedSeed := seed
+		prefixedSeed.CurrentIssue = "P100"
+		prefixedSeed.NextIssue = "P101"
+		periodState.Store(code, prefixedSeed)
+		t.Cleanup(func() { periodState.Delete(code) })
+
+		UpdatePeriodState(code, "P98", "P99", time.Now().UTC(), 3)
+		got, ok := PeriodStateFor(code)
+		if !ok || got != prefixedSeed {
+			t.Fatalf("period state = %+v ok=%v, want unchanged %+v", got, ok, prefixedSeed)
+		}
+	})
 }
 
 func TestBetCloseSec(t *testing.T) {

@@ -51,3 +51,27 @@ func TestBoundaryHealthDuplicateBoundaryDoesNotClearStaleGeneration(t *testing.T
 		t.Fatalf("duplicate boundary receipt = %s, want %s", snapshot.LastReceivedMono, base)
 	}
 }
+
+func TestBoundaryHealthUsesConfiguredFifteenSecondScope(t *testing.T) {
+	h := NewBoundaryHealth([]string{"tron_ffc_15s"})
+	base := time.Unix(100, 0)
+	h.Observe("tron_ffc_15s", "30", "31", base, 15*time.Second)
+	h.Observe("unmonitored_lottery", "40", "41", base, time.Second)
+
+	if got := h.Stale(base.Add(15499 * time.Millisecond)); len(got) != 0 {
+		t.Fatalf("stale before exact boundary = %v, want none", got)
+	}
+	if got, want := lotteryCodes(h.Stale(base.Add(15500*time.Millisecond))), []string{"tron_ffc_15s"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("stale lotteries = %v, want %v", got, want)
+	}
+	if snapshot := h.Snapshot("unmonitored_lottery"); !snapshot.LastReceivedMono.IsZero() {
+		t.Fatalf("unmonitored lottery was observed: %+v", snapshot)
+	}
+}
+
+func TestBoundaryHealthUnobservedMonitoredLotteryNeverRequestsReconnect(t *testing.T) {
+	h := NewBoundaryHealth([]string{"tron_ffc_15s"})
+	if got := h.Stale(time.Unix(1000000, 0)); len(got) != 0 {
+		t.Fatalf("unobserved lottery stale signals = %v, want none", got)
+	}
+}

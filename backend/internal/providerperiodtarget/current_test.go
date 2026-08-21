@@ -163,3 +163,111 @@ func TestCurrentDoesNotFallbackToRESTForTronSixSecondFormalTarget(t *testing.T) 
 		t.Fatalf("snapshot recorder calls=%d want=0", calls)
 	}
 }
+
+func TestCurrentRejectsEmptyOrMismatchedSourceForEveryFormalShortLottery(t *testing.T) {
+	now := time.Now().UTC()
+	for code, interval := range map[string]int{
+		"tron_ffc_3s":  3,
+		"tron_ffc_6s":  6,
+		"tron_ffc_15s": 15,
+	} {
+		t.Run(code, func(t *testing.T) {
+			lottery.ClearPeriodsSchedule(code)
+			t.Cleanup(func() { lottery.ClearPeriodsSchedule(code) })
+			current := "strict-current-" + code
+			lottery.UpdatePeriodState(code, current, "strict-next-"+code, now, interval)
+			lottery.UpdatePeriodsScheduleFullWithDuration(
+				code, "rest-candidate", "rest-candidate", now.Add(time.Duration(interval)*time.Second),
+				now.Add(time.Duration(interval)*time.Second), interval, "", now,
+			)
+
+			for _, source := range []string{"", "mismatched-source"} {
+				currentSnapshotCache.Delete(code)
+				recorder := &fakeSnapshotRecorder{id: 96}
+				_, _, ok, err := Current(context.Background(), recorder, code, source, now.Add(100*time.Millisecond))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if ok {
+					t.Fatalf("source %q unexpectedly authorized a formal target", source)
+				}
+				if calls := recorder.calls.Load(); calls != 0 {
+					t.Fatalf("source %q recorder calls=%d want=0", source, calls)
+				}
+			}
+		})
+	}
+}
+
+func TestCurrentForInitialDispatchUsesFreshBoundaryForEveryFormalShortLottery(t *testing.T) {
+	now := time.Now().UTC()
+	for code, interval := range map[string]int{
+		"tron_ffc_3s":  3,
+		"tron_ffc_6s":  6,
+		"tron_ffc_15s": 15,
+	} {
+		t.Run(code, func(t *testing.T) {
+			currentSnapshotCache.Delete(code)
+			current := "initial-current-" + code
+			next := "initial-next-" + code
+			lottery.UpdatePeriodState(code, current, next, now, interval)
+			recorder := &fakeSnapshotRecorder{id: 97}
+
+			target, snapshotID, ok, err := CurrentForInitialDispatch(context.Background(), recorder, code, now.Add(100*time.Millisecond))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !ok || snapshotID != 97 || target.PeriodNo != next {
+				t.Fatalf("target=%+v snapshot=%d ok=%v, want fresh WS next issue", target, snapshotID, ok)
+			}
+			if recorder.params.Source != "guaji_draw_ws_next" {
+				t.Fatalf("snapshot source=%q want guaji_draw_ws_next", recorder.params.Source)
+			}
+		})
+	}
+}
+
+func TestCurrentForInitialDispatchRejectsStaleFormalBoundary(t *testing.T) {
+	now := time.Now().UTC()
+	for code, interval := range map[string]int{
+		"tron_ffc_3s":  3,
+		"tron_ffc_6s":  6,
+		"tron_ffc_15s": 15,
+	} {
+		t.Run(code, func(t *testing.T) {
+			currentSnapshotCache.Delete(code)
+			lottery.UpdatePeriodState(code, "stale-current-"+code, "stale-next-"+code, now.Add(-time.Minute), interval)
+			recorder := &fakeSnapshotRecorder{id: 98}
+
+			_, _, ok, err := CurrentForInitialDispatch(context.Background(), recorder, code, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ok {
+				t.Fatal("stale formal boundary authorized an initial target")
+			}
+			if calls := recorder.calls.Load(); calls != 0 {
+				t.Fatalf("recorder calls=%d want=0", calls)
+			}
+		})
+	}
+}
+
+func TestCurrentForInitialDispatchPreservesRESTTargetForOtherLotteries(t *testing.T) {
+	now := time.Now().UTC()
+	code := uniqueTestLotteryCode("initial_rest", now)
+	lottery.UpdatePeriodsScheduleFullWithDuration(
+		code, "rest-current", "rest-current", now.Add(time.Minute), now.Add(time.Minute),
+		60, "", now,
+	)
+	t.Cleanup(func() { lottery.ClearPeriodsSchedule(code) })
+	recorder := &fakeSnapshotRecorder{id: 99}
+
+	target, snapshotID, ok, err := CurrentForInitialDispatch(context.Background(), recorder, code, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || snapshotID != 99 || target.PeriodNo != "rest-current" {
+		t.Fatalf("target=%+v snapshot=%d ok=%v, want REST target", target, snapshotID, ok)
+	}
+}
