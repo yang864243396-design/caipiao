@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
+
 	"caipiao/backend/internal/schemebetting"
 )
 
@@ -80,5 +82,31 @@ func TestPeriodBoundaryDeliveryDispositionAcksOnlyHandlerSuccess(t *testing.T) {
 				t.Fatalf("disposition = %v/%q, want %v/%q", got, failureClass, test.want, test.failureClass)
 			}
 		})
+	}
+}
+
+func TestEstablishReadySubscriptionSignalsOnlyAfterSuccessfulSubscribe(t *testing.T) {
+	var order []string
+	ready := func() { order = append(order, "ready") }
+	subscribe := func() (*nats.Subscription, error) {
+		order = append(order, "subscribed")
+		return &nats.Subscription{}, nil
+	}
+
+	if _, err := establishReadySubscription(subscribe, ready); err != nil {
+		t.Fatal(err)
+	}
+	if len(order) != 2 || order[0] != "subscribed" || order[1] != "ready" {
+		t.Fatalf("subscription order=%v, want subscribed then ready", order)
+	}
+
+	called := false
+	if _, err := establishReadySubscription(func() (*nats.Subscription, error) {
+		return nil, errors.New("subscribe failed")
+	}, func() { called = true }); err == nil {
+		t.Fatal("failed subscription returned nil error")
+	}
+	if called {
+		t.Fatal("failed subscription signaled readiness")
 	}
 }

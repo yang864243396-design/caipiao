@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math/rand"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -45,6 +46,9 @@ type Worker struct {
 	store              drawStore
 	boundaryPublisher  boundaryPublisher
 	periodStateUpdater func(string, string, string, time.Time, int) bool
+	recoveryReady      func()
+	recoveryReadyCodes map[string]struct{}
+	recoveryReadyOnce  sync.Once
 }
 
 type drawStore interface {
@@ -69,6 +73,23 @@ func (w *Worker) SetPeriodBoundaryPublisher(publisher boundaryPublisher) {
 	if w != nil {
 		w.boundaryPublisher = publisher
 	}
+}
+
+// SetContiguousRecoveryReady configures the one-shot readiness edge consumed
+// by formal contiguous-target recovery. Non-short lotteries are ignored.
+func (w *Worker) SetContiguousRecoveryReady(lotteryCodes []string, ready func()) {
+	if w == nil {
+		return
+	}
+	codes := make(map[string]struct{}, len(lotteryCodes))
+	for _, lotteryCode := range lotteryCodes {
+		lotteryCode = strings.TrimSpace(lotteryCode)
+		if lottery.RequiresFreshShortPeriodWSBetTarget(lotteryCode) {
+			codes[lotteryCode] = struct{}{}
+		}
+	}
+	w.recoveryReadyCodes = codes
+	w.recoveryReady = ready
 }
 
 func NewWorker(pool *db.Pool, client *guaji.Client, hub *ws.Hub) *Worker {
@@ -348,6 +369,17 @@ func (w *Worker) observeAcceptedBoundary(accepted bool, lotteryCode, currentIssu
 		return
 	}
 	w.boundaryHealth.Observe(lotteryCode, currentIssue, nextIssue, receivedMono, time.Duration(intervalSec)*time.Second)
+	if w.recoveryReady == nil {
+		return
+	}
+	if _, configured := w.recoveryReadyCodes[strings.TrimSpace(lotteryCode)]; !configured {
+		return
+	}
+	snapshot := w.boundaryHealth.Snapshot(lotteryCode)
+	if snapshot.CurrentIssue != strings.TrimSpace(currentIssue) || snapshot.NextIssue != strings.TrimSpace(nextIssue) {
+		return
+	}
+	w.recoveryReadyOnce.Do(w.recoveryReady)
 }
 
 func (w *Worker) resolveLotteries(ctx context.Context, gameKey string) ([]lotteryTarget, error) {

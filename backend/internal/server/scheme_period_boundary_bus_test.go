@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -67,6 +68,165 @@ func TestLeasedContiguousTargetWorkerCarriesStrategyFenceForRecovery(t *testing.
 	}
 	if capture.recoveryContext == nil || capture.recoveryContext == baseContext {
 		t.Fatal("recovery did not receive the lease-wrapped context")
+	}
+}
+
+func TestContiguousRecoveryWaitsForEveryRuntimeReadinessSignalAndStartsOnce(t *testing.T) {
+	readiness := newContiguousRecoveryReadiness([]int32{3, 7})
+	localSubscription := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	started := make(chan struct{})
+	var starts atomic.Int32
+	go func() {
+		done <- runContiguousTargetRecoveryWhenReady(ctx, readiness, localSubscription, func(runCtx context.Context) error {
+			starts.Add(1)
+			close(started)
+			<-runCtx.Done()
+			return nil
+		})
+	}()
+
+	assertRecoveryNotStarted(t, started)
+	readiness.SignalDrawWS()
+	assertRecoveryNotStarted(t, started)
+	readiness.SignalExpander()
+	assertRecoveryNotStarted(t, started)
+	readiness.SignalLease(3)
+	readiness.SignalConsumer(3)
+	close(localSubscription)
+	assertRecoveryNotStarted(t, started)
+	readiness.SignalLease(7)
+	assertRecoveryNotStarted(t, started)
+	readiness.SignalConsumer(7)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("recovery did not start after all runtime readiness signals")
+	}
+	if got := starts.Load(); got != 1 {
+		t.Fatalf("startup recovery starts=%d, want 1", got)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("recovery readiness runner returned %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("recovery readiness goroutine leaked after cancellation")
+	}
+}
+
+func TestContiguousRecoveryReadinessCancellationExitsWithoutStarting(t *testing.T) {
+	readiness := newContiguousRecoveryReadiness([]int32{3})
+	localSubscription := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	var starts atomic.Int32
+	go func() {
+		done <- runContiguousTargetRecoveryWhenReady(ctx, readiness, localSubscription, func(context.Context) error {
+			starts.Add(1)
+			return nil
+		})
+	}()
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("cancellation returned %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("readiness wait leaked after cancellation")
+	}
+	if got := starts.Load(); got != 0 {
+		t.Fatalf("recovery started %d times before readiness", got)
+	}
+}
+
+func TestContiguousShardRuntimeAssertsLeaseAndKeepsConsumerActiveBeforeRecovery(t *testing.T) {
+	readiness := newContiguousRecoveryReadiness([]int32{3})
+	readiness.SignalDrawWS()
+	readiness.SignalExpander()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	consumerActive := make(chan struct{})
+	recoveryStarted := make(chan struct{})
+	var leaseAssertions atomic.Int32
+	go func() {
+		done <- runContiguousTargetShardRuntime(
+			ctx, readiness, 3,
+			func(context.Context) error {
+				leaseAssertions.Add(1)
+				return nil
+			},
+			func(consumeCtx context.Context, ready func()) error {
+				ready()
+				close(consumerActive)
+				<-consumeCtx.Done()
+				return nil
+			},
+			func(recoveryCtx context.Context) error {
+				close(recoveryStarted)
+				<-recoveryCtx.Done()
+				return nil
+			},
+		)
+	}()
+	select {
+	case <-consumerActive:
+	case <-time.After(time.Second):
+		t.Fatal("target-ready consumer did not remain active")
+	}
+	select {
+	case <-recoveryStarted:
+	case <-time.After(time.Second):
+		t.Fatal("recovery did not start after lease and subscription readiness")
+	}
+	if got := leaseAssertions.Load(); got != 1 {
+		t.Fatalf("lease assertions=%d, want 1", got)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("shard runtime leaked after cancellation")
+	}
+}
+
+func TestContiguousShardRuntimeLeaseAssertionFailureStartsNothing(t *testing.T) {
+	readiness := newContiguousRecoveryReadiness([]int32{3})
+	wantErr := errors.New("stale lease")
+	var consumers, recoveries atomic.Int32
+	err := runContiguousTargetShardRuntime(
+		context.Background(), readiness, 3,
+		func(context.Context) error { return wantErr },
+		func(context.Context, func()) error {
+			consumers.Add(1)
+			return nil
+		},
+		func(context.Context) error {
+			recoveries.Add(1)
+			return nil
+		},
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("error=%v, want stale lease", err)
+	}
+	if consumers.Load() != 0 || recoveries.Load() != 0 {
+		t.Fatalf("consumer starts=%d recovery starts=%d", consumers.Load(), recoveries.Load())
+	}
+}
+
+func assertRecoveryNotStarted(t *testing.T, started <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-started:
+		t.Fatal("recovery started before all runtime readiness signals")
+	default:
 	}
 }
 

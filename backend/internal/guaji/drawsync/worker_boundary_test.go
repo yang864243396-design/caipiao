@@ -3,6 +3,7 @@ package drawsync
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -82,6 +83,58 @@ func TestDrawWorkerPersistsAfterBoundaryPublishFailure(t *testing.T) {
 	}
 	if got := store.PersistCount(); got != 1 {
 		t.Fatalf("persist calls = %d, want 1", got)
+	}
+}
+
+func TestDrawWorkerSignalsRecoveryReadyAfterAcceptedConfiguredBoundaryAndHealthUpdate(t *testing.T) {
+	worker := newDrawWorkerForTest(&fakeDrawStore{inserted: true}, &fakeBoundaryPublisher{})
+	ready := make(chan struct{})
+	var signals atomic.Int32
+	worker.SetContiguousRecoveryReady([]string{"tron_ffc_6s"}, func() {
+		if snapshot := worker.boundaryHealth.Snapshot("tron_ffc_6s"); snapshot.CurrentIssue != "P101" || snapshot.NextIssue != "P102" {
+			t.Errorf("readiness observed before health update: %+v", snapshot)
+		}
+		signals.Add(1)
+		select {
+		case <-ready:
+		default:
+			close(ready)
+		}
+	})
+
+	if err := worker.Ingest(context.Background(), wsDraw("tron_ffc_3s", "P100", "P101")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ready:
+		t.Fatal("unconfigured formal lottery signaled readiness")
+	default:
+	}
+
+	worker.periodStateUpdater = func(string, string, string, time.Time, int) bool { return false }
+	if err := worker.Ingest(context.Background(), wsDraw("tron_ffc_6s", "P100", "P101")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ready:
+		t.Fatal("rejected boundary signaled readiness")
+	default:
+	}
+
+	worker.periodStateUpdater = func(string, string, string, time.Time, int) bool { return true }
+	if err := worker.Ingest(context.Background(), wsDraw("tron_ffc_6s", "P101", "P102")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("accepted configured boundary did not signal readiness")
+	}
+	if err := worker.Ingest(context.Background(), wsDraw("tron_ffc_6s", "P102", "P103")); err != nil {
+		t.Fatal(err)
+	}
+	if got := signals.Load(); got != 1 {
+		t.Fatalf("readiness signals=%d, want exactly one", got)
 	}
 }
 

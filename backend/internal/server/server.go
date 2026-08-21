@@ -289,6 +289,7 @@ func New(cfg config.Config) (*Server, error) {
 	var strategyNotifier interface {
 		NotifyStrategyDraw(context.Context, string, string)
 	}
+	formalSchemeBettingMode := strings.EqualFold(cfg.SchemeBettingMode, "gray") || strings.EqualFold(cfg.SchemeBettingMode, "production")
 
 	var schemeWorker *schemes.Worker
 	if pool != nil && cfg.SchemeWorkerEnabled {
@@ -318,19 +319,24 @@ func New(cfg config.Config) (*Server, error) {
 		}
 		launchWorker(func() { schemeBettingRuntime.Run(workerCtx) })
 	}
+	var contiguousReadiness *contiguousRecoveryReadiness
+	if schemeEventBus != nil && schemeWorker != nil && formalSchemeBettingMode {
+		contiguousReadiness = newContiguousRecoveryReadiness(cfg.SchemeBettingShards)
+	}
 	if schemeEventBus != nil && schemeWorker != nil {
 		strategyNotifier = &drawEventPublisher{
 			pool: pool, bus: schemeEventBus, leaseOwner: eventLeaseOwner, leaseFor: 2 * cfg.SchemeBettingLease,
 		}
-		formalMode := strings.EqualFold(cfg.SchemeBettingMode, "gray") || strings.EqualFold(cfg.SchemeBettingMode, "production")
-		if formalMode {
+		if formalSchemeBettingMode {
 			launchWorker(func() {
 				if err := runSchemeDrawExpander(workerCtx, schemeEventBus, pool, uint32(cfg.SchemeBettingShardCount)); err != nil {
 					slog.Error("scheme draw expander stopped", "err", err)
 				}
 			})
 			launchWorker(func() {
-				if err := runSchemePeriodBoundaryExpander(workerCtx, schemeEventBus, pool, cfg.SchemeBettingShards, uint32(cfg.SchemeBettingShardCount)); err != nil {
+				if err := runSchemePeriodBoundaryExpander(
+					workerCtx, schemeEventBus, pool, cfg.SchemeBettingShards, uint32(cfg.SchemeBettingShardCount), contiguousReadiness.SignalExpander,
+				); err != nil {
 					slog.Error("scheme period-boundary expander stopped", "err", err)
 				}
 			})
@@ -347,6 +353,7 @@ func New(cfg config.Config) (*Server, error) {
 					if err := runLeasedSchemeContiguousTargetConsumer(
 						workerCtx, schemeEventBus, pool, shard, eventLeaseOwner, 2*cfg.SchemeBettingLease, schemeWorker,
 						cfg.SchemeBettingLotteries, int(cfg.SchemeBettingBatch), cfg.SchemeBettingConcurrency, time.Second,
+						contiguousReadiness,
 					); err != nil {
 						slog.Error("scheme contiguous-target shard consumer stopped", "shard", shard, "err", err)
 					}
@@ -372,7 +379,7 @@ func New(cfg config.Config) (*Server, error) {
 				}
 			})
 		}
-		if formalMode {
+		if formalSchemeBettingMode {
 			launchWorker(func() { schemeWorker.RunStartupFormalTakeover(workerCtx) })
 			launchWorker(func() {
 				schemeWorker.RunAutomaticRearmRecovery(
@@ -394,6 +401,9 @@ func New(cfg config.Config) (*Server, error) {
 			dw.SetStrategyNotifier(strategyNotifier)
 			if schemeEventBus != nil {
 				dw.SetPeriodBoundaryPublisher(schemeEventBus)
+			}
+			if contiguousReadiness != nil {
+				dw.SetContiguousRecoveryReady(cfg.SchemeBettingLotteries, contiguousReadiness.SignalDrawWS)
 			}
 			launchWorker(func() { dw.Run(workerCtx) })
 		}
