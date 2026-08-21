@@ -37,7 +37,7 @@ func TestContiguousChainFaultResolverAndExpiryRaceHasOneDatabaseWinner(t *testin
 	f := newProductionContiguousChainE2EFixture(t)
 	f.deliverStrategyReady(1)
 	f.publishExactBoundary()
-	f.raceResolverAndExpiry()
+	f.raceResolverCompletionAndExpiry()
 	f.assertOneTerminalWinnerAndAtMostOneOutbox()
 }
 

@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/nats-io/nats.go"
 
+	"caipiao/backend/internal/db/sqlcdb"
 	"caipiao/backend/internal/schemebetting"
 )
 
@@ -109,4 +111,80 @@ func TestEstablishReadySubscriptionSignalsOnlyAfterSuccessfulSubscribe(t *testin
 	if called {
 		t.Fatal("failed subscription signaled readiness")
 	}
+}
+
+// Removing the production boundary expander must fail this test: a boundary
+// which arrives before phase one has no target-ready row to publish, while a
+// later durable delivery must expand the newly committed wait with the same
+// stable boundary identity.
+func TestExpandContiguousTargetBoundaryDefersUntilAwaitingDecisionExists(t *testing.T) {
+	source := &boundaryExpansionSource{}
+	publisher := &boundaryExpansionPublisher{}
+	event := PeriodBoundary{LotteryCode: "tron_ffc_6s", CurrentIssue: "100", NextIssue: "101", Generation: 9}
+
+	if err := ExpandContiguousTargetBoundary(context.Background(), event, source, publisher, []int32{3}, 64); err != nil {
+		t.Fatal(err)
+	}
+	if got := publisher.Count(); got != 0 {
+		t.Fatalf("pre-phase boundary target-ready events=%d want 0", got)
+	}
+
+	source.SetRows([]sqlcdb.AwaitingContiguousTargetRow{{
+		DecisionID: 41, SchemeID: "inst-41", LotteryCode: "tron_ffc_6s", SourcePeriodNo: "100", ShardNo: 3,
+	}})
+	if err := ExpandContiguousTargetBoundary(context.Background(), event, source, publisher, []int32{3}, 64); err != nil {
+		t.Fatal(err)
+	}
+	if err := ExpandContiguousTargetBoundary(context.Background(), event, source, publisher, []int32{3}, 64); err != nil {
+		t.Fatal(err)
+	}
+	events := publisher.Events()
+	if len(events) != 2 || events[0].DecisionID != 41 || events[1].DecisionID != 41 || events[0].MessageID() != events[1].MessageID() {
+		t.Fatalf("post-commit target-ready redelivery=%+v", events)
+	}
+}
+
+type boundaryExpansionSource struct {
+	mu   sync.Mutex
+	rows []sqlcdb.AwaitingContiguousTargetRow
+}
+
+func (source *boundaryExpansionSource) SetRows(rows []sqlcdb.AwaitingContiguousTargetRow) {
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	source.rows = append([]sqlcdb.AwaitingContiguousTargetRow(nil), rows...)
+}
+
+func (source *boundaryExpansionSource) ListAwaitingContiguousTargets(
+	_ context.Context, _ []string, _ []int32, _ int64, _ int32,
+) ([]sqlcdb.AwaitingContiguousTargetRow, error) {
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	return append([]sqlcdb.AwaitingContiguousTargetRow(nil), source.rows...), nil
+}
+
+type boundaryExpansionPublisher struct {
+	mu     sync.Mutex
+	events []ContiguousTargetReady
+}
+
+func (publisher *boundaryExpansionPublisher) PublishContiguousTargetReady(
+	_ context.Context, event ContiguousTargetReady, _ uint32,
+) error {
+	publisher.mu.Lock()
+	defer publisher.mu.Unlock()
+	publisher.events = append(publisher.events, event)
+	return nil
+}
+
+func (publisher *boundaryExpansionPublisher) Count() int {
+	publisher.mu.Lock()
+	defer publisher.mu.Unlock()
+	return len(publisher.events)
+}
+
+func (publisher *boundaryExpansionPublisher) Events() []ContiguousTargetReady {
+	publisher.mu.Lock()
+	defer publisher.mu.Unlock()
+	return append([]ContiguousTargetReady(nil), publisher.events...)
 }

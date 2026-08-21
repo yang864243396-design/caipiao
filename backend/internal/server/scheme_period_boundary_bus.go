@@ -13,8 +13,6 @@ import (
 	"caipiao/backend/internal/schemes"
 )
 
-const contiguousTargetBoundaryExpansionPageSize int32 = 32
-
 type contiguousRecoveryReadiness struct {
 	drawWSReady   chan struct{}
 	expanderReady chan struct{}
@@ -101,42 +99,18 @@ func runContiguousTargetShardRuntime(
 	return err
 }
 
-type boundaryAwaitingTargetSource interface {
-	ListAwaitingContiguousTargets(context.Context, []string, []int32, int64, int32) ([]sqlcdb.AwaitingContiguousTargetRow, error)
-}
-
-type contiguousTargetReadyPublisher interface {
-	PublishContiguousTargetReady(context.Context, schemeeventbus.ContiguousTargetReady, uint32) error
-}
-
 // expandSchemePeriodBoundary publishes a single bounded page. Resolution is
 // intentionally deferred to the shard consumer; this path performs no target
 // lookup or provider operation.
 func expandSchemePeriodBoundary(
 	ctx context.Context,
 	event schemeeventbus.PeriodBoundary,
-	source boundaryAwaitingTargetSource,
-	publisher contiguousTargetReadyPublisher,
+	source schemeeventbus.AwaitingContiguousTargetSource,
+	publisher schemeeventbus.ContiguousTargetReadyPublisher,
 	shards []int32,
 	shardCount uint32,
 ) error {
-	if source == nil || publisher == nil || event.LotteryCode == "" || event.Generation == 0 || shardCount == 0 || len(shards) == 0 {
-		return errors.New("contiguous target boundary expander configuration is incomplete")
-	}
-	rows, err := source.ListAwaitingContiguousTargets(ctx, []string{event.LotteryCode}, shards, 0, contiguousTargetBoundaryExpansionPageSize)
-	if err != nil {
-		return err
-	}
-	for _, row := range rows {
-		ready := schemeeventbus.ContiguousTargetReady{
-			DecisionID: row.DecisionID, SchemeID: row.SchemeID, LotteryCode: row.LotteryCode,
-			SourcePeriod: row.SourcePeriodNo, BoundaryGeneration: event.Generation,
-		}
-		if err := publisher.PublishContiguousTargetReady(ctx, ready, shardCount); err != nil {
-			return err
-		}
-	}
-	return nil
+	return schemeeventbus.ExpandContiguousTargetBoundary(ctx, event, source, publisher, shards, shardCount)
 }
 
 func runSchemePeriodBoundaryExpander(

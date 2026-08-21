@@ -10,10 +10,13 @@ import (
 
 	"github.com/nats-io/nats.go"
 
+	"caipiao/backend/internal/db/sqlcdb"
 	"caipiao/backend/internal/schemebetting"
 )
 
 const ContiguousTargetExpanderDurable = "scheme-contiguous-target-expander"
+
+const contiguousTargetBoundaryExpansionPageSize int32 = 32
 
 type PeriodBoundary struct {
 	LotteryCode  string    `json:"lotteryCode"`
@@ -145,6 +148,49 @@ func (bus *Bus) PublishContiguousTargetReady(ctx context.Context, event Contiguo
 }
 
 type ContiguousTargetReadyHandler func(context.Context, ContiguousTargetReady) error
+
+// AwaitingContiguousTargetSource is the bounded persisted-wait lookup used by
+// the boundary expander. A boundary can arrive before phase one commits; a
+// later durable delivery or recovery is therefore allowed to query again.
+type AwaitingContiguousTargetSource interface {
+	ListAwaitingContiguousTargets(context.Context, []string, []int32, int64, int32) ([]sqlcdb.AwaitingContiguousTargetRow, error)
+}
+
+// ContiguousTargetReadyPublisher isolates boundary expansion from the event
+// transport while preserving the exact durable target-ready message identity.
+type ContiguousTargetReadyPublisher interface {
+	PublishContiguousTargetReady(context.Context, ContiguousTargetReady, uint32) error
+}
+
+// ExpandContiguousTargetBoundary turns one accepted period boundary into one
+// bounded page of target-ready wakeups. It intentionally performs no target
+// lookup or provider operation: the shard consumer owns resolution.
+func ExpandContiguousTargetBoundary(
+	ctx context.Context,
+	event PeriodBoundary,
+	source AwaitingContiguousTargetSource,
+	publisher ContiguousTargetReadyPublisher,
+	shards []int32,
+	shardCount uint32,
+) error {
+	if source == nil || publisher == nil || strings.TrimSpace(event.LotteryCode) == "" || event.Generation == 0 || shardCount == 0 || len(shards) == 0 {
+		return errors.New("contiguous target boundary expander configuration is incomplete")
+	}
+	rows, err := source.ListAwaitingContiguousTargets(ctx, []string{event.LotteryCode}, shards, 0, contiguousTargetBoundaryExpansionPageSize)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		ready := ContiguousTargetReady{
+			DecisionID: row.DecisionID, SchemeID: row.SchemeID, LotteryCode: row.LotteryCode,
+			SourcePeriod: row.SourcePeriodNo, BoundaryGeneration: event.Generation,
+		}
+		if err := publisher.PublishContiguousTargetReady(ctx, ready, shardCount); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func (bus *Bus) ConsumeContiguousTargetReady(ctx context.Context, shard uint32, durable string, handler ContiguousTargetReadyHandler) error {
 	return bus.ConsumeContiguousTargetReadyWithReady(ctx, shard, durable, handler, nil)

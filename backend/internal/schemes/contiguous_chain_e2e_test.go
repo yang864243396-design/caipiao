@@ -13,6 +13,7 @@ import (
 
 	"caipiao/backend/internal/db/sqlcdb"
 	"caipiao/backend/internal/guaji"
+	"caipiao/backend/internal/guaji/drawsync"
 	"caipiao/backend/internal/guajibet"
 	"caipiao/backend/internal/lottery"
 	"caipiao/backend/internal/playrules"
@@ -38,6 +39,24 @@ func TestFormalShortPeriodContiguousLifecycleUsesProductionTransactions(t *testi
 	f.assertOneProviderSubmission()
 }
 
+// Removing the durable recovery of a boundary that arrived before phase one
+// must fail this test. The first production draw ingestion expands no rows;
+// phase one then commits a real waiting decision while its immediate resolver
+// is transiently blocked. A redelivered authoritative boundary must publish
+// two target-ready deliveries while that decision is still active, and exactly
+// one resolver may create the frozen command/outbox.
+func TestFormalShortPeriodBoundaryBeforePhaseOneRecoversActiveTargetReadyRedelivery(t *testing.T) {
+	f := newProductionContiguousChainE2EFixture(t)
+	f.deliverBoundaryBeforePhaseOne()
+	f.processPhaseOneWithProviderSnapshotBlocked()
+	f.assertAwaitingWithoutOutbox()
+	f.redeliverBoundaryToTwoActiveTargetReadyHandlers()
+
+	f.assertOneStrategyAdvance()
+	f.assertOneDecisionForSource()
+	f.assertOneOutboxWithStableRequestID()
+}
+
 // productionContiguousChainE2EFixture keeps PostgreSQL and every production
 // state transition real. Only the external Guaji transport is replaced.
 // newResolverEntryFixture owns schema gating and cleanup.
@@ -45,6 +64,8 @@ type productionContiguousChainE2EFixture struct {
 	*resolverEntryFixture
 	q             *sqlcdb.Queries
 	worker        *Worker
+	drawWorker    *drawsync.Worker
+	boundaryPipe  *task9BoundaryPipeline
 	dispatcher    *schemebettingdispatch.Runtime
 	provider      *task9Provider
 	recordID      int64
@@ -90,6 +111,9 @@ WHERE id=$1`, base.schemeID); err != nil {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Existing source settlement is durable before the websocket boundary. The
+	// later drawsync.Ingest call deliberately sees this REST-like duplicate and
+	// must still publish the authoritative PeriodBoundary.
 	drawnAt := base.databaseNow().Add(30 * time.Second)
 	if _, err := base.pool.Exec(base.ctx, `
 INSERT INTO lottery_draws (lottery_code, issue_no, period_short, balls, sum_value, drawn_at)
@@ -109,6 +133,12 @@ RETURNING id`, fmt.Sprintf("T9C%d", stamp), base.memberID, base.schemeID, base.l
 	}
 	base.processor.SetBettingMode("gray", []string{base.lotteryCode})
 	f.worker = &Worker{pool: base.pool, q: f.q, strategyProcessor: base.processor, bettingBacklog: availableRearmBacklog{}}
+	f.boundaryPipe = &task9BoundaryPipeline{fixture: f, targetReadyStarted: make(chan struct{}, 8)}
+	f.drawWorker = drawsync.NewWorker(base.pool, guaji.NewClient(guaji.Config{Enabled: true}), nil)
+	if f.drawWorker == nil {
+		t.Fatal("drawsync worker unavailable")
+	}
+	f.drawWorker.SetPeriodBoundaryPublisher(f.boundaryPipe)
 	f.provider = &task9Provider{}
 	f.dispatchOwner = fmt.Sprintf("t9-%010d", stamp%10_000_000_000)
 	f.dispatcher, err = schemebettingdispatch.New(f.q, f.provider, schemebettingdispatch.Config{
@@ -124,12 +154,11 @@ RETURNING id`, fmt.Sprintf("T9C%d", stamp), base.memberID, base.schemeID, base.l
 }
 
 func (f *productionContiguousChainE2EFixture) cleanupProductionRows() {
-	ctx := context.Background()
-	_, _ = f.pool.Exec(ctx, `DELETE FROM scheme_betting_shard_leases WHERE lease_kind='dispatcher' AND shard_no=$1 AND lease_owner=$2`, f.shardNo, f.dispatchOwner)
-	_, _ = f.pool.Exec(ctx, `DELETE FROM scheme_strategy_evaluations WHERE instance_id=$1`, f.schemeID)
-	_, _ = f.pool.Exec(ctx, `DELETE FROM cloud_bet_records WHERE scheme_id=$1`, f.schemeID)
-	_, _ = f.pool.Exec(ctx, `DELETE FROM lottery_draws WHERE lottery_code=$1 AND issue_no=$2`, f.lotteryCode, f.source)
-	_, _ = f.pool.Exec(ctx, `DELETE FROM provider_period_snapshots WHERE lottery_code=$1 AND period_no IN ($2,$3,$4)`,
+	f.cleanupExec("dispatcher shard lease", `DELETE FROM scheme_betting_shard_leases WHERE lease_kind='dispatcher' AND shard_no=$1 AND lease_owner=$2`, f.shardNo, f.dispatchOwner)
+	f.cleanupExec("strategy evaluations", `DELETE FROM scheme_strategy_evaluations WHERE instance_id=$1`, f.schemeID)
+	f.cleanupExec("cloud bet records", `DELETE FROM cloud_bet_records WHERE scheme_id=$1`, f.schemeID)
+	f.cleanupExec("source lottery draw", `DELETE FROM lottery_draws WHERE lottery_code=$1 AND issue_no=$2`, f.lotteryCode, f.source)
+	f.cleanupExec("expanded provider snapshots", `DELETE FROM provider_period_snapshots WHERE lottery_code=$1 AND period_no IN ($2,$3,$4)`,
 		f.lotteryCode, f.target, incrementDecimal(f.target), incrementDecimal(incrementDecimal(f.target)))
 }
 
@@ -145,7 +174,98 @@ func (f *productionContiguousChainE2EFixture) deliverBoundaryBeforePhaseOne() {
 	if decisions != 0 || outboxes != 0 {
 		f.t.Fatalf("pre-phase boundary saw decisions=%d outboxes=%d", decisions, outboxes)
 	}
-	f.publishExactBoundary()
+	event := guaji.DrawEvent{
+		GameKey: f.lotteryCode, Periods: f.source, NextPeriods: f.target,
+		DrawnAt: f.databaseNow(), Balls: guaji.DrawBalls{SSC: "92345"},
+	}
+	if err := f.drawWorker.Ingest(f.ctx, event); err != nil {
+		f.t.Fatal(err)
+	}
+	if got := f.boundaryPipe.boundaryCount(); got != 1 {
+		f.t.Fatalf("pre-phase production boundary publications=%d want 1", got)
+	}
+}
+
+func (f *productionContiguousChainE2EFixture) processPhaseOneWithProviderSnapshotBlocked() {
+	f.t.Helper()
+	lockTx, err := f.pool.Begin(f.ctx)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	locked := false
+	defer func() {
+		if !locked {
+			return
+		}
+		if rollbackErr := lockTx.Rollback(context.Background()); rollbackErr != nil {
+			f.t.Errorf("release provider snapshot test lock: %v", rollbackErr)
+		}
+	}()
+	if _, err := lockTx.Exec(f.ctx, `LOCK TABLE provider_period_snapshots IN ACCESS EXCLUSIVE MODE`); err != nil {
+		f.t.Fatal(err)
+	}
+	locked = true
+	resolveCtx, cancel := context.WithTimeout(f.ctx, 200*time.Millisecond)
+	defer cancel()
+	err = f.processor.ProcessStrategyReady(resolveCtx, f.recordID, f.schemeID, f.lotteryCode, f.source, 7)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		f.t.Fatalf("phase-one resolver error=%v want provider snapshot timeout after phase-one commit", err)
+	}
+	if err := lockTx.Rollback(context.Background()); err != nil {
+		f.t.Fatal(err)
+	}
+	locked = false
+}
+
+func (f *productionContiguousChainE2EFixture) assertAwaitingWithoutOutbox() {
+	f.t.Helper()
+	var status string
+	var outboxes int
+	if err := f.pool.QueryRow(f.ctx, `
+SELECT d.status, (SELECT COUNT(*)::int FROM scheme_bet_outbox o WHERE o.decision_id=d.id)
+FROM scheme_period_decisions d
+WHERE d.scheme_id=$1 AND d.source_period_no=$2`, f.schemeID, f.source).Scan(&status, &outboxes); err != nil {
+		f.t.Fatal(err)
+	}
+	if status != "awaiting_target" || outboxes != 0 {
+		f.t.Fatalf("post-phase-one status/outboxes=%q/%d want awaiting_target/0", status, outboxes)
+	}
+}
+
+func (f *productionContiguousChainE2EFixture) redeliverBoundaryToTwoActiveTargetReadyHandlers() {
+	f.t.Helper()
+	decisionID := f.decisionID()
+	lockTx, err := f.pool.Begin(f.ctx)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	locked := false
+	defer func() {
+		if !locked {
+			return
+		}
+		if rollbackErr := lockTx.Rollback(context.Background()); rollbackErr != nil {
+			f.t.Errorf("release active target-ready test lock: %v", rollbackErr)
+		}
+	}()
+	if _, err := lockTx.Exec(f.ctx, `SELECT id FROM scheme_period_decisions WHERE id=$1 FOR UPDATE`, decisionID); err != nil {
+		f.t.Fatal(err)
+	}
+	locked = true
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() { errs <- f.boundaryPipe.redeliver(f.ctx) }()
+	}
+	f.boundaryPipe.waitForTargetReadyStarts(2)
+	if err := lockTx.Commit(f.ctx); err != nil {
+		f.t.Fatal(err)
+	}
+	locked = false
+	for range 2 {
+		if err := <-errs; err != nil {
+			f.t.Fatal(err)
+		}
+	}
 }
 
 func (f *productionContiguousChainE2EFixture) deliverStrategyReady(deliveries int) {
@@ -229,7 +349,7 @@ func (f *productionContiguousChainE2EFixture) restartAndRecoverWaiting(runs int)
 	if err != nil || !acquired {
 		f.t.Fatalf("acquire strategy lease acquired=%v err=%v", acquired, err)
 	}
-	defer f.pool.Exec(context.Background(), `DELETE FROM scheme_betting_shard_leases WHERE lease_kind='strategy' AND shard_no=$1 AND lease_owner=$2`, f.shardNo, owner)
+	defer f.cleanupExec("recovery strategy shard lease", `DELETE FROM scheme_betting_shard_leases WHERE lease_kind='strategy' AND shard_no=$1 AND lease_owner=$2`, f.shardNo, owner)
 	ctx := WithStrategyLeaseFence(f.ctx, StrategyLeaseFence{ShardNo: f.shardNo, Owner: owner, Epoch: epoch})
 	for range runs {
 		if _, err := runContiguousTargetRecoveryBatch(ctx, f.q, f.processor, []string{f.lotteryCode}, []int32{f.shardNo}, 32); err != nil {
@@ -245,15 +365,36 @@ func (f *productionContiguousChainE2EFixture) expireWaitingDecision() {
 	}
 }
 
-func (f *productionContiguousChainE2EFixture) raceResolverAndExpiry() {
+// raceResolverCompletionAndExpiry starts the real resolver while completion is
+// still legal, then starts the production expiry transition at the database
+// deadline. Either conditional terminal update may win; a pre-expired fixture
+// is deliberately not used because it would only race two expiry paths.
+func (f *productionContiguousChainE2EFixture) raceResolverCompletionAndExpiry() {
 	f.t.Helper()
-	f.expireWaitingDecision()
 	id := f.decisionID()
+	deadline := f.databaseNow().Add(300 * time.Millisecond)
+	if _, err := f.pool.Exec(f.ctx, `UPDATE scheme_period_decisions SET target_deadline_at=$2 WHERE id=$1`, id, deadline); err != nil {
+		f.t.Fatal(err)
+	}
 	start := make(chan struct{})
 	errs := make(chan error, 2)
-	go func() { <-start; errs <- f.processor.ResolveAwaitingTarget(f.ctx, id) }()
 	go func() {
 		<-start
+		// Keep CompleteAwaitingContiguousTarget viable but close enough to the
+		// deadline that the independently scheduled expiry transition competes
+		// for the same locked decision/instance rows.
+		wait := time.Until(deadline.Add(-20 * time.Millisecond))
+		if wait > 0 {
+			time.Sleep(wait)
+		}
+		errs <- f.processor.ResolveAwaitingTarget(f.ctx, id)
+	}()
+	go func() {
+		<-start
+		wait := time.Until(deadline)
+		if wait > 0 {
+			time.Sleep(wait)
+		}
 		_, err := f.q.MissAwaitingContiguousTarget(f.ctx, sqlcdb.MissAwaitingContiguousTargetParams{DecisionID: id, FailureReason: "target_deadline_elapsed", Diagnostics: []byte(`{"source":"task9-race"}`)})
 		errs <- err
 	}()
@@ -449,6 +590,65 @@ WHERE o.scheme_id=$1 ORDER BY o.id DESC LIMIT 1`, f.schemeID).Scan(&state, &outc
 	}
 	if state != wantState || outcome != reason || chainState != "blocked_requires_rearm" {
 		f.t.Fatalf("provider fault state/outcome/chain=%q/%q/%q", state, outcome, chainState)
+	}
+}
+
+// task9BoundaryPipeline preserves the real production event sequence inside
+// the isolated database composition test. It replaces only JetStream's
+// external transport: drawsync publishes PeriodBoundary, the production
+// expander rereads durable waits, and target-ready invokes the real worker.
+type task9BoundaryPipeline struct {
+	fixture *productionContiguousChainE2EFixture
+
+	mu                 sync.Mutex
+	boundaries         []schemeeventbus.PeriodBoundary
+	targetReadyStarted chan struct{}
+}
+
+func (pipeline *task9BoundaryPipeline) PublishPeriodBoundary(ctx context.Context, event schemeeventbus.PeriodBoundary) error {
+	pipeline.mu.Lock()
+	pipeline.boundaries = append(pipeline.boundaries, event)
+	pipeline.mu.Unlock()
+	return schemeeventbus.ExpandContiguousTargetBoundary(
+		ctx, event, pipeline.fixture.q, pipeline, []int32{pipeline.fixture.shardNo}, shadowOutboxShardCount,
+	)
+}
+
+func (pipeline *task9BoundaryPipeline) PublishContiguousTargetReady(ctx context.Context, event schemeeventbus.ContiguousTargetReady, _ uint32) error {
+	select {
+	case pipeline.targetReadyStarted <- struct{}{}:
+	default:
+	}
+	return pipeline.fixture.worker.ProcessContiguousTargetReady(ctx, event)
+}
+
+func (pipeline *task9BoundaryPipeline) boundaryCount() int {
+	pipeline.mu.Lock()
+	defer pipeline.mu.Unlock()
+	return len(pipeline.boundaries)
+}
+
+func (pipeline *task9BoundaryPipeline) redeliver(ctx context.Context) error {
+	pipeline.mu.Lock()
+	if len(pipeline.boundaries) == 0 {
+		pipeline.mu.Unlock()
+		return errors.New("no production period boundary to redeliver")
+	}
+	event := pipeline.boundaries[len(pipeline.boundaries)-1]
+	pipeline.mu.Unlock()
+	return schemeeventbus.ExpandContiguousTargetBoundary(
+		ctx, event, pipeline.fixture.q, pipeline, []int32{pipeline.fixture.shardNo}, shadowOutboxShardCount,
+	)
+}
+
+func (pipeline *task9BoundaryPipeline) waitForTargetReadyStarts(want int) {
+	pipeline.fixture.t.Helper()
+	for range want {
+		select {
+		case <-pipeline.targetReadyStarted:
+		case <-time.After(time.Second):
+			pipeline.fixture.t.Fatalf("timed out waiting for target-ready handler %d/%d", want, want)
+		}
 	}
 }
 

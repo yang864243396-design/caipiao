@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -19,6 +21,55 @@ import (
 )
 
 var resolverEntryIssueCounter atomic.Int64
+
+func TestContiguousTestDatabaseGuardRequiresMarkerAndTestDatabaseName(t *testing.T) {
+	tests := []struct {
+		name        string
+		databaseURL string
+		marker      string
+		wantErr     bool
+	}{
+		{name: "missing marker", databaseURL: "postgres://user:pass@localhost/caipiao_test", wantErr: true},
+		{name: "wrong marker", databaseURL: "postgres://user:pass@localhost/caipiao_test", marker: "yes", wantErr: true},
+		{name: "production database name", databaseURL: "postgres://user:pass@localhost/caipiao", marker: "1", wantErr: true},
+		{name: "test database missing separator", databaseURL: "postgres://user:pass@localhost/caipiaotest", marker: "1", wantErr: true},
+		{name: "missing database name", databaseURL: "postgres://user:pass@localhost", marker: "1", wantErr: true},
+		{name: "non postgres URL", databaseURL: "mysql://user:pass@localhost/caipiao_test", marker: "1", wantErr: true},
+		{name: "explicit isolated database", databaseURL: "postgres://user:pass@localhost/caipiao_test", marker: "1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateContiguousTestDatabase(tt.databaseURL, tt.marker)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("validateContiguousTestDatabase() error=%v wantErr=%v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// validateContiguousTestDatabase is deliberately test-only. The resolver
+// composition tests commit through multiple independent transactions, so they
+// may never use a regular developer or production database by accident.
+func validateContiguousTestDatabase(databaseURL, marker string) error {
+	if strings.TrimSpace(marker) != "1" {
+		return fmt.Errorf("CAIPIAO_TEST_DB=1 is required for contiguous database tests")
+	}
+	parsed, err := url.Parse(strings.TrimSpace(databaseURL))
+	if err != nil {
+		return fmt.Errorf("parse DATABASE_URL: %w", err)
+	}
+	if parsed.Scheme != "postgres" && parsed.Scheme != "postgresql" {
+		return fmt.Errorf("contiguous database tests require a PostgreSQL URL")
+	}
+	if strings.TrimSpace(parsed.Host) == "" {
+		return fmt.Errorf("contiguous database tests require a PostgreSQL host")
+	}
+	databaseName := strings.Trim(strings.TrimSpace(parsed.EscapedPath()), "/")
+	if databaseName == "" || strings.Contains(databaseName, "/") || !strings.HasSuffix(strings.ToLower(databaseName), "_test") {
+		return fmt.Errorf("contiguous database tests require an isolated *_test database")
+	}
+	return nil
+}
 
 func TestResolveAwaitingTargetDBExactSuccessCreatesOneOutboxAndAdvancesChain(t *testing.T) {
 	f := newResolverEntryFixture(t)
@@ -122,9 +173,11 @@ func TestResolveAwaitingTargetDBRecoveryTwiceIsIdempotent(t *testing.T) {
 		t.Skipf("strategy shard %d lease is held by another test or process", f.shardNo)
 	}
 	t.Cleanup(func() {
-		_, _ = f.pool.Exec(context.Background(), `
+		if _, cleanupErr := f.pool.Exec(context.Background(), `
 DELETE FROM scheme_betting_shard_leases
-WHERE lease_kind = 'strategy' AND shard_no = $1 AND lease_owner = $2 AND lease_epoch = $3`, f.shardNo, owner, epoch)
+		WHERE lease_kind = 'strategy' AND shard_no = $1 AND lease_owner = $2 AND lease_epoch = $3`, f.shardNo, owner, epoch); cleanupErr != nil {
+			t.Errorf("cleanup strategy shard lease: %v", cleanupErr)
+		}
 	})
 	fenced := WithStrategyLeaseFence(f.ctx, StrategyLeaseFence{ShardNo: f.shardNo, Owner: owner, Epoch: epoch})
 	q := sqlcdb.New(f.pool)
@@ -162,6 +215,9 @@ func newResolverEntryFixture(t *testing.T) *resolverEntryFixture {
 	databaseURL, ok := os.LookupEnv("DATABASE_URL")
 	if !ok || databaseURL == "" {
 		t.Skip("DATABASE_URL not set")
+	}
+	if err := validateContiguousTestDatabase(databaseURL, os.Getenv("CAIPIAO_TEST_DB")); err != nil {
+		t.Skipf("contiguous database integration disabled: %v", err)
 	}
 	pool, err := db.Connect(context.Background(), databaseURL, 16, 0)
 	if err != nil {
@@ -346,12 +402,19 @@ WHERE d.id = $1`, decisionID).Scan(&decisionStatus, &instanceStatus, &reason, &c
 }
 
 func (f *resolverEntryFixture) cleanup() {
-	_, _ = f.pool.Exec(context.Background(), `DELETE FROM scheme_bet_outbox WHERE scheme_id = $1`, f.schemeID)
-	_, _ = f.pool.Exec(context.Background(), `DELETE FROM scheme_period_decisions WHERE scheme_id = $1`, f.schemeID)
-	_, _ = f.pool.Exec(context.Background(), `DELETE FROM provider_period_snapshots WHERE lottery_code = $1 AND period_no = $2`, f.lotteryCode, f.target)
-	_, _ = f.pool.Exec(context.Background(), `DELETE FROM scheme_instances WHERE id = $1`, f.schemeID)
-	_, _ = f.pool.Exec(context.Background(), `DELETE FROM scheme_definitions WHERE id = $1`, f.definition)
+	f.cleanupExec("scheme bet outbox", `DELETE FROM scheme_bet_outbox WHERE scheme_id = $1`, f.schemeID)
+	f.cleanupExec("period decisions", `DELETE FROM scheme_period_decisions WHERE scheme_id = $1`, f.schemeID)
+	f.cleanupExec("provider snapshots", `DELETE FROM provider_period_snapshots WHERE lottery_code = $1 AND period_no = $2`, f.lotteryCode, f.target)
+	f.cleanupExec("scheme instance", `DELETE FROM scheme_instances WHERE id = $1`, f.schemeID)
+	f.cleanupExec("scheme definition", `DELETE FROM scheme_definitions WHERE id = $1`, f.definition)
 	if f.memberID > 0 {
-		_, _ = f.pool.Exec(context.Background(), `DELETE FROM members WHERE id = $1`, f.memberID)
+		f.cleanupExec("member", `DELETE FROM members WHERE id = $1`, f.memberID)
+	}
+}
+
+func (f *resolverEntryFixture) cleanupExec(label, query string, args ...any) {
+	f.t.Helper()
+	if _, err := f.pool.Exec(context.Background(), query, args...); err != nil {
+		f.t.Errorf("cleanup %s: %v", label, err)
 	}
 }
