@@ -25,9 +25,11 @@ const wireToken = "tok-wire-test"
 
 // betCapture 记录假第三方收到的下单请求。
 type betCapture struct {
-	calls   atomic.Int32
-	rawBody atomic.Value // string
-	authHdr atomic.Value // string
+	calls          atomic.Int32
+	listCalls      atomic.Int32
+	listDelayNanos atomic.Int64
+	rawBody        atomic.Value // string
+	authHdr        atomic.Value // string
 }
 
 func (c *betCapture) body(t *testing.T) map[string]any {
@@ -62,6 +64,10 @@ func fakeGuaji(t *testing.T, placeResp, listResp any) (*guaji.Client, *betCaptur
 			cap.rawBody.Store(string(raw))
 			_ = json.NewEncoder(w).Encode(placeResp)
 		case strings.HasPrefix(r.URL.Path, "/api/web_bets/"):
+			cap.listCalls.Add(1)
+			if delay := time.Duration(cap.listDelayNanos.Load()); delay > 0 {
+				time.Sleep(delay)
+			}
 			if listResp == nil {
 				_ = json.NewEncoder(w).Encode(map[string]any{"code": 201, "data": []any{}})
 				return
@@ -228,7 +234,7 @@ func TestPlaceLottBetUpstreamRejection(t *testing.T) {
 // TestPlaceLottBetFallsBackToListLookup 上游只回 periods 不回 id 时，回列表里按期号找。
 func TestPlaceLottBetFallsBackToListLookup(t *testing.T) {
 	const period = "115202606160196"
-	c, _ := fakeGuaji(t,
+	c, capture := fakeGuaji(t,
 		map[string]any{"code": 201, "message": "下注成功", "periods": period},
 		map[string]any{"code": 201, "data": []any{
 			map[string]any{"id": 398515, "game_id": 29, "periods": period, "bet_amount": 12},
@@ -244,6 +250,9 @@ func TestPlaceLottBetFallsBackToListLookup(t *testing.T) {
 	}
 	if res.Periods != period {
 		t.Errorf("期号 = %q", res.Periods)
+	}
+	if got := capture.listCalls.Load(); got != 1 {
+		t.Errorf("legacy list lookup calls=%d, want 1", got)
 	}
 }
 

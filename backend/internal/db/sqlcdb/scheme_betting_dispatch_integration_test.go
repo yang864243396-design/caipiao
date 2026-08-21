@@ -108,6 +108,88 @@ func TestFinishAttemptSQLParsesAgainstMigratedSchema(t *testing.T) {
 	}
 }
 
+func TestFinishAttemptPersistsFloatProviderAmount(t *testing.T) {
+	_ = godotenv.Load("../../../.env")
+	cfg := config.Load()
+	if cfg.DatabaseURL == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+	pool, err := db.Connect(context.Background(), cfg.DatabaseURL, 2, 0)
+	if err != nil {
+		t.Skipf("database unavailable: %v", err)
+	}
+	defer pool.Close()
+
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+
+	var memberID, snapshotID int64
+	var lotteryCode string
+	if err := tx.QueryRow(ctx, `SELECT id FROM members ORDER BY id LIMIT 1`).Scan(&memberID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			t.Skip("database has no member fixture")
+		}
+		t.Fatal(err)
+	}
+	if err := tx.QueryRow(ctx, `SELECT id, lottery_code FROM provider_period_snapshots ORDER BY id DESC LIMIT 1`).Scan(&snapshotID, &lotteryCode); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			t.Skip("database has no provider period snapshot fixture")
+		}
+		t.Fatal(err)
+	}
+
+	unique := fmt.Sprintf("finish-provider-amount-%d", time.Now().UnixNano())
+	const shardNo int32 = 0
+	var outboxID int64
+	err = tx.QueryRow(ctx, `
+INSERT INTO scheme_bet_outbox
+    (origin, local_order_no, member_id, lottery_code, source_period_no, target_period_no,
+     mode, state, request_id, payload_hash, payload, frozen_request, frozen_request_hash,
+     command_frozen_at, provider_snapshot_id, close_at, safe_deadline_at, shard_no)
+VALUES
+    ('api', $1, $2, $3, $4, $4,
+     'gray', 'pending', $1, $5, '{}'::jsonb, '{}'::jsonb, $5,
+     clock_timestamp(), $6, clock_timestamp() + interval '10 seconds',
+     clock_timestamp() + interval '5 seconds', $7)
+RETURNING id`, unique, memberID, lotteryCode, unique+"-period", unique+"-hash", snapshotID, shardNo).Scan(&outboxID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	q := sqlcdb.New(tx)
+	command, acquired, err := q.LeaseFormalEventOutboxByID(ctx, sqlcdb.LeaseFormalEventOutboxParams{
+		ID: outboxID, RequestID: unique, Mode: "gray", Owner: unique + "-owner",
+		LotteryCodes: []string{lotteryCode}, ShardNo: shardNo, LeaseDuration: 2 * time.Second,
+	})
+	if err != nil || !acquired {
+		t.Fatalf("lease acquired=%v err=%v", acquired, err)
+	}
+	if start, err := q.StartAttempt(ctx, command, 2*time.Second); err != nil || !start.Started {
+		t.Fatalf("attempt start=%+v err=%v", start, err)
+	}
+	finishedAt := time.Now().UTC()
+	finished, err := q.FinishAttempt(ctx, schemebetting.FinishDispatch{
+		CommandID: command.ID, SchemeID: command.SchemeID, LeaseOwner: command.Lease.Owner,
+		FencingToken: command.Lease.Token, State: schemebetting.OutboxAccepted,
+		Reason: "accepted", ProviderOrderID: unique + "-provider", AcceptedPeriod: command.TargetPeriod,
+		ProviderAmount: 0.2, ProviderCurrency: "USDT", FinishedAt: finishedAt,
+	})
+	if err != nil || !finished {
+		t.Fatalf("finished=%v err=%v", finished, err)
+	}
+	var storedAmount string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(provider_amount::text, '') FROM scheme_bet_outbox WHERE id=$1`, outboxID).Scan(&storedAmount); err != nil {
+		t.Fatal(err)
+	}
+	if storedAmount != "0.200" {
+		t.Fatalf("provider_amount=%q, want exact numeric text 0.200", storedAmount)
+	}
+}
+
 func TestFormalOutboxLeaseAndAttemptUseDatabaseClock(t *testing.T) {
 	_ = godotenv.Load("../../../.env")
 	cfg := config.Load()

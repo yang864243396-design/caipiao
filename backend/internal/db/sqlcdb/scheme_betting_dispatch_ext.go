@@ -232,7 +232,7 @@ WITH updated_outbox AS (
         terminal_at = CASE WHEN $4::varchar(32) = 'sent_unknown' THEN NULL ELSE $8::timestamptz END,
         provider_account_id = NULLIF($11, 0),
         provider_currency = NULLIF($12, ''),
-        provider_amount = NULLIF($13, 0),
+        provider_amount = NULLIF($13::double precision, 0)::numeric,
         last_error = NULLIF($14, ''),
         lease_until = NULL,
         updated_at = $8::timestamptz

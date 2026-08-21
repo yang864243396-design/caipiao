@@ -2,6 +2,7 @@ package guaji
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -99,13 +100,25 @@ func (c *Client) PlaceLottBet(ctx context.Context, accessToken string, req LottB
 		return nil, err
 	}
 	res := parseLottBetResult(env, raw)
-	if allowAmbiguousBetLookup(ctx) && res.ThirdPartyBetID == "" && res.Periods != "" {
-		amount := req.BetContents[0].BetAmount
-		if id, ferr := c.findBetIDByPeriod(ctx, accessToken, req.GameID, res.Periods, amount); ferr == nil {
+	var lookupErr error
+	if res.ThirdPartyBetID == "" && res.Periods != "" {
+		if allowAmbiguousBetLookup(ctx) {
+			amount := req.BetContents[0].BetAmount
+			if id, ferr := c.findBetIDByPeriod(ctx, accessToken, req.GameID, res.Periods, amount); ferr == nil {
+				res.ThirdPartyBetID = id
+			} else {
+				lookupErr = ferr
+			}
+		} else if id, ferr := c.findBetIDByFingerprint(ctx, accessToken, req, res.Periods); ferr == nil {
 			res.ThirdPartyBetID = id
+		} else {
+			lookupErr = ferr
 		}
 	}
 	if strings.TrimSpace(res.ThirdPartyBetID) == "" {
+		if lookupErr != nil {
+			return nil, fmt.Errorf("guaji place bet: upstream did not return bet id (periods=%q rule_id=%s lookup=%w raw=%s)", res.Periods, req.BetContents[0].RuleID, lookupErr, truncate(string(raw), 256))
+		}
 		return nil, fmt.Errorf("guaji place bet: upstream did not return bet id (periods=%q rule_id=%s raw=%s)", res.Periods, req.BetContents[0].RuleID, truncate(string(raw), 256))
 	}
 	return &res, nil
@@ -431,6 +444,238 @@ func (c *Client) findBetIDByPeriod(ctx context.Context, accessToken string, game
 		lastErr = fmt.Errorf("guaji find bet: not found periods=%s", periods)
 	}
 	return "", lastErr
+}
+
+func (c *Client) findBetIDByFingerprint(ctx context.Context, accessToken string, req LottBetRequest, periods string) (string, error) {
+	periods = strings.TrimSpace(periods)
+	if periods == "" {
+		return "", fmt.Errorf("guaji find exact bet: empty periods")
+	}
+	var lastErr error
+	for attempt := 0; attempt < 4; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(400 * time.Millisecond):
+			}
+		}
+		env, raw, err := c.fetchWebBetsRawShared(ctx, accessToken, 30, 1)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if err := c.parseEnvelope(env); err != nil {
+			lastErr = err
+			continue
+		}
+		var wrap struct {
+			Data []map[string]any `json:"data"`
+		}
+		if err := json.Unmarshal(raw, &wrap); err != nil {
+			lastErr = err
+			continue
+		}
+		matches := make([]string, 0, 1)
+		for _, row := range wrap.Data {
+			if !webBetMatchesFingerprint(row, req, periods) {
+				continue
+			}
+			id := rawAnyID(row["id"])
+			if id != "" {
+				matches = append(matches, id)
+			}
+		}
+		switch len(matches) {
+		case 1:
+			return matches[0], nil
+		case 0:
+			lastErr = fmt.Errorf("guaji find exact bet: not found periods=%s", periods)
+		default:
+			return "", fmt.Errorf("guaji find exact bet: ambiguous periods=%s matches=%d", periods, len(matches))
+		}
+	}
+	return "", lastErr
+}
+
+type sharedWebBetListResponse struct {
+	envelope envelope
+	raw      []byte
+}
+
+func (c *Client) fetchWebBetsRawShared(ctx context.Context, accessToken string, limit, page int) (envelope, []byte, error) {
+	tokenHash := sha256.Sum256([]byte(accessToken))
+	key := fmt.Sprintf("%x:%d:%d", tokenHash[:8], limit, page)
+	resultCh := c.betListSF.DoChan(key, func() (any, error) {
+		timeout := c.http.Timeout
+		if timeout <= 0 {
+			timeout = 30 * time.Second
+		}
+		sharedCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+		defer cancel()
+		env, raw, err := c.FetchWebBetsRaw(sharedCtx, accessToken, limit, page)
+		if err != nil {
+			return nil, err
+		}
+		return sharedWebBetListResponse{envelope: env, raw: raw}, nil
+	})
+	select {
+	case <-ctx.Done():
+		return envelope{}, nil, ctx.Err()
+	case result := <-resultCh:
+		if result.Err != nil {
+			return envelope{}, nil, result.Err
+		}
+		response, ok := result.Val.(sharedWebBetListResponse)
+		if !ok {
+			return envelope{}, nil, fmt.Errorf("guaji shared bet list: unexpected response type")
+		}
+		return response.envelope, response.raw, nil
+	}
+}
+
+func webBetMatchesFingerprint(row map[string]any, req LottBetRequest, periods string) bool {
+	if strings.TrimSpace(stringAny(row["periods"])) != periods || intAny(row["game_id"]) != req.GameID {
+		return false
+	}
+	if intAny(row["currency"]) != req.Currency {
+		return false
+	}
+	wantAmount := 0.0
+	for _, item := range req.BetContents {
+		wantAmount += item.BetAmount
+	}
+	if got, ok := floatAny(row["bet_amount"]); !ok || !floatNear(got, wantAmount) {
+		return false
+	}
+	gotContents := webBetContentMaps(row)
+	if len(gotContents) != len(req.BetContents) {
+		return false
+	}
+	used := make([]bool, len(gotContents))
+	for _, want := range req.BetContents {
+		matched := false
+		for i, got := range gotContents {
+			if used[i] || !webBetContentMatches(got, want) {
+				continue
+			}
+			used[i] = true
+			matched = true
+			break
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+func webBetContentMatches(got map[string]any, want LottBetContent) bool {
+	gotUnit, unitOK := floatAny(got["amount_unit"])
+	gotAmount, amountOK := floatAny(got["bet_amount"])
+	gotSolo, soloOK := boolAny(got["solo"])
+	return strings.TrimSpace(stringAny(got["rule_id"])) == strings.TrimSpace(want.RuleID) &&
+		strings.TrimSpace(stringAny(got["bet_content"])) == strings.TrimSpace(want.BetContent) &&
+		unitOK && floatNear(gotUnit, want.AmountUnit) &&
+		intAny(got["bets_nums"]) == want.BetsNums &&
+		intAny(got["multiple"]) == want.Multiple &&
+		soloOK && gotSolo == want.Solo &&
+		amountOK && floatNear(gotAmount, want.BetAmount)
+}
+
+func webBetContentMaps(row map[string]any) []map[string]any {
+	items := make([]map[string]any, 0, 1)
+	if raw, ok := row["bet_contents"].([]any); ok {
+		for _, item := range raw {
+			if content, ok := item.(map[string]any); ok {
+				items = append(items, content)
+			}
+		}
+	}
+	if len(items) > 0 {
+		return items
+	}
+	if outer, ok := row["bet_content"].(map[string]any); ok {
+		if inner, ok := outer["bet_content"].(map[string]any); ok {
+			items = append(items, inner)
+		}
+	}
+	return items
+}
+
+func rawAnyID(v any) string {
+	switch value := v.(type) {
+	case string:
+		return strings.TrimSpace(value)
+	case float64:
+		if value > 0 && value == math.Trunc(value) {
+			return strconv.FormatInt(int64(value), 10)
+		}
+	case json.Number:
+		return value.String()
+	}
+	return ""
+}
+
+func stringAny(v any) string {
+	switch value := v.(type) {
+	case string:
+		return value
+	case float64:
+		if value == math.Trunc(value) {
+			return strconv.FormatInt(int64(value), 10)
+		}
+	case json.Number:
+		return value.String()
+	}
+	return ""
+}
+
+func intAny(v any) int {
+	switch value := v.(type) {
+	case float64:
+		return int(value)
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case json.Number:
+		n, _ := strconv.Atoi(value.String())
+		return n
+	case string:
+		n, _ := strconv.Atoi(strings.TrimSpace(value))
+		return n
+	}
+	return 0
+}
+
+func floatAny(v any) (float64, bool) {
+	switch value := v.(type) {
+	case float64:
+		return value, true
+	case int:
+		return float64(value), true
+	case int64:
+		return float64(value), true
+	case json.Number:
+		n, err := value.Float64()
+		return n, err == nil
+	case string:
+		n, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		return n, err == nil
+	}
+	return 0, false
+}
+
+func boolAny(v any) (bool, bool) {
+	switch value := v.(type) {
+	case bool:
+		return value, true
+	case string:
+		b, err := strconv.ParseBool(strings.TrimSpace(value))
+		return b, err == nil
+	}
+	return false, false
 }
 
 func floatNear(a, b float64) bool {

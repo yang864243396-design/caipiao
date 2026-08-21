@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 type requestTransportError struct {
@@ -55,8 +57,9 @@ func requestPhaseName(phase int32) string {
 
 // Client is the Guaji third-party HTTP adapter (T0 skeleton).
 type Client struct {
-	cfg  Config
-	http *http.Client
+	cfg       Config
+	http      *http.Client
+	betListSF singleflight.Group
 }
 
 func NewClient(cfg Config) *Client {
