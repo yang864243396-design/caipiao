@@ -77,7 +77,7 @@ func (q *Queries) ActivateSchemeBettingChain(ctx context.Context, schemeID, chai
 	tag, err := q.db.Exec(ctx, `
 UPDATE scheme_instances
 SET betting_owner = 'event', strict_chain_state = 'active', chain_id = $2, chain_seq = 0,
-    bet_failed_detail = NULL, updated_at = now()
+    bet_failed_detail = NULL, chain_block_reason = NULL, updated_at = now()
 WHERE id = $1 AND (betting_owner = 'event' OR $3)`, schemeID, chainID, allowLegacy)
 	if err != nil {
 		return err
