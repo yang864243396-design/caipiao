@@ -3,6 +3,8 @@ package schemes
 import (
 	"context"
 	"strings"
+
+	"caipiao/backend/internal/schemeeventbus"
 )
 
 func (p *StrategyProcessor) ProcessStrategyReady(ctx context.Context, recordID int64, schemeID, lotteryCode, periodNo string, expectedStateVersion int64) error {
@@ -54,4 +56,14 @@ func (w *Worker) ProcessStrategyReady(ctx context.Context, recordID int64, schem
 		return nil
 	}
 	return w.strategyProcessor.ProcessStrategyReady(ctx, recordID, schemeID, lotteryCode, periodNo, expectedStateVersion)
+}
+
+// ProcessContiguousTargetReady handles a durable boundary wakeup. The
+// resolver re-reads and locks the decision, so duplicate JetStream deliveries
+// are naturally idempotent.
+func (w *Worker) ProcessContiguousTargetReady(ctx context.Context, event schemeeventbus.ContiguousTargetReady) error {
+	if w == nil || w.strategyProcessor == nil || event.DecisionID <= 0 {
+		return nil
+	}
+	return w.strategyProcessor.ResolveAwaitingTarget(ctx, event.DecisionID)
 }

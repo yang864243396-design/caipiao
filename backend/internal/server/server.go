@@ -329,6 +329,11 @@ func New(cfg config.Config) (*Server, error) {
 					slog.Error("scheme draw expander stopped", "err", err)
 				}
 			})
+			launchWorker(func() {
+				if err := runSchemePeriodBoundaryExpander(workerCtx, schemeEventBus, pool, cfg.SchemeBettingShards, uint32(cfg.SchemeBettingShardCount)); err != nil {
+					slog.Error("scheme period-boundary expander stopped", "err", err)
+				}
+			})
 			for _, shardID := range cfg.SchemeBettingShards {
 				shard := uint32(shardID)
 				launchWorker(func() {
@@ -336,6 +341,13 @@ func New(cfg config.Config) (*Server, error) {
 						workerCtx, schemeEventBus, pool, shard, eventLeaseOwner, 2*cfg.SchemeBettingLease, schemeWorker,
 					); err != nil {
 						slog.Error("scheme strategy shard consumer stopped", "shard", shard, "err", err)
+					}
+				})
+				launchWorker(func() {
+					if err := runLeasedSchemeContiguousTargetConsumer(
+						workerCtx, schemeEventBus, pool, shard, eventLeaseOwner, 2*cfg.SchemeBettingLease, schemeWorker,
+					); err != nil {
+						slog.Error("scheme contiguous-target shard consumer stopped", "shard", shard, "err", err)
 					}
 				})
 				betShard := shardID
@@ -384,6 +396,18 @@ func New(cfg config.Config) (*Server, error) {
 			}
 			launchWorker(func() { dw.Run(workerCtx) })
 		}
+	}
+	if schemeEventBus != nil && schemeWorker != nil &&
+		(strings.EqualFold(cfg.SchemeBettingMode, "gray") || strings.EqualFold(cfg.SchemeBettingMode, "production")) {
+		// Start after the draw websocket worker and durable consumers have been
+		// launched. The scan itself runs immediately, then remains bounded at
+		// the established recovery cadence.
+		launchWorker(func() {
+			schemeWorker.RunContiguousTargetRecovery(
+				workerCtx, cfg.SchemeBettingLotteries, cfg.SchemeBettingShards,
+				int(cfg.SchemeBettingBatch), cfg.SchemeBettingConcurrency, time.Second,
+			)
+		})
 	}
 
 	// periods API：同步第三方封盘倒计时（running 彩种，需挂机 token）

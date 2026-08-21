@@ -14,6 +14,8 @@ type AwaitingContiguousTargetRow struct {
 	SourceBetRecordID int64
 	TargetDeadlineAt  time.Time
 	StateVersionAfter int64
+	RuleSnapshotHash  string
+	LocalHit          bool
 	ChainID           string
 	ChainSeq          int64
 	ShardNo           int32
@@ -35,6 +37,7 @@ type MissAwaitingContiguousTargetParams struct {
 const awaitingContiguousTargetSelect = `
 SELECT d.id AS decision_id, d.scheme_id, i.member_id, d.lottery_code, d.source_period_no,
        COALESCE(d.source_bet_record_id, 0), d.target_deadline_at, d.state_version_after,
+	       COALESCE(d.rule_snapshot_hash, ''), COALESCE(d.local_hit, false),
        COALESCE(i.chain_id, ''), i.chain_seq, d.shard_no,
        CASE WHEN i.sim_bet THEN 'shadow' ELSE 'production' END
 FROM scheme_period_decisions d
@@ -48,6 +51,7 @@ func (q *Queries) GetAwaitingContiguousTargetForUpdate(ctx context.Context, deci
 FOR UPDATE OF d, i`, decisionID).Scan(
 		&row.DecisionID, &row.SchemeID, &row.MemberID, &row.LotteryCode, &row.SourcePeriodNo,
 		&row.SourceBetRecordID, &row.TargetDeadlineAt, &row.StateVersionAfter,
+		&row.RuleSnapshotHash, &row.LocalHit,
 		&row.ChainID, &row.ChainSeq, &row.ShardNo, &row.Mode,
 	)
 	if err != nil {
@@ -95,6 +99,7 @@ LIMIT $4`, lotteryCodes, shards, cursor, limit)
 		if err := rows.Scan(
 			&row.DecisionID, &row.SchemeID, &row.MemberID, &row.LotteryCode, &row.SourcePeriodNo,
 			&row.SourceBetRecordID, &row.TargetDeadlineAt, &row.StateVersionAfter,
+			&row.RuleSnapshotHash, &row.LocalHit,
 			&row.ChainID, &row.ChainSeq, &row.ShardNo, &row.Mode,
 		); err != nil {
 			return nil, err
@@ -167,6 +172,68 @@ SET status = 'paused',
     updated_at = now()
 FROM missed
 WHERE i.id = missed.scheme_id`, arg.DecisionID, arg.FailureReason, arg.Diagnostics)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// MissAwaitingContiguousTargetGap terminates a wait only after the resolver
+// has proven that the websocket boundary cannot produce the immediate target.
+// Unlike the expiry transition, it deliberately does not wait for the
+// deadline: continuing after a proven gap would authorize a skipped period.
+func (q *Queries) MissAwaitingContiguousTargetGap(ctx context.Context, arg MissAwaitingContiguousTargetParams) (bool, error) {
+	tag, err := q.db.Exec(ctx, `
+WITH locked_decision AS (
+    SELECT d.id, d.scheme_id
+    FROM scheme_period_decisions d
+    WHERE d.id = $1 AND d.status = 'awaiting_target'
+    FOR UPDATE
+), locked_instance AS (
+    SELECT i.id
+    FROM scheme_instances i
+    JOIN locked_decision d ON d.scheme_id = i.id
+    FOR UPDATE
+), missed AS (
+    UPDATE scheme_period_decisions d
+    SET status = 'missed_contiguous_period',
+        failure_reason = NULLIF($2, ''),
+        diagnostics = $3,
+        decided_at = now()
+    FROM locked_decision ld
+    JOIN locked_instance li ON li.id = ld.scheme_id
+    WHERE d.id = ld.id
+      AND d.status = 'awaiting_target'
+    RETURNING d.scheme_id
+)
+UPDATE scheme_instances i
+SET status = 'paused',
+    status_reason = 'bet_failed',
+    strict_chain_state = 'blocked_requires_rearm',
+    chain_block_reason = 'missed_contiguous_period',
+    bet_failed_detail = NULLIF($2, ''),
+    updated_at = now()
+FROM missed
+WHERE i.id = missed.scheme_id`, arg.DecisionID, arg.FailureReason, arg.Diagnostics)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// AdvanceContiguousTargetChainSequence fences the one outbox allowed for an
+// awaiting decision. The enclosing resolver transaction rolls this back if
+// completing or freezing the command cannot also succeed.
+func (q *Queries) AdvanceContiguousTargetChainSequence(ctx context.Context, schemeID, chainID string, expectedSequence int64) (bool, error) {
+	tag, err := q.db.Exec(ctx, `
+UPDATE scheme_instances
+SET chain_seq = chain_seq + 1,
+    updated_at = now()
+WHERE id = $1
+  AND betting_owner = 'event'
+  AND strict_chain_state = 'active'
+  AND chain_id = NULLIF($2, '')
+  AND chain_seq = $3`, schemeID, chainID, expectedSequence)
 	if err != nil {
 		return false, err
 	}

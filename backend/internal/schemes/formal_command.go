@@ -89,8 +89,8 @@ func (p *StrategyProcessor) buildFormalFrozenRequest(
 	if betAmountExceedsMax(amount) {
 		return nil, errMaxBetAmountExceeded(cfg.Currency)
 	}
-	var memberAccount string
-	if err := p.pool.QueryRow(ctx, `SELECT account FROM members WHERE id = $1`, inst.MemberID).Scan(&memberAccount); err != nil {
+	memberAccount, err := q.GetMemberAccountByID(ctx, inst.MemberID)
+	if err != nil {
 		return nil, err
 	}
 	memberAccount = strings.TrimSpace(memberAccount)

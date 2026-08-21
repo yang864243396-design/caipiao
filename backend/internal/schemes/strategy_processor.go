@@ -223,7 +223,7 @@ func (p *StrategyProcessor) process(ctx context.Context, row sqlcdb.PendingForma
 		return err
 	}
 	if formal && shadow.Status == "awaiting_target" && shadow.DecisionID > 0 {
-		return p.missExpiredFormalAwaitingTarget(ctx, shadow.DecisionID)
+		return p.ResolveAwaitingTarget(ctx, shadow.DecisionID)
 	}
 	return nil
 }
