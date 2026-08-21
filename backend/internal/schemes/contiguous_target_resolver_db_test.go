@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"caipiao/backend/internal/db"
 	"caipiao/backend/internal/db/sqlcdb"
 	"caipiao/backend/internal/lottery"
@@ -35,6 +37,8 @@ func TestContiguousTestDatabaseGuardRequiresMarkerAndTestDatabaseName(t *testing
 		{name: "test database missing separator", databaseURL: "postgres://user:pass@localhost/caipiaotest", marker: "1", wantErr: true},
 		{name: "missing database name", databaseURL: "postgres://user:pass@localhost", marker: "1", wantErr: true},
 		{name: "non postgres URL", databaseURL: "mysql://user:pass@localhost/caipiao_test", marker: "1", wantErr: true},
+		{name: "dbname query override", databaseURL: "postgres://user:pass@localhost/caipiao_test?dbname=caipiao", marker: "1", wantErr: true},
+		{name: "host query override", databaseURL: "postgres://user:pass@localhost/caipiao_test?host=production-db", marker: "1", wantErr: true},
 		{name: "explicit isolated database", databaseURL: "postgres://user:pass@localhost/caipiao_test", marker: "1"},
 	}
 	for _, tt := range tests {
@@ -54,18 +58,29 @@ func validateContiguousTestDatabase(databaseURL, marker string) error {
 	if strings.TrimSpace(marker) != "1" {
 		return fmt.Errorf("CAIPIAO_TEST_DB=1 is required for contiguous database tests")
 	}
-	parsed, err := url.Parse(strings.TrimSpace(databaseURL))
+	databaseURL = strings.TrimSpace(databaseURL)
+	parsed, err := url.Parse(databaseURL)
 	if err != nil {
 		return fmt.Errorf("parse DATABASE_URL: %w", err)
 	}
 	if parsed.Scheme != "postgres" && parsed.Scheme != "postgresql" {
 		return fmt.Errorf("contiguous database tests require a PostgreSQL URL")
 	}
-	if strings.TrimSpace(parsed.Host) == "" {
+	for queryKey := range parsed.Query() {
+		switch strings.ToLower(strings.TrimSpace(queryKey)) {
+		case "dbname", "host":
+			return fmt.Errorf("contiguous database tests reject %s query overrides", queryKey)
+		}
+	}
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		return fmt.Errorf("parse effective DATABASE_URL: %w", err)
+	}
+	if config.ConnConfig == nil || strings.TrimSpace(config.ConnConfig.Host) == "" {
 		return fmt.Errorf("contiguous database tests require a PostgreSQL host")
 	}
-	databaseName := strings.Trim(strings.TrimSpace(parsed.EscapedPath()), "/")
-	if databaseName == "" || strings.Contains(databaseName, "/") || !strings.HasSuffix(strings.ToLower(databaseName), "_test") {
+	databaseName := strings.TrimSpace(config.ConnConfig.Database)
+	if databaseName == "" || !strings.HasSuffix(strings.ToLower(databaseName), "_test") {
 		return fmt.Errorf("contiguous database tests require an isolated *_test database")
 	}
 	return nil

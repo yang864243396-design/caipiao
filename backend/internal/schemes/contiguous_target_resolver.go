@@ -185,6 +185,11 @@ func (p *StrategyProcessor) ResolveAwaitingTarget(ctx context.Context, decisionI
 	if err != nil {
 		return err
 	}
+	if p.beforeCompleteAwaitingTargetFn != nil {
+		if err := p.beforeCompleteAwaitingTargetFn(ctx, row.DecisionID); err != nil {
+			return err
+		}
+	}
 	completed, err := qtx.CompleteAwaitingContiguousTarget(ctx, sqlcdb.CompleteAwaitingContiguousTargetParams{
 		DecisionID: row.DecisionID, TargetPeriodNo: command.TargetPeriod, Diagnostics: diagnostics,
 	})

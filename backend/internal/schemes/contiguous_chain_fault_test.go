@@ -33,12 +33,12 @@ func TestContiguousChainFaultRestartExpiredWaitingIsTerminal(t *testing.T) {
 	f.assertMissedWithoutOutbox()
 }
 
-func TestContiguousChainFaultResolverAndExpiryRaceHasOneDatabaseWinner(t *testing.T) {
+func TestContiguousChainFaultResolverCompletionWinsAgainstReleasedExpiry(t *testing.T) {
 	f := newProductionContiguousChainE2EFixture(t)
 	f.deliverStrategyReady(1)
 	f.publishExactBoundary()
 	f.raceResolverCompletionAndExpiry()
-	f.assertOneTerminalWinnerAndAtMostOneOutbox()
+	f.assertCompletedOnce(f.decisionID())
 }
 
 func TestContiguousChainFaultConnectedWSCanIdentifyOneStaleLottery(t *testing.T) {

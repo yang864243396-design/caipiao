@@ -36,6 +36,9 @@ type StrategyProcessor struct {
 	bettingLotteries     map[string]struct{}
 	ruleRegistry         *playrules.RegistryStore
 	missAwaitingTargetFn func(context.Context, *sqlcdb.Queries, sqlcdb.MissAwaitingContiguousTargetParams) (bool, error)
+	// beforeCompleteAwaitingTargetFn is an unexported test synchronization seam.
+	// Production leaves it nil, preserving the direct terminal transition.
+	beforeCompleteAwaitingTargetFn func(context.Context, int64) error
 
 	lifecycleMu     sync.Mutex
 	closing         bool

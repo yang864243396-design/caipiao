@@ -365,43 +365,130 @@ func (f *productionContiguousChainE2EFixture) expireWaitingDecision() {
 	}
 }
 
-// raceResolverCompletionAndExpiry starts the real resolver while completion is
-// still legal, then starts the production expiry transition at the database
-// deadline. Either conditional terminal update may win; a pre-expired fixture
-// is deliberately not used because it would only race two expiry paths.
+// raceResolverCompletionAndExpiry proves the real resolver has reached its
+// terminal completion transition while the database deadline is still open.
+// A real MissAwaitingContiguousTarget query is then observed waiting on the
+// resolver's row lock before completion is released. Completion must win; an
+// expiry-only execution can no longer satisfy the test.
 func (f *productionContiguousChainE2EFixture) raceResolverCompletionAndExpiry() {
 	f.t.Helper()
 	id := f.decisionID()
-	deadline := f.databaseNow().Add(300 * time.Millisecond)
+	deadline := f.databaseNow().Add(10 * time.Second)
 	if _, err := f.pool.Exec(f.ctx, `UPDATE scheme_period_decisions SET target_deadline_at=$2 WHERE id=$1`, id, deadline); err != nil {
 		f.t.Fatal(err)
 	}
-	start := make(chan struct{})
-	errs := make(chan error, 2)
-	go func() {
-		<-start
-		// Keep CompleteAwaitingContiguousTarget viable but close enough to the
-		// deadline that the independently scheduled expiry transition competes
-		// for the same locked decision/instance rows.
-		wait := time.Until(deadline.Add(-20 * time.Millisecond))
-		if wait > 0 {
-			time.Sleep(wait)
+	completionReached := make(chan struct{})
+	releaseCompletion := make(chan struct{})
+	f.processor.beforeCompleteAwaitingTargetFn = func(ctx context.Context, decisionID int64) error {
+		if decisionID != id {
+			return fmt.Errorf("completion seam decision=%d want %d", decisionID, id)
 		}
-		errs <- f.processor.ResolveAwaitingTarget(f.ctx, id)
-	}()
-	go func() {
-		<-start
-		wait := time.Until(deadline)
-		if wait > 0 {
-			time.Sleep(wait)
+		close(completionReached)
+		select {
+		case <-releaseCompletion:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
 		}
-		_, err := f.q.MissAwaitingContiguousTarget(f.ctx, sqlcdb.MissAwaitingContiguousTargetParams{DecisionID: id, FailureReason: "target_deadline_elapsed", Diagnostics: []byte(`{"source":"task9-race"}`)})
-		errs <- err
+	}
+	defer func() { f.processor.beforeCompleteAwaitingTargetFn = nil }()
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseCompletion) }) }
+	defer release()
+
+	resolverErr := make(chan error, 1)
+	go func() { resolverErr <- f.processor.ResolveAwaitingTarget(f.ctx, id) }()
+	select {
+	case <-completionReached:
+	case <-time.After(3 * time.Second):
+		f.t.Fatal("resolver never reached the live completion transition")
+	}
+	if now := f.databaseNow(); !now.Before(deadline) {
+		f.t.Fatalf("completion transition reached after deadline: now=%s deadline=%s", now, deadline)
+	}
+
+	type expiryResult struct {
+		won bool
+		err error
+	}
+	expiryPID := make(chan int, 1)
+	expiryDone := make(chan expiryResult, 1)
+	go func() {
+		tx, err := f.pool.Begin(f.ctx)
+		if err != nil {
+			expiryDone <- expiryResult{err: err}
+			return
+		}
+		defer tx.Rollback(f.ctx)
+		var backendPID int
+		if err := tx.QueryRow(f.ctx, `SELECT pg_backend_pid()`).Scan(&backendPID); err != nil {
+			expiryDone <- expiryResult{err: err}
+			return
+		}
+		expiryPID <- backendPID
+		won, err := sqlcdb.New(tx).MissAwaitingContiguousTarget(f.ctx, sqlcdb.MissAwaitingContiguousTargetParams{DecisionID: id, FailureReason: "target_deadline_elapsed", Diagnostics: []byte(`{"source":"task9-race"}`)})
+		if err == nil {
+			err = tx.Commit(f.ctx)
+		}
+		expiryDone <- expiryResult{won: won, err: err}
 	}()
-	close(start)
-	for range 2 {
-		if err := <-errs; err != nil {
+	var pid int
+	select {
+	case pid = <-expiryPID:
+	case result := <-expiryDone:
+		f.t.Fatalf("expiry contender failed before issuing SQL: %v", result.err)
+	case <-time.After(3 * time.Second):
+		f.t.Fatal("expiry contender did not open a database transaction")
+	}
+	f.waitForDatabaseLockWait(pid)
+	if now := f.databaseNow(); !now.Before(deadline) {
+		f.t.Fatalf("completion ceased to be viable before release: now=%s deadline=%s", now, deadline)
+	}
+	release()
+	select {
+	case err := <-resolverErr:
+		if err != nil {
 			f.t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		f.t.Fatal("resolver did not finish after releasing completion")
+	}
+	var result expiryResult
+	select {
+	case result = <-expiryDone:
+	case <-time.After(3 * time.Second):
+		f.t.Fatal("expiry contender did not finish after resolver completion")
+	}
+	if result.err != nil {
+		f.t.Fatal(result.err)
+	}
+	if result.won {
+		f.t.Fatal("expiry transition won after resolver reached viable completion")
+	}
+}
+
+func (f *productionContiguousChainE2EFixture) waitForDatabaseLockWait(backendPID int) {
+	f.t.Helper()
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	timeout := time.NewTimer(3 * time.Second)
+	defer timeout.Stop()
+	for {
+		var state, waitType string
+		err := f.pool.QueryRow(f.ctx, `
+SELECT state, COALESCE(wait_event_type, '')
+FROM pg_stat_activity
+WHERE pid=$1`, backendPID).Scan(&state, &waitType)
+		if err != nil {
+			f.t.Fatal(err)
+		}
+		if state == "active" && waitType == "Lock" {
+			return
+		}
+		select {
+		case <-ticker.C:
+		case <-timeout.C:
+			f.t.Fatalf("expiry backend %d never reached a database lock wait; state=%q waitType=%q", backendPID, state, waitType)
 		}
 	}
 }
@@ -542,21 +629,6 @@ WHERE d.scheme_id=$1 AND d.source_period_no=$2`, f.schemeID, f.source).Scan(&sta
 	}
 	if status != "missed_contiguous_period" || chainState != "blocked_requires_rearm" || outboxes != 0 {
 		f.t.Fatalf("missed status/chain/outboxes=%q/%q/%d", status, chainState, outboxes)
-	}
-}
-
-func (f *productionContiguousChainE2EFixture) assertOneTerminalWinnerAndAtMostOneOutbox() {
-	f.t.Helper()
-	var status string
-	var decisions, outboxes int
-	if err := f.pool.QueryRow(f.ctx, `
-SELECT COUNT(*)::int, MAX(status),
-       (SELECT COUNT(*)::int FROM scheme_bet_outbox o WHERE o.scheme_id=$1 AND o.source_period_no=$2)
-FROM scheme_period_decisions WHERE scheme_id=$1 AND source_period_no=$2`, f.schemeID, f.source).Scan(&decisions, &status, &outboxes); err != nil {
-		f.t.Fatal(err)
-	}
-	if decisions != 1 || (status != "completed" && status != "missed_contiguous_period") || outboxes > 1 || (status == "completed" && outboxes != 1) || (status == "missed_contiguous_period" && outboxes != 0) {
-		f.t.Fatalf("terminal decisions/status/outboxes=%d/%q/%d", decisions, status, outboxes)
 	}
 }
 
