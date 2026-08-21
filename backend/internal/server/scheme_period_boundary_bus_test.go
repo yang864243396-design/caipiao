@@ -71,7 +71,7 @@ func TestLeasedContiguousTargetWorkerCarriesStrategyFenceForRecovery(t *testing.
 	}
 }
 
-func TestContiguousRecoveryWaitsForEveryRuntimeReadinessSignalAndStartsOnce(t *testing.T) {
+func TestContiguousRecoveryWaitsForSharedAndLocalReadinessAndStartsOnce(t *testing.T) {
 	readiness := newContiguousRecoveryReadiness([]int32{3, 7})
 	localSubscription := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -92,13 +92,7 @@ func TestContiguousRecoveryWaitsForEveryRuntimeReadinessSignalAndStartsOnce(t *t
 	assertRecoveryNotStarted(t, started)
 	readiness.SignalExpander()
 	assertRecoveryNotStarted(t, started)
-	readiness.SignalLease(3)
-	readiness.SignalConsumer(3)
 	close(localSubscription)
-	assertRecoveryNotStarted(t, started)
-	readiness.SignalLease(7)
-	assertRecoveryNotStarted(t, started)
-	readiness.SignalConsumer(7)
 	select {
 	case <-started:
 	case <-time.After(time.Second):
@@ -115,6 +109,132 @@ func TestContiguousRecoveryWaitsForEveryRuntimeReadinessSignalAndStartsOnce(t *t
 		}
 	case <-time.After(time.Second):
 		t.Fatal("recovery readiness goroutine leaked after cancellation")
+	}
+}
+
+func TestContiguousShardOwnershipIsIndependentAndTransfersWithoutDuplicateRecovery(t *testing.T) {
+	readiness := newContiguousRecoveryReadiness([]int32{0, 1})
+	readiness.SignalDrawWS()
+	readiness.SignalExpander()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	retry := [2]chan time.Time{make(chan time.Time, 2), make(chan time.Time, 2)}
+	periodic := [2]chan struct{}{make(chan struct{}, 2), make(chan struct{}, 2)}
+	startup := make(chan int32, 4)
+	periodicRan := make(chan int32, 4)
+	attempted := make(chan int32, 4)
+	var shardOneOwned atomic.Bool
+	done := make(chan error, 2)
+
+	for shard := int32(0); shard < 2; shard++ {
+		shard := shard
+		go func() {
+			done <- runContiguousTargetShardOwnershipLoop(
+				ctx, retry[shard],
+				func(context.Context) (int64, bool, error) {
+					attempted <- shard
+					return int64(shard + 1), shard == 0 || shardOneOwned.Load(), nil
+				},
+				func(leaseCtx context.Context, _ int64) error {
+					return runContiguousTargetShardRuntime(
+						leaseCtx, readiness, shard,
+						func(context.Context) error { return nil },
+						func(consumeCtx context.Context, ready func()) error {
+							ready()
+							<-consumeCtx.Done()
+							return nil
+						},
+						func(recoveryCtx context.Context) error {
+							startup <- shard
+							for {
+								select {
+								case <-recoveryCtx.Done():
+									return nil
+								case <-periodic[shard]:
+									periodicRan <- shard
+								}
+							}
+						},
+					)
+				},
+			)
+		}()
+	}
+
+	waitForShardSet(t, attempted, map[int32]struct{}{0: {}, 1: {}}, "initial acquire attempts")
+	waitForShardSignal(t, startup, 0, "shard 0 startup recovery")
+	periodic[0] <- struct{}{}
+	waitForShardSignal(t, periodicRan, 0, "shard 0 periodic recovery")
+	assertNoShardSignal(t, startup, 1, "denied shard 1 startup recovery")
+
+	shardOneOwned.Store(true)
+	retry[1] <- time.Now()
+	waitForShardSignal(t, attempted, 1, "shard 1 ownership retry")
+	waitForShardSignal(t, startup, 1, "shard 1 transferred startup recovery")
+	retry[0] <- time.Now()
+	retry[1] <- time.Now()
+	assertNoAnyShardSignal(t, startup, "duplicate per-shard startup recovery")
+
+	cancel()
+	for range 2 {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("per-shard ownership goroutine leaked after cancellation")
+		}
+	}
+}
+
+func waitForShardSignal(t *testing.T, signals <-chan int32, want int32, label string) {
+	t.Helper()
+	select {
+	case got := <-signals:
+		if got != want {
+			t.Fatalf("%s shard=%d, want %d", label, got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for %s", label)
+	}
+}
+
+func waitForShardSet(t *testing.T, signals <-chan int32, want map[int32]struct{}, label string) {
+	t.Helper()
+	seen := make(map[int32]struct{}, len(want))
+	deadline := time.After(time.Second)
+	for len(seen) < len(want) {
+		select {
+		case got := <-signals:
+			if _, expected := want[got]; !expected {
+				t.Fatalf("%s unexpected shard=%d", label, got)
+			}
+			seen[got] = struct{}{}
+		case <-deadline:
+			t.Fatalf("timed out waiting for %s: got %v", label, seen)
+		}
+	}
+}
+
+func assertNoShardSignal(t *testing.T, signals <-chan int32, unwanted int32, label string) {
+	t.Helper()
+	select {
+	case got := <-signals:
+		if got == unwanted {
+			t.Fatalf("unexpected %s", label)
+		}
+	default:
+	}
+}
+
+func assertNoAnyShardSignal(t *testing.T, signals <-chan int32, label string) {
+	t.Helper()
+	select {
+	case got := <-signals:
+		t.Fatalf("%s on shard %d", label, got)
+	default:
 	}
 }
 

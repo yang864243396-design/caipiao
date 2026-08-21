@@ -16,33 +16,17 @@ import (
 const contiguousTargetBoundaryExpansionPageSize int32 = 32
 
 type contiguousRecoveryReadiness struct {
-	drawWSReady    chan struct{}
-	expanderReady  chan struct{}
-	consumersReady chan struct{}
-	leasesReady    chan struct{}
+	drawWSReady   chan struct{}
+	expanderReady chan struct{}
 
 	drawOnce     sync.Once
 	expanderOnce sync.Once
-	mu           sync.Mutex
-	expected     map[int32]struct{}
-	consumers    map[int32]struct{}
-	leases       map[int32]struct{}
 }
 
-func newContiguousRecoveryReadiness(shards []int32) *contiguousRecoveryReadiness {
-	readiness := &contiguousRecoveryReadiness{
+func newContiguousRecoveryReadiness(_ []int32) *contiguousRecoveryReadiness {
+	return &contiguousRecoveryReadiness{
 		drawWSReady: make(chan struct{}), expanderReady: make(chan struct{}),
-		consumersReady: make(chan struct{}), leasesReady: make(chan struct{}),
-		expected: make(map[int32]struct{}, len(shards)), consumers: make(map[int32]struct{}, len(shards)), leases: make(map[int32]struct{}, len(shards)),
 	}
-	for _, shard := range shards {
-		readiness.expected[shard] = struct{}{}
-	}
-	if len(readiness.expected) == 0 {
-		close(readiness.consumersReady)
-		close(readiness.leasesReady)
-	}
-	return readiness
 }
 
 func (readiness *contiguousRecoveryReadiness) SignalDrawWS() {
@@ -57,39 +41,6 @@ func (readiness *contiguousRecoveryReadiness) SignalExpander() {
 	}
 }
 
-func (readiness *contiguousRecoveryReadiness) SignalConsumer(shard int32) {
-	if readiness == nil {
-		return
-	}
-	readiness.signalShard(shard, readiness.consumers, readiness.consumersReady)
-}
-
-func (readiness *contiguousRecoveryReadiness) SignalLease(shard int32) {
-	if readiness == nil {
-		return
-	}
-	readiness.signalShard(shard, readiness.leases, readiness.leasesReady)
-}
-
-func (readiness *contiguousRecoveryReadiness) signalShard(shard int32, seen map[int32]struct{}, ready chan struct{}) {
-	if readiness == nil {
-		return
-	}
-	readiness.mu.Lock()
-	defer readiness.mu.Unlock()
-	if _, configured := readiness.expected[shard]; !configured {
-		return
-	}
-	seen[shard] = struct{}{}
-	if len(seen) == len(readiness.expected) {
-		select {
-		case <-ready:
-		default:
-			close(ready)
-		}
-	}
-}
-
 func runContiguousTargetRecoveryWhenReady(
 	ctx context.Context,
 	readiness *contiguousRecoveryReadiness,
@@ -100,7 +51,7 @@ func runContiguousTargetRecoveryWhenReady(
 		return errors.New("contiguous target recovery readiness configuration is incomplete")
 	}
 	for _, ready := range []<-chan struct{}{
-		readiness.drawWSReady, readiness.expanderReady, readiness.leasesReady, readiness.consumersReady, localSubscriptionReady,
+		readiness.drawWSReady, readiness.expanderReady, localSubscriptionReady,
 	} {
 		select {
 		case <-ctx.Done():
@@ -125,7 +76,7 @@ func runContiguousTargetShardRuntime(
 	if err := assertLease(ctx); err != nil {
 		return err
 	}
-	readiness.SignalLease(shard)
+	_ = shard
 
 	runtimeCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -133,7 +84,6 @@ func runContiguousTargetShardRuntime(
 	var subscriptionOnce sync.Once
 	signalSubscription := func() {
 		subscriptionOnce.Do(func() {
-			readiness.SignalConsumer(shard)
 			close(subscriptionReady)
 		})
 	}
@@ -270,8 +220,31 @@ func runLeasedSchemeContiguousTargetConsumer(
 	q := sqlcdb.New(pool)
 	retry := time.NewTicker(leaseDuration / 3)
 	defer retry.Stop()
+	return runContiguousTargetShardOwnershipLoop(
+		ctx, retry.C,
+		func(acquireCtx context.Context) (int64, bool, error) {
+			return q.AcquireSchemeBettingShardLease(acquireCtx, "strategy", int32(shard), owner, leaseDuration)
+		},
+		func(leaseCtx context.Context, epoch int64) error {
+			return holdSchemeContiguousTargetShardLease(
+				leaseCtx, bus, q, shard, owner, epoch, leaseDuration, worker,
+				lotteryCodes, batch, concurrency, recoveryInterval, readiness,
+			)
+		},
+	)
+}
+
+func runContiguousTargetShardOwnershipLoop(
+	ctx context.Context,
+	retry <-chan time.Time,
+	acquire func(context.Context) (int64, bool, error),
+	hold func(context.Context, int64) error,
+) error {
+	if retry == nil || acquire == nil || hold == nil {
+		return errors.New("contiguous target shard ownership configuration is incomplete")
+	}
 	for {
-		epoch, acquired, err := q.AcquireSchemeBettingShardLease(ctx, "strategy", int32(shard), owner, leaseDuration)
+		epoch, acquired, err := acquire(ctx)
 		if err != nil {
 			return err
 		}
@@ -279,14 +252,11 @@ func runLeasedSchemeContiguousTargetConsumer(
 			select {
 			case <-ctx.Done():
 				return nil
-			case <-retry.C:
+			case <-retry:
 				continue
 			}
 		}
-		err = holdSchemeContiguousTargetShardLease(
-			ctx, bus, q, shard, owner, epoch, leaseDuration, worker,
-			lotteryCodes, batch, concurrency, recoveryInterval, readiness,
-		)
+		err = hold(ctx, epoch)
 		if errors.Is(err, errContiguousTargetShardLeaseLost) {
 			continue
 		}
