@@ -125,15 +125,40 @@ func New(config Config) (*Bus, error) {
 		return nil, errors.New("scheme event bus JetStream unavailable")
 	}
 	bus := &Bus{nc: nc, js: js, prefix: config.SubjectPrefix, stream: config.StreamName}
-	_, err = js.AddStream(&nats.StreamConfig{
-		Name: config.StreamName, Subjects: []string{bus.prefix + ".scheme.>"},
+	streamConfig := &nats.StreamConfig{
+		Name: config.StreamName, Subjects: []string{bus.prefix + ".scheme.>", bus.prefix + ".period.>", bus.prefix + ".target.>"},
 		Storage: nats.FileStorage, Retention: nats.LimitsPolicy, Replicas: config.Replicas,
 		MaxAge: config.MaxAge, Discard: nats.DiscardOld,
-	})
+	}
+	_, err = js.AddStream(streamConfig)
 	if err != nil && !errors.Is(err, nats.ErrStreamNameAlreadyInUse) {
 		if _, infoErr := js.StreamInfo(config.StreamName); infoErr != nil {
 			nc.Close()
 			return nil, errors.New("scheme event stream unavailable")
+		}
+	}
+	if errors.Is(err, nats.ErrStreamNameAlreadyInUse) {
+		info, infoErr := js.StreamInfo(config.StreamName)
+		if infoErr != nil {
+			nc.Close()
+			return nil, errors.New("scheme event stream unavailable")
+		}
+		existing := make(map[string]struct{}, len(info.Config.Subjects))
+		for _, subject := range info.Config.Subjects {
+			existing[subject] = struct{}{}
+		}
+		changed := false
+		for _, subject := range streamConfig.Subjects {
+			if _, ok := existing[subject]; !ok {
+				info.Config.Subjects = append(info.Config.Subjects, subject)
+				changed = true
+			}
+		}
+		if changed {
+			if _, updateErr := js.UpdateStream(&info.Config); updateErr != nil {
+				nc.Close()
+				return nil, errors.New("scheme event stream subjects unavailable")
+			}
 		}
 	}
 	return bus, nil

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math/rand"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -14,6 +15,7 @@ import (
 	"caipiao/backend/internal/db/sqlcdb"
 	"caipiao/backend/internal/guaji"
 	"caipiao/backend/internal/lottery"
+	"caipiao/backend/internal/schemeeventbus"
 	"caipiao/backend/internal/ws"
 )
 
@@ -39,6 +41,20 @@ type Worker struct {
 	strategyNotifier    interface {
 		NotifyStrategyDraw(context.Context, string, string)
 	}
+	store              drawStore
+	boundaryPublisher  boundaryPublisher
+	boundaryMu         sync.Mutex
+	boundaryGeneration map[string]uint64
+}
+
+type drawStore interface {
+	ResolveLotteries(context.Context, string) ([]lotteryTarget, error)
+	DrawIntervalSec(context.Context, string) int
+	PersistDraw(context.Context, string, string, []string, time.Time, lottery.DrawFactMeta) (bool, error)
+}
+
+type boundaryPublisher interface {
+	PublishPeriodBoundary(context.Context, schemeeventbus.PeriodBoundary) error
 }
 
 func (w *Worker) SetStrategyNotifier(notifier interface {
@@ -46,6 +62,12 @@ func (w *Worker) SetStrategyNotifier(notifier interface {
 }) {
 	if w != nil {
 		w.strategyNotifier = notifier
+	}
+}
+
+func (w *Worker) SetPeriodBoundaryPublisher(publisher boundaryPublisher) {
+	if w != nil {
+		w.boundaryPublisher = publisher
 	}
 }
 
@@ -210,13 +232,14 @@ type lotteryTarget struct {
 // 一个 lottery_logXXX 键可能对应多个本平台彩种（不同 play_template，如同线下的
 // 极速SSC/11选5/六合彩共享同区块）；逐个按各自 template 选号入库。
 func (w *Worker) Ingest(ctx context.Context, ev guaji.DrawEvent) error {
-	if w == nil || w.q == nil {
+	if w == nil || (w.q == nil && w.store == nil) {
 		return errors.New("drawsync worker unavailable")
 	}
 	if ev.GameKey == "" || ev.Periods == "" {
 		return nil
 	}
-	targets, err := w.resolveLotteries(ctx, ev.GameKey)
+	store := w.drawStore()
+	targets, err := store.ResolveLotteries(ctx, ev.GameKey)
 	if err != nil {
 		return err
 	}
@@ -229,15 +252,18 @@ func (w *Worker) Ingest(ctx context.Context, ev guaji.DrawEvent) error {
 		if drawnAt.IsZero() {
 			drawnAt = time.Now()
 		}
-		if intervalSec := w.drawIntervalSec(ctx, tgt.code); intervalSec > 0 {
+		if intervalSec := store.DrawIntervalSec(ctx, tgt.code); intervalSec > 0 {
 			accepted := lottery.UpdatePeriodState(tgt.code, ev.Periods, ev.NextPeriods, drawnAt, intervalSec)
 			w.observeAcceptedBoundary(accepted, tgt.code, ev.Periods, ev.NextPeriods, receivedMono, intervalSec)
+			if accepted {
+				w.publishPeriodBoundary(ctx, tgt.code, ev.Periods, ev.NextPeriods, receivedMono)
+			}
 		}
 		balls := ev.Balls.BallsFor(tgt.template)
 		if len(balls) == 0 {
 			continue
 		}
-		_, inserted, err := lottery.PersistDrawFactFromBalls(ctx, w.q, w.hub, tgt.code, ev.Periods, balls, drawnAt, lottery.DrawFactMeta{
+		inserted, err := store.PersistDraw(ctx, tgt.code, ev.Periods, balls, drawnAt, lottery.DrawFactMeta{
 			Source:          "draw_ws",
 			ProviderEventID: strings.TrimSpace(ev.GameKey) + ":" + strings.TrimSpace(ev.Periods),
 			ReceivedAt:      time.Now().UTC(),
@@ -254,6 +280,53 @@ func (w *Worker) Ingest(ctx context.Context, ev guaji.DrawEvent) error {
 		}
 	}
 	return nil
+}
+
+func (w *Worker) drawStore() drawStore {
+	if w.store != nil {
+		return w.store
+	}
+	return workerDrawStore{worker: w}
+}
+
+type workerDrawStore struct{ worker *Worker }
+
+func (store workerDrawStore) ResolveLotteries(ctx context.Context, gameKey string) ([]lotteryTarget, error) {
+	return store.worker.resolveLotteries(ctx, gameKey)
+}
+
+func (store workerDrawStore) DrawIntervalSec(ctx context.Context, lotteryCode string) int {
+	return store.worker.drawIntervalSec(ctx, lotteryCode)
+}
+
+func (store workerDrawStore) PersistDraw(ctx context.Context, lotteryCode, issueNo string, balls []string, drawnAt time.Time, meta lottery.DrawFactMeta) (bool, error) {
+	_, inserted, err := lottery.PersistDrawFactFromBalls(ctx, store.worker.q, store.worker.hub, lotteryCode, issueNo, balls, drawnAt, meta)
+	return inserted, err
+}
+
+func (w *Worker) publishPeriodBoundary(ctx context.Context, lotteryCode, currentIssue, nextIssue string, receivedAt time.Time) {
+	generation := w.nextBoundaryGeneration(lotteryCode)
+	if w.boundaryPublisher == nil {
+		return
+	}
+	event := schemeeventbus.PeriodBoundary{
+		LotteryCode: lotteryCode, CurrentIssue: currentIssue, NextIssue: nextIssue,
+		ReceivedAt: receivedAt.UTC(), Generation: generation,
+	}
+	if err := w.boundaryPublisher.PublishPeriodBoundary(ctx, event); err != nil {
+		slog.Error("publish period boundary failed; draw persistence continues", "lottery", lotteryCode, "currentIssue", currentIssue, "nextIssue", nextIssue, "generation", generation, "err", err)
+	}
+}
+
+func (w *Worker) nextBoundaryGeneration(lotteryCode string) uint64 {
+	w.boundaryMu.Lock()
+	defer w.boundaryMu.Unlock()
+	if w.boundaryGeneration == nil {
+		w.boundaryGeneration = make(map[string]uint64)
+	}
+	lotteryCode = strings.TrimSpace(lotteryCode)
+	w.boundaryGeneration[lotteryCode]++
+	return w.boundaryGeneration[lotteryCode]
 }
 
 // observeAcceptedBoundary refreshes boundary health only after the formal

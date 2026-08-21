@@ -379,6 +379,9 @@ func New(cfg config.Config) (*Server, error) {
 	if pool != nil && guajiClient.Enabled() {
 		if dw := drawsync.NewWorker(pool, guajiClient, wsHub); dw != nil {
 			dw.SetStrategyNotifier(strategyNotifier)
+			if schemeEventBus != nil {
+				dw.SetPeriodBoundaryPublisher(schemeEventBus)
+			}
 			launchWorker(func() { dw.Run(workerCtx) })
 		}
 	}
