@@ -84,6 +84,34 @@ type InsertSchemePeriodDecisionParams struct {
 	TargetDeadlineAt   pgtype.Timestamptz
 }
 
+// FormalPhaseOneDecisionState is the locked database evidence required before
+// treating a duplicate formal source decision as an idempotent success.
+type FormalPhaseOneDecisionState struct {
+	DecisionID                 int64
+	SchemeID                   string
+	LotteryCode                string
+	SourcePeriodNo             string
+	SourceBetRecordID          pgtype.Int8
+	DrawHash                   pgtype.Text
+	StateVersionBefore         int64
+	StateVersionAfter          int64
+	RuleVersion                pgtype.Int4
+	RuleSnapshotHash           pgtype.Text
+	LocalHit                   pgtype.Bool
+	WinningUnits               pgtype.Int4
+	Status                     string
+	TargetDeadlineAt           pgtype.Timestamptz
+	CurrentStateVersion        int64
+	EvaluationStatus           pgtype.Text
+	EvaluationCloudBetRecordID pgtype.Int8
+	EvaluationRuleVersion      pgtype.Int4
+	EvaluationRuleSnapshotHash pgtype.Text
+	EvaluationLocalHit         pgtype.Bool
+	EvaluationWinningUnits     pgtype.Int4
+	EvaluationCompletedAt      pgtype.Timestamptz
+	CloudStrategyEvaluatedAt   pgtype.Timestamptz
+}
+
 func (q *Queries) InsertSchemePeriodDecision(ctx context.Context, arg InsertSchemePeriodDecisionParams) (int64, bool, error) {
 	var id int64
 	err := q.db.QueryRow(ctx, `
@@ -104,6 +132,68 @@ RETURNING id`, arg.SchemeID, arg.LotteryCode, arg.SourcePeriodNo, arg.SourceBetR
 	}
 	err = q.db.QueryRow(ctx, `SELECT id FROM scheme_period_decisions WHERE scheme_id = $1 AND source_period_no = $2`, arg.SchemeID, arg.SourcePeriodNo).Scan(&id)
 	return id, false, err
+}
+
+// GetFormalPhaseOneDecisionStateForUpdate locks the decision and all matching
+// phase-one evidence. InsertSchemePeriodDecision's unique conflict waits for an
+// uncommitted winner, so this subsequent READ COMMITTED statement observes the
+// winner's complete transaction rather than accepting a transient partial row.
+func (q *Queries) GetFormalPhaseOneDecisionStateForUpdate(
+	ctx context.Context, schemeID, sourcePeriodNo string,
+) (FormalPhaseOneDecisionState, bool, error) {
+	var row FormalPhaseOneDecisionState
+	err := q.db.QueryRow(ctx, `
+WITH locked_decision AS MATERIALIZED (
+    SELECT d.id, d.scheme_id, d.lottery_code, d.source_period_no,
+           d.source_bet_record_id, d.draw_hash,
+           d.state_version_before, d.state_version_after,
+           d.rule_version, d.rule_snapshot_hash, d.local_hit, d.winning_units,
+           d.status, d.target_deadline_at, i.state_version AS current_state_version
+    FROM scheme_period_decisions d
+    JOIN scheme_instances i ON i.id = d.scheme_id
+    WHERE d.scheme_id = $1 AND d.source_period_no = $2
+    FOR UPDATE OF d, i
+), locked_evaluation AS MATERIALIZED (
+    SELECT e.status, e.cloud_bet_record_id, e.rule_version, e.rule_snapshot_hash,
+           e.local_hit, e.winning_units, e.completed_at
+    FROM scheme_strategy_evaluations e
+    JOIN locked_decision d
+      ON d.scheme_id = e.instance_id AND d.source_period_no = e.period_no
+    FOR UPDATE OF e
+), locked_cloud AS MATERIALIZED (
+    SELECT c.strategy_evaluated_at
+    FROM cloud_bet_records c
+    JOIN locked_decision d ON d.source_bet_record_id = c.id
+    FOR UPDATE OF c
+)
+SELECT d.id, d.scheme_id, d.lottery_code, d.source_period_no,
+       d.source_bet_record_id, d.draw_hash,
+       d.state_version_before, d.state_version_after,
+       d.rule_version, d.rule_snapshot_hash, d.local_hit, d.winning_units,
+       d.status, d.target_deadline_at, d.current_state_version,
+       e.status, e.cloud_bet_record_id, e.rule_version, e.rule_snapshot_hash,
+       e.local_hit, e.winning_units, e.completed_at,
+       c.strategy_evaluated_at
+FROM locked_decision d
+LEFT JOIN locked_evaluation e ON TRUE
+LEFT JOIN locked_cloud c ON TRUE`, schemeID, sourcePeriodNo).Scan(
+		&row.DecisionID, &row.SchemeID, &row.LotteryCode, &row.SourcePeriodNo,
+		&row.SourceBetRecordID, &row.DrawHash,
+		&row.StateVersionBefore, &row.StateVersionAfter,
+		&row.RuleVersion, &row.RuleSnapshotHash, &row.LocalHit, &row.WinningUnits,
+		&row.Status, &row.TargetDeadlineAt, &row.CurrentStateVersion,
+		&row.EvaluationStatus, &row.EvaluationCloudBetRecordID,
+		&row.EvaluationRuleVersion, &row.EvaluationRuleSnapshotHash,
+		&row.EvaluationLocalHit, &row.EvaluationWinningUnits,
+		&row.EvaluationCompletedAt, &row.CloudStrategyEvaluatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return FormalPhaseOneDecisionState{}, false, nil
+		}
+		return FormalPhaseOneDecisionState{}, false, err
+	}
+	return row, true, nil
 }
 
 type InsertShadowSchemeBetOutboxParams struct {

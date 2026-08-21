@@ -39,6 +39,124 @@ func TestContiguousTargetDeadlineRejectsNonPositiveIntervalAsConfigurationError(
 	}
 }
 
+func TestFormalEvaluationReservesDecisionBeforeStrategyAdvance(t *testing.T) {
+	store := &fakeFormalPhaseOneDecisionStore{created: true, decisionID: 41}
+	params := formalPhaseOneTestDecisionParams()
+
+	decisionID, created, err := reserveFormalPhaseOneDecision(
+		context.Background(), store, params,
+		func() error {
+			store.calls = append(store.calls, "advance")
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("reserveFormalPhaseOneDecision() error = %v", err)
+	}
+	if decisionID != 41 || !created {
+		t.Fatalf("decision id=%d created=%v, want id=41 created", decisionID, created)
+	}
+	want := []string{"reserve", "advance"}
+	if fmt.Sprint(store.calls) != fmt.Sprint(want) {
+		t.Fatalf("calls = %v, want %v", store.calls, want)
+	}
+}
+
+func TestDuplicateFormalEvaluationDoesNotAdvanceCompletedPhaseOne(t *testing.T) {
+	params := formalPhaseOneTestDecisionParams()
+	store := &fakeFormalPhaseOneDecisionStore{
+		decisionID: 41,
+		existing:   matchingFormalPhaseOneDecisionState(41, params),
+	}
+	advanced := false
+
+	decisionID, created, err := reserveFormalPhaseOneDecision(
+		context.Background(), store, params,
+		func() error {
+			advanced = true
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("reserveFormalPhaseOneDecision() error = %v", err)
+	}
+	if decisionID != 41 || created || advanced {
+		t.Fatalf("decision id=%d created=%v advanced=%v, want existing idempotent success", decisionID, created, advanced)
+	}
+	want := []string{"reserve", "validate"}
+	if fmt.Sprint(store.calls) != fmt.Sprint(want) {
+		t.Fatalf("calls = %v, want %v", store.calls, want)
+	}
+}
+
+func TestFormalEvaluationRejectsIncompleteExistingDecisionBeforeAdvance(t *testing.T) {
+	params := formalPhaseOneTestDecisionParams()
+	existing := matchingFormalPhaseOneDecisionState(41, params)
+	existing.EvaluationStatus = pgtype.Text{String: "processing", Valid: true}
+	existing.EvaluationCompletedAt = pgtype.Timestamptz{}
+	existing.CloudStrategyEvaluatedAt = pgtype.Timestamptz{}
+	store := &fakeFormalPhaseOneDecisionStore{decisionID: 41, existing: existing}
+	advanced := false
+
+	_, _, err := reserveFormalPhaseOneDecision(
+		context.Background(), store, params,
+		func() error {
+			advanced = true
+			return nil
+		},
+	)
+	if !errors.Is(err, ErrFormalPhaseOneInconsistentState) {
+		t.Fatalf("error = %v, want ErrFormalPhaseOneInconsistentState", err)
+	}
+	if advanced {
+		t.Fatal("incomplete existing decision advanced strategy state")
+	}
+}
+
+type fakeFormalPhaseOneDecisionStore struct {
+	created    bool
+	decisionID int64
+	existing   sqlcdb.FormalPhaseOneDecisionState
+	calls      []string
+}
+
+func (f *fakeFormalPhaseOneDecisionStore) InsertSchemePeriodDecision(context.Context, sqlcdb.InsertSchemePeriodDecisionParams) (int64, bool, error) {
+	f.calls = append(f.calls, "reserve")
+	return f.decisionID, f.created, nil
+}
+
+func (f *fakeFormalPhaseOneDecisionStore) GetFormalPhaseOneDecisionStateForUpdate(context.Context, string, string) (sqlcdb.FormalPhaseOneDecisionState, bool, error) {
+	f.calls = append(f.calls, "validate")
+	return f.existing, true, nil
+}
+
+func formalPhaseOneTestDecisionParams() sqlcdb.InsertSchemePeriodDecisionParams {
+	return sqlcdb.InsertSchemePeriodDecisionParams{
+		SchemeID: "scheme-1", LotteryCode: "lottery-1", SourcePeriodNo: "period-1",
+		SourceBetRecordID: 77, DrawHash: "draw-hash", StateVersionBefore: 3, StateVersionAfter: 4,
+		RuleVersion: pgtype.Int4{Int32: 2, Valid: true}, RuleSnapshotHash: pgtype.Text{String: "rule-hash", Valid: true},
+		LocalHit: true, WinningUnits: 1, Status: "awaiting_target",
+		TargetDeadlineAt: pgtype.Timestamptz{Time: time.Date(2026, time.August, 21, 10, 0, 4, 800000000, time.UTC), Valid: true},
+	}
+}
+
+func matchingFormalPhaseOneDecisionState(decisionID int64, params sqlcdb.InsertSchemePeriodDecisionParams) sqlcdb.FormalPhaseOneDecisionState {
+	return sqlcdb.FormalPhaseOneDecisionState{
+		DecisionID: decisionID, SchemeID: params.SchemeID, LotteryCode: params.LotteryCode,
+		SourcePeriodNo: params.SourcePeriodNo, SourceBetRecordID: pgtype.Int8{Int64: params.SourceBetRecordID, Valid: true},
+		DrawHash:           pgtype.Text{String: params.DrawHash, Valid: true},
+		StateVersionBefore: params.StateVersionBefore, StateVersionAfter: params.StateVersionAfter,
+		RuleVersion: params.RuleVersion, RuleSnapshotHash: params.RuleSnapshotHash,
+		LocalHit: pgtype.Bool{Bool: params.LocalHit, Valid: true}, WinningUnits: pgtype.Int4{Int32: int32(params.WinningUnits), Valid: true},
+		Status: params.Status, TargetDeadlineAt: params.TargetDeadlineAt, CurrentStateVersion: params.StateVersionAfter,
+		EvaluationStatus: pgtype.Text{String: "completed", Valid: true}, EvaluationCloudBetRecordID: pgtype.Int8{Int64: params.SourceBetRecordID, Valid: true},
+		EvaluationRuleVersion: params.RuleVersion, EvaluationRuleSnapshotHash: params.RuleSnapshotHash,
+		EvaluationLocalHit: pgtype.Bool{Bool: params.LocalHit, Valid: true}, EvaluationWinningUnits: pgtype.Int4{Int32: int32(params.WinningUnits), Valid: true},
+		EvaluationCompletedAt:    pgtype.Timestamptz{Time: time.Date(2026, time.August, 21, 10, 0, 1, 0, time.UTC), Valid: true},
+		CloudStrategyEvaluatedAt: pgtype.Timestamptz{Time: time.Date(2026, time.August, 21, 10, 0, 1, 0, time.UTC), Valid: true},
+	}
+}
+
 func TestFormalEvaluationPersistsAwaitingTargetWithoutOutbox(t *testing.T) {
 	f := newFormalStrategyFixture(t)
 	deadline := f.drawnAt.Add(6*time.Second - guajiPlaceCloseSafety)
