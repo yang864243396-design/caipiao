@@ -92,6 +92,19 @@ func (w *Worker) startEventSchemeChain(ctx context.Context, schemeID, actor, rea
 	if !ok {
 		return errors.New("no_fresh_provider_target")
 	}
+	if action == "rearm" {
+		if err := q.BreakAwaitingTargetRowsForNewChain(ctx, schemeID); err != nil {
+			return err
+		}
+		stateVersion, err = q.ResetSchemeStrategyForNewChain(ctx, schemeID, stateVersion)
+		if err != nil {
+			return err
+		}
+		inst, err = q.GetSchemeInstanceFull(ctx, schemeID)
+		if err != nil {
+			return err
+		}
+	}
 	chainID, err := newSchemeChainID()
 	if err != nil {
 		return err

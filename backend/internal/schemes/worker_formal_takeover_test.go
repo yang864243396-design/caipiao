@@ -115,7 +115,7 @@ func TestWorkerStartupTakeoverRearmsBlockedEventScheme(t *testing.T) {
 	w.SetSchemeBettingMode("gray", []string{"tron_ffc_6s"})
 
 	result := w.takeOverStartupFormalSchemes(context.Background(), []startupFormalScheme{
-		{instance: sqlcdb.SchemeInstance{ID: "blocked", LotteryCode: "tron_ffc_6s"}, owner: "event", chainState: "blocked_requires_rearm"},
+		{instance: sqlcdb.SchemeInstance{ID: "blocked", LotteryCode: "tron_ffc_6s"}, owner: "event", chainState: "blocked_requires_rearm", chainBlockReason: "", lastOutboxState: "expired", lastOutboxReason: "safe_deadline_elapsed"},
 		{instance: sqlcdb.SchemeInstance{ID: "active", LotteryCode: "tron_ffc_6s"}, owner: "event", chainState: "active"},
 	})
 
@@ -124,6 +124,26 @@ func TestWorkerStartupTakeoverRearmsBlockedEventScheme(t *testing.T) {
 	}
 	if enabler.rearmCalls != 1 || enabler.calls != 0 || enabler.scheme != "blocked" {
 		t.Fatalf("unexpected startup rearm call: %+v", enabler)
+	}
+}
+
+func TestStartupTakeoverDoesNotRearmMissedContiguousPeriod(t *testing.T) {
+	enabler := &fakeFormalEventEnabler{}
+	w := &Worker{strategyProcessor: &StrategyProcessor{}, formalEventEnabler: enabler}
+	w.SetSchemeBettingMode("gray", []string{"tron_ffc_6s"})
+
+	result := w.takeOverStartupFormalSchemes(context.Background(), []startupFormalScheme{{
+		instance:         sqlcdb.SchemeInstance{ID: "blocked", LotteryCode: "tron_ffc_6s"},
+		owner:            "event",
+		chainState:       "blocked_requires_rearm",
+		chainBlockReason: "missed_contiguous_period",
+	}})
+
+	if result.Eligible != 0 || result.Attempted != 0 || result.Transferred != 0 || result.Deferred != 0 {
+		t.Fatalf("missed contiguous scheme was eligible for startup rearm: %+v", result)
+	}
+	if enabler.rearmCalls != 0 {
+		t.Fatalf("missed contiguous scheme was automatically rearmed: %+v", enabler)
 	}
 }
 

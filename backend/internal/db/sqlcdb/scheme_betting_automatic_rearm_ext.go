@@ -3,17 +3,19 @@ package sqlcdb
 import "context"
 
 type AutomaticRearmCandidate struct {
-	OutboxID    int64
-	RequestID   string
-	SchemeID    string
-	LotteryCode string
-	ShardNo     int32
-	State       string
-	Reason      string
+	OutboxID         int64
+	RequestID        string
+	SchemeID         string
+	LotteryCode      string
+	ShardNo          int32
+	State            string
+	Reason           string
+	ChainBlockReason string
 }
 
 const automaticRearmCandidateSelect = `
-SELECT o.id, o.request_id, i.id, i.lottery_code, o.shard_no, o.state, COALESCE(o.outcome_reason, '')
+SELECT o.id, o.request_id, i.id, i.lottery_code, o.shard_no, o.state, COALESCE(o.outcome_reason, ''),
+       COALESCE(i.chain_block_reason, '')
 FROM scheme_instances i
 JOIN LATERAL (
     SELECT id, request_id, lottery_code, shard_no, state, outcome_reason, created_at
@@ -44,7 +46,7 @@ func (q *Queries) GetAutomaticRearmCandidate(ctx context.Context, outboxID int64
 	err := q.db.QueryRow(ctx, automaticRearmCandidateSelect+`
   AND o.id = $1`, outboxID).Scan(
 		&row.OutboxID, &row.RequestID, &row.SchemeID, &row.LotteryCode,
-		&row.ShardNo, &row.State, &row.Reason,
+		&row.ShardNo, &row.State, &row.Reason, &row.ChainBlockReason,
 	)
 	if err != nil {
 		if isNoRowsError(err) {
@@ -75,7 +77,7 @@ LIMIT $3`, lotteryCodes, shards, limit)
 		var row AutomaticRearmCandidate
 		if err := rows.Scan(
 			&row.OutboxID, &row.RequestID, &row.SchemeID, &row.LotteryCode,
-			&row.ShardNo, &row.State, &row.Reason,
+			&row.ShardNo, &row.State, &row.Reason, &row.ChainBlockReason,
 		); err != nil {
 			return nil, err
 		}

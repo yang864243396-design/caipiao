@@ -17,9 +17,12 @@ const (
 )
 
 type startupFormalScheme struct {
-	instance   sqlcdb.SchemeInstance
-	owner      string
-	chainState string
+	instance         sqlcdb.SchemeInstance
+	owner            string
+	chainState       string
+	chainBlockReason string
+	lastOutboxState  string
+	lastOutboxReason string
 }
 
 type startupFormalTakeoverResult struct {
@@ -96,7 +99,11 @@ func (w *Worker) takeOverRunningFormalSchemes(ctx context.Context) startupFormal
 			lookupDeferred++
 			continue
 		}
-		candidates = append(candidates, startupFormalScheme{instance: inst, owner: execution.Owner, chainState: execution.ChainState})
+		candidates = append(candidates, startupFormalScheme{
+			instance: inst, owner: execution.Owner, chainState: execution.ChainState,
+			chainBlockReason: execution.ChainBlockReason,
+			lastOutboxState:  execution.LastOutboxState, lastOutboxReason: execution.LastOutboxReason,
+		})
 	}
 	result := w.takeOverStartupFormalSchemes(ctx, candidates)
 	result.Eligible += lookupDeferred
@@ -117,7 +124,8 @@ func (w *Worker) takeOverStartupFormalSchemes(ctx context.Context, candidates []
 	eligible := make([]startupFormalScheme, 0, len(candidates))
 	for _, candidate := range candidates {
 		legacyCandidate := candidate.owner == "legacy"
-		blockedEventCandidate := candidate.owner == "event" && candidate.chainState == "blocked_requires_rearm"
+		blockedEventCandidate := candidate.owner == "event" && candidate.chainState == "blocked_requires_rearm" &&
+			isAutomaticRearmAllowed(candidate.chainBlockReason, candidate.lastOutboxState, candidate.lastOutboxReason)
 		if requiresGuajiRealBet(candidate.instance) && (legacyCandidate || blockedEventCandidate) && w.formalEventModeForLottery(candidate.instance.LotteryCode) {
 			eligible = append(eligible, candidate)
 		}

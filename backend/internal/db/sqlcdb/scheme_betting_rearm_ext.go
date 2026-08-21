@@ -73,6 +73,44 @@ SELECT EXISTS (
 	return nil
 }
 
+// BreakAwaitingTargetRowsForNewChain makes outstanding old-chain strategy
+// decisions terminal before a replacement chain is created. It never inserts
+// an order, so a manual rearm cannot resurrect an old-period target.
+func (q *Queries) BreakAwaitingTargetRowsForNewChain(ctx context.Context, schemeID string) error {
+	_, err := q.db.Exec(ctx, `
+UPDATE scheme_period_decisions
+SET status = 'chain_broken',
+    failure_reason = 'manual_rearm_replaced_chain'
+WHERE scheme_id = $1
+  AND status = 'awaiting_target'`, schemeID)
+	return err
+}
+
+// ResetSchemeStrategyForNewChain resets all strategy-owned cursors at the
+// chain boundary and advances the version exactly once. The expected version
+// prevents a stale restart from overwriting a newer strategy transition.
+func (q *Queries) ResetSchemeStrategyForNewChain(
+	ctx context.Context, schemeID string, expectedStateVersion int64,
+) (int64, error) {
+	var newStateVersion int64
+	err := q.db.QueryRow(ctx, `
+UPDATE scheme_instances
+SET round_index = 0,
+    pick_index = 0,
+    current_pick = '',
+    last_direction = '',
+    lookback_round_reset_pending = FALSE,
+    state_version = state_version + 1,
+    updated_at = now()
+WHERE id = $1
+  AND state_version = $2
+RETURNING state_version`, schemeID, expectedStateVersion).Scan(&newStateVersion)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, errors.New("scheme state version changed before manual rearm")
+	}
+	return newStateVersion, err
+}
+
 func (q *Queries) ActivateSchemeBettingChain(ctx context.Context, schemeID, chainID string, allowLegacy bool) error {
 	tag, err := q.db.Exec(ctx, `
 UPDATE scheme_instances

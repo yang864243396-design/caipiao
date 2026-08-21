@@ -22,10 +22,22 @@ type automaticRearmRecoverySource interface {
 }
 
 func safeAutomaticRearmOutcome(state, reason string) bool {
-	state = strings.TrimSpace(state)
-	reason = strings.TrimSpace(reason)
-	return (state == "rejected" && reason == "provider_pre_send_failed") ||
-		(state == "expired" && (reason == "safe_deadline_elapsed" || reason == "dispatcher_lost_before_start_deadline_elapsed"))
+	return isAutomaticRearmAllowed("", state, reason)
+}
+
+// isAutomaticRearmAllowed permits only outcomes proven not to have reached
+// the provider. A broken contiguous chain or any ambiguous provider outcome
+// remains blocked until an operator starts a new chain explicitly.
+func isAutomaticRearmAllowed(chainBlockReason, outboxState, outboxReason string) bool {
+	chainBlockReason = strings.TrimSpace(chainBlockReason)
+	outboxState = strings.TrimSpace(outboxState)
+	outboxReason = strings.TrimSpace(outboxReason)
+	switch chainBlockReason {
+	case "missed_contiguous_period", "provider_accepted_wrong_period", "provider_acceptance_unknown":
+		return false
+	}
+	return (outboxState == "rejected" && outboxReason == "provider_pre_send_failed") ||
+		(outboxState == "expired" && (outboxReason == "safe_deadline_elapsed" || outboxReason == "dispatcher_lost_before_start_deadline_elapsed"))
 }
 
 func handleAutomaticRearmEvent(
@@ -43,7 +55,7 @@ func handleAutomaticRearmEvent(
 	}
 	if candidate.OutboxID != event.OutboxID || candidate.RequestID != event.RequestID ||
 		candidate.ShardNo != event.ShardNo || candidate.State != event.State || candidate.Reason != event.Reason ||
-		!safeAutomaticRearmOutcome(candidate.State, candidate.Reason) {
+		!isAutomaticRearmAllowed(candidate.ChainBlockReason, candidate.State, candidate.Reason) {
 		return nil
 	}
 	err = enabler.RearmEventScheme(ctx, candidate.SchemeID, "system", "automatic recovery of proven unsent event chain")

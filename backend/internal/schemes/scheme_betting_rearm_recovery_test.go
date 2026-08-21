@@ -53,6 +53,28 @@ func TestAutomaticRearmConsumesOnlyAuthoritativeSafeBlockedCandidate(t *testing.
 	}
 }
 
+func TestAutomaticRearmRejectsMissedContiguousPeriod(t *testing.T) {
+	if isAutomaticRearmAllowed("missed_contiguous_period", "expired", "safe_deadline_elapsed") {
+		t.Fatal("missed contiguous period must require an explicit manual restart")
+	}
+}
+
+func TestAutomaticRearmRejectsAmbiguousOrGenericFailures(t *testing.T) {
+	for _, candidate := range []struct {
+		blockReason string
+		state       string
+		reason      string
+	}{
+		{blockReason: "provider_accepted_wrong_period", state: "rejected", reason: "provider_pre_send_failed"},
+		{blockReason: "provider_acceptance_unknown", state: "expired", reason: "safe_deadline_elapsed"},
+		{blockReason: "", state: "bet_failed", reason: "provider_pre_send_failed"},
+	} {
+		if isAutomaticRearmAllowed(candidate.blockReason, candidate.state, candidate.reason) {
+			t.Fatalf("automatic rearm allowed unsafe candidate: %+v", candidate)
+		}
+	}
+}
+
 func TestAutomaticRearmIgnoresAmbiguousOrStaleEvents(t *testing.T) {
 	for _, event := range []schemeeventbus.BetReconcile{
 		{OutboxID: 7, RequestID: "request-7", ShardNo: 2, State: "sent_unknown", Reason: "provider_acceptance_pending_reconciliation"},

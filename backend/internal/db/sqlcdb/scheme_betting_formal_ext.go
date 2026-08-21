@@ -6,18 +6,27 @@ import (
 )
 
 type SchemeBettingExecutionState struct {
-	Owner      string
-	ChainState string
-	ChainID    string
-	ChainSeq   int64
+	Owner            string
+	ChainState       string
+	ChainID          string
+	ChainSeq         int64
+	ChainBlockReason string
+	LastOutboxState  string
+	LastOutboxReason string
 }
 
 func (q *Queries) GetSchemeBettingExecutionState(ctx context.Context, schemeID string) (SchemeBettingExecutionState, error) {
 	var state SchemeBettingExecutionState
 	err := q.db.QueryRow(ctx, `
-SELECT betting_owner, strict_chain_state, COALESCE(chain_id, ''), chain_seq
+SELECT betting_owner, strict_chain_state, COALESCE(chain_id, ''), chain_seq,
+       COALESCE(chain_block_reason, ''),
+       COALESCE((SELECT state FROM scheme_bet_outbox WHERE scheme_id = scheme_instances.id ORDER BY created_at DESC, id DESC LIMIT 1), ''),
+       COALESCE((SELECT outcome_reason FROM scheme_bet_outbox WHERE scheme_id = scheme_instances.id ORDER BY created_at DESC, id DESC LIMIT 1), '')
 FROM scheme_instances
-WHERE id = $1`, schemeID).Scan(&state.Owner, &state.ChainState, &state.ChainID, &state.ChainSeq)
+WHERE id = $1`, schemeID).Scan(
+		&state.Owner, &state.ChainState, &state.ChainID, &state.ChainSeq,
+		&state.ChainBlockReason, &state.LastOutboxState, &state.LastOutboxReason,
+	)
 	return state, err
 }
 
