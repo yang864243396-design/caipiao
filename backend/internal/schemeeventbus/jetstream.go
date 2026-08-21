@@ -64,6 +64,16 @@ type BetReconcile struct {
 	Reason    string `json:"reason,omitempty"`
 }
 
+func validateBetReconcile(event BetReconcile, shard int32) error {
+	if event.OutboxID <= 0 || strings.TrimSpace(event.RequestID) == "" || strings.TrimSpace(event.State) == "" {
+		return errors.New("scheme bet-reconcile event identity is incomplete")
+	}
+	if event.ShardNo != shard {
+		return errors.New("scheme bet-reconcile event has wrong shard")
+	}
+	return nil
+}
+
 type DeadLetter struct {
 	SourceSubject string    `json:"sourceSubject"`
 	PayloadDigest string    `json:"payloadDigest"`
@@ -334,6 +344,39 @@ func (bus *Bus) ConsumeBetReady(ctx context.Context, shard int32, durable string
 	}, nats.Durable(durable), nats.ManualAck(), nats.AckExplicit(), nats.BindStream(bus.stream), nats.MaxAckPending(256))
 	if err != nil {
 		return errors.New("scheme bet-ready consumer unavailable")
+	}
+	defer sub.Unsubscribe()
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+type BetReconcileHandler func(context.Context, BetReconcile) error
+
+// ConsumeBetReconcile wakes recovery for one exact terminal command. The
+// handler must still re-read PostgreSQL and prove the scheme is safe to rearm.
+func (bus *Bus) ConsumeBetReconcile(ctx context.Context, shard int32, durable string, handler BetReconcileHandler) error {
+	if bus == nil || handler == nil || shard < 0 || strings.TrimSpace(durable) == "" {
+		return errors.New("scheme bet-reconcile consumer configuration is incomplete")
+	}
+	durable = strings.TrimSpace(durable)
+	sub, err := bus.js.QueueSubscribe(bus.BetReconcileSubject(shard), durable, func(message *nats.Msg) {
+		var event BetReconcile
+		if err := json.Unmarshal(message.Data, &event); err != nil {
+			bus.deadLetterAndTerminate(ctx, message, "invalid_json")
+			return
+		}
+		if err := validateBetReconcile(event, shard); err != nil {
+			bus.deadLetterAndTerminate(ctx, message, "invalid_bet_reconcile")
+			return
+		}
+		if err := handler(ctx, event); err != nil {
+			bus.retryOrDeadLetterAfter(ctx, message, "handler_error", 500*time.Millisecond)
+			return
+		}
+		_ = message.Ack()
+	}, nats.Durable(durable), nats.DeliverNew(), nats.ManualAck(), nats.AckExplicit(), nats.BindStream(bus.stream), nats.MaxAckPending(256))
+	if err != nil {
+		return errors.New("scheme bet-reconcile consumer unavailable")
 	}
 	defer sub.Unsubscribe()
 	<-ctx.Done()

@@ -17,6 +17,10 @@ type betReadyProcessor interface {
 	HandleBetReady(context.Context, schemeeventbus.BetReady) error
 }
 
+type betReconcileProcessor interface {
+	HandleBetReconcile(context.Context, schemeeventbus.BetReconcile) error
+}
+
 func runLeasedSchemeBetReadyConsumer(
 	ctx context.Context,
 	bus *schemeeventbus.Bus,
@@ -105,6 +109,23 @@ func runSchemeBetReadyConsumer(
 	}
 	durable := fmt.Sprintf("scheme-bet-dispatch-shard-%d-v1", shard)
 	err := bus.ConsumeBetReady(ctx, shard, durable, processor.HandleBetReady)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return nil
+	}
+	return err
+}
+
+func runSchemeBetReconcileConsumer(
+	ctx context.Context,
+	bus *schemeeventbus.Bus,
+	shard int32,
+	processor betReconcileProcessor,
+) error {
+	if bus == nil || processor == nil || shard < 0 {
+		return errors.New("scheme bet-reconcile consumer configuration is incomplete")
+	}
+	durable := fmt.Sprintf("scheme-bet-rearm-shard-%d-v1", shard)
+	err := bus.ConsumeBetReconcile(ctx, shard, durable, processor.HandleBetReconcile)
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return nil
 	}

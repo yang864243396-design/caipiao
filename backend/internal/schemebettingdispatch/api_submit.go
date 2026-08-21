@@ -10,6 +10,7 @@ import (
 
 	"caipiao/backend/internal/db/sqlcdb"
 	"caipiao/backend/internal/guajibet"
+	"caipiao/backend/internal/providerperiodtarget"
 	"caipiao/backend/internal/schemebetting"
 )
 
@@ -88,28 +89,15 @@ func (runtime *Runtime) SubmitAPIBet(ctx context.Context, command APIBetCommand)
 		return APIBetResult{}, errors.New("formal API bet lottery is not allowlisted")
 	}
 	now := time.Now().UTC()
-	periodRows, err := runtime.q.ListOpenProviderPeriodSnapshots(ctx, command.Request.LotteryCode, "", now, now.Add(-6*time.Second), 8)
+	target, snapshotID, ok, err := providerperiodtarget.Current(ctx, runtime.q, command.Request.LotteryCode, "", now)
 	if err != nil {
 		return APIBetResult{}, err
 	}
-	var target schemebetting.PeriodSnapshot
-	var snapshotID int64
-	for _, row := range periodRows {
-		if strings.TrimSpace(row.PeriodNo) != strings.TrimSpace(command.Request.IssueNo) {
-			continue
-		}
-		openAt := time.Time{}
-		if row.OpenAt.Valid {
-			openAt = row.OpenAt.Time.UTC()
-		}
-		target = schemebetting.PeriodSnapshot{
-			PeriodNo: row.PeriodNo, OpenAt: openAt, CloseAt: row.CloseAt.UTC(), ObservedAt: row.ObservedAt.UTC(),
-		}
-		snapshotID = row.ID
-		break
+	if !ok || snapshotID <= 0 {
+		return APIBetResult{}, errors.New("no current provider period for formal API bet target")
 	}
-	if snapshotID == 0 {
-		return APIBetResult{}, errors.New("no fresh provider snapshot for formal API bet target")
+	if strings.TrimSpace(target.PeriodNo) != strings.TrimSpace(command.Request.IssueNo) {
+		return APIBetResult{}, errors.New("formal API bet target is not the current provider period")
 	}
 	safeDeadline := schemebetting.SafeDeadline(target.CloseAt, apiDeadlineBudget(target))
 	if !schemebetting.IsSafeToCreate(now, safeDeadline) {

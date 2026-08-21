@@ -346,6 +346,11 @@ func New(cfg config.Config) (*Server, error) {
 						slog.Error("scheme bet-ready shard consumer stopped", "shard", betShard, "err", err)
 					}
 				})
+				launchWorker(func() {
+					if err := runSchemeBetReconcileConsumer(workerCtx, schemeEventBus, betShard, schemeWorker); err != nil {
+						slog.Error("scheme bet-reconcile shard consumer stopped", "shard", betShard, "err", err)
+					}
+				})
 			}
 		} else {
 			launchWorker(func() {
@@ -356,6 +361,12 @@ func New(cfg config.Config) (*Server, error) {
 		}
 		if formalMode {
 			launchWorker(func() { schemeWorker.RunStartupFormalTakeover(workerCtx) })
+			launchWorker(func() {
+				schemeWorker.RunAutomaticRearmRecovery(
+					workerCtx, cfg.SchemeBettingLotteries, cfg.SchemeBettingShards,
+					time.Second, int(cfg.SchemeBettingBatch), cfg.SchemeBettingConcurrency,
+				)
+			})
 		}
 	}
 	h.SetSchemeBettingActionService(schemeWorker)

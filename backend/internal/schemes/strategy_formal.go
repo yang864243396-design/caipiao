@@ -3,6 +3,7 @@ package schemes
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -10,8 +11,24 @@ import (
 	"caipiao/backend/internal/cloud/schemestate"
 	"caipiao/backend/internal/db/sqlcdb"
 	"caipiao/backend/internal/lottery"
+	"caipiao/backend/internal/providerperiodtarget"
 	"caipiao/backend/internal/schemebetting"
 )
+
+var (
+	errNoFreshFormalProviderTarget = errors.New("no_fresh_provider_target")
+	errUnsafeFormalProviderTarget  = errors.New("unsafe_provider_target_deadline")
+)
+
+func formalProviderTargetError(available bool, buildErr error) error {
+	if !available {
+		return errNoFreshFormalProviderTarget
+	}
+	if buildErr != nil {
+		return fmt.Errorf("%w: %v", errUnsafeFormalProviderTarget, buildErr)
+	}
+	return nil
+}
 
 func (p *StrategyProcessor) SetBettingMode(mode string, lotteries []string) {
 	if p == nil {
@@ -68,32 +85,12 @@ func (p *StrategyProcessor) tryProcessFormalCandidate(
 	}
 
 	now := time.Now().UTC()
-	periodRows, err := q.ListOpenProviderPeriodSnapshots(ctx, row.LotteryCode, row.PeriodNo, now, now.Add(-6*time.Second), 8)
+	target, providerSnapshotID, ok, err := providerperiodtarget.Current(ctx, q, row.LotteryCode, row.PeriodNo, now)
 	if err != nil {
 		return true, shadowDecisionResult{}, err
 	}
-	if len(periodRows) > 0 && !periodRows[0].DatabaseNow.IsZero() {
-		now = periodRows[0].DatabaseNow.UTC()
-	}
-	snapshots := make([]schemebetting.PeriodSnapshot, 0, len(periodRows))
-	for _, item := range periodRows {
-		openAt := time.Time{}
-		if item.OpenAt.Valid {
-			openAt = item.OpenAt.Time.UTC()
-		}
-		snapshots = append(snapshots, schemebetting.PeriodSnapshot{PeriodNo: item.PeriodNo, OpenAt: openAt, CloseAt: item.CloseAt.UTC(), ObservedAt: item.ObservedAt.UTC()})
-	}
-	target, ok := schemebetting.SelectTargetPeriod(snapshots, row.PeriodNo, now, 6*time.Second)
-	if !ok {
-		blocked, err := p.persistFormalBlocked(ctx, q, row, stateVersionBefore, result, "no_fresh_provider_target")
-		return true, blocked, err
-	}
-	var providerSnapshotID int64
-	for _, item := range periodRows {
-		if item.PeriodNo == target.PeriodNo && item.CloseAt.UTC().Equal(target.CloseAt.UTC()) {
-			providerSnapshotID = item.ID
-			break
-		}
+	if err := formalProviderTargetError(ok, nil); err != nil {
+		return true, shadowDecisionResult{}, err
 	}
 	command, err := schemebetting.BuildShadowCommand(schemebetting.ShadowCommandInput{
 		SchemeID: row.SchemeID, LotteryCode: row.LotteryCode, SourcePeriod: row.PeriodNo,
@@ -102,8 +99,7 @@ func (p *StrategyProcessor) tryProcessFormalCandidate(
 		Budget: shadowDeadlineBudget(target), ShardCount: shadowOutboxShardCount,
 	})
 	if err != nil {
-		blocked, blockErr := p.persistFormalBlocked(ctx, q, row, stateVersionBefore, result, "unsafe_deadline")
-		return true, blocked, blockErr
+		return true, shadowDecisionResult{}, formalProviderTargetError(true, err)
 	}
 
 	if err := schemestate.ProcessStrategyAfterDraw(ctx, q, inst, row.PeriodNo, result.Hit, definitionConfig); err != nil {

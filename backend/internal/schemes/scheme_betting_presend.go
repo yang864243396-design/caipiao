@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"caipiao/backend/internal/db/sqlcdb"
+	"caipiao/backend/internal/providerperiodtarget"
 	"caipiao/backend/internal/schemebetting"
 )
 
@@ -88,8 +89,6 @@ func (w *Worker) reschedulePreSendFailure(ctx context.Context, outboxID int64) (
 	if providerSnapshotID <= 0 {
 		return failed.SchemeID, errors.New("provider_snapshot_missing_for_pre_send_replacement")
 	}
-	now = target.ObservedAt.UTC()
-
 	sourcePeriod := fmt.Sprintf("pre-send:%d", outboxID)
 	command, err := schemebetting.BuildShadowCommand(schemebetting.ShadowCommandInput{
 		SchemeID: failed.SchemeID, LotteryCode: failed.LotteryCode, SourcePeriod: sourcePeriod,
@@ -151,75 +150,7 @@ func (w *Worker) preSendReplacementTarget(
 	failed sqlcdb.PreSendFailureOutbox,
 	now time.Time,
 ) (schemebetting.PeriodSnapshot, int64, bool, error) {
-	if hintedPeriod := providerChangedPeriodFromPreSendError(failed.LastError); hintedPeriod != "" && hintedPeriod != failed.FailedPeriod {
-		row, found, err := q.GetPreSendReplacementProviderPeriod(ctx, failed.LotteryCode, hintedPeriod, 6*time.Second)
-		if err != nil {
-			return schemebetting.PeriodSnapshot{}, 0, false, err
-		}
-		if found {
-			dbNow := row.DatabaseNow.UTC()
-			if dbNow.IsZero() {
-				dbNow = now.UTC()
-			}
-			// The provider has just confirmed this exact issue as accepted. Use
-			// that fact as the effective opening edge while retaining the
-			// persisted real close time and snapshot identity.
-			return schemebetting.PeriodSnapshot{
-				PeriodNo: row.PeriodNo, OpenAt: dbNow, CloseAt: row.CloseAt.UTC(), ObservedAt: dbNow,
-			}, row.ID, true, nil
-		}
-	}
-
-	periodRows, err := q.ListOpenProviderPeriodSnapshots(ctx, failed.LotteryCode, failed.FailedPeriod, now, now.Add(-6*time.Second), 8)
-	if err != nil {
-		return schemebetting.PeriodSnapshot{}, 0, false, err
-	}
-	if len(periodRows) > 0 && !periodRows[0].DatabaseNow.IsZero() {
-		now = periodRows[0].DatabaseNow.UTC()
-	}
-	snapshots := make([]schemebetting.PeriodSnapshot, 0, len(periodRows))
-	for _, item := range periodRows {
-		openAt := time.Time{}
-		if item.OpenAt.Valid {
-			openAt = item.OpenAt.Time.UTC()
-		}
-		snapshots = append(snapshots, schemebetting.PeriodSnapshot{
-			PeriodNo: item.PeriodNo, OpenAt: openAt, CloseAt: item.CloseAt.UTC(), ObservedAt: item.ObservedAt.UTC(),
-		})
-	}
-	target, ok := schemebetting.SelectTargetPeriod(snapshots, failed.FailedPeriod, now, 6*time.Second)
-	if !ok {
-		return schemebetting.PeriodSnapshot{}, 0, false, nil
-	}
-	for _, item := range periodRows {
-		if item.PeriodNo == target.PeriodNo && item.CloseAt.UTC().Equal(target.CloseAt.UTC()) {
-			target.ObservedAt = now.UTC()
-			return target, item.ID, true, nil
-		}
-	}
-	return schemebetting.PeriodSnapshot{}, 0, false, nil
-}
-
-func providerChangedPeriodFromPreSendError(detail string) string {
-	const marker = "provider open period changed from "
-	idx := strings.Index(detail, marker)
-	if idx < 0 {
-		return ""
-	}
-	remainder := detail[idx+len(marker):]
-	toIdx := strings.Index(remainder, " to ")
-	if toIdx < 0 {
-		return ""
-	}
-	fields := strings.Fields(remainder[toIdx+len(" to "):])
-	if len(fields) == 0 {
-		return ""
-	}
-	target := strings.TrimSpace(strings.TrimSuffix(fields[0], ";"))
-	if target == "" || len(target) > 128 {
-		return ""
-	}
-	return target
+	return providerperiodtarget.Current(ctx, q, failed.LotteryCode, failed.FailedPeriod, now)
 }
 
 func boundedPreSendFailureReason(err error) string {

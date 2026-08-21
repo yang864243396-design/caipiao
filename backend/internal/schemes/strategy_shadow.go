@@ -8,6 +8,7 @@ import (
 
 	"caipiao/backend/internal/db/sqlcdb"
 	"caipiao/backend/internal/lottery"
+	"caipiao/backend/internal/providerperiodtarget"
 	"caipiao/backend/internal/schemebetting"
 )
 
@@ -25,35 +26,14 @@ type shadowDecisionResult struct {
 func persistShadowDecision(ctx context.Context, q *sqlcdb.Queries, row sqlcdb.PendingFormalStrategyRow, stateVersionBefore int64, hit bool, winningUnits int) (shadowDecisionResult, error) {
 	now := time.Now().UTC()
 	result := shadowDecisionResult{Status: "blocked"}
-	periodRows, err := q.ListOpenProviderPeriodSnapshots(ctx, row.LotteryCode, row.PeriodNo, now, now.Add(-6*time.Second), 8)
+	target, providerSnapshotID, ok, err := providerperiodtarget.Current(ctx, q, row.LotteryCode, row.PeriodNo, now)
 	if err != nil {
 		return result, err
 	}
-	if len(periodRows) > 0 && !periodRows[0].DatabaseNow.IsZero() {
-		now = periodRows[0].DatabaseNow.UTC()
-	}
-	snapshots := make([]schemebetting.PeriodSnapshot, 0, len(periodRows))
-	for _, item := range periodRows {
-		openAt := time.Time{}
-		if item.OpenAt.Valid {
-			openAt = item.OpenAt.Time.UTC()
-		}
-		snapshots = append(snapshots, schemebetting.PeriodSnapshot{
-			PeriodNo: item.PeriodNo, OpenAt: openAt, CloseAt: item.CloseAt.UTC(), ObservedAt: item.ObservedAt.UTC(),
-		})
-	}
-	target, ok := schemebetting.SelectTargetPeriod(snapshots, row.PeriodNo, now, 6*time.Second)
 	var command schemebetting.ShadowCommand
-	var providerSnapshotID int64
 	if !ok {
 		result.Reason = "no_fresh_provider_target"
 	} else {
-		for _, item := range periodRows {
-			if item.PeriodNo == target.PeriodNo && item.CloseAt.UTC().Equal(target.CloseAt.UTC()) {
-				providerSnapshotID = item.ID
-				break
-			}
-		}
 		command, err = schemebetting.BuildShadowCommand(schemebetting.ShadowCommandInput{
 			SchemeID: row.SchemeID, LotteryCode: row.LotteryCode, SourcePeriod: row.PeriodNo,
 			Target: target, ProviderSnapshotID: providerSnapshotID, StateVersion: stateVersionBefore + 1,

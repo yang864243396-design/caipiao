@@ -10,8 +10,11 @@ import (
 	"time"
 
 	"caipiao/backend/internal/db/sqlcdb"
+	"caipiao/backend/internal/providerperiodtarget"
 	"caipiao/backend/internal/schemebetting"
 )
+
+var errEventSchemeNotBlocked = errors.New("only blocked event-owned schemes can be rearmed")
 
 func (w *Worker) EnableEventScheme(ctx context.Context, schemeID, actor, reason string) error {
 	return w.startEventSchemeChain(ctx, schemeID, actor, reason, "enable_event", true)
@@ -64,7 +67,7 @@ func (w *Worker) startEventSchemeChain(ctx context.Context, schemeID, actor, rea
 			return errors.New("scheme is already event-owned")
 		}
 	} else if execution.Owner != "event" || execution.ChainState != string(schemebetting.ChainStateBlockedRequiresRearm) {
-		return errors.New("only blocked event-owned schemes can be rearmed")
+		return errEventSchemeNotBlocked
 	}
 	if action == "rearm" {
 		if err := q.EnsureNoUnresolvedSchemeBet(ctx, schemeID); err != nil {
@@ -82,33 +85,12 @@ func (w *Worker) startEventSchemeChain(ctx context.Context, schemeID, actor, rea
 		return err
 	}
 	now := time.Now().UTC()
-	periodRows, err := q.ListOpenProviderPeriodSnapshots(ctx, inst.LotteryCode, "", now, now.Add(-6*time.Second), 8)
+	target, providerSnapshotID, ok, err := providerperiodtarget.Current(ctx, q, inst.LotteryCode, "", now)
 	if err != nil {
 		return err
 	}
-	if len(periodRows) > 0 && !periodRows[0].DatabaseNow.IsZero() {
-		now = periodRows[0].DatabaseNow.UTC()
-	}
-	snapshots := make([]schemebetting.PeriodSnapshot, 0, len(periodRows))
-	for _, item := range periodRows {
-		openAt := time.Time{}
-		if item.OpenAt.Valid {
-			openAt = item.OpenAt.Time.UTC()
-		}
-		snapshots = append(snapshots, schemebetting.PeriodSnapshot{
-			PeriodNo: item.PeriodNo, OpenAt: openAt, CloseAt: item.CloseAt.UTC(), ObservedAt: item.ObservedAt.UTC(),
-		})
-	}
-	target, ok := schemebetting.SelectTargetPeriod(snapshots, "", now, 6*time.Second)
 	if !ok {
 		return errors.New("no_fresh_provider_target")
-	}
-	var providerSnapshotID int64
-	for _, item := range periodRows {
-		if item.PeriodNo == target.PeriodNo && item.CloseAt.UTC().Equal(target.CloseAt.UTC()) {
-			providerSnapshotID = item.ID
-			break
-		}
 	}
 	chainID, err := newSchemeChainID()
 	if err != nil {

@@ -112,3 +112,33 @@ func TestValidateBetReadyAcceptsExactShardEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestValidateBetReconcileRejectsWrongShardAndIncompleteIdentity(t *testing.T) {
+	for _, event := range []BetReconcile{
+		{OutboxID: 0, RequestID: "request-7", ShardNo: 2, State: "rejected", Reason: "provider_pre_send_failed"},
+		{OutboxID: 7, RequestID: "", ShardNo: 2, State: "rejected", Reason: "provider_pre_send_failed"},
+		{OutboxID: 7, RequestID: "request-7", ShardNo: 3, State: "rejected", Reason: "provider_pre_send_failed"},
+		{OutboxID: 7, RequestID: "request-7", ShardNo: 2, State: "", Reason: "provider_pre_send_failed"},
+	} {
+		if err := validateBetReconcile(event, 2); err == nil {
+			t.Fatalf("event should be rejected: %+v", event)
+		}
+	}
+}
+
+func TestValidateBetReconcileAllowsTerminalEventWithoutReason(t *testing.T) {
+	event := BetReconcile{OutboxID: 7, RequestID: "request-7", ShardNo: 2, State: "accepted"}
+	if err := validateBetReconcile(event, 2); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateBetReconcileAcceptsExactShardEvent(t *testing.T) {
+	event := BetReconcile{
+		OutboxID: 7, RequestID: "request-7", ShardNo: 2,
+		State: "rejected", Reason: "provider_pre_send_failed",
+	}
+	if err := validateBetReconcile(event, 2); err != nil {
+		t.Fatal(err)
+	}
+}
