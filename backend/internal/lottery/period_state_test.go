@@ -121,6 +121,49 @@ func TestUpdatePeriodStateDoesNotRefreshDuplicateOrOlderFormalBoundary(t *testin
 	})
 }
 
+func TestUpdatePeriodStateReportsWhetherFormalBoundaryAdvanced(t *testing.T) {
+	code := "tron_ffc_3s"
+	staleAt := time.Now().UTC().Add(-time.Minute)
+	seed := PeriodState{
+		CurrentIssue: "P100",
+		NextIssue:    "P101",
+		CloseAt:      staleAt.Add(3 * time.Second),
+		UpdatedAt:    staleAt,
+		IntervalSec:  3,
+	}
+	periodState.Store(code, seed)
+	t.Cleanup(func() { periodState.Delete(code) })
+
+	if accepted := UpdatePeriodState(code, "P99", "P100", time.Now().UTC(), 3); accepted {
+		t.Fatal("replayed prefixed boundary was reported as accepted")
+	}
+	if got, ok := PeriodStateFor(code); !ok || got != seed {
+		t.Fatalf("period state after replay = %+v ok=%v, want unchanged %+v", got, ok, seed)
+	}
+
+	if accepted := UpdatePeriodState(code, "P101", "P102", time.Now().UTC(), 3); !accepted {
+		t.Fatal("legitimate prefixed advancement was reported as rejected")
+	}
+	if got, ok := PeriodStateFor(code); !ok || got.CurrentIssue != "P101" || got.NextIssue != "P102" {
+		t.Fatalf("period state after advancement = %+v ok=%v", got, ok)
+	}
+}
+
+func TestUpdatePeriodStateReportsNonFormalBoundaryAccepted(t *testing.T) {
+	code := "test_nonformal_period_state_acceptance"
+	defer periodState.Delete(code)
+
+	if accepted := UpdatePeriodState(code, "P100", "P101", time.Now().UTC(), 3); !accepted {
+		t.Fatal("non-formal boundary was reported as rejected")
+	}
+	if accepted := UpdatePeriodState(code, "different-format", "still-different", time.Now().UTC(), 3); !accepted {
+		t.Fatal("non-formal boundary changed behavior when its issue format changed")
+	}
+	if got, ok := PeriodStateFor(code); !ok || got.CurrentIssue != "different-format" || got.NextIssue != "still-different" {
+		t.Fatalf("period state after non-formal update = %+v ok=%v", got, ok)
+	}
+}
+
 func TestBetCloseSec(t *testing.T) {
 	cases := map[int]int{
 		3: 1, 6: 1, 15: 2, 60: 8, 180: 15, 300: 15,

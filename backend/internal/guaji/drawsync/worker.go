@@ -230,10 +230,8 @@ func (w *Worker) Ingest(ctx context.Context, ev guaji.DrawEvent) error {
 			drawnAt = time.Now()
 		}
 		if intervalSec := w.drawIntervalSec(ctx, tgt.code); intervalSec > 0 {
-			lottery.UpdatePeriodState(tgt.code, ev.Periods, ev.NextPeriods, drawnAt, intervalSec)
-			if w.boundaryHealth != nil {
-				w.boundaryHealth.Observe(tgt.code, ev.Periods, ev.NextPeriods, receivedMono, time.Duration(intervalSec)*time.Second)
-			}
+			accepted := lottery.UpdatePeriodState(tgt.code, ev.Periods, ev.NextPeriods, drawnAt, intervalSec)
+			w.observeAcceptedBoundary(accepted, tgt.code, ev.Periods, ev.NextPeriods, receivedMono, intervalSec)
 		}
 		balls := ev.Balls.BallsFor(tgt.template)
 		if len(balls) == 0 {
@@ -256,6 +254,15 @@ func (w *Worker) Ingest(ctx context.Context, ev guaji.DrawEvent) error {
 		}
 	}
 	return nil
+}
+
+// observeAcceptedBoundary refreshes boundary health only after the formal
+// period-state update has accepted the same websocket boundary.
+func (w *Worker) observeAcceptedBoundary(accepted bool, lotteryCode, currentIssue, nextIssue string, receivedMono time.Time, intervalSec int) {
+	if w == nil || !accepted || w.boundaryHealth == nil || intervalSec <= 0 {
+		return
+	}
+	w.boundaryHealth.Observe(lotteryCode, currentIssue, nextIssue, receivedMono, time.Duration(intervalSec)*time.Second)
 }
 
 func (w *Worker) resolveLotteries(ctx context.Context, gameKey string) ([]lotteryTarget, error) {

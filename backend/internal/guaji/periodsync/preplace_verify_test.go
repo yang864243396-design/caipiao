@@ -67,7 +67,7 @@ func TestVerifyOpenPeriodRejectsRESTFallbackForTronSixSecondBet(t *testing.T) {
 	lottery.ClearPeriodsSchedule(code)
 	t.Cleanup(func() { lottery.ClearPeriodsSchedule(code) })
 	now := time.Now().UTC()
-	lottery.UpdatePeriodState(code, "P-expired", "P-expired-next", now.Add(-12*time.Second), 6)
+	lottery.UpdatePeriodState(code, "10114255902822", "10114255902823", now.Add(-12*time.Second), 6)
 	lottery.UpdatePeriodsScheduleFullWithDuration(
 		code, "P-rest-future", "P-rest-future", now.Add(6*time.Second), now.Add(6*time.Second),
 		6, "", now,

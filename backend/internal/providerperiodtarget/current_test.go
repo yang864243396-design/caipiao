@@ -145,7 +145,7 @@ func TestCurrentDoesNotFallbackToRESTForTronSixSecondFormalTarget(t *testing.T) 
 
 	// A stale/contradictory websocket boundary must stop formal dispatch. The
 	// REST periods feed can be one issue ahead of the provider's bet endpoint.
-	lottery.UpdatePeriodState(code, "P-ws-current", "P-ws-next", now, 6)
+	lottery.UpdatePeriodState(code, "10114255902823", "10114255902824", now, 6)
 	lottery.UpdatePeriodsScheduleFullWithDuration(
 		code, "P-rest-future", "P-rest-future", now.Add(6*time.Second), now.Add(6*time.Second),
 		6, "", now,
@@ -174,8 +174,8 @@ func TestCurrentRejectsEmptyOrMismatchedSourceForEveryFormalShortLottery(t *test
 		t.Run(code, func(t *testing.T) {
 			lottery.ClearPeriodsSchedule(code)
 			t.Cleanup(func() { lottery.ClearPeriodsSchedule(code) })
-			current := "strict-current-" + code
-			lottery.UpdatePeriodState(code, current, "strict-next-"+code, now, interval)
+			current := "900000000000000000000000000001"
+			lottery.UpdatePeriodState(code, current, "900000000000000000000000000002", now, interval)
 			lottery.UpdatePeriodsScheduleFullWithDuration(
 				code, "rest-candidate", "rest-candidate", now.Add(time.Duration(interval)*time.Second),
 				now.Add(time.Duration(interval)*time.Second), interval, "", now,
@@ -208,8 +208,8 @@ func TestCurrentForInitialDispatchUsesFreshBoundaryForEveryFormalShortLottery(t 
 	} {
 		t.Run(code, func(t *testing.T) {
 			currentSnapshotCache.Delete(code)
-			current := "initial-current-" + code
-			next := "initial-next-" + code
+			current := "900000000000000000000000000002"
+			next := "900000000000000000000000000003"
 			lottery.UpdatePeriodState(code, current, next, now, interval)
 			recorder := &fakeSnapshotRecorder{id: 97}
 
@@ -236,7 +236,7 @@ func TestCurrentForInitialDispatchRejectsStaleFormalBoundary(t *testing.T) {
 	} {
 		t.Run(code, func(t *testing.T) {
 			currentSnapshotCache.Delete(code)
-			lottery.UpdatePeriodState(code, "stale-current-"+code, "stale-next-"+code, now.Add(-time.Minute), interval)
+			lottery.UpdatePeriodState(code, "900000000000000000000000000003", "900000000000000000000000000004", now.Add(-time.Minute), interval)
 			recorder := &fakeSnapshotRecorder{id: 98}
 
 			_, _, ok, err := CurrentForInitialDispatch(context.Background(), recorder, code, now)

@@ -4,6 +4,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"caipiao/backend/internal/periodissue"
 )
 
 // StaleLottery identifies one configured lottery whose most recent draw
@@ -135,35 +137,5 @@ func isNewerBoundary(previous LotteryBoundaryHealthSnapshot, currentIssue string
 	if previous.LastReceivedMono.IsZero() {
 		return true
 	}
-	if currentIssue == previous.CurrentIssue {
-		return false
-	}
-	return !decimalIssueLessOrEqual(currentIssue, previous.CurrentIssue)
-}
-
-func decimalIssueLessOrEqual(current, previous string) bool {
-	if !isDecimalIssue(current) || !isDecimalIssue(previous) {
-		return false
-	}
-	current = strings.TrimLeft(current, "0")
-	previous = strings.TrimLeft(previous, "0")
-	if current == "" {
-		current = "0"
-	}
-	if previous == "" {
-		previous = "0"
-	}
-	if len(current) != len(previous) {
-		return len(current) < len(previous)
-	}
-	return current <= previous
-}
-
-func isDecimalIssue(issue string) bool {
-	for _, char := range issue {
-		if char < '0' || char > '9' {
-			return false
-		}
-	}
-	return issue != ""
+	return periodissue.Advances(previous.CurrentIssue, currentIssue)
 }

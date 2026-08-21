@@ -52,6 +52,33 @@ func TestBoundaryHealthDuplicateBoundaryDoesNotClearStaleGeneration(t *testing.T
 	}
 }
 
+func TestBoundaryHealthPrefixedReplayDoesNotClearStaleGeneration(t *testing.T) {
+	h := NewBoundaryHealth([]string{"tron_ffc_3s"})
+	base := time.Unix(100, 0)
+	h.Observe("tron_ffc_3s", "P100", "P101", base, 3*time.Second)
+	if got := h.Stale(base.Add(4 * time.Second)); len(got) != 1 {
+		t.Fatalf("first stale signal = %v, want one", got)
+	}
+
+	h.Observe("tron_ffc_3s", "P99", "P100", base.Add(4*time.Second), 3*time.Second)
+	snapshot := h.Snapshot("tron_ffc_3s")
+	if !snapshot.ReconnectRequested {
+		t.Fatal("P99 replay cleared the P100 stale generation")
+	}
+	if snapshot.CurrentIssue != "P100" || !snapshot.LastReceivedMono.Equal(base) {
+		t.Fatalf("snapshot after replay = %+v, want original P100 receipt", snapshot)
+	}
+
+	h.Observe("tron_ffc_3s", "P101", "P102", base.Add(5*time.Second), 3*time.Second)
+	snapshot = h.Snapshot("tron_ffc_3s")
+	if snapshot.ReconnectRequested {
+		t.Fatal("legitimate P100 to P101 advancement did not clear the stale generation")
+	}
+	if snapshot.CurrentIssue != "P101" || !snapshot.LastReceivedMono.Equal(base.Add(5*time.Second)) {
+		t.Fatalf("snapshot after advancement = %+v, want P101 with newer receipt", snapshot)
+	}
+}
+
 func TestBoundaryHealthUsesConfiguredFifteenSecondScope(t *testing.T) {
 	h := NewBoundaryHealth([]string{"tron_ffc_15s"})
 	base := time.Unix(100, 0)

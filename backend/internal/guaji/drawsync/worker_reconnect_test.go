@@ -165,6 +165,28 @@ func TestWorkerRunStopsSupervisorAndSubscriptionOnParentCancellation(t *testing.
 	}
 }
 
+func TestWorkerRejectedFormalBoundaryDoesNotRefreshHealth(t *testing.T) {
+	health := guaji.NewBoundaryHealth([]string{"tron_ffc_3s"})
+	worker := &Worker{boundaryHealth: health}
+	base := time.Unix(100, 0)
+	health.Observe("tron_ffc_3s", "P100", "P101", base, 3*time.Second)
+	if got := health.Stale(base.Add(4 * time.Second)); len(got) != 1 {
+		t.Fatalf("first stale signal = %v, want one", got)
+	}
+
+	worker.observeAcceptedBoundary(false, "tron_ffc_3s", "P99", "P100", base.Add(4*time.Second), 3)
+	snapshot := health.Snapshot("tron_ffc_3s")
+	if !snapshot.ReconnectRequested || snapshot.CurrentIssue != "P100" || !snapshot.LastReceivedMono.Equal(base) {
+		t.Fatalf("worker refreshed health for rejected replay: %+v", snapshot)
+	}
+
+	worker.observeAcceptedBoundary(true, "tron_ffc_3s", "P101", "P102", base.Add(5*time.Second), 3)
+	snapshot = health.Snapshot("tron_ffc_3s")
+	if snapshot.ReconnectRequested || snapshot.CurrentIssue != "P101" || !snapshot.LastReceivedMono.Equal(base.Add(5*time.Second)) {
+		t.Fatalf("worker did not observe accepted advancement: %+v", snapshot)
+	}
+}
+
 type serialDrawSubscriber struct {
 	attempts  atomic.Int32
 	active    atomic.Int32

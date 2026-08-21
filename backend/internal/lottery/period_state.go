@@ -4,6 +4,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"caipiao/backend/internal/periodissue"
 )
 
 // PeriodState 来自第三方开奖 WS 的当期/下期快照（drawsync 写入；供投注期号，不参与展示倒计时）。
@@ -26,19 +28,19 @@ func FormalShortPeriodLotteryCodes() []string {
 }
 
 // UpdatePeriodState 在开奖 WS 入库时更新彩种期号与封盘时刻。
-func UpdatePeriodState(lotteryCode, currentIssue, nextIssue string, drawnAt time.Time, intervalSec int) {
+func UpdatePeriodState(lotteryCode, currentIssue, nextIssue string, drawnAt time.Time, intervalSec int) bool {
 	lotteryCode = strings.TrimSpace(lotteryCode)
 	if lotteryCode == "" || intervalSec <= 0 {
-		return
+		return false
 	}
 	currentIssue = strings.TrimSpace(currentIssue)
 	nextIssue = strings.TrimSpace(nextIssue)
 	if RequiresFreshShortPeriodWSBetTarget(lotteryCode) {
 		if currentIssue == "" || nextIssue == "" || currentIssue == nextIssue {
-			return
+			return false
 		}
-		if previous, ok := PeriodStateFor(lotteryCode); ok && !formalBoundaryAdvances(previous, currentIssue, nextIssue) {
-			return
+		if previous, ok := PeriodStateFor(lotteryCode); ok && previous.CurrentIssue != "" && !periodissue.Advances(previous.CurrentIssue, currentIssue) {
+			return false
 		}
 	}
 	if drawnAt.IsZero() {
@@ -54,53 +56,7 @@ func UpdatePeriodState(lotteryCode, currentIssue, nextIssue string, drawnAt time
 		UpdatedAt:    time.Now().UTC(),
 		IntervalSec:  intervalSec,
 	})
-}
-
-func formalBoundaryAdvances(previous PeriodState, currentIssue, nextIssue string) bool {
-	previousIssue := strings.TrimSpace(previous.CurrentIssue)
-	previousNextIssue := strings.TrimSpace(previous.NextIssue)
-	currentIssue = strings.TrimSpace(currentIssue)
-	nextIssue = strings.TrimSpace(nextIssue)
-	if previousIssue == "" {
-		return true
-	}
-	if currentIssue == previousIssue {
-		return false
-	}
-	if nextIssue == previousIssue {
-		return false
-	}
-	if previousNextIssue != "" && currentIssue == previousNextIssue {
-		return true
-	}
-	previousPrefix, previousSequence, previousOK := normalizedIssueSequence(previousIssue)
-	currentPrefix, currentSequence, currentOK := normalizedIssueSequence(currentIssue)
-	if !previousOK || !currentOK || currentPrefix != previousPrefix {
-		return true
-	}
-	if len(currentSequence) != len(previousSequence) {
-		return len(currentSequence) > len(previousSequence)
-	}
-	return currentSequence > previousSequence
-}
-
-func normalizedIssueSequence(issue string) (string, string, bool) {
-	if issue == "" {
-		return "", "", false
-	}
-	sequenceStart := len(issue)
-	for sequenceStart > 0 && issue[sequenceStart-1] >= '0' && issue[sequenceStart-1] <= '9' {
-		sequenceStart--
-	}
-	if sequenceStart == len(issue) {
-		return "", "", false
-	}
-	prefix := issue[:sequenceStart]
-	sequence := strings.TrimLeft(issue[sequenceStart:], "0")
-	if sequence == "" {
-		sequence = "0"
-	}
-	return prefix, sequence, true
+	return true
 }
 
 // PeriodStateFor 读取彩种最新期号快照。
