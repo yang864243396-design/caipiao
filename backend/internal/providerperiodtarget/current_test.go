@@ -21,9 +21,19 @@ type fakeSnapshotRecorder struct {
 }
 
 var testCodeSequence atomic.Uint64
+var formalIssueSequence atomic.Uint64
 
 func uniqueTestLotteryCode(prefix string, now time.Time) string {
 	return fmt.Sprintf("%s_%d_%d", prefix, now.UnixNano(), testCodeSequence.Add(1))
+}
+
+// uniqueFormalIssues keeps the package-global short-period state monotonic
+// across repeated `go test -count` executions. The production state correctly
+// rejects replayed/older WS boundaries; fixed fixture issues used to make a
+// later test iteration look like an invalid replay.
+func uniqueFormalIssues() (string, string) {
+	start := formalIssueSequence.Add(2)
+	return fmt.Sprintf("999999999999999999999999%020d", start), fmt.Sprintf("999999999999999999999999%020d", start+1)
 }
 
 func (recorder *fakeSnapshotRecorder) RecordCurrentProviderPeriodSnapshot(
@@ -133,25 +143,26 @@ func TestCurrentUsesFreshWSNextPeriodForTronSixSecondFormalTarget(t *testing.T) 
 	code := "tron_ffc_6s"
 	currentSnapshotCache.Delete(code)
 	lottery.ClearPeriodsSchedule(code)
+	current, next := uniqueFormalIssues()
 
 	// The periods feed can expose a future period as its first candidate. The
 	// provider still accepts the fresh draw websocket's next_periods value.
 	lottery.UpdatePeriodsScheduleFullWithDuration(
-		code, "10114255902823", "10114255902823", now.Add(12*time.Second), now.Add(12*time.Second),
+		code, next, next, now.Add(12*time.Second), now.Add(12*time.Second),
 		6, now.Add(12*time.Second).Format("2006-01-02 15:04:05"), now.Add(6*time.Second),
 	)
-	lottery.UpdatePeriodState(code, "10114255902821", "10114255902822", now, 6)
+	lottery.UpdatePeriodState(code, current, next, now, 6)
 	lottery.ClearPeriodsSchedule(code)
 	recorder := &fakeSnapshotRecorder{id: 94}
 
-	target, snapshotID, ok, err := Current(context.Background(), recorder, code, "10114255902821", now.Add(100*time.Millisecond))
+	target, snapshotID, ok, err := Current(context.Background(), recorder, code, current, now.Add(100*time.Millisecond))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !ok || snapshotID != 94 {
 		t.Fatalf("snapshot=%d ok=%v", snapshotID, ok)
 	}
-	if target.PeriodNo != "10114255902822" {
+	if target.PeriodNo != next {
 		t.Fatalf("target period=%s want fresh WS next period", target.PeriodNo)
 	}
 	if wantClose := now.Add(6 * time.Second); !target.CloseAt.Equal(wantClose) {
@@ -168,10 +179,11 @@ func TestCurrentDoesNotFallbackToRESTForTronSixSecondFormalTarget(t *testing.T) 
 	currentSnapshotCache.Delete(code)
 	lottery.ClearPeriodsSchedule(code)
 	t.Cleanup(func() { lottery.ClearPeriodsSchedule(code) })
+	current, next := uniqueFormalIssues()
 
 	// A stale/contradictory websocket boundary must stop formal dispatch. The
 	// REST periods feed can be one issue ahead of the provider's bet endpoint.
-	lottery.UpdatePeriodState(code, "10114255902823", "10114255902824", now, 6)
+	lottery.UpdatePeriodState(code, current, next, now, 6)
 	lottery.UpdatePeriodsScheduleFullWithDuration(
 		code, "P-rest-future", "P-rest-future", now.Add(6*time.Second), now.Add(6*time.Second),
 		6, "", now,
@@ -200,8 +212,8 @@ func TestCurrentRejectsEmptyOrMismatchedSourceForEveryFormalShortLottery(t *test
 		t.Run(code, func(t *testing.T) {
 			lottery.ClearPeriodsSchedule(code)
 			t.Cleanup(func() { lottery.ClearPeriodsSchedule(code) })
-			current := "900000000000000000000000000001"
-			lottery.UpdatePeriodState(code, current, "900000000000000000000000000002", now, interval)
+			current, next := uniqueFormalIssues()
+			lottery.UpdatePeriodState(code, current, next, now, interval)
 			lottery.UpdatePeriodsScheduleFullWithDuration(
 				code, "rest-candidate", "rest-candidate", now.Add(time.Duration(interval)*time.Second),
 				now.Add(time.Duration(interval)*time.Second), interval, "", now,
@@ -234,8 +246,7 @@ func TestCurrentForInitialDispatchUsesFreshBoundaryForEveryFormalShortLottery(t 
 	} {
 		t.Run(code, func(t *testing.T) {
 			currentSnapshotCache.Delete(code)
-			current := "900000000000000000000000000002"
-			next := "900000000000000000000000000003"
+			current, next := uniqueFormalIssues()
 			lottery.UpdatePeriodState(code, current, next, now, interval)
 			recorder := &fakeSnapshotRecorder{id: 97}
 
@@ -262,7 +273,8 @@ func TestCurrentForInitialDispatchRejectsStaleFormalBoundary(t *testing.T) {
 	} {
 		t.Run(code, func(t *testing.T) {
 			currentSnapshotCache.Delete(code)
-			lottery.UpdatePeriodState(code, "900000000000000000000000000003", "900000000000000000000000000004", now.Add(-time.Minute), interval)
+			current, next := uniqueFormalIssues()
+			lottery.UpdatePeriodState(code, current, next, now.Add(-time.Minute), interval)
 			recorder := &fakeSnapshotRecorder{id: 98}
 
 			_, _, ok, err := CurrentForInitialDispatch(context.Background(), recorder, code, now)

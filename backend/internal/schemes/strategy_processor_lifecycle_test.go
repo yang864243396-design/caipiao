@@ -108,3 +108,51 @@ func TestWorkerRunWaitsForStrategyRecoveryBeforeReturning(t *testing.T) {
 		t.Fatal("Worker.Run returned before its strategy recovery child finished")
 	}
 }
+
+func TestStrategyProcessorCloseWaitsForConcurrentDrawRedeliveries(t *testing.T) {
+	started := make(chan struct{}, 3)
+	release := make(chan struct{})
+	var calls atomic.Int32
+	processor := &StrategyProcessor{recoverScopedFn: func(context.Context, string, string) error {
+		calls.Add(1)
+		started <- struct{}{}
+		<-release
+		return nil
+	}}
+
+	// JetStream may redeliver the same draw while the first delivery is still
+	// active. The processor must account for every child before Close returns;
+	// duplicate decision/outbox suppression remains the transaction's job.
+	for range 3 {
+		processor.NotifyDraw(context.Background(), "tron_ffc_6s", "100")
+	}
+	for range 3 {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			close(release)
+			t.Fatal("draw redelivery recovery did not start")
+		}
+	}
+
+	closed := make(chan struct{})
+	go func() {
+		processor.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		close(release)
+		t.Fatal("Close returned while redelivery recoveries were active")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not wait for redelivery recoveries")
+	}
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("recovery calls=%d, want each of three redeliveries accounted for", got)
+	}
+}
