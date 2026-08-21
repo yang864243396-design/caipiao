@@ -81,6 +81,7 @@ type InsertSchemePeriodDecisionParams struct {
 	WinningUnits       int
 	Status             string
 	Diagnostics        []byte
+	TargetDeadlineAt   pgtype.Timestamptz
 }
 
 func (q *Queries) InsertSchemePeriodDecision(ctx context.Context, arg InsertSchemePeriodDecisionParams) (int64, bool, error) {
@@ -89,12 +90,12 @@ func (q *Queries) InsertSchemePeriodDecision(ctx context.Context, arg InsertSche
 INSERT INTO scheme_period_decisions
     (scheme_id, lottery_code, source_period_no, source_bet_record_id, draw_hash,
      state_version_before, state_version_after, rule_version, rule_snapshot_hash,
-     local_hit, winning_units, status, diagnostics)
-VALUES ($1, $2, $3, NULLIF($4, 0), NULLIF($5, ''), $6, $7, $8, $9, $10, $11, $12, $13)
+     local_hit, winning_units, status, diagnostics, target_deadline_at)
+VALUES ($1, $2, $3, NULLIF($4, 0), NULLIF($5, ''), $6, $7, $8, $9, $10, $11, $12, $13, $14)
 ON CONFLICT (scheme_id, source_period_no) DO NOTHING
 RETURNING id`, arg.SchemeID, arg.LotteryCode, arg.SourcePeriodNo, arg.SourceBetRecordID, arg.DrawHash,
 		arg.StateVersionBefore, arg.StateVersionAfter, arg.RuleVersion, arg.RuleSnapshotHash,
-		arg.LocalHit, arg.WinningUnits, arg.Status, arg.Diagnostics).Scan(&id)
+		arg.LocalHit, arg.WinningUnits, arg.Status, arg.Diagnostics, arg.TargetDeadlineAt).Scan(&id)
 	if err == nil {
 		return id, true, nil
 	}

@@ -21,6 +21,7 @@ type shadowDecisionResult struct {
 	TargetPeriod string `json:"targetPeriod,omitempty"`
 	RequestID    string `json:"requestId,omitempty"`
 	SafeDeadline string `json:"safeDeadline,omitempty"`
+	Created      bool   `json:"-"`
 }
 
 func persistShadowDecision(ctx context.Context, q *sqlcdb.Queries, row sqlcdb.PendingFormalStrategyRow, stateVersionBefore int64, hit bool, winningUnits int) (shadowDecisionResult, error) {

@@ -208,5 +208,31 @@ func (p *StrategyProcessor) process(ctx context.Context, row sqlcdb.PendingForma
 	if err := qtx.MarkCloudBetRecordStrategyEvaluated(ctx, row.RecordID); err != nil {
 		return err
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	if formal && shadow.Status == "awaiting_target" && shadow.DecisionID > 0 {
+		return p.missExpiredFormalAwaitingTarget(ctx, shadow.DecisionID)
+	}
+	return nil
+}
+
+// missExpiredFormalAwaitingTarget deliberately runs after phase one's commit.
+// A transient failure leaves the waiting row intact for the durable recovery
+// path instead of rolling back the already-advanced local strategy state.
+func (p *StrategyProcessor) missExpiredFormalAwaitingTarget(ctx context.Context, decisionID int64) error {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	_, err = p.q.WithTx(tx).MissAwaitingContiguousTarget(ctx, sqlcdb.MissAwaitingContiguousTargetParams{
+		DecisionID:    decisionID,
+		FailureReason: "missed_contiguous_period",
+		Diagnostics:   []byte(`{"source":"formal_phase_one_expiry"}`),
+	})
+	if err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }

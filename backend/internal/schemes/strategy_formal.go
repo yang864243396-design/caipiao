@@ -8,17 +8,39 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"caipiao/backend/internal/cloud/schemestate"
 	"caipiao/backend/internal/db/sqlcdb"
 	"caipiao/backend/internal/lottery"
-	"caipiao/backend/internal/providerperiodtarget"
-	"caipiao/backend/internal/schemebetting"
 )
 
 var (
-	errNoFreshFormalProviderTarget = errors.New("no_fresh_provider_target")
-	errUnsafeFormalProviderTarget  = errors.New("unsafe_provider_target_deadline")
+	errNoFreshFormalProviderTarget   = errors.New("no_fresh_provider_target")
+	errUnsafeFormalProviderTarget    = errors.New("unsafe_provider_target_deadline")
+	ErrContiguousTargetConfiguration = errors.New("contiguous target configuration")
 )
+
+// ContiguousTargetConfigurationError identifies a chain configuration that
+// cannot safely derive the immediately following target deadline.
+type ContiguousTargetConfigurationError struct {
+	IntervalSec int
+}
+
+func (e *ContiguousTargetConfigurationError) Error() string {
+	return fmt.Sprintf("%s: draw interval must be positive (got %d)", ErrContiguousTargetConfiguration, e.IntervalSec)
+}
+
+func (e *ContiguousTargetConfigurationError) Unwrap() error {
+	return ErrContiguousTargetConfiguration
+}
+
+func contiguousTargetDeadline(drawnAt time.Time, intervalSec int, safety time.Duration) (time.Time, error) {
+	if intervalSec <= 0 {
+		return time.Time{}, &ContiguousTargetConfigurationError{IntervalSec: intervalSec}
+	}
+	return drawnAt.UTC().Add(time.Duration(intervalSec) * time.Second).Add(-safety), nil
+}
 
 func formalProviderTargetError(available bool, buildErr error) error {
 	if !available {
@@ -84,69 +106,72 @@ func (p *StrategyProcessor) tryProcessFormalCandidate(
 		return true, blocked, err
 	}
 
-	now := time.Now().UTC()
-	target, providerSnapshotID, ok, err := providerperiodtarget.Current(ctx, q, row.LotteryCode, row.PeriodNo, now)
+	deadline, err := contiguousTargetDeadline(
+		row.DrawnAt,
+		lottery.DrawIntervalSecForLottery(ctx, q, row.LotteryCode),
+		guajiPlaceCloseSafety,
+	)
 	if err != nil {
+		if errors.Is(err, ErrContiguousTargetConfiguration) {
+			blocked, blockErr := p.persistFormalConfigurationFailure(ctx, q, row, inst, definitionConfig, stateVersionBefore, result)
+			return true, blocked, blockErr
+		}
 		return true, shadowDecisionResult{}, err
 	}
-	if err := formalProviderTargetError(ok, nil); err != nil {
-		return true, shadowDecisionResult{}, err
-	}
-	command, err := schemebetting.BuildShadowCommand(schemebetting.ShadowCommandInput{
-		SchemeID: row.SchemeID, LotteryCode: row.LotteryCode, SourcePeriod: row.PeriodNo,
-		Target: target, ProviderSnapshotID: providerSnapshotID, StateVersion: stateVersionBefore + 1,
-		RuleSnapshotHash: row.RuleSnapshotHash.String, LocalHit: result.Hit, Now: now,
-		Budget: shadowDeadlineBudget(target), ShardCount: shadowOutboxShardCount,
-	})
-	if err != nil {
-		return true, shadowDecisionResult{}, formalProviderTargetError(true, err)
-	}
+	awaiting, err := p.persistFormalAwaitingTarget(ctx, q, row, inst, definitionConfig, stateVersionBefore, result, deadline)
+	return true, awaiting, err
+}
 
+// persistFormalAwaitingTarget is phase one of a formal contiguous chain. It
+// advances only local strategy state and commits the target wait; resolving a
+// period, producing a frozen request, and creating an Outbox are phase two.
+func (p *StrategyProcessor) persistFormalAwaitingTarget(
+	ctx context.Context,
+	q *sqlcdb.Queries,
+	row sqlcdb.PendingFormalStrategyRow,
+	inst sqlcdb.SchemeInstance,
+	definitionConfig []byte,
+	stateVersionBefore int64,
+	result schemestate.FormalRuleEvaluation,
+	deadline time.Time,
+) (shadowDecisionResult, error) {
 	if err := schemestate.ProcessStrategyAfterDraw(ctx, q, inst, row.PeriodNo, result.Hit, definitionConfig); err != nil {
-		return true, shadowDecisionResult{}, err
-	}
-	advanced, err := q.GetSchemeInstanceFull(ctx, row.SchemeID)
-	if err != nil {
-		return true, shadowDecisionResult{}, err
-	}
-	frozen, err := p.buildFormalFrozenRequest(ctx, q, advanced, command.TargetPeriod, command.RequestID)
-	if err != nil {
-		return true, shadowDecisionResult{}, fmt.Errorf("freeze formal request: %w", err)
+		return shadowDecisionResult{}, err
 	}
 	diagnostics, err := json.Marshal(map[string]any{
-		"mode": mode, "targetPeriod": command.TargetPeriod, "requestId": command.RequestID,
-		"safeDeadline": command.SafeDeadline.Format(time.RFC3339Nano), "chainId": execution.ChainID,
-		"chainSeq": execution.ChainSeq + 1,
+		"mode":           p.formalModeForLottery(row.LotteryCode),
+		"targetDeadline": deadline.UTC().Format(time.RFC3339Nano),
 	})
 	if err != nil {
-		return true, shadowDecisionResult{}, err
+		return shadowDecisionResult{}, err
 	}
 	decisionID, created, err := q.InsertSchemePeriodDecision(ctx, sqlcdb.InsertSchemePeriodDecisionParams{
 		SchemeID: row.SchemeID, LotteryCode: row.LotteryCode, SourcePeriodNo: row.PeriodNo,
 		SourceBetRecordID: row.RecordID, DrawHash: lottery.CanonicalDrawHash(row.LotteryCode, row.PeriodNo, row.Balls),
 		StateVersionBefore: stateVersionBefore, StateVersionAfter: stateVersionBefore + 1,
 		RuleVersion: row.RuleVersion, RuleSnapshotHash: row.RuleSnapshotHash,
-		LocalHit: result.Hit, WinningUnits: result.WinningUnits, Status: "completed", Diagnostics: diagnostics,
+		LocalHit: result.Hit, WinningUnits: result.WinningUnits, Status: "awaiting_target", Diagnostics: diagnostics,
+		TargetDeadlineAt: pgtype.Timestamptz{Time: deadline.UTC(), Valid: true},
 	})
 	if err != nil {
-		return true, shadowDecisionResult{}, err
+		return shadowDecisionResult{}, err
 	}
-	formal := shadowDecisionResult{Status: "completed", DecisionID: decisionID, TargetPeriod: command.TargetPeriod, RequestID: command.RequestID, SafeDeadline: command.SafeDeadline.Format(time.RFC3339Nano)}
-	if !created {
-		return true, formal, nil
+	return shadowDecisionResult{Status: "awaiting_target", DecisionID: decisionID, Created: created}, nil
+}
+
+func (p *StrategyProcessor) persistFormalConfigurationFailure(
+	ctx context.Context,
+	q *sqlcdb.Queries,
+	row sqlcdb.PendingFormalStrategyRow,
+	inst sqlcdb.SchemeInstance,
+	definitionConfig []byte,
+	stateVersionBefore int64,
+	result schemestate.FormalRuleEvaluation,
+) (shadowDecisionResult, error) {
+	if err := schemestate.ProcessStrategyAfterDraw(ctx, q, inst, row.PeriodNo, result.Hit, definitionConfig); err != nil {
+		return shadowDecisionResult{}, err
 	}
-	if err := q.InsertFormalSchemeBetOutbox(ctx, sqlcdb.InsertFormalSchemeBetOutboxParams{
-		DecisionID: decisionID, SchemeID: row.SchemeID, MemberID: inst.MemberID, LotteryCode: row.LotteryCode,
-		SourcePeriodNo: row.PeriodNo, TargetPeriodNo: command.TargetPeriod, Mode: mode,
-		RequestID: command.RequestID, PayloadHash: command.PayloadHash, Payload: command.Payload,
-		FrozenRequest: frozen, FrozenRequestHash: schemebetting.CanonicalJSONPayloadHash(frozen), ProviderSnapshotID: command.ProviderSnapshotID,
-		CloseAt: command.CloseAt, SafeDeadlineAt: command.SafeDeadline, ShardNo: int32(command.ShardNo),
-		SourceStateVersion: stateVersionBefore + 1, InitialBet: false,
-		ChainID: execution.ChainID, ChainSeq: execution.ChainSeq + 1,
-	}); err != nil {
-		return true, shadowDecisionResult{}, err
-	}
-	return true, formal, nil
+	return p.persistFormalBlocked(ctx, q, row, stateVersionBefore+1, result, "contiguous_target_configuration")
 }
 
 func (p *StrategyProcessor) persistFormalBlocked(

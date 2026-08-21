@@ -71,7 +71,8 @@ func (q *Queries) PendingFormalStrategyRowForSchemeDraw(ctx context.Context, rec
 SELECT c.id, c.scheme_id, COALESCE(c.lottery_code, ''), c.period_no,
        COALESCE(c.bet_content, ''), c.rule_snapshot, c.rule_version,
        c.rule_snapshot_hash, d.balls,
-       CASE c.status WHEN 'hit' THEN TRUE WHEN 'miss' THEN FALSE ELSE NULL END
+       CASE c.status WHEN 'hit' THEN TRUE WHEN 'miss' THEN FALSE ELSE NULL END,
+       d.drawn_at
 FROM cloud_bet_records c
 JOIN scheme_instances si ON si.id = c.scheme_id
 JOIN lottery_draws d ON d.lottery_code = c.lottery_code AND d.issue_no = c.period_no
@@ -90,7 +91,7 @@ WHERE c.scheme_id = $1
 ORDER BY c.placed_at, c.id
 LIMIT 1`, schemeID, lotteryCode, periodNo, expectedStateVersion, recordID).Scan(
 		&item.RecordID, &item.SchemeID, &item.LotteryCode, &item.PeriodNo,
-		&item.BetContent, &item.RuleSnapshot, &item.RuleVersion, &item.RuleSnapshotHash, &balls, &item.ProviderHit,
+		&item.BetContent, &item.RuleSnapshot, &item.RuleVersion, &item.RuleSnapshotHash, &balls, &item.ProviderHit, &item.DrawnAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

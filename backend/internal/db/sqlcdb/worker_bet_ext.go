@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -756,6 +757,7 @@ type PendingFormalStrategyRow struct {
 	RuleSnapshotHash pgtype.Text
 	Balls            []string
 	ProviderHit      pgtype.Bool
+	DrawnAt          time.Time
 }
 
 func (q *Queries) ListPendingFormalStrategyRows(ctx context.Context, rowLimit int32) ([]PendingFormalStrategyRow, error) {
@@ -766,7 +768,8 @@ func (q *Queries) ListPendingFormalStrategyRows(ctx context.Context, rowLimit in
 SELECT c.id, c.scheme_id, COALESCE(c.lottery_code, ''), c.period_no,
        COALESCE(c.bet_content, ''), c.rule_snapshot, c.rule_version,
        c.rule_snapshot_hash, d.balls,
-       CASE c.status WHEN 'hit' THEN TRUE WHEN 'miss' THEN FALSE ELSE NULL END
+       CASE c.status WHEN 'hit' THEN TRUE WHEN 'miss' THEN FALSE ELSE NULL END,
+       d.drawn_at
 FROM cloud_bet_records c
 JOIN lottery_draws d ON d.lottery_code = c.lottery_code AND d.issue_no = c.period_no
 WHERE c.sim_bet = FALSE
@@ -786,7 +789,7 @@ LIMIT $1`, rowLimit)
 	for rows.Next() {
 		var item PendingFormalStrategyRow
 		var balls []byte
-		if err := rows.Scan(&item.RecordID, &item.SchemeID, &item.LotteryCode, &item.PeriodNo, &item.BetContent, &item.RuleSnapshot, &item.RuleVersion, &item.RuleSnapshotHash, &balls, &item.ProviderHit); err != nil {
+		if err := rows.Scan(&item.RecordID, &item.SchemeID, &item.LotteryCode, &item.PeriodNo, &item.BetContent, &item.RuleSnapshot, &item.RuleVersion, &item.RuleSnapshotHash, &balls, &item.ProviderHit, &item.DrawnAt); err != nil {
 			return nil, err
 		}
 		item.Balls = ParseDrawBalls(balls)
