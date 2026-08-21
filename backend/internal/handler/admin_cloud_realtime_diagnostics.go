@@ -209,7 +209,7 @@ func diagnosticBodyKey(key string) bool {
 		return unicode.ToLower(r)
 	}, strings.TrimSpace(key))
 	switch normalized {
-	case "body", "rawbody", "response", "rawresponse", "responsebody", "providerbody", "providerresponse", "providerresponsebody":
+	case "body", "raw", "rawbody", "response", "rawresponse", "responsebody", "providerbody", "providerresponse", "providerresponsebody":
 		return true
 	default:
 		return false

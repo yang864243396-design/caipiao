@@ -100,6 +100,69 @@ func TestRuntimeDiagnosticSanitizerRedactsMultilineJSONBodiesBeforeSecrets(t *te
 	}
 }
 
+func TestRuntimeDiagnosticSanitizerRedactsNestedRawPayloadsCaseInsensitively(t *testing.T) {
+	const (
+		rawSecret      = "raw-first-secret\nraw-later-secret"
+		bodySecret     = "body-secret"
+		tokenSecret    = "token-secret"
+		passwordSecret = "password-secret"
+		outerSafe      = "outer-safe"
+		nestedSafe     = "nested-safe"
+	)
+
+	assertSanitized := func(t *testing.T, sanitized string) {
+		t.Helper()
+		for _, leaked := range []string{rawSecret, "raw-first-secret", "raw-later-secret", bodySecret, tokenSecret, passwordSecret} {
+			if strings.Contains(sanitized, leaked) {
+				t.Fatalf("nested diagnostic leaked %q in %s", leaked, sanitized)
+			}
+		}
+		for _, safe := range []string{outerSafe, nestedSafe} {
+			if !strings.Contains(sanitized, safe) {
+				t.Fatalf("nested diagnostic lost safe value %q in %s", safe, sanitized)
+			}
+		}
+	}
+
+	t.Run("JSON", func(t *testing.T) {
+		input := `{
+  "safe": "outer-safe",
+  "nested": {
+    "RaW": "raw-first-secret\nraw-later-secret",
+    "body": "body-secret",
+    "token": "token-secret",
+    "password": "password-secret",
+    "safe": "nested-safe"
+  }
+}`
+
+		got := sanitizeDiagnosticString(input)
+		if !json.Valid([]byte(got)) {
+			t.Fatalf("sanitized nested diagnostic is not valid JSON: %q", got)
+		}
+		assertSanitized(t, got)
+	})
+
+	t.Run("map", func(t *testing.T) {
+		input := map[string]any{
+			"safe": outerSafe,
+			"nested": map[string]any{
+				"rAw":      rawSecret,
+				"body":     bodySecret,
+				"token":    tokenSecret,
+				"password": passwordSecret,
+				"safe":     nestedSafe,
+			},
+		}
+
+		got, err := json.Marshal(sanitizeDiagnosticValue(input))
+		if err != nil {
+			t.Fatalf("marshal sanitized nested map: %v", err)
+		}
+		assertSanitized(t, string(got))
+	})
+}
+
 func TestRuntimeDiagnosticSanitizerRedactsArbitraryMultilineBodyThroughEnd(t *testing.T) {
 	input := "request failed token=prefix-token\nprovider response:\nstatus=500\npassword=inside-password\nbody:\nfirst body line\nlate-body-secret\ntrailer=must-not-leak"
 
