@@ -29,6 +29,13 @@ func roundLottBetAmount(unit float64, betsNums, mult int) float64 {
 	return math.Round(unit*float64(betsNums)*float64(mult)*1000+1e-9) / 1000
 }
 
+func acceptedFinancialAmount(frozenAmount, providerWireAmount float64) float64 {
+	if frozenAmount > 0 {
+		return frozenAmount
+	}
+	return providerWireAmount
+}
+
 func lottBetContentForRequest(meta guajibet.RuleMeta, content string, unit float64, betsNums, mult int) guaji.LottBetContent {
 	item := guaji.LottBetContent{
 		BetContent: content,
@@ -220,7 +227,7 @@ func (s *Service) placeRealBetWithRow(
 		ThirdPartyBetID: betRes.ThirdPartyBetID,
 		Periods:         periods,
 		Currency:        currency,
-		Amount:          betRes.Amount,
+		Amount:          acceptedFinancialAmount(req.Amount, betRes.Amount),
 	}, nil
 }
 

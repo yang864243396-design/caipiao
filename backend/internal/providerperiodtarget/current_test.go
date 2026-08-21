@@ -101,3 +101,37 @@ func TestCurrentRejectsSourcePeriod(t *testing.T) {
 		t.Fatal("source period must not be recorded as a new target")
 	}
 }
+
+func TestCurrentUsesFreshWSNextPeriodForTronSixSecondFormalTarget(t *testing.T) {
+	now := time.Now().UTC()
+	code := "tron_ffc_6s"
+	currentSnapshotCache.Delete(code)
+	lottery.ClearPeriodsSchedule(code)
+
+	// The periods feed can expose a future period as its first candidate. The
+	// provider still accepts the fresh draw websocket's next_periods value.
+	lottery.UpdatePeriodsScheduleFullWithDuration(
+		code, "10114255902823", "10114255902823", now.Add(12*time.Second), now.Add(12*time.Second),
+		6, now.Add(12*time.Second).Format("2006-01-02 15:04:05"), now.Add(6*time.Second),
+	)
+	lottery.UpdatePeriodState(code, "10114255902821", "10114255902822", now, 6)
+	lottery.ClearPeriodsSchedule(code)
+	recorder := &fakeSnapshotRecorder{id: 94}
+
+	target, snapshotID, ok, err := Current(context.Background(), recorder, code, "10114255902821", now.Add(100*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || snapshotID != 94 {
+		t.Fatalf("snapshot=%d ok=%v", snapshotID, ok)
+	}
+	if target.PeriodNo != "10114255902822" {
+		t.Fatalf("target period=%s want fresh WS next period", target.PeriodNo)
+	}
+	if wantClose := now.Add(6 * time.Second); !target.CloseAt.Equal(wantClose) {
+		t.Fatalf("target close=%s want=%s", target.CloseAt, wantClose)
+	}
+	if recorder.params.Source != "guaji_draw_ws_next" {
+		t.Fatalf("snapshot source=%q want guaji_draw_ws_next", recorder.params.Source)
+	}
+}

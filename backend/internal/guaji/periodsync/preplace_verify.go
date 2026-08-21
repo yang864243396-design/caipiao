@@ -43,6 +43,9 @@ type prePlaceVerifyCache struct {
 func freshSharedOpenPeriod(lotteryCode string, now time.Time) (prePlaceVerifyResult, bool) {
 	lotteryCode = strings.TrimSpace(lotteryCode)
 	now = now.UTC()
+	if state, ok := lottery.FreshShortPeriodWSBetTarget(lotteryCode, "", now); ok {
+		return prePlaceVerifyResult{Period: state.NextIssue, CloseAt: state.CloseAt.UTC()}, true
+	}
 	if lotteryCode == "" || !lottery.PeriodsScheduleFresh(lotteryCode, lottery.PeriodsFallbackStaleAge, now) {
 		return prePlaceVerifyResult{}, false
 	}

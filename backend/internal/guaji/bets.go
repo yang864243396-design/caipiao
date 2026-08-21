@@ -121,6 +121,15 @@ func (c *Client) PlaceLottBet(ctx context.Context, accessToken string, req LottB
 		}
 		return nil, fmt.Errorf("guaji place bet: upstream did not return bet id (periods=%q rule_id=%s raw=%s)", res.Periods, req.BetContents[0].RuleID, truncate(string(raw), 256))
 	}
+	// A successful V6 response and its exact list lookup may omit amount even
+	// though the provider has accepted the order. The immutable request is the
+	// financial identity used by the exact fingerprint, so retain that amount
+	// instead of turning an accepted order into an unresolved outbox.
+	if res.Amount <= 0 {
+		for _, content := range req.BetContents {
+			res.Amount += content.BetAmount
+		}
+	}
 	return &res, nil
 }
 
@@ -496,6 +505,88 @@ func (c *Client) findBetIDByFingerprint(ctx context.Context, accessToken string,
 		}
 	}
 	return "", lastErr
+}
+
+type ExactLottBetQuery struct {
+	Request LottBetRequest
+	Periods string
+}
+
+// FindExactLottBets reads the provider list once and resolves a batch of frozen
+// requests from the same account. Each result still requires one unique full
+// fingerprint match.
+func (c *Client) FindExactLottBets(ctx context.Context, accessToken string, queries []ExactLottBetQuery) ([]LottBetResult, []error) {
+	results := make([]LottBetResult, len(queries))
+	errs := make([]error, len(queries))
+	if len(queries) == 0 {
+		return results, errs
+	}
+	env, raw, err := c.fetchWebBetsRawShared(ctx, accessToken, 30, 1)
+	if err != nil {
+		for i := range errs {
+			errs[i] = err
+		}
+		return results, errs
+	}
+	if err := c.parseEnvelope(env); err != nil {
+		for i := range errs {
+			errs[i] = err
+		}
+		return results, errs
+	}
+	var wrap struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &wrap); err != nil {
+		for i := range errs {
+			errs[i] = err
+		}
+		return results, errs
+	}
+	for i, query := range queries {
+		results[i], errs[i] = findExactLottBetInRows(wrap.Data, query.Request, query.Periods)
+	}
+	return results, errs
+}
+
+// FindExactLottBet performs a read-only lookup of one provider order using the
+// complete frozen request fingerprint. It never places or retries a bet and it
+// refuses both zero and multiple matches.
+func (c *Client) FindExactLottBet(ctx context.Context, accessToken string, req LottBetRequest, periods string) (LottBetResult, error) {
+	results, errs := c.FindExactLottBets(ctx, accessToken, []ExactLottBetQuery{{Request: req, Periods: periods}})
+	return results[0], errs[0]
+}
+
+func findExactLottBetInRows(rows []map[string]any, req LottBetRequest, periods string) (LottBetResult, error) {
+	periods = strings.TrimSpace(periods)
+	if periods == "" {
+		return LottBetResult{}, fmt.Errorf("guaji find exact bet: empty periods")
+	}
+	matches := make([]LottBetResult, 0, 1)
+	for _, row := range rows {
+		if !webBetMatchesFingerprint(row, req, periods) {
+			continue
+		}
+		id := rawAnyID(row["id"])
+		amount, amountOK := floatAny(row["bet_amount"])
+		if id == "" || !amountOK || amount <= 0 {
+			continue
+		}
+		matches = append(matches, LottBetResult{
+			ThirdPartyBetID: id,
+			Periods:         strings.TrimSpace(stringAny(row["periods"])),
+			Amount:          amount,
+			Currency:        intAny(row["currency"]),
+		})
+	}
+	switch len(matches) {
+	case 1:
+		return matches[0], nil
+	case 0:
+		return LottBetResult{}, fmt.Errorf("%w: periods=%s", ErrWebBetNotFound, periods)
+	default:
+		return LottBetResult{}, fmt.Errorf("guaji find exact bet: ambiguous periods=%s matches=%d", periods, len(matches))
+	}
 }
 
 type sharedWebBetListResponse struct {

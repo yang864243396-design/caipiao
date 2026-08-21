@@ -52,6 +52,40 @@ func PeriodStateFor(lotteryCode string) (PeriodState, bool) {
 	return st, ok
 }
 
+// FreshShortPeriodWSBetTarget returns the provider websocket's next_periods
+// value for formal short-period betting. The periods REST feed may expose a
+// future candidate before the placement endpoint switches periods, so it must
+// not override a fresh websocket boundary for these lotteries.
+func FreshShortPeriodWSBetTarget(lotteryCode, sourcePeriod string, now time.Time) (PeriodState, bool) {
+	lotteryCode = strings.TrimSpace(lotteryCode)
+	switch lotteryCode {
+	case "tron_ffc_3s", "tron_ffc_6s", "tron_ffc_15s":
+	default:
+		return PeriodState{}, false
+	}
+	state, ok := PeriodStateFor(lotteryCode)
+	if !ok || state.IntervalSec <= 0 || state.IntervalSec > 15 {
+		return PeriodState{}, false
+	}
+	now = now.UTC()
+	updatedAt := state.UpdatedAt.UTC()
+	closeAt := state.CloseAt.UTC()
+	maxAge := time.Duration(state.IntervalSec) * time.Second
+	if updatedAt.IsZero() || now.Before(updatedAt) || now.Sub(updatedAt) > maxAge || closeAt.IsZero() || !now.Before(closeAt) {
+		return PeriodState{}, false
+	}
+	state.CurrentIssue = strings.TrimSpace(state.CurrentIssue)
+	state.NextIssue = strings.TrimSpace(state.NextIssue)
+	sourcePeriod = strings.TrimSpace(sourcePeriod)
+	if state.NextIssue == "" || state.NextIssue == sourcePeriod {
+		return PeriodState{}, false
+	}
+	if sourcePeriod != "" && state.CurrentIssue != sourcePeriod {
+		return PeriodState{}, false
+	}
+	return state, true
+}
+
 // BetCloseSec 距封盘多少秒内允许 Worker 尝试投注。
 func BetCloseSec(intervalSec int) int {
 	if intervalSec <= 0 {

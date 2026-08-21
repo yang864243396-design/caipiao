@@ -35,6 +35,33 @@ func TestVerifyOpenPeriodUsesFreshSharedScheduleWithoutRefresh(t *testing.T) {
 	}
 }
 
+func TestVerifyOpenPeriodUsesFreshWSNextForTronSixSecondBet(t *testing.T) {
+	code := "tron_ffc_6s"
+	lottery.ClearPeriodsSchedule(code)
+	now := time.Now().UTC()
+	lottery.UpdatePeriodsScheduleFullWithDuration(
+		code, "10114255902823", "10114255902823", now.Add(12*time.Second), now.Add(12*time.Second),
+		6, "", now.Add(6*time.Second),
+	)
+	lottery.UpdatePeriodState(code, "10114255902821", "10114255902822", now, 6)
+	syncer := &Syncer{prePlaceVerifications: newPrePlaceVerifyCache(time.Second)}
+	var refreshCalls atomic.Int32
+
+	result, err := syncer.verifyOpenPeriod(context.Background(), code, now.Add(100*time.Millisecond), func(context.Context) (prePlaceVerifyResult, error) {
+		refreshCalls.Add(1)
+		return prePlaceVerifyResult{Period: "unexpected"}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Period != "10114255902822" || !result.CloseAt.Equal(now.Add(6*time.Second)) {
+		t.Fatalf("result=%+v want fresh WS next period", result)
+	}
+	if refreshCalls.Load() != 0 {
+		t.Fatalf("refresh calls=%d want 0", refreshCalls.Load())
+	}
+}
+
 func TestFreshSharedOpenPeriodUsesRememberedRealCloseForProvisionalPeriod(t *testing.T) {
 	code := fmt.Sprintf("test_provisional_real_close_%d", time.Now().UnixNano())
 	lottery.ClearPeriodsSchedule(code)

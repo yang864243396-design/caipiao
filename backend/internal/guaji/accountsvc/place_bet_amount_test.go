@@ -50,3 +50,9 @@ func TestRoundLottBetAmount_preservesUnitProductForThirdPartyValidation(t *testi
 		t.Fatalf("got %v want 0.176", got)
 	}
 }
+
+func TestAcceptedFinancialAmountUsesFrozenTruncatedCharge(t *testing.T) {
+	if got := acceptedFinancialAmount(0.25, 0.252); got != 0.25 {
+		t.Fatalf("accepted financial amount=%v, want frozen charged amount 0.25", got)
+	}
+}

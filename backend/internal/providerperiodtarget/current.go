@@ -26,9 +26,9 @@ type snapshotCacheEntry struct {
 
 var currentSnapshotCache sync.Map // lotteryCode -> *snapshotCacheEntry
 
-// Current uses the existing lottery-wide periods schedule as the sole current
-// target. provider_period_snapshots receives an audit copy but never selects
-// or overrides the open period.
+// Current prefers a fresh provider websocket boundary for supported short
+// lotteries and falls back to the lottery-wide periods schedule. The selected
+// target is always copied into provider_period_snapshots for audit.
 func Current(
 	ctx context.Context,
 	recorder SnapshotRecorder,
@@ -38,7 +38,13 @@ func Current(
 	lotteryCode = strings.TrimSpace(lotteryCode)
 	sourcePeriod = strings.TrimSpace(sourcePeriod)
 	now = now.UTC()
-	if recorder == nil || lotteryCode == "" || !lottery.PeriodsScheduleFresh(lotteryCode, lottery.PeriodsFallbackStaleAge, now) {
+	if recorder == nil || lotteryCode == "" {
+		return schemebetting.PeriodSnapshot{}, 0, false, nil
+	}
+	if target, ok := freshShortPeriodWSNext(lotteryCode, sourcePeriod, now); ok {
+		return recordCurrentSnapshot(ctx, recorder, lotteryCode, target, "guaji_draw_ws_next")
+	}
+	if !lottery.PeriodsScheduleFresh(lotteryCode, lottery.PeriodsFallbackStaleAge, now) {
 		return schemebetting.PeriodSnapshot{}, 0, false, nil
 	}
 	schedule, ok := lottery.PeriodsScheduleFor(lotteryCode)
@@ -67,10 +73,35 @@ func Current(
 	target := schemebetting.PeriodSnapshot{
 		PeriodNo: periodNo, OpenAt: openAt, CloseAt: closeAt, ObservedAt: observedAt,
 	}
+	return recordCurrentSnapshot(ctx, recorder, lotteryCode, target, "guaji_periods_current")
+}
+
+func freshShortPeriodWSNext(lotteryCode, sourcePeriod string, now time.Time) (schemebetting.PeriodSnapshot, bool) {
+	state, ok := lottery.FreshShortPeriodWSBetTarget(lotteryCode, sourcePeriod, now)
+	if !ok {
+		return schemebetting.PeriodSnapshot{}, false
+	}
+	openAt := state.CloseAt.UTC().Add(-time.Duration(state.IntervalSec) * time.Second)
+	return schemebetting.PeriodSnapshot{
+		PeriodNo: state.NextIssue, OpenAt: openAt, CloseAt: state.CloseAt.UTC(), ObservedAt: state.UpdatedAt.UTC(),
+	}, true
+}
+
+func recordCurrentSnapshot(
+	ctx context.Context,
+	recorder SnapshotRecorder,
+	lotteryCode string,
+	target schemebetting.PeriodSnapshot,
+	source string,
+) (schemebetting.PeriodSnapshot, int64, bool, error) {
+	periodNo := strings.TrimSpace(target.PeriodNo)
+	openAt := target.OpenAt.UTC()
+	closeAt := target.CloseAt.UTC()
+	observedAt := target.ObservedAt.UTC()
 	canonical, err := json.Marshal(map[string]any{
 		"lotteryCode": lotteryCode, "periodNo": periodNo,
 		"openAt": openAt.Format(time.RFC3339Nano), "closeAt": closeAt.Format(time.RFC3339Nano),
-		"observedAt": observedAt.Format(time.RFC3339Nano), "source": "guaji_periods_current",
+		"observedAt": observedAt.Format(time.RFC3339Nano), "source": source,
 	})
 	if err != nil {
 		return schemebetting.PeriodSnapshot{}, 0, false, err
@@ -86,7 +117,7 @@ func Current(
 	}
 	snapshotID, err := recorder.RecordCurrentProviderPeriodSnapshot(ctx, sqlcdb.RecordCurrentProviderPeriodSnapshotParams{
 		LotteryCode: lotteryCode, PeriodNo: periodNo, OpenAt: openAt, CloseAt: closeAt,
-		ObservedAt: observedAt, Source: "guaji_periods_current",
+		ObservedAt: observedAt, Source: source,
 		SnapshotHash: snapshotHash, RawPayload: canonical,
 	})
 	if err != nil {

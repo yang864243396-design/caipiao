@@ -39,11 +39,76 @@ func TestPlaceLottBetStrictResolvesOneExactOrderWithoutSecondPost(t *testing.T) 
 	if result.ThirdPartyBetID != "999992" {
 		t.Fatalf("third-party order id=%q, want 999992", result.ThirdPartyBetID)
 	}
+	if result.Amount != 12 {
+		t.Fatalf("accepted amount=%v, want frozen request amount 12", result.Amount)
+	}
 	if got := capture.calls.Load(); got != 1 {
 		t.Fatalf("placement POST calls=%d, want exactly 1", got)
 	}
 	if got := capture.listCalls.Load(); got != 1 {
 		t.Fatalf("order-list GET calls=%d, want 1", got)
+	}
+}
+
+func TestFindExactLottBetReadsOneUniqueFrozenRequestWithoutPosting(t *testing.T) {
+	const period = "115202608190009"
+	c, capture := fakeGuaji(t,
+		map[string]any{"code": 500},
+		map[string]any{"code": 201, "data": []any{
+			map[string]any{
+				"id": 999999, "game_id": 29, "periods": period, "bet_amount": 12, "currency": 3,
+				"bet_contents": []any{map[string]any{
+					"rule_id": "13", "bet_content": ",,1,3,5", "amount_unit": 2,
+					"bets_nums": 2, "multiple": 3, "solo": false, "bet_amount": 12,
+				}},
+			},
+		}},
+	)
+	result, err := c.FindExactLottBet(context.Background(), wireToken, sampleReq(), period)
+	if err != nil {
+		t.Fatalf("read-only exact lookup failed: %v", err)
+	}
+	if result.ThirdPartyBetID != "999999" || result.Periods != period || result.Amount != 12 || result.Currency != 3 {
+		t.Fatalf("unexpected exact result: %+v", result)
+	}
+	if got := capture.calls.Load(); got != 0 {
+		t.Fatalf("read-only lookup sent %d placement POSTs", got)
+	}
+	if got := capture.listCalls.Load(); got != 1 {
+		t.Fatalf("order-list GET calls=%d, want 1", got)
+	}
+}
+
+func TestFindExactLottBetsUsesOneListReadForAccountBatch(t *testing.T) {
+	const firstPeriod = "115202608190010"
+	const secondPeriod = "115202608190011"
+	content := func(id int, period string) map[string]any {
+		return map[string]any{
+			"id": id, "game_id": 29, "periods": period, "bet_amount": 12, "currency": 3,
+			"bet_contents": []any{map[string]any{
+				"rule_id": "13", "bet_content": ",,1,3,5", "amount_unit": 2,
+				"bets_nums": 2, "multiple": 3, "solo": false, "bet_amount": 12,
+			}},
+		}
+	}
+	c, capture := fakeGuaji(t, map[string]any{"code": 500}, map[string]any{
+		"code": 201, "data": []any{content(1000010, firstPeriod), content(1000011, secondPeriod)},
+	})
+	results, errs := c.FindExactLottBets(context.Background(), wireToken, []guaji.ExactLottBetQuery{
+		{Request: sampleReq(), Periods: firstPeriod},
+		{Request: sampleReq(), Periods: secondPeriod},
+	})
+	if len(results) != 2 || len(errs) != 2 || errs[0] != nil || errs[1] != nil {
+		t.Fatalf("unexpected batch lookup: results=%+v errors=%v", results, errs)
+	}
+	if results[0].ThirdPartyBetID != "1000010" || results[1].ThirdPartyBetID != "1000011" {
+		t.Fatalf("unexpected batch ids: %+v", results)
+	}
+	if got := capture.listCalls.Load(); got != 1 {
+		t.Fatalf("account batch list GET calls=%d, want 1", got)
+	}
+	if got := capture.calls.Load(); got != 0 {
+		t.Fatalf("account batch sent %d placement POSTs", got)
 	}
 }
 

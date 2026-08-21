@@ -18,14 +18,26 @@ import (
 	"caipiao/backend/internal/schemebetting"
 )
 
-type providerAmountTestPlacer struct{}
+type providerAmountTestPlacer struct {
+	result guajibet.Result
+}
 
 func (providerAmountTestPlacer) Enabled() bool { return true }
 func (providerAmountTestPlacer) PlaceRealBet(context.Context, string, guajibet.Request) (guajibet.Result, error) {
 	return guajibet.Result{}, errors.New("not used")
 }
 func (providerAmountTestPlacer) MirrorBetDebitLedger(context.Context, *sqlcdb.Queries, int64, string, float64, int64, string) error {
-	return errors.New("not used")
+	return nil
+}
+func (placer providerAmountTestPlacer) ResolveAcceptedBet(context.Context, string, guajibet.Request) (guajibet.Result, error) {
+	return placer.result, nil
+}
+func (placer providerAmountTestPlacer) ResolveAcceptedBets(_ context.Context, _ string, requests []guajibet.Request) []guajibet.AcceptanceLookup {
+	lookups := make([]guajibet.AcceptanceLookup, len(requests))
+	for i := range lookups {
+		lookups[i].Result = placer.result
+	}
+	return lookups
 }
 
 func TestResolveUnknownPersistsFloatProviderAmount(t *testing.T) {
@@ -65,14 +77,18 @@ LIMIT 1`).Scan(&snapshotID, &lotteryCode); err != nil {
 		t.Fatal(err)
 	}
 
-	unique := fmt.Sprintf("provider-amount-%d", time.Now().UnixNano())
-	targetPeriod := unique + "-target"
+	unique := fmt.Sprintf("pa%d", time.Now().UnixNano())
+	targetPeriod := unique + "t"
 	frozen, err := json.Marshal(FrozenGuajiRequest{
-		RequestID:     unique,
-		MemberAccount: "integration-test",
+		RequestID:       unique,
+		MemberAccount:   "integration-test",
+		LotteryLabel:    "integration lottery",
+		LotteryCategory: "ssc",
+		LocalBetPayload: json.RawMessage(`{}`),
 		Request: guajibet.Request{
 			LotteryCode: lotteryCode,
 			IssueNo:     targetPeriod,
+			PlayMethod:  "integration play",
 			Amount:      0.2,
 			Currency:    "USDT",
 		},
@@ -97,27 +113,24 @@ RETURNING id`, memberID, lotteryCode, targetPeriod, unique, unique+"-hash", froz
 	}
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM scheme_betting_admin_actions WHERE outbox_id=$1`, outboxID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM bet_orders WHERE order_no=$1`, unique)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM scheme_bet_outbox WHERE id=$1`, outboxID)
 	})
 
-	finalizer := NewAcceptanceFinalizer(pool, providerAmountTestPlacer{})
-	err = finalizer.ResolveUnknown(ctx, outboxID, "integration-test", "verify provider amount binding", schemebetting.UnknownResolution{
-		Outcome:           "accepted",
-		Evidence:          "provider accepted test order",
-		ProviderOrderID:   unique + "-order",
-		AcceptedPeriod:    unique + "-other-period",
-		ProviderAmount:    0.2,
-		ProviderAccountID: accountID,
-		ProviderCurrency:  "USDT",
-	})
+	finalizer := NewAcceptanceFinalizer(pool, providerAmountTestPlacer{result: guajibet.Result{
+		ThirdPartyBetID: unique + "-order", Periods: unique + "p", Amount: 0.2,
+		GuajiAccountID: accountID, Currency: "USDT",
+	}})
+	err = finalizer.RecoverUnknown(ctx, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var state, storedAmount string
+	var finalized bool
 	if err := pool.QueryRow(ctx, `
-SELECT state, COALESCE(provider_amount::text, '')
+SELECT state, COALESCE(provider_amount::text, ''), financial_finalized_at IS NOT NULL
 FROM scheme_bet_outbox
-WHERE id=$1`, outboxID).Scan(&state, &storedAmount); err != nil {
+WHERE id=$1`, outboxID).Scan(&state, &storedAmount, &finalized); err != nil {
 		t.Fatal(err)
 	}
 	if state != string(schemebetting.OutboxAcceptedWrongPeriod) {
@@ -125,5 +138,15 @@ WHERE id=$1`, outboxID).Scan(&state, &storedAmount); err != nil {
 	}
 	if storedAmount != "0.200" {
 		t.Fatalf("provider_amount=%q, want exact numeric text 0.200", storedAmount)
+	}
+	if !finalized {
+		t.Fatal("accepted wrong-period provider order was not financially finalized")
+	}
+	var storedPeriod string
+	if err := pool.QueryRow(ctx, `SELECT issue_no FROM bet_orders WHERE order_no=$1`, unique).Scan(&storedPeriod); err != nil {
+		t.Fatal(err)
+	}
+	if storedPeriod != unique+"p" {
+		t.Fatalf("bet order issue=%q, want provider accepted period", storedPeriod)
 	}
 }

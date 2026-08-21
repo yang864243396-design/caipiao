@@ -156,7 +156,7 @@ WHERE outbox_id = $1
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
-	if resolvedState == schemebetting.OutboxAccepted {
+	if resolvedState == schemebetting.OutboxAccepted || resolvedState == schemebetting.OutboxAcceptedWrongPeriod {
 		return finalizer.FinalizeAccepted(ctx, outboxID)
 	}
 	return nil
@@ -172,7 +172,7 @@ func (finalizer *AcceptanceFinalizer) RecoverAccepted(ctx context.Context, limit
 	rows, err := finalizer.pool.Query(ctx, `
 SELECT id
 FROM scheme_bet_outbox
-WHERE state = 'accepted' AND financial_finalized_at IS NULL
+WHERE state IN ('accepted', 'accepted_wrong_period') AND financial_finalized_at IS NULL
 ORDER BY terminal_at, id
 LIMIT $1`, limit)
 	if err != nil {
@@ -200,6 +200,116 @@ LIMIT $1`, limit)
 	return nil
 }
 
+type unknownRecoveryCandidate struct {
+	id     int64
+	frozen FrozenGuajiRequest
+}
+
+// RecoverUnknown claims a bounded batch of ambiguous placements and performs
+// read-only exact provider lookups. A missing or ambiguous match is left
+// frozen for a later backoff attempt; it is never converted to rejected.
+func (finalizer *AcceptanceFinalizer) RecoverUnknown(ctx context.Context, limit int32) error {
+	if finalizer == nil {
+		return nil
+	}
+	resolver, hasSingleResolver := finalizer.placer.(guajibet.AcceptanceResolver)
+	batchResolver, hasBatchResolver := finalizer.placer.(guajibet.AcceptanceBatchResolver)
+	if !hasSingleResolver && !hasBatchResolver {
+		return nil
+	}
+	if limit <= 0 {
+		limit = 32
+	}
+	rows, err := finalizer.pool.Query(ctx, `
+WITH candidates AS (
+    SELECT id
+    FROM scheme_bet_outbox
+    WHERE state IN ('sent_unknown', 'external_acceptance_unknown')
+      AND provider_reconcile_next_at <= clock_timestamp()
+    ORDER BY provider_reconcile_next_at, id
+    FOR UPDATE SKIP LOCKED
+    LIMIT $1
+), claimed AS (
+    UPDATE scheme_bet_outbox o
+    SET provider_reconcile_attempts = provider_reconcile_attempts + 1,
+        provider_reconcile_next_at = clock_timestamp() + LEAST(
+            interval '30 seconds',
+            interval '250 milliseconds' * power(2::double precision, LEAST(provider_reconcile_attempts, 7))
+        ),
+        updated_at = clock_timestamp()
+    FROM candidates c
+    WHERE o.id = c.id
+    RETURNING o.id, o.frozen_request
+)
+SELECT id, frozen_request FROM claimed`, limit)
+	if err != nil {
+		return err
+	}
+	candidates := make([]unknownRecoveryCandidate, 0, limit)
+	for rows.Next() {
+		var candidate unknownRecoveryCandidate
+		var frozenRaw []byte
+		if err := rows.Scan(&candidate.id, &frozenRaw); err != nil {
+			rows.Close()
+			return err
+		}
+		if err := json.Unmarshal(frozenRaw, &candidate.frozen); err != nil {
+			continue
+		}
+		candidates = append(candidates, candidate)
+	}
+	rowsErr := rows.Err()
+	rows.Close()
+	if rowsErr != nil {
+		return rowsErr
+	}
+	if hasBatchResolver {
+		grouped := make(map[string][]unknownRecoveryCandidate)
+		for _, candidate := range candidates {
+			account := strings.TrimSpace(candidate.frozen.MemberAccount)
+			grouped[account] = append(grouped[account], candidate)
+		}
+		for account, accountCandidates := range grouped {
+			requests := make([]guajibet.Request, len(accountCandidates))
+			for i := range accountCandidates {
+				requests[i] = accountCandidates[i].frozen.Request
+			}
+			lookups := batchResolver.ResolveAcceptedBets(ctx, account, requests)
+			for i, lookup := range lookups {
+				if i >= len(accountCandidates) || lookup.Err != nil {
+					continue
+				}
+				if err := finalizer.resolveRecoveredUnknown(ctx, accountCandidates[i].id, lookup.Result); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	for _, candidate := range candidates {
+		accepted, err := resolver.ResolveAcceptedBet(ctx, candidate.frozen.MemberAccount, candidate.frozen.Request)
+		if err == nil {
+			if err := finalizer.resolveRecoveredUnknown(ctx, candidate.id, accepted); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (finalizer *AcceptanceFinalizer) resolveRecoveredUnknown(ctx context.Context, outboxID int64, accepted guajibet.Result) error {
+	resolution := schemebetting.UnknownResolution{
+		Outcome:           "accepted",
+		Evidence:          "automatic exact provider order reconciliation",
+		ProviderOrderID:   accepted.ThirdPartyBetID,
+		AcceptedPeriod:    accepted.Periods,
+		ProviderAmount:    accepted.Amount,
+		ProviderAccountID: accepted.GuajiAccountID,
+		ProviderCurrency:  accepted.Currency,
+	}
+	return finalizer.ResolveUnknown(ctx, outboxID, "scheme-betting-reconciler", "exact provider order fingerprint matched", resolution)
+}
+
 func (finalizer *AcceptanceFinalizer) FinalizeAccepted(ctx context.Context, outboxID int64) error {
 	if finalizer == nil || outboxID <= 0 {
 		return errors.New("accepted bet finalizer is not configured")
@@ -220,7 +330,7 @@ SELECT frozen_request, COALESCE(provider_order_no, ''), COALESCE(accepted_period
        COALESCE(provider_account_id, 0), COALESCE(provider_currency, ''), provider_amount,
        member_id, COALESCE(scheme_id, ''), chain_seq, origin, COALESCE(local_order_no, '')
 FROM scheme_bet_outbox
-WHERE id = $1 AND state = 'accepted' AND financial_finalized_at IS NULL
+WHERE id = $1 AND state IN ('accepted', 'accepted_wrong_period') AND financial_finalized_at IS NULL
 FOR UPDATE`, outboxID).Scan(&frozenRaw, &providerOrder, &acceptedPeriod, &providerAccountID,
 		&providerCurrency, &providerAmount, &memberID, &schemeID, &chainSeq, &origin, &localOrderNo)
 	if err != nil {
@@ -307,7 +417,7 @@ LIMIT 1`, orderNo, memberID, frozen.Request.LotteryCode, frozen.LotteryLabel,
 		if _, err := tx.Exec(ctx, `
 UPDATE scheme_bet_outbox
 SET financial_finalized_at = now(), updated_at = now()
-WHERE id = $1 AND state = 'accepted'`, outboxID); err != nil {
+WHERE id = $1 AND state IN ('accepted', 'accepted_wrong_period')`, outboxID); err != nil {
 			return err
 		}
 		return tx.Commit(ctx)
@@ -341,7 +451,7 @@ WHERE scheme_id = $1 AND period_no = $2`, schemeID, acceptedPeriod, frozen.RuleS
 	}
 	if _, err := tx.Exec(ctx, `UPDATE scheme_bet_outbox
 SET local_order_no = $2, local_cloud_record_id = $3, financial_finalized_at = now(), updated_at = now()
-WHERE id = $1 AND state = 'accepted'`, outboxID, orderNo, cloudRecordID); err != nil {
+WHERE id = $1 AND state IN ('accepted', 'accepted_wrong_period')`, outboxID, orderNo, cloudRecordID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE scheme_instances

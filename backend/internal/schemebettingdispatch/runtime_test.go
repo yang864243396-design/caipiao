@@ -39,8 +39,9 @@ func (err fakeDefinitelyNotSentError) Unwrap() error           { return err.err 
 func (err fakeDefinitelyNotSentError) DefinitelyNotSent() bool { return true }
 
 type fakeAcceptedRecovery struct {
-	calls int
-	err   error
+	calls        int
+	unknownCalls int
+	err          error
 }
 
 type fakePeriodVerifier struct {
@@ -64,6 +65,11 @@ func (verifier *fakePeriodVerifier) VerifyOpenPeriodForMember(context.Context, s
 
 func (recovery *fakeAcceptedRecovery) RecoverAccepted(context.Context, int32) error {
 	recovery.calls++
+	return recovery.err
+}
+
+func (recovery *fakeAcceptedRecovery) RecoverUnknown(context.Context, int32) error {
+	recovery.unknownCalls++
 	return recovery.err
 }
 
@@ -280,6 +286,9 @@ func TestRunAcceptanceRecoveryAfterSuccessfulAbandonedDispatchSweep(t *testing.T
 	}
 	if recovery.calls != 1 {
 		t.Fatalf("recovery calls=%d want 1", recovery.calls)
+	}
+	if recovery.unknownCalls != 1 {
+		t.Fatalf("unknown recovery calls=%d want 1", recovery.unknownCalls)
 	}
 }
 

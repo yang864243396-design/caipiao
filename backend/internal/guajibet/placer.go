@@ -53,3 +53,20 @@ type Placer interface {
 	PlaceRealBet(ctx context.Context, memberAccount string, req Request) (Result, error)
 	MirrorBetDebitLedger(ctx context.Context, qtx *sqlcdb.Queries, memberID int64, orderNo string, stake float64, guajiAccountID int64, currency string) error
 }
+
+// AcceptanceResolver only reads provider orders. It is deliberately separate
+// from Placer so reconciliation can never issue a second placement POST.
+type AcceptanceResolver interface {
+	ResolveAcceptedBet(ctx context.Context, memberAccount string, req Request) (Result, error)
+}
+
+type AcceptanceLookup struct {
+	Result Result
+	Err    error
+}
+
+// AcceptanceBatchResolver resolves one account's frozen requests from one
+// provider-list snapshot.
+type AcceptanceBatchResolver interface {
+	ResolveAcceptedBets(ctx context.Context, memberAccount string, requests []Request) []AcceptanceLookup
+}

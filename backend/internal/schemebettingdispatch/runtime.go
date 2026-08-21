@@ -209,6 +209,10 @@ type acceptedRecovery interface {
 	RecoverAccepted(context.Context, int32) error
 }
 
+type unknownRecovery interface {
+	RecoverUnknown(context.Context, int32) error
+}
+
 type unknownAcceptanceResolver interface {
 	ResolveUnknown(context.Context, int64, string, string, schemebetting.UnknownResolution) error
 }
@@ -512,6 +516,11 @@ func runAcceptanceRecovery(ctx context.Context, sweepErr error, recovery accepte
 	}
 	if recovery == nil {
 		return nil
+	}
+	if unresolved, ok := recovery.(unknownRecovery); ok {
+		if err := unresolved.RecoverUnknown(ctx, limit); err != nil {
+			return err
+		}
 	}
 	return recovery.RecoverAccepted(ctx, limit)
 }
