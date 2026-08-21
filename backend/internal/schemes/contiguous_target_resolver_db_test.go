@@ -4,14 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/joho/godotenv"
-
-	"caipiao/backend/internal/config"
 	"caipiao/backend/internal/db"
 	"caipiao/backend/internal/db/sqlcdb"
 	"caipiao/backend/internal/lottery"
@@ -161,12 +159,11 @@ type resolverEntryFixture struct {
 
 func newResolverEntryFixture(t *testing.T) *resolverEntryFixture {
 	t.Helper()
-	_ = godotenv.Load("../../.env")
-	cfg := config.Load()
-	if cfg.DatabaseURL == "" {
+	databaseURL, ok := os.LookupEnv("DATABASE_URL")
+	if !ok || databaseURL == "" {
 		t.Skip("DATABASE_URL not set")
 	}
-	pool, err := db.Connect(context.Background(), cfg.DatabaseURL, 16, 0)
+	pool, err := db.Connect(context.Background(), databaseURL, 16, 0)
 	if err != nil {
 		t.Skipf("database unavailable: %v", err)
 	}
@@ -258,7 +255,11 @@ VALUES ($1, $2, $3, 'custom', 'resolver entry test', $4, 'test', 'running',
 }
 
 func nextResolverEntryBoundary() (string, string) {
-	n := resolverEntryIssueCounter.Add(1)
+	// Each fixture owns a small monotonic range because fault tests may advance
+	// the shared production period state beyond their exact N -> N+1 boundary.
+	// Reserving ten issues keeps the next sequential fixture ahead without
+	// weakening production replay rejection or resetting package-global state.
+	n := resolverEntryIssueCounter.Add(10)
 	source := fmt.Sprintf("99999999999999999999999%07d", n)
 	return source, incrementDecimal(source)
 }
@@ -298,26 +299,30 @@ func (f *resolverEntryFixture) assertCompletedOnce(decisionID int64) schemebetti
 	var status, target string
 	var instanceChainSeq, outboxChainSeq int64
 	var outboxCount int
-	var frozenRaw string
+	var requestID, frozenRaw string
 	if err := f.pool.QueryRow(f.ctx, `
 SELECT d.status, d.target_period_no, i.chain_seq,
        (SELECT COUNT(*)::int FROM scheme_bet_outbox o WHERE o.decision_id = d.id),
-       COALESCE((SELECT o.chain_seq FROM scheme_bet_outbox o WHERE o.decision_id = d.id), 0),
+	   COALESCE((SELECT o.request_id FROM scheme_bet_outbox o WHERE o.decision_id = d.id), ''),
+	   COALESCE((SELECT o.chain_seq FROM scheme_bet_outbox o WHERE o.decision_id = d.id), 0),
        COALESCE((SELECT o.frozen_request::text FROM scheme_bet_outbox o WHERE o.decision_id = d.id), '{}')
 FROM scheme_period_decisions d
 JOIN scheme_instances i ON i.id = d.scheme_id
-WHERE d.id = $1`, decisionID).Scan(&status, &target, &instanceChainSeq, &outboxCount, &outboxChainSeq, &frozenRaw); err != nil {
+WHERE d.id = $1`, decisionID).Scan(&status, &target, &instanceChainSeq, &outboxCount, &requestID, &outboxChainSeq, &frozenRaw); err != nil {
 		f.t.Fatal(err)
 	}
 	if status != "completed" || target != f.target || instanceChainSeq != 5 || outboxCount != 1 || outboxChainSeq != 5 {
 		f.t.Fatalf("status=%q target=%q chain=%d outboxes=%d outboxChain=%d", status, target, instanceChainSeq, outboxCount, outboxChainSeq)
 	}
+	if requestID == "" {
+		f.t.Fatal("completed contiguous decision has an empty request_id")
+	}
 	var frozen schemebettingdispatch.FrozenGuajiRequest
 	if err := json.Unmarshal([]byte(frozenRaw), &frozen); err != nil {
 		f.t.Fatal(err)
 	}
-	if frozen.Request.IssueNo != f.target {
-		f.t.Fatalf("frozen issue=%q want %q", frozen.Request.IssueNo, f.target)
+	if frozen.Request.IssueNo != f.target || frozen.RequestID != requestID {
+		f.t.Fatalf("frozen issue/request=%q/%q want %q/%q", frozen.Request.IssueNo, frozen.RequestID, f.target, requestID)
 	}
 	return frozen
 }

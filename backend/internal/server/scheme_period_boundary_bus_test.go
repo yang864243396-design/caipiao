@@ -341,6 +341,81 @@ func TestContiguousShardRuntimeLeaseAssertionFailureStartsNothing(t *testing.T) 
 	}
 }
 
+func TestContiguousShardRuntimeDatabaseFailureDoesNotCancelSiblingShard(t *testing.T) {
+	readiness := newContiguousRecoveryReadiness([]int32{4, 5})
+	readiness.SignalDrawWS()
+	readiness.SignalExpander()
+	root, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	failingDone := make(chan error, 1)
+	siblingDone := make(chan error, 1)
+	siblingRecoveryStarted := make(chan struct{})
+	siblingWork := make(chan struct{}, 1)
+	siblingProgress := make(chan struct{}, 1)
+	databaseErr := errors.New("injected shard database failure")
+
+	consume := func(ctx context.Context, ready func()) error {
+		ready()
+		<-ctx.Done()
+		return nil
+	}
+	go func() {
+		failingDone <- runContiguousTargetShardRuntime(
+			root, readiness, 4,
+			func(context.Context) error { return nil }, consume,
+			func(context.Context) error { return databaseErr },
+		)
+	}()
+	go func() {
+		siblingDone <- runContiguousTargetShardRuntime(
+			root, readiness, 5,
+			func(context.Context) error { return nil }, consume,
+			func(ctx context.Context) error {
+				close(siblingRecoveryStarted)
+				for {
+					select {
+					case <-ctx.Done():
+						return nil
+					case <-siblingWork:
+						siblingProgress <- struct{}{}
+					}
+				}
+			},
+		)
+	}()
+
+	select {
+	case <-siblingRecoveryStarted:
+	case <-time.After(time.Second):
+		t.Fatal("sibling shard recovery did not start")
+	}
+	select {
+	case err := <-failingDone:
+		if !errors.Is(err, databaseErr) {
+			t.Fatalf("failed shard error=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("failed shard runtime did not return its database error")
+	}
+	siblingWork <- struct{}{}
+	select {
+	case <-siblingProgress:
+	case err := <-siblingDone:
+		t.Fatalf("sibling shard stopped after peer failure: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("sibling shard stopped making progress after peer database failure")
+	}
+	cancel()
+	select {
+	case err := <-siblingDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("sibling shard runtime leaked after cancellation")
+	}
+}
+
 func assertRecoveryNotStarted(t *testing.T, started <-chan struct{}) {
 	t.Helper()
 	select {

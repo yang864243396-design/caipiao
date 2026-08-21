@@ -28,6 +28,34 @@ func TestDrawWorkerPublishesBoundaryWhenDrawInsertIsDuplicate(t *testing.T) {
 	}
 }
 
+func TestDrawWorkerRESTInsertBeforeWSDuplicateAndRedeliveryKeepsOneDrawAndBoundary(t *testing.T) {
+	store := newDeduplicatingDrawStore()
+	store.SeedRESTDraw("tron_ffc_6s", "REST100")
+	publisher := &fakeBoundaryPublisher{}
+	worker := &Worker{
+		store: store, boundaryPublisher: publisher,
+		periodStateUpdater: newFakePeriodStateUpdater().Update,
+		boundaryHealth:     guaji.NewBoundaryHealth(lottery.FormalShortPeriodLotteryCodes()),
+	}
+	event := wsDraw("tron_ffc_6s", "REST100", "REST101")
+
+	// The first WS delivery must wake the boundary path even though the REST
+	// writer already won the draw uniqueness race. Redelivery must not create a
+	// second persisted draw or a second accepted boundary.
+	if err := worker.Ingest(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.Ingest(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.RowCount(); got != 1 {
+		t.Fatalf("persisted draw rows=%d want 1", got)
+	}
+	if got := publisher.Count(); got != 1 {
+		t.Fatalf("accepted boundary publications=%d want 1", got)
+	}
+}
+
 func TestDrawWorkerPublishesAcceptedBoundariesAndRejectsReplay(t *testing.T) {
 	store := &fakeDrawStore{inserted: true}
 	publisher := &fakeBoundaryPublisher{}
@@ -162,6 +190,44 @@ type fakeDrawStore struct {
 
 	mu           sync.Mutex
 	persistCalls int
+}
+
+type deduplicatingDrawStore struct {
+	mu   sync.Mutex
+	rows map[string]struct{}
+}
+
+func newDeduplicatingDrawStore() *deduplicatingDrawStore {
+	return &deduplicatingDrawStore{rows: make(map[string]struct{})}
+}
+
+func (store *deduplicatingDrawStore) SeedRESTDraw(lotteryCode, issue string) {
+	store.mu.Lock()
+	store.rows[lotteryCode+"\x00"+issue] = struct{}{}
+	store.mu.Unlock()
+}
+
+func (*deduplicatingDrawStore) ResolveLotteries(_ context.Context, gameKey string) ([]lotteryTarget, error) {
+	return []lotteryTarget{{code: gameKey, template: "fast_ssc_std"}}, nil
+}
+
+func (*deduplicatingDrawStore) DrawIntervalSec(context.Context, string) int { return 6 }
+
+func (store *deduplicatingDrawStore) PersistDraw(_ context.Context, lotteryCode, issue string, _ []string, _ time.Time, _ lottery.DrawFactMeta) (bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	key := lotteryCode + "\x00" + issue
+	if _, exists := store.rows[key]; exists {
+		return false, nil
+	}
+	store.rows[key] = struct{}{}
+	return true, nil
+}
+
+func (store *deduplicatingDrawStore) RowCount() int {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return len(store.rows)
 }
 
 type fakePeriodStateUpdater struct {
