@@ -20,7 +20,9 @@ type PeriodBoundary struct {
 	CurrentIssue string    `json:"currentIssue"`
 	NextIssue    string    `json:"nextIssue"`
 	ReceivedAt   time.Time `json:"receivedAt"`
-	Generation   uint64    `json:"generation"`
+	// Generation is a deterministic boundary idempotency token. Consumers
+	// must not infer ordering from its numeric value.
+	Generation uint64 `json:"generation"`
 }
 
 func (event PeriodBoundary) MessageID() string {
@@ -67,25 +69,42 @@ func (bus *Bus) PublishPeriodBoundary(ctx context.Context, event PeriodBoundary)
 
 type PeriodBoundaryHandler func(context.Context, PeriodBoundary) error
 
+type periodBoundaryDisposition uint8
+
+const (
+	periodBoundaryAck periodBoundaryDisposition = iota + 1
+	periodBoundaryRetry
+	periodBoundaryDeadLetter
+)
+
+func periodBoundaryDelivery(ctx context.Context, payload []byte, handler PeriodBoundaryHandler) (periodBoundaryDisposition, string) {
+	var event PeriodBoundary
+	if err := json.Unmarshal(payload, &event); err != nil {
+		return periodBoundaryDeadLetter, "invalid_json"
+	}
+	if strings.TrimSpace(event.LotteryCode) == "" || strings.TrimSpace(event.CurrentIssue) == "" || strings.TrimSpace(event.NextIssue) == "" || event.Generation == 0 {
+		return periodBoundaryDeadLetter, "invalid_period_boundary"
+	}
+	if err := handler(ctx, event); err != nil {
+		return periodBoundaryRetry, "handler_error"
+	}
+	return periodBoundaryAck, ""
+}
+
 func (bus *Bus) ConsumePeriodBoundaries(ctx context.Context, durable string, handler PeriodBoundaryHandler) error {
 	if bus == nil || handler == nil || strings.TrimSpace(durable) == "" {
 		return errors.New("period boundary consumer configuration is incomplete")
 	}
 	sub, err := bus.js.Subscribe(bus.PeriodBoundarySubject("*"), func(message *nats.Msg) {
-		var event PeriodBoundary
-		if err := json.Unmarshal(message.Data, &event); err != nil {
-			bus.deadLetterAndTerminate(ctx, message, "invalid_json")
-			return
+		disposition, failureClass := periodBoundaryDelivery(ctx, message.Data, handler)
+		switch disposition {
+		case periodBoundaryAck:
+			_ = message.Ack()
+		case periodBoundaryRetry:
+			bus.retryOrDeadLetterAfter(ctx, message, failureClass, 100*time.Millisecond)
+		case periodBoundaryDeadLetter:
+			bus.deadLetterAndTerminate(ctx, message, failureClass)
 		}
-		if strings.TrimSpace(event.LotteryCode) == "" || strings.TrimSpace(event.CurrentIssue) == "" || strings.TrimSpace(event.NextIssue) == "" || event.Generation == 0 {
-			bus.deadLetterAndTerminate(ctx, message, "invalid_period_boundary")
-			return
-		}
-		if err := handler(ctx, event); err != nil {
-			bus.retryOrDeadLetterAfter(ctx, message, "handler_error", 100*time.Millisecond)
-			return
-		}
-		_ = message.Ack()
 	}, nats.Durable(strings.TrimSpace(durable)), nats.ManualAck(), nats.AckExplicit(), nats.BindStream(bus.stream), nats.MaxAckPending(256))
 	if err != nil {
 		return errors.New("period boundary consumer unavailable")

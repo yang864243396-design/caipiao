@@ -27,7 +27,7 @@ func TestDrawWorkerPublishesBoundaryWhenDrawInsertIsDuplicate(t *testing.T) {
 	}
 }
 
-func TestDrawWorkerPublishesOneMonotonicGenerationPerAcceptedBoundary(t *testing.T) {
+func TestDrawWorkerPublishesAcceptedBoundariesAndRejectsReplay(t *testing.T) {
 	store := &fakeDrawStore{inserted: true}
 	publisher := &fakeBoundaryPublisher{}
 	worker := newDrawWorkerForTest(store, publisher)
@@ -47,11 +47,28 @@ func TestDrawWorkerPublishesOneMonotonicGenerationPerAcceptedBoundary(t *testing
 	if got := len(publisher.events); got != 2 {
 		t.Fatalf("published boundaries = %d, want 2", got)
 	}
-	if got := publisher.events[0].Generation; got != 1 {
-		t.Fatalf("first generation = %d, want 1", got)
+	if publisher.events[0].Generation == 0 || publisher.events[1].Generation == 0 {
+		t.Fatalf("boundary tokens must be non-zero: %+v", publisher.events)
 	}
-	if got := publisher.events[1].Generation; got != 2 {
-		t.Fatalf("second generation = %d, want 2", got)
+	if publisher.events[0].Generation == publisher.events[1].Generation {
+		t.Fatalf("different boundaries shared token %d", publisher.events[0].Generation)
+	}
+}
+
+func TestDrawWorkerBoundaryTokenSurvivesWorkerRestart(t *testing.T) {
+	event := wsDraw("tron_ffc_6s", "P700", "P701")
+	first := publishOneBoundary(t, event)
+	second := publishOneBoundary(t, event)
+	different := publishOneBoundary(t, wsDraw("tron_ffc_6s", "P701", "P702"))
+
+	if first == 0 {
+		t.Fatal("same-boundary token is zero")
+	}
+	if first != second {
+		t.Fatalf("same boundary tokens differ across workers: %d != %d", first, second)
+	}
+	if first == different {
+		t.Fatalf("different boundaries shared token %d", first)
 	}
 }
 
@@ -94,6 +111,26 @@ type fakeDrawStore struct {
 	persistCalls int
 }
 
+type fakePeriodStateUpdater struct {
+	mu   sync.Mutex
+	seen map[string]string
+}
+
+func newFakePeriodStateUpdater() *fakePeriodStateUpdater {
+	return &fakePeriodStateUpdater{seen: make(map[string]string)}
+}
+
+func (updater *fakePeriodStateUpdater) Update(lotteryCode, currentIssue, nextIssue string, _ time.Time, _ int) bool {
+	updater.mu.Lock()
+	defer updater.mu.Unlock()
+	boundary := currentIssue + "\x00" + nextIssue
+	if updater.seen[lotteryCode] == boundary {
+		return false
+	}
+	updater.seen[lotteryCode] = boundary
+	return true
+}
+
 func (*fakeDrawStore) ResolveLotteries(_ context.Context, gameKey string) ([]lotteryTarget, error) {
 	return []lotteryTarget{{code: gameKey, template: "fast_ssc_std"}}, nil
 }
@@ -121,8 +158,24 @@ func wsDraw(lotteryCode, currentIssue, nextIssue string) guaji.DrawEvent {
 }
 
 func newDrawWorkerForTest(store *fakeDrawStore, publisher *fakeBoundaryPublisher) *Worker {
+	updater := newFakePeriodStateUpdater()
 	return &Worker{
-		store: store, boundaryPublisher: publisher,
+		store: store, boundaryPublisher: publisher, periodStateUpdater: updater.Update,
 		boundaryHealth: guaji.NewBoundaryHealth(lottery.FormalShortPeriodLotteryCodes()),
 	}
+}
+
+func publishOneBoundary(t *testing.T, event guaji.DrawEvent) uint64 {
+	t.Helper()
+	publisher := &fakeBoundaryPublisher{}
+	worker := newDrawWorkerForTest(&fakeDrawStore{inserted: true}, publisher)
+	if err := worker.Ingest(context.Background(), event); err != nil {
+		t.Fatalf("ingest boundary: %v", err)
+	}
+	publisher.mu.Lock()
+	defer publisher.mu.Unlock()
+	if len(publisher.events) != 1 {
+		t.Fatalf("published boundaries = %d, want 1", len(publisher.events))
+	}
+	return publisher.events[0].Generation
 }

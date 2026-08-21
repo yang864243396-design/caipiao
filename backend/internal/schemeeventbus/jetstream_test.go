@@ -83,6 +83,30 @@ func TestSubjectsUseFixedShardSuffix(t *testing.T) {
 	}
 }
 
+func TestMergeStreamSubjectsPreservesExistingAndAddsBoundaryRoutes(t *testing.T) {
+	got, changed := mergeStreamSubjects(
+		[]string{"tenant.scheme.>", "tenant.custom.>"},
+		[]string{"tenant.scheme.>", "tenant.period.>", "tenant.target.>"},
+	)
+	want := []string{"tenant.scheme.>", "tenant.custom.>", "tenant.period.>", "tenant.target.>"}
+	if !changed {
+		t.Fatal("new boundary subjects were not reported as a stream update")
+	}
+	if len(got) != len(want) {
+		t.Fatalf("subjects = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("subjects = %v, want %v", got, want)
+		}
+	}
+
+	unchanged, changed := mergeStreamSubjects(got, want)
+	if changed {
+		t.Fatalf("existing stream subjects unexpectedly changed: %v", unchanged)
+	}
+}
+
 func TestStrategyBacklogCapacityIncludesPendingAndUnacked(t *testing.T) {
 	if !strategyBacklogWithinCapacity(200, 55, 256) {
 		t.Fatal("255 outstanding messages should remain admissible")

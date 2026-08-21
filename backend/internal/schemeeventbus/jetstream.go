@@ -143,18 +143,9 @@ func New(config Config) (*Bus, error) {
 			nc.Close()
 			return nil, errors.New("scheme event stream unavailable")
 		}
-		existing := make(map[string]struct{}, len(info.Config.Subjects))
-		for _, subject := range info.Config.Subjects {
-			existing[subject] = struct{}{}
-		}
-		changed := false
-		for _, subject := range streamConfig.Subjects {
-			if _, ok := existing[subject]; !ok {
-				info.Config.Subjects = append(info.Config.Subjects, subject)
-				changed = true
-			}
-		}
+		mergedSubjects, changed := mergeStreamSubjects(info.Config.Subjects, streamConfig.Subjects)
 		if changed {
+			info.Config.Subjects = mergedSubjects
 			if _, updateErr := js.UpdateStream(&info.Config); updateErr != nil {
 				nc.Close()
 				return nil, errors.New("scheme event stream subjects unavailable")
@@ -162,6 +153,24 @@ func New(config Config) (*Bus, error) {
 		}
 	}
 	return bus, nil
+}
+
+func mergeStreamSubjects(existing, required []string) ([]string, bool) {
+	merged := append([]string(nil), existing...)
+	seen := make(map[string]struct{}, len(existing)+len(required))
+	for _, subject := range existing {
+		seen[subject] = struct{}{}
+	}
+	changed := false
+	for _, subject := range required {
+		if _, ok := seen[subject]; ok {
+			continue
+		}
+		merged = append(merged, subject)
+		seen[subject] = struct{}{}
+		changed = true
+	}
+	return merged, changed
 }
 
 func (bus *Bus) Close() {

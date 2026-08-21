@@ -2,11 +2,12 @@ package drawsync
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"log/slog"
 	"math/rand"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -43,8 +44,7 @@ type Worker struct {
 	}
 	store              drawStore
 	boundaryPublisher  boundaryPublisher
-	boundaryMu         sync.Mutex
-	boundaryGeneration map[string]uint64
+	periodStateUpdater func(string, string, string, time.Time, int) bool
 }
 
 type drawStore interface {
@@ -253,7 +253,7 @@ func (w *Worker) Ingest(ctx context.Context, ev guaji.DrawEvent) error {
 			drawnAt = time.Now()
 		}
 		if intervalSec := store.DrawIntervalSec(ctx, tgt.code); intervalSec > 0 {
-			accepted := lottery.UpdatePeriodState(tgt.code, ev.Periods, ev.NextPeriods, drawnAt, intervalSec)
+			accepted := w.updatePeriodState(tgt.code, ev.Periods, ev.NextPeriods, drawnAt, intervalSec)
 			w.observeAcceptedBoundary(accepted, tgt.code, ev.Periods, ev.NextPeriods, receivedMono, intervalSec)
 			if accepted {
 				w.publishPeriodBoundary(ctx, tgt.code, ev.Periods, ev.NextPeriods, receivedMono)
@@ -305,7 +305,7 @@ func (store workerDrawStore) PersistDraw(ctx context.Context, lotteryCode, issue
 }
 
 func (w *Worker) publishPeriodBoundary(ctx context.Context, lotteryCode, currentIssue, nextIssue string, receivedAt time.Time) {
-	generation := w.nextBoundaryGeneration(lotteryCode)
+	generation := periodBoundaryToken(lotteryCode, currentIssue, nextIssue)
 	if w.boundaryPublisher == nil {
 		return
 	}
@@ -318,15 +318,27 @@ func (w *Worker) publishPeriodBoundary(ctx context.Context, lotteryCode, current
 	}
 }
 
-func (w *Worker) nextBoundaryGeneration(lotteryCode string) uint64 {
-	w.boundaryMu.Lock()
-	defer w.boundaryMu.Unlock()
-	if w.boundaryGeneration == nil {
-		w.boundaryGeneration = make(map[string]uint64)
+func (w *Worker) updatePeriodState(lotteryCode, currentIssue, nextIssue string, drawnAt time.Time, intervalSec int) bool {
+	if w.periodStateUpdater != nil {
+		return w.periodStateUpdater(lotteryCode, currentIssue, nextIssue, drawnAt, intervalSec)
 	}
-	lotteryCode = strings.TrimSpace(lotteryCode)
-	w.boundaryGeneration[lotteryCode]++
-	return w.boundaryGeneration[lotteryCode]
+	return lottery.UpdatePeriodState(lotteryCode, currentIssue, nextIssue, drawnAt, intervalSec)
+}
+
+// periodBoundaryToken is an idempotency token, not an ordering sequence.
+// Canonical boundary identity is stable across worker and process restarts.
+func periodBoundaryToken(lotteryCode, currentIssue, nextIssue string) uint64 {
+	canonical := strings.Join([]string{
+		strings.TrimSpace(lotteryCode),
+		strings.TrimSpace(currentIssue),
+		strings.TrimSpace(nextIssue),
+	}, "\x00")
+	digest := sha256.Sum256([]byte(canonical))
+	token := binary.BigEndian.Uint64(digest[:8])
+	if token == 0 {
+		return 1
+	}
+	return token
 }
 
 // observeAcceptedBoundary refreshes boundary health only after the formal
