@@ -114,8 +114,16 @@ RETURNING state_version`, schemeID, expectedStateVersion).Scan(&newStateVersion)
 func (q *Queries) ActivateSchemeBettingChain(ctx context.Context, schemeID, chainID string, allowLegacy bool) error {
 	tag, err := q.db.Exec(ctx, `
 UPDATE scheme_instances
-SET betting_owner = 'event', strict_chain_state = 'active', chain_id = $2, chain_seq = 0,
-    bet_failed_detail = NULL, chain_block_reason = NULL, updated_at = now()
+SET status = 'running',
+    status_reason = '',
+    betting_owner = 'event',
+    strict_chain_state = 'active',
+    chain_id = $2,
+    chain_seq = 0,
+    bet_failed_detail = NULL,
+    chain_block_reason = NULL,
+    running_since = COALESCE(running_since, now()),
+    updated_at = now()
 WHERE id = $1 AND (betting_owner = 'event' OR $3)`, schemeID, chainID, allowLegacy)
 	if err != nil {
 		return err

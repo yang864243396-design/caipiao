@@ -16,6 +16,30 @@ import (
 
 var errEventSchemeNotBlocked = errors.New("only blocked event-owned schemes can be rearmed")
 
+func isManualRearmInstanceEligible(status, owner, chainState, chainBlockReason string) bool {
+	if strings.TrimSpace(owner) != "event" ||
+		strings.TrimSpace(chainState) != string(schemebetting.ChainStateBlockedRequiresRearm) {
+		return false
+	}
+	status = strings.TrimSpace(status)
+	if status == "running" {
+		return true
+	}
+	if status != "paused" {
+		return false
+	}
+	switch strings.TrimSpace(chainBlockReason) {
+	case "missed_contiguous_period",
+		"provider_accepted_wrong_period",
+		"provider_acceptance_unknown",
+		"contiguous_target_configuration",
+		"admin_cancelled_before_send":
+		return true
+	default:
+		return false
+	}
+}
+
 func (w *Worker) EnableEventScheme(ctx context.Context, schemeID, actor, reason string) error {
 	return w.startEventSchemeChain(ctx, schemeID, actor, reason, "enable_event", true)
 }
@@ -51,8 +75,8 @@ func (w *Worker) startEventSchemeChain(ctx context.Context, schemeID, actor, rea
 	if err != nil {
 		return err
 	}
-	if inst.Status != "running" || inst.SimBet {
-		return errors.New("only running formal schemes can use event betting")
+	if inst.SimBet {
+		return errors.New("only formal schemes can use event betting")
 	}
 	mode := w.strategyProcessor.formalModeForLottery(inst.LotteryCode)
 	if mode == "" {
@@ -63,10 +87,13 @@ func (w *Worker) startEventSchemeChain(ctx context.Context, schemeID, actor, rea
 		return err
 	}
 	if allowLegacy {
+		if inst.Status != "running" {
+			return errors.New("only running formal schemes can enable event betting")
+		}
 		if execution.Owner != "legacy" {
 			return errors.New("scheme is already event-owned")
 		}
-	} else if execution.Owner != "event" || execution.ChainState != string(schemebetting.ChainStateBlockedRequiresRearm) {
+	} else if !isManualRearmInstanceEligible(inst.Status, execution.Owner, execution.ChainState, execution.ChainBlockReason) {
 		return errEventSchemeNotBlocked
 	}
 	if action == "rearm" {
@@ -155,7 +182,7 @@ func (w *Worker) startEventSchemeChain(ctx context.Context, schemeID, actor, rea
 		return err
 	}
 	afterState, _ := json.Marshal(map[string]any{
-		"owner": "event", "chainState": "active", "chainId": chainID, "chainSeq": 0,
+		"status": "running", "owner": "event", "chainState": "active", "chainId": chainID, "chainSeq": 0,
 	})
 	if err := q.InsertSchemeBettingAdminAction(ctx, sqlcdb.InsertSchemeBettingAdminActionParams{
 		SchemeID: schemeID, OutboxID: outboxID, Action: action, Actor: actor,
