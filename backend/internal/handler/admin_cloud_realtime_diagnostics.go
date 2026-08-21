@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"caipiao/backend/internal/apix"
 )
@@ -17,8 +19,19 @@ var cloudRealtimeDiagnosticSections = [...]string{"bus", "publisher", "hub", "sc
 var (
 	diagnosticURLUserInfo   = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)[^/\s@]+@`)
 	diagnosticLabeledSecret = regexp.MustCompile(`(?i)(?:password|passwd|pwd|token|credentials?|secret)\s*[:=]\s*[^,\s;]+`)
-	diagnosticProviderBody  = regexp.MustCompile(`(?i)(?:raw\s+)?(?:provider\s+)?body\s*[:=]\s*(?:\{.*\}|\[.*\]|[^,\s;]+)`)
 )
+
+const diagnosticRedacted = "[redacted]"
+
+var diagnosticBodyLabels = [...]string{
+	"provider response body", "provider_response_body", "provider-response-body", "providerresponsebody",
+	"provider response", "provider_response", "provider-response", "providerresponse",
+	"provider body", "provider_body", "provider-body", "providerbody",
+	"raw response", "raw_response", "raw-response", "rawresponse",
+	"response body", "response_body", "response-body", "responsebody",
+	"raw body", "raw_body", "raw-body", "rawbody",
+	"response", "body",
+}
 
 func (h *Handler) AdminCloudRealtimeDiagnostics(w http.ResponseWriter, _ *http.Request) {
 	apix.OK(w, h.safeCloudRealtimeSnapshot())
@@ -70,6 +83,10 @@ func sanitizeDiagnosticValue(value any) any {
 	case map[string]any:
 		clean := make(map[string]any, len(typed))
 		for key, child := range typed {
+			if diagnosticBodyKey(key) {
+				clean[key] = diagnosticRedacted
+				continue
+			}
 			if diagnosticSecretKey(key) {
 				continue
 			}
@@ -90,9 +107,113 @@ func sanitizeDiagnosticValue(value any) any {
 }
 
 func sanitizeDiagnosticString(value string) string {
+	if sanitized, ok := sanitizeDiagnosticJSON(value); ok {
+		return sanitized
+	}
+	return sanitizeDiagnosticPlainText(value)
+}
+
+func sanitizeDiagnosticJSON(value string) (string, bool) {
+	var decoded any
+	if json.Unmarshal([]byte(value), &decoded) != nil {
+		return "", false
+	}
+	sanitized, err := json.Marshal(sanitizeDiagnosticJSONValue(decoded))
+	if err != nil {
+		return "", false
+	}
+	return string(sanitized), true
+}
+
+func sanitizeDiagnosticJSONValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		clean := make(map[string]any, len(typed))
+		for key, child := range typed {
+			switch {
+			case diagnosticBodyKey(key), diagnosticSecretKey(key):
+				clean[key] = diagnosticRedacted
+			default:
+				clean[key] = sanitizeDiagnosticJSONValue(child)
+			}
+		}
+		return clean
+	case []any:
+		clean := make([]any, len(typed))
+		for index, child := range typed {
+			clean[index] = sanitizeDiagnosticJSONValue(child)
+		}
+		return clean
+	case string:
+		return sanitizeDiagnosticPlainText(typed)
+	default:
+		return value
+	}
+}
+
+func sanitizeDiagnosticPlainText(value string) string {
+	value = redactDiagnosticBodySuffix(value)
 	value = diagnosticURLUserInfo.ReplaceAllString(value, `${1}[redacted]@`)
-	value = diagnosticLabeledSecret.ReplaceAllString(value, "[redacted]")
-	return diagnosticProviderBody.ReplaceAllString(value, "body=[redacted]")
+	return diagnosticLabeledSecret.ReplaceAllString(value, diagnosticRedacted)
+}
+
+func redactDiagnosticBodySuffix(value string) string {
+	lower := strings.ToLower(value)
+	redactAt := -1
+	for _, label := range diagnosticBodyLabels {
+		searchFrom := 0
+		for searchFrom < len(lower) {
+			relative := strings.Index(lower[searchFrom:], label)
+			if relative < 0 {
+				break
+			}
+			start := searchFrom + relative
+			end := start + len(label)
+			if diagnosticLabelBoundary(lower, start, end) {
+				separator := end
+				for separator < len(lower) && (lower[separator] == ' ' || lower[separator] == '\t') {
+					separator++
+				}
+				if separator < len(lower) && (lower[separator] == ':' || lower[separator] == '=') {
+					if redactAt < 0 || separator+1 < redactAt {
+						redactAt = separator + 1
+					}
+					break
+				}
+			}
+			searchFrom = start + 1
+		}
+	}
+	if redactAt < 0 {
+		return value
+	}
+	return value[:redactAt] + diagnosticRedacted
+}
+
+func diagnosticLabelBoundary(value string, start, end int) bool {
+	if start > 0 && diagnosticWordByte(value[start-1]) {
+		return false
+	}
+	return end >= len(value) || !diagnosticWordByte(value[end])
+}
+
+func diagnosticWordByte(value byte) bool {
+	return value == '_' || unicode.IsLetter(rune(value)) || unicode.IsDigit(rune(value))
+}
+
+func diagnosticBodyKey(key string) bool {
+	normalized := strings.Map(func(r rune) rune {
+		if r == '_' || r == '-' || unicode.IsSpace(r) {
+			return -1
+		}
+		return unicode.ToLower(r)
+	}, strings.TrimSpace(key))
+	switch normalized {
+	case "body", "rawbody", "response", "rawresponse", "responsebody", "providerbody", "providerresponse", "providerresponsebody":
+		return true
+	default:
+		return false
+	}
 }
 
 func diagnosticSecretKey(key string) bool {

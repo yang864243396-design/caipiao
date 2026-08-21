@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -65,6 +66,52 @@ func TestRuntimeDiagnosticSanitizerRedactsProviderBodies(t *testing.T) {
 	for _, leaked := range []string{"too_late", "raw-body", "raw-token", "{"} {
 		if strings.Contains(got, leaked) {
 			t.Fatalf("provider diagnostic leaked %q in %q", leaked, got)
+		}
+	}
+}
+
+func TestRuntimeDiagnosticSanitizerRedactsMultilineJSONBodiesBeforeSecrets(t *testing.T) {
+	input := `{
+  "message": "keep this diagnostic",
+  "providerResponse": {
+    "status": 422,
+    "body": "first provider line\npassword=inside-password\nlater-provider-line",
+    "token": "inside-token"
+  },
+  "rawBody": "raw first line\nraw-later-line",
+  "password": "outer-password"
+}`
+
+	got := sanitizeDiagnosticString(input)
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
+		t.Fatalf("sanitized diagnostic is not valid JSON: %v; value=%q", err, got)
+	}
+	if decoded["message"] != "keep this diagnostic" {
+		t.Fatalf("non-sensitive diagnostic lost: %#v", decoded)
+	}
+	for _, leaked := range []string{
+		"first provider line", "inside-password", "later-provider-line", "inside-token",
+		"raw first line", "raw-later-line", "outer-password",
+	} {
+		if strings.Contains(got, leaked) {
+			t.Fatalf("multiline JSON diagnostic leaked %q in %s", leaked, got)
+		}
+	}
+}
+
+func TestRuntimeDiagnosticSanitizerRedactsArbitraryMultilineBodyThroughEnd(t *testing.T) {
+	input := "request failed token=prefix-token\nprovider response:\nstatus=500\npassword=inside-password\nbody:\nfirst body line\nlate-body-secret\ntrailer=must-not-leak"
+
+	got := sanitizeDiagnosticString(input)
+	if !strings.Contains(got, "request failed") {
+		t.Fatalf("non-sensitive prefix lost: %q", got)
+	}
+	for _, leaked := range []string{
+		"prefix-token", "status=500", "inside-password", "first body line", "late-body-secret", "must-not-leak",
+	} {
+		if strings.Contains(got, leaked) {
+			t.Fatalf("arbitrary multiline diagnostic leaked %q in %q", leaked, got)
 		}
 	}
 }
