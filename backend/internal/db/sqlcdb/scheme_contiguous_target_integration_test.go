@@ -3,8 +3,6 @@ package sqlcdb_test
 import (
 	"context"
 	"fmt"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,25 +15,62 @@ import (
 )
 
 func TestAwaitingTargetResolverAndExpiryHaveOneWinner(t *testing.T) {
-	f := newAwaitingDecisionDBFixture(t)
-	decisionID := f.Seed(f.DatabaseNow().Add(time.Second))
-	var resolved, missed atomic.Int32
-	var wg sync.WaitGroup
-	wg.Add(2)
+	f := newConcurrentAwaitingDecisionDBFixture(t)
+	deadline := f.DatabaseNow().Add(150 * time.Millisecond)
+	decisionID := f.Seed(deadline)
+
+	lockTx, err := f.pool.Begin(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lockTx.Rollback(f.ctx)
+	if _, found, err := sqlcdb.New(lockTx).GetAwaitingContiguousTargetForUpdate(f.ctx, decisionID); err != nil || !found {
+		t.Fatalf("lock awaiting decision found=%v err=%v", found, err)
+	}
+
+	type result struct {
+		kind string
+		won  bool
+		err  error
+	}
+	ready := make(chan struct{}, 2)
+	start := make(chan struct{})
+	results := make(chan result, 2)
 	go func() {
-		defer wg.Done()
-		if f.Complete(decisionID) {
-			resolved.Add(1)
-		}
+		won, err := f.completeAfterStart(decisionID, ready, start)
+		results <- result{kind: "complete", won: won, err: err}
 	}()
 	go func() {
-		defer wg.Done()
-		if f.Miss(decisionID) {
-			missed.Add(1)
-		}
+		won, err := f.missAfterStart(decisionID, ready, start)
+		results <- result{kind: "miss", won: won, err: err}
 	}()
-	wg.Wait()
-	if got := resolved.Load() + missed.Load(); got != 1 {
+	<-ready
+	<-ready
+	f.waitForDatabaseClockAfter(deadline)
+	close(start)
+	if err := lockTx.Commit(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	var resolved, missed int
+	for range 2 {
+		result := <-results
+		if result.err != nil {
+			t.Errorf("%s worker: %v", result.kind, result.err)
+			continue
+		}
+		if result.won {
+			if result.kind == "complete" {
+				resolved++
+			} else {
+				missed++
+			}
+		}
+	}
+	if resolved != 0 || missed != 1 {
+		t.Fatalf("terminal winners complete=%d miss=%d want complete=0 miss=1", resolved, missed)
+	}
+	if got := resolved + missed; got != 1 {
 		t.Fatalf("terminal winners=%d want=1", got)
 	}
 	f.AssertSingleTerminal(decisionID)
@@ -199,32 +234,6 @@ func (f *awaitingDecisionDBFixture) SeedMany(count int) {
 	}
 }
 
-func (f *awaitingDecisionDBFixture) Complete(decisionID int64) bool {
-	f.t.Helper()
-	completed, err := f.q.CompleteAwaitingContiguousTarget(f.ctx, sqlcdb.CompleteAwaitingContiguousTargetParams{
-		DecisionID:     decisionID,
-		TargetPeriodNo: fmt.Sprintf("target-%d", decisionID),
-		Diagnostics:    []byte(`{"source":"test"}`),
-	})
-	if err != nil {
-		f.t.Fatal(err)
-	}
-	return completed
-}
-
-func (f *awaitingDecisionDBFixture) Miss(decisionID int64) bool {
-	f.t.Helper()
-	missed, err := f.q.MissAwaitingContiguousTarget(f.ctx, sqlcdb.MissAwaitingContiguousTargetParams{
-		DecisionID:    decisionID,
-		FailureReason: "missed_contiguous_period",
-		Diagnostics:   []byte(`{"source":"test"}`),
-	})
-	if err != nil {
-		f.t.Fatal(err)
-	}
-	return missed
-}
-
 func (f *awaitingDecisionDBFixture) List(cursor int64, limit int32) []sqlcdb.AwaitingContiguousTargetRow {
 	f.t.Helper()
 	rows, err := f.q.ListAwaitingContiguousTargets(f.ctx, []string{f.lotteryCode}, []int32{f.shardNo}, cursor, limit)
@@ -259,5 +268,189 @@ WHERE d.id = $1`, decisionID).Scan(&decisionStatus, &instanceStatus, &statusReas
 		}
 	default:
 		f.t.Fatalf("decision status=%q is not terminal", decisionStatus)
+	}
+}
+
+type concurrentAwaitingDecisionDBFixture struct {
+	t            *testing.T
+	ctx          context.Context
+	pool         *db.Pool
+	schemeID     string
+	definitionID string
+	memberID     int64
+	lotteryCode  string
+	shardNo      int32
+}
+
+func newConcurrentAwaitingDecisionDBFixture(t *testing.T) *concurrentAwaitingDecisionDBFixture {
+	t.Helper()
+	_ = godotenv.Load("../../../.env")
+	cfg := config.Load()
+	if cfg.DatabaseURL == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+	ctx := context.Background()
+	pool, err := db.Connect(ctx, cfg.DatabaseURL, 4, 0)
+	if err != nil {
+		t.Skipf("database unavailable: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	if _, err := pool.Exec(ctx, `
+SELECT target_deadline_at, target_period_no, failure_reason, shard_no
+FROM scheme_period_decisions
+WHERE FALSE`); err != nil {
+		t.Skipf("migration 177 not applied: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `SELECT chain_block_reason FROM scheme_instances WHERE FALSE`); err != nil {
+		t.Skipf("migration 177 not applied: %v", err)
+	}
+
+	stamp := time.Now().UnixNano()
+	f := &concurrentAwaitingDecisionDBFixture{
+		t:            t,
+		ctx:          ctx,
+		pool:         pool,
+		schemeID:     fmt.Sprintf("awaiting-concurrent-inst-%d", stamp),
+		definitionID: fmt.Sprintf("awaiting-concurrent-definition-%d", stamp),
+		lotteryCode:  fmt.Sprintf("awaiting-concurrent-lottery-%d", stamp),
+		shardNo:      7,
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := fmt.Sprintf("awaiting-concurrent-account-%d", stamp)
+	if err := tx.QueryRow(ctx, `
+INSERT INTO members (account, password_hash, display_name, status)
+VALUES ($1, 'test', 'awaiting concurrent target test', 'active')
+RETURNING id`, account).Scan(&f.memberID); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO scheme_definitions (id, member_id, kind, scheme_name, lottery_code, lottery_label, share_status, config)
+VALUES ($1, $2, 'custom', 'awaiting concurrent target test', $3, 'test', 'private', '{}'::jsonb)`, f.definitionID, f.memberID, f.lotteryCode); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO scheme_instances
+    (id, definition_id, member_id, kind, scheme_name, lottery_code, lottery_label, status,
+     sim_bet, betting_owner, strict_chain_state, chain_id, chain_seq, state_version)
+VALUES ($1, $2, $3, 'custom', 'awaiting concurrent target test', $4, 'test', 'running',
+        false, 'event', 'active', 'awaiting-concurrent-chain', 4, 8)`, f.schemeID, f.definitionID, f.memberID, f.lotteryCode); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(f.cleanup)
+	return f
+}
+
+func (f *concurrentAwaitingDecisionDBFixture) cleanup() {
+	_, _ = f.pool.Exec(f.ctx, `DELETE FROM scheme_instances WHERE id = $1`, f.schemeID)
+	_, _ = f.pool.Exec(f.ctx, `DELETE FROM scheme_definitions WHERE id = $1`, f.definitionID)
+	_, _ = f.pool.Exec(f.ctx, `DELETE FROM members WHERE id = $1`, f.memberID)
+}
+
+func (f *concurrentAwaitingDecisionDBFixture) DatabaseNow() time.Time {
+	f.t.Helper()
+	var now time.Time
+	if err := f.pool.QueryRow(f.ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		f.t.Fatal(err)
+	}
+	return now
+}
+
+func (f *concurrentAwaitingDecisionDBFixture) Seed(deadline time.Time) int64 {
+	f.t.Helper()
+	var decisionID int64
+	if err := f.pool.QueryRow(f.ctx, `
+INSERT INTO scheme_period_decisions
+    (scheme_id, lottery_code, source_period_no, state_version_before, state_version_after,
+     status, target_deadline_at, shard_no)
+VALUES ($1, $2, 'concurrent-source', 7, 8, 'awaiting_target', $3, $4)
+RETURNING id`, f.schemeID, f.lotteryCode, deadline, f.shardNo).Scan(&decisionID); err != nil {
+		f.t.Fatal(err)
+	}
+	return decisionID
+}
+
+func (f *concurrentAwaitingDecisionDBFixture) completeAfterStart(decisionID int64, ready chan<- struct{}, start <-chan struct{}) (bool, error) {
+	tx, err := f.pool.Begin(f.ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(f.ctx)
+	ready <- struct{}{}
+	<-start
+	won, err := sqlcdb.New(tx).CompleteAwaitingContiguousTarget(f.ctx, sqlcdb.CompleteAwaitingContiguousTargetParams{
+		DecisionID:     decisionID,
+		TargetPeriodNo: "concurrent-target",
+		Diagnostics:    []byte(`{"source":"concurrent-test"}`),
+	})
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(f.ctx); err != nil {
+		return false, err
+	}
+	return won, nil
+}
+
+func (f *concurrentAwaitingDecisionDBFixture) missAfterStart(decisionID int64, ready chan<- struct{}, start <-chan struct{}) (bool, error) {
+	tx, err := f.pool.Begin(f.ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(f.ctx)
+	ready <- struct{}{}
+	<-start
+	won, err := sqlcdb.New(tx).MissAwaitingContiguousTarget(f.ctx, sqlcdb.MissAwaitingContiguousTargetParams{
+		DecisionID:    decisionID,
+		FailureReason: "missed_contiguous_period",
+		Diagnostics:   []byte(`{"source":"concurrent-test"}`),
+	})
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(f.ctx); err != nil {
+		return false, err
+	}
+	return won, nil
+}
+
+func (f *concurrentAwaitingDecisionDBFixture) waitForDatabaseClockAfter(deadline time.Time) {
+	f.t.Helper()
+	timeout := time.Now().Add(5 * time.Second)
+	for {
+		if f.DatabaseNow().After(deadline) {
+			return
+		}
+		if time.Now().After(timeout) {
+			f.t.Fatalf("database clock did not pass deadline %s", deadline.Format(time.RFC3339Nano))
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func (f *concurrentAwaitingDecisionDBFixture) AssertSingleTerminal(decisionID int64) {
+	f.t.Helper()
+	var decisionStatus, instanceStatus, statusReason, chainState string
+	var blockReason *string
+	if err := f.pool.QueryRow(f.ctx, `
+SELECT d.status, i.status, i.status_reason, i.strict_chain_state, i.chain_block_reason
+FROM scheme_period_decisions d
+JOIN scheme_instances i ON i.id = d.scheme_id
+WHERE d.id = $1`, decisionID).Scan(&decisionStatus, &instanceStatus, &statusReason, &chainState, &blockReason); err != nil {
+		f.t.Fatal(err)
+	}
+	if decisionStatus != "missed_contiguous_period" || instanceStatus != "paused" || statusReason != "bet_failed" || chainState != "blocked_requires_rearm" {
+		f.t.Fatalf("terminal state decision=%q instance=%q reason=%q chain=%q", decisionStatus, instanceStatus, statusReason, chainState)
+	}
+	if blockReason == nil || *blockReason != "missed_contiguous_period" {
+		f.t.Fatalf("block reason=%v want missed_contiguous_period", blockReason)
 	}
 }

@@ -33,7 +33,7 @@ type MissAwaitingContiguousTargetParams struct {
 }
 
 const awaitingContiguousTargetSelect = `
-SELECT d.id, d.scheme_id, i.member_id, d.lottery_code, d.source_period_no,
+SELECT d.id AS decision_id, d.scheme_id, i.member_id, d.lottery_code, d.source_period_no,
        COALESCE(d.source_bet_record_id, 0), d.target_deadline_at, d.state_version_after,
        COALESCE(i.chain_id, ''), i.chain_seq, d.shard_no,
        CASE WHEN i.sim_bet THEN 'shadow' ELSE 'production' END
@@ -65,11 +65,25 @@ func (q *Queries) ListAwaitingContiguousTargets(
 	if limit <= 0 || limit > 32 {
 		limit = 32
 	}
-	rows, err := q.db.Query(ctx, awaitingContiguousTargetSelect+`
-  AND d.lottery_code = ANY($1::text[])
-  AND d.shard_no = ANY($2::integer[])
-  AND d.id > $3
-ORDER BY d.id
+	rows, err := q.db.Query(ctx, `
+WITH scopes AS (
+    SELECT lottery_code, shard_no
+    FROM unnest($1::text[]) AS lotteries(lottery_code)
+    CROSS JOIN unnest($2::integer[]) AS shards(shard_no)
+), candidates AS (
+    SELECT scoped.*
+    FROM scopes scope
+    CROSS JOIN LATERAL (`+awaitingContiguousTargetSelect+`
+      AND d.lottery_code = scope.lottery_code
+      AND d.shard_no = scope.shard_no
+      AND d.id > $3
+    ORDER BY d.id
+    LIMIT 32
+    ) AS scoped
+)
+SELECT *
+FROM candidates
+ORDER BY decision_id
 LIMIT $4`, lotteryCodes, shards, cursor, limit)
 	if err != nil {
 		return nil, err
@@ -112,7 +126,7 @@ FROM locked_decision ld
 JOIN locked_instance li ON li.id = ld.scheme_id
 WHERE d.id = ld.id
   AND d.status = 'awaiting_target'
-  AND now() < d.target_deadline_at`, arg.DecisionID, arg.TargetPeriodNo, arg.Diagnostics)
+  AND clock_timestamp() < d.target_deadline_at`, arg.DecisionID, arg.TargetPeriodNo, arg.Diagnostics)
 	if err != nil {
 		return false, err
 	}
@@ -141,7 +155,7 @@ WITH locked_decision AS (
     JOIN locked_instance li ON li.id = ld.scheme_id
     WHERE d.id = ld.id
       AND d.status = 'awaiting_target'
-      AND now() >= d.target_deadline_at
+      AND clock_timestamp() >= d.target_deadline_at
     RETURNING d.scheme_id
 )
 UPDATE scheme_instances i

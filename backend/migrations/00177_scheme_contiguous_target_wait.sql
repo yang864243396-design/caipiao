@@ -29,7 +29,7 @@ CREATE INDEX IF NOT EXISTS idx_scheme_period_decisions_awaiting_target
   WHERE status = 'awaiting_target';
 
 CREATE INDEX IF NOT EXISTS idx_scheme_period_decisions_awaiting_target_shard
-  ON scheme_period_decisions (shard_no, lottery_code, target_deadline_at, id)
+  ON scheme_period_decisions (lottery_code, shard_no, id)
   WHERE status = 'awaiting_target';
 
 -- +goose Down
