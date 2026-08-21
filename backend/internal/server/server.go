@@ -398,6 +398,7 @@ func New(cfg config.Config) (*Server, error) {
 	// T3：第三方开奖 WS 订阅（GUAJI_ENABLED 时；入库与广播不依赖平台 WS 开关）
 	if pool != nil && guajiClient.Enabled() {
 		if dw := drawsync.NewWorker(pool, guajiClient, wsHub); dw != nil {
+			wireSchemeRuntimeDiagnostics(h, dw)
 			dw.SetStrategyNotifier(strategyNotifier)
 			if schemeEventBus != nil {
 				dw.SetPeriodBoundaryPublisher(schemeEventBus)
@@ -764,6 +765,16 @@ func isNilPointer(value any) bool {
 
 type realtimeMarkerSetter interface {
 	SetRealtimeMarker(schemeevents.Marker)
+}
+
+type schemeRuntimeDiagnosticsSetter interface {
+	SetSchemeRuntimeDiagnostics(handler.SchemeRuntimeDiagnosticsProvider)
+}
+
+func wireSchemeRuntimeDiagnostics(setter schemeRuntimeDiagnosticsSetter, provider handler.SchemeRuntimeDiagnosticsProvider) {
+	if setter != nil && provider != nil {
+		setter.SetSchemeRuntimeDiagnostics(provider)
+	}
 }
 
 func injectRealtimeMarker(marker schemeevents.Marker, setters ...realtimeMarkerSetter) {

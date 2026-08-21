@@ -28,6 +28,8 @@ type LotteryBoundaryHealthSnapshot struct {
 	Interval           time.Duration
 	StaleAt            time.Time
 	ReconnectRequested bool
+	WSRestLagPeriods   int
+	Stale              bool
 }
 
 // BoundaryHealth tracks independently configured draw boundaries. It is safe
@@ -116,13 +118,29 @@ func (h *BoundaryHealth) Stale(now time.Time) []StaleLottery {
 }
 
 func (h *BoundaryHealth) Snapshot(lotteryCode string) LotteryBoundaryHealthSnapshot {
+	return h.SnapshotAt(lotteryCode, time.Time{})
+}
+
+// SnapshotAt returns a copy of current boundary receipt state and its
+// read-only lag calculation. It never requests a reconnect or mutates health.
+func (h *BoundaryHealth) SnapshotAt(lotteryCode string, now time.Time) LotteryBoundaryHealthSnapshot {
 	if h == nil {
 		return LotteryBoundaryHealthSnapshot{}
 	}
 	lotteryCode = strings.TrimSpace(lotteryCode)
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	return h.entries[lotteryCode]
+	snapshot := h.entries[lotteryCode]
+	if now.IsZero() || snapshot.LastReceivedMono.IsZero() || snapshot.Interval <= 0 {
+		return snapshot
+	}
+	if now.After(snapshot.StaleAt) || now.Equal(snapshot.StaleAt) {
+		snapshot.Stale = true
+	}
+	if now.After(snapshot.LastReceivedMono) {
+		snapshot.WSRestLagPeriods = int(now.Sub(snapshot.LastReceivedMono) / snapshot.Interval)
+	}
+	return snapshot
 }
 
 func lotteryCodes(stale []StaleLottery) []string {

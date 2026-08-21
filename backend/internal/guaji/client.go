@@ -57,9 +57,10 @@ func requestPhaseName(phase int32) string {
 
 // Client is the Guaji third-party HTTP adapter (T0 skeleton).
 type Client struct {
-	cfg       Config
-	http      *http.Client
-	betListSF singleflight.Group
+	cfg          Config
+	http         *http.Client
+	betListSF    singleflight.Group
+	drawWSHealth *drawWSHealthStore
 }
 
 func NewClient(cfg Config) *Client {
@@ -79,7 +80,8 @@ func NewClient(cfg Config) *Client {
 		ExpectContinueTimeout: 1 * time.Second,
 	}
 	return &Client{
-		cfg: cfg,
+		cfg:          cfg,
+		drawWSHealth: &drawWSHealthStore{},
 		http: &http.Client{
 			Timeout:   timeout,
 			Transport: transport,
@@ -90,6 +92,15 @@ func NewClient(cfg Config) *Client {
 func (c *Client) Config() Config { return c.cfg }
 
 func (c *Client) Enabled() bool { return c.cfg.Enabled }
+
+// DrawWSHealth returns the latest local draw websocket state without opening a
+// connection or making a provider request.
+func (c *Client) DrawWSHealth() DrawWSHealthSnapshot {
+	if c == nil {
+		return DrawWSHealthSnapshot{}
+	}
+	return c.drawWSHealth.snapshotNow()
+}
 
 // TuneHTTPConcurrency 提高单主机连接上限（默认 MaxConnsPerHost=32）。
 // 压测工具或高并发 Worker 需要超过 32 路真并发时调用。

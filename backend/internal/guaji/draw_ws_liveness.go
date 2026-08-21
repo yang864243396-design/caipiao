@@ -30,11 +30,67 @@ type drawWSConn interface {
 
 // DrawWSHealthSnapshot is the state of one shared draw websocket connection.
 type DrawWSHealthSnapshot struct {
+	Connected   bool
 	ConnectedAt time.Time
 	LastFrameAt time.Time
 	LastPongAt  time.Time
 	Reconnects  uint64
 	LastError   string
+}
+
+type drawWSHealthStore struct {
+	mu       sync.RWMutex
+	active   *drawWSLiveness
+	snapshot DrawWSHealthSnapshot
+	seen     bool
+}
+
+func (s *drawWSHealthStore) begin(liveness *drawWSLiveness) {
+	if s == nil || liveness == nil {
+		return
+	}
+	snapshot := liveness.Snapshot()
+	s.mu.Lock()
+	if s.seen {
+		snapshot.Reconnects = s.snapshot.Reconnects + 1
+	}
+	snapshot.Connected = true
+	s.active = liveness
+	s.snapshot = snapshot
+	s.seen = true
+	s.mu.Unlock()
+}
+
+func (s *drawWSHealthStore) end(liveness *drawWSLiveness) {
+	if s == nil || liveness == nil {
+		return
+	}
+	snapshot := liveness.Snapshot()
+	s.mu.Lock()
+	if s.active == liveness {
+		snapshot.Reconnects += s.snapshot.Reconnects
+		snapshot.Connected = false
+		s.active = nil
+		s.snapshot = snapshot
+	}
+	s.mu.Unlock()
+}
+
+func (s *drawWSHealthStore) snapshotNow() DrawWSHealthSnapshot {
+	if s == nil {
+		return DrawWSHealthSnapshot{}
+	}
+	s.mu.RLock()
+	snapshot := s.snapshot
+	active := s.active
+	s.mu.RUnlock()
+	if active == nil {
+		return snapshot
+	}
+	activeSnapshot := active.Snapshot()
+	activeSnapshot.Connected = true
+	activeSnapshot.Reconnects += snapshot.Reconnects
+	return activeSnapshot
 }
 
 // drawWSDeadlineWaiter lets deterministic test connections wait for a fake

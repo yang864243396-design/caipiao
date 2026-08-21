@@ -16,6 +16,7 @@ import (
 // ParseDrawEvents 把一条消息拆成多个 DrawEvent：
 //   - lottery_v2_broadcast 内每个 lottery_logXXX 一条，另附 type 本身一条（波场 3 秒）
 //   - lottery1/3/5_wsds 独立 type 各一条（波场 1/3/5 分 00 区块）
+//
 // 号码字段全部带上，由 drawsync 按彩种 play_template 选取对应玩法号码。
 type DrawEvent struct {
 	GameKey     string    // 彩种线键，如 "lottery_log033"（反查 outbound_lottery_code）
@@ -70,9 +71,9 @@ var IgnoredDrawKeywords = []string{
 }
 
 var ignoredMessageTypes = map[string]bool{
-	"block":              true,
-	"block-new":          true,
-	"long_dragon_update": true,
+	"block":                        true,
+	"block-new":                    true,
+	"long_dragon_update":           true,
 	"fc3d_lottery_v2_broadcast":    true,
 	"pl35_lottery_v2_broadcast":    true,
 	"fc_pl3d_lottery_v2_broadcast": true,
@@ -309,12 +310,18 @@ func (c *Client) SubscribeDraws(ctx context.Context, handler func([]DrawEvent)) 
 	}
 	connectionCtx, cancel := context.WithCancel(ctx)
 	liveness := newDrawWSLiveness(conn, time.Now)
+	if c.drawWSHealth != nil {
+		c.drawWSHealth.begin(liveness)
+	}
 	livenessDone := make(chan error, 1)
 	go func() { livenessDone <- liveness.Run(connectionCtx) }()
 	defer func() {
 		cancel()
 		_ = conn.Close()
 		<-livenessDone
+		if c.drawWSHealth != nil {
+			c.drawWSHealth.end(liveness)
+		}
 	}()
 
 	for {

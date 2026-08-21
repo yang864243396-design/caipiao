@@ -17,6 +17,7 @@ var cloudRealtimeDiagnosticSections = [...]string{"bus", "publisher", "hub", "sc
 var (
 	diagnosticURLUserInfo   = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)[^/\s@]+@`)
 	diagnosticLabeledSecret = regexp.MustCompile(`(?i)(?:password|passwd|pwd|token|credentials?|secret)\s*[:=]\s*[^,\s;]+`)
+	diagnosticProviderBody  = regexp.MustCompile(`(?i)(?:raw\s+)?(?:provider\s+)?body\s*[:=]\s*(?:\{.*\}|\[.*\]|[^,\s;]+)`)
 )
 
 func (h *Handler) AdminCloudRealtimeDiagnostics(w http.ResponseWriter, _ *http.Request) {
@@ -90,7 +91,8 @@ func sanitizeDiagnosticValue(value any) any {
 
 func sanitizeDiagnosticString(value string) string {
 	value = diagnosticURLUserInfo.ReplaceAllString(value, `${1}[redacted]@`)
-	return diagnosticLabeledSecret.ReplaceAllString(value, "[redacted]")
+	value = diagnosticLabeledSecret.ReplaceAllString(value, "[redacted]")
+	return diagnosticProviderBody.ReplaceAllString(value, "body=[redacted]")
 }
 
 func diagnosticSecretKey(key string) bool {

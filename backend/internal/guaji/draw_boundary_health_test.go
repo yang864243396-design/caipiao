@@ -102,3 +102,17 @@ func TestBoundaryHealthUnobservedMonitoredLotteryNeverRequestsReconnect(t *testi
 		t.Fatalf("unobserved lottery stale signals = %v, want none", got)
 	}
 }
+
+func TestBoundaryHealthSnapshotAtReportsLagWithoutMutatingReconnectState(t *testing.T) {
+	h := NewBoundaryHealth([]string{"tron_ffc_3s"})
+	base := time.Unix(100, 0)
+	h.Observe("tron_ffc_3s", "100", "101", base, 3*time.Second)
+
+	snapshot := h.SnapshotAt("tron_ffc_3s", base.Add(7*time.Second))
+	if snapshot.WSRestLagPeriods != 2 || !snapshot.Stale {
+		t.Fatalf("snapshot=%+v, want two stale periods", snapshot)
+	}
+	if h.Snapshot("tron_ffc_3s").ReconnectRequested {
+		t.Fatal("read-only snapshot mutated reconnect state")
+	}
+}

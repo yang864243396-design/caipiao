@@ -55,6 +55,7 @@ type Handler struct {
 	wsHub                    *ws.Hub
 	realtime                 schemeevents.Marker
 	cloudRealtimeDiagnostics realtimeDiagnosticsProvider
+	schemeRuntimeDiagnostics SchemeRuntimeDiagnosticsProvider
 	guaji                    *guaji.Client
 	guajiAccounts            *accountsvc.Service
 	cmsUploads               *content.UploadStore
@@ -74,6 +75,13 @@ func (h *Handler) SetCloudRealtimeDiagnostics(provider interface{ Snapshot() map
 		return
 	}
 	h.cloudRealtimeDiagnostics = provider
+}
+
+func (h *Handler) SetSchemeRuntimeDiagnostics(provider SchemeRuntimeDiagnosticsProvider) {
+	if h == nil {
+		return
+	}
+	h.schemeRuntimeDiagnostics = provider
 }
 
 func (h *Handler) markScheme(memberID int64, instanceID string) {

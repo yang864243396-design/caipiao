@@ -30,6 +30,10 @@ type drawSubscriber interface {
 	SubscribeDraws(context.Context, func([]guaji.DrawEvent)) error
 }
 
+type drawWSHealthSource interface {
+	DrawWSHealth() guaji.DrawWSHealthSnapshot
+}
+
 // Worker 订阅第三方开奖 WS，过滤忽略彩种，按 outbound_lottery_code 反查入库并广播 WS-5（T3）。
 type Worker struct {
 	pool                *db.Pool
@@ -90,6 +94,26 @@ func (w *Worker) SetContiguousRecoveryReady(lotteryCodes []string, ready func())
 	}
 	w.recoveryReadyCodes = codes
 	w.recoveryReady = ready
+}
+
+// DrawWSHealth returns a local transport snapshot only; it never probes the
+// provider or changes the shared subscription.
+func (w *Worker) DrawWSHealth() guaji.DrawWSHealthSnapshot {
+	if w == nil {
+		return guaji.DrawWSHealthSnapshot{}
+	}
+	if source, ok := w.client.(drawWSHealthSource); ok {
+		return source.DrawWSHealth()
+	}
+	return guaji.DrawWSHealthSnapshot{}
+}
+
+// PeriodBoundaryHealth returns the current read-only boundary receipt state.
+func (w *Worker) PeriodBoundaryHealth(lotteryCode string, now time.Time) guaji.LotteryBoundaryHealthSnapshot {
+	if w == nil || w.boundaryHealth == nil {
+		return guaji.LotteryBoundaryHealthSnapshot{}
+	}
+	return w.boundaryHealth.SnapshotAt(lotteryCode, now)
 }
 
 func NewWorker(pool *db.Pool, client *guaji.Client, hub *ws.Hub) *Worker {
