@@ -125,6 +125,46 @@ func TestFormalEvaluationExpiredDeadlineCommitsThenMisses(t *testing.T) {
 	}
 }
 
+func TestFormalEvaluationRedeliveryRetriesFailedExpiredMissOnce(t *testing.T) {
+	f := newFormalStrategyEntryFixture(t, "15s", time.Now().UTC().Add(-30*time.Second))
+	wantErr := errors.New("transient expired miss failure")
+	missCalls := 0
+	f.processor.missAwaitingTargetFn = func(
+		ctx context.Context,
+		q *sqlcdb.Queries,
+		arg sqlcdb.MissAwaitingContiguousTargetParams,
+	) (bool, error) {
+		missCalls++
+		if missCalls == 1 {
+			return false, wantErr
+		}
+		return q.MissAwaitingContiguousTarget(ctx, arg)
+	}
+
+	if err := f.process(); !errors.Is(err, wantErr) {
+		t.Fatalf("first ProcessStrategyReady() error = %v, want transient miss failure", err)
+	}
+	afterFailure := f.snapshot()
+	if afterFailure.DecisionStatus != "awaiting_target" || afterFailure.StateVersion != 1 || afterFailure.RoundIndex != 1 || afterFailure.ChainState != "active" {
+		t.Fatalf("after transient failure decision=%q state=%d round=%d chain=%q, want recoverable committed wait", afterFailure.DecisionStatus, afterFailure.StateVersion, afterFailure.RoundIndex, afterFailure.ChainState)
+	}
+
+	if err := f.process(); err != nil {
+		t.Fatalf("redelivered ProcessStrategyReady() error = %v", err)
+	}
+	afterRetry := f.snapshot()
+	if afterRetry.DecisionStatus != "missed_contiguous_period" || afterRetry.ChainState != "blocked_requires_rearm" || missCalls != 2 {
+		t.Fatalf("after retry decision=%q chain=%q missCalls=%d, want one successful terminal retry", afterRetry.DecisionStatus, afterRetry.ChainState, missCalls)
+	}
+
+	if err := f.process(); err != nil {
+		t.Fatalf("terminal redelivery error = %v", err)
+	}
+	if missCalls != 2 {
+		t.Fatalf("terminal redelivery missCalls=%d, want no retry storm after terminal", missCalls)
+	}
+}
+
 func TestFormalEvaluationNonPositiveIntervalTerminatesConfiguration(t *testing.T) {
 	f := newFormalStrategyEntryFixture(t, "", time.Now().UTC())
 	if err := f.process(); err != nil {

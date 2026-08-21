@@ -193,24 +193,45 @@ func formalPhaseOneBlockReason(diagnostics []byte) string {
 	return strings.TrimSpace(payload.Reason)
 }
 
+type formalCommittedPhaseOneEvidence struct {
+	DecisionID       int64
+	Status           string
+	TargetDeadlineAt pgtype.Timestamptz
+}
+
+func retryExpiredFormalWaitTransition(
+	ctx context.Context,
+	evidence formalCommittedPhaseOneEvidence,
+	miss func(context.Context, int64) (bool, error),
+) error {
+	if evidence.Status != "awaiting_target" {
+		return nil
+	}
+	if evidence.DecisionID <= 0 || !evidence.TargetDeadlineAt.Valid {
+		return formalPhaseOneInconsistent(evidence.DecisionID, "awaiting target retry evidence is incomplete")
+	}
+	_, err := miss(ctx, evidence.DecisionID)
+	return err
+}
+
 func (p *StrategyProcessor) validateExistingFormalPhaseOneConflict(
 	ctx context.Context,
 	q *sqlcdb.Queries,
 	recordID int64,
 	schemeID, lotteryCode, periodNo string,
 	expectedStateVersion *int64,
-) error {
+) (formalCommittedPhaseOneEvidence, error) {
 	if p.formalModeForLottery(lotteryCode) == "" {
-		return nil
+		return formalCommittedPhaseOneEvidence{}, nil
 	}
 	existing, found, err := q.GetFormalPhaseOneDecisionStateForUpdate(ctx, schemeID, periodNo)
 	if err != nil || !found {
-		return err
+		return formalCommittedPhaseOneEvidence{}, err
 	}
 	switch existing.Status {
 	case "awaiting_target", "completed", "missed_contiguous_period", "chain_broken":
 	default:
-		return nil
+		return formalCommittedPhaseOneEvidence{}, nil
 	}
 	stateVersionBefore := existing.StateVersionBefore
 	if expectedStateVersion != nil {
@@ -229,9 +250,13 @@ func (p *StrategyProcessor) validateExistingFormalPhaseOneConflict(
 		Status: existing.Status, Diagnostics: existing.DecisionDiagnostics, TargetDeadlineAt: existing.TargetDeadlineAt,
 	}
 	if reason := validateExistingFormalPhaseOne(existing, existing.DecisionID, params); reason != "" {
-		return formalPhaseOneInconsistent(existing.DecisionID, reason)
+		return formalCommittedPhaseOneEvidence{}, formalPhaseOneInconsistent(existing.DecisionID, reason)
 	}
-	return nil
+	return formalCommittedPhaseOneEvidence{
+		DecisionID:       existing.DecisionID,
+		Status:           existing.Status,
+		TargetDeadlineAt: existing.TargetDeadlineAt,
+	}, nil
 }
 
 func formalPhaseOneStatusMatches(expected, actual string) bool {

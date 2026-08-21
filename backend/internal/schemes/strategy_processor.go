@@ -29,12 +29,13 @@ func shouldProcessFormalStrategy(candidate strategyCandidate) bool {
 // Its query is bounded and idempotent; financial settlement is intentionally
 // not part of this processor.
 type StrategyProcessor struct {
-	pool             *db.Pool
-	q                *sqlcdb.Queries
-	busy             atomic.Bool
-	bettingMode      string
-	bettingLotteries map[string]struct{}
-	ruleRegistry     *playrules.RegistryStore
+	pool                 *db.Pool
+	q                    *sqlcdb.Queries
+	busy                 atomic.Bool
+	bettingMode          string
+	bettingLotteries     map[string]struct{}
+	ruleRegistry         *playrules.RegistryStore
+	missAwaitingTargetFn func(context.Context, *sqlcdb.Queries, sqlcdb.MissAwaitingContiguousTargetParams) (bool, error)
 
 	lifecycleMu     sync.Mutex
 	closing         bool
@@ -148,7 +149,14 @@ func (p *StrategyProcessor) process(ctx context.Context, row sqlcdb.PendingForma
 		return err
 	}
 	if !claimed {
-		return p.validateExistingFormalPhaseOneConflict(ctx, qtx, row.RecordID, row.SchemeID, row.LotteryCode, row.PeriodNo, nil)
+		evidence, err := p.validateExistingFormalPhaseOneConflict(ctx, qtx, row.RecordID, row.SchemeID, row.LotteryCode, row.PeriodNo, nil)
+		if err != nil {
+			return err
+		}
+		if err := p.retryExpiredFormalWait(ctx, qtx, evidence); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
 	}
 	evaluation, err := qtx.GetSchemeStrategyEvaluation(ctx, sqlcdb.GetSchemeStrategyEvaluationParams{InstanceID: row.SchemeID, PeriodNo: row.PeriodNo})
 	if err != nil {
@@ -229,7 +237,7 @@ func (p *StrategyProcessor) missExpiredFormalAwaitingTarget(ctx context.Context,
 		return err
 	}
 	defer tx.Rollback(ctx)
-	_, err = p.q.WithTx(tx).MissAwaitingContiguousTarget(ctx, sqlcdb.MissAwaitingContiguousTargetParams{
+	_, err = p.missAwaitingTarget(ctx, p.q.WithTx(tx), sqlcdb.MissAwaitingContiguousTargetParams{
 		DecisionID:    decisionID,
 		FailureReason: "missed_contiguous_period",
 		Diagnostics:   []byte(`{"source":"formal_phase_one_expiry"}`),
@@ -238,4 +246,29 @@ func (p *StrategyProcessor) missExpiredFormalAwaitingTarget(ctx context.Context,
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+func (p *StrategyProcessor) missAwaitingTarget(
+	ctx context.Context,
+	q *sqlcdb.Queries,
+	arg sqlcdb.MissAwaitingContiguousTargetParams,
+) (bool, error) {
+	if p.missAwaitingTargetFn != nil {
+		return p.missAwaitingTargetFn(ctx, q, arg)
+	}
+	return q.MissAwaitingContiguousTarget(ctx, arg)
+}
+
+func (p *StrategyProcessor) retryExpiredFormalWait(
+	ctx context.Context,
+	q *sqlcdb.Queries,
+	evidence formalCommittedPhaseOneEvidence,
+) error {
+	return retryExpiredFormalWaitTransition(ctx, evidence, func(ctx context.Context, decisionID int64) (bool, error) {
+		return p.missAwaitingTarget(ctx, q, sqlcdb.MissAwaitingContiguousTargetParams{
+			DecisionID:    decisionID,
+			FailureReason: "missed_contiguous_period",
+			Diagnostics:   []byte(`{"source":"formal_strategy_ready_redelivery"}`),
+		})
+	})
 }

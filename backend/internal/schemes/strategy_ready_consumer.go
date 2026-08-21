@@ -37,7 +37,11 @@ func (p *StrategyProcessor) ProcessStrategyReady(ctx context.Context, recordID i
 		}
 		defer tx.Rollback(ctx)
 		qtx := p.q.WithTx(tx)
-		if err := p.validateExistingFormalPhaseOneConflict(ctx, qtx, recordID, schemeID, lotteryCode, periodNo, &expectedStateVersion); err != nil {
+		evidence, err := p.validateExistingFormalPhaseOneConflict(ctx, qtx, recordID, schemeID, lotteryCode, periodNo, &expectedStateVersion)
+		if err != nil {
+			return err
+		}
+		if err := p.retryExpiredFormalWait(ctx, qtx, evidence); err != nil {
 			return err
 		}
 		return tx.Commit(ctx)

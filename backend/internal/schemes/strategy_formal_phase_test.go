@@ -202,6 +202,71 @@ func TestDuplicateFormalAwaitingRequiresActiveUnblockedChain(t *testing.T) {
 	}
 }
 
+func TestFormalAwaitingRedeliveryRetriesConditionalMissAndPropagatesError(t *testing.T) {
+	wantErr := errors.New("transient miss update failure")
+	calls := 0
+	evidence := formalCommittedPhaseOneEvidence{
+		DecisionID:       41,
+		Status:           "awaiting_target",
+		TargetDeadlineAt: pgtype.Timestamptz{Time: time.Date(2026, time.August, 21, 10, 0, 4, 0, time.UTC), Valid: true},
+	}
+
+	err := retryExpiredFormalWaitTransition(context.Background(), evidence, func(context.Context, int64) (bool, error) {
+		calls++
+		return false, wantErr
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want transient update error for redelivery", err)
+	}
+	if calls != 1 {
+		t.Fatalf("conditional miss calls = %d, want 1", calls)
+	}
+}
+
+func TestFormalAwaitingRedeliveryAcknowledgesConditionalMissResult(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("changed_%v", changed), func(t *testing.T) {
+			calls := 0
+			evidence := formalCommittedPhaseOneEvidence{
+				DecisionID:       41,
+				Status:           "awaiting_target",
+				TargetDeadlineAt: pgtype.Timestamptz{Time: time.Date(2026, time.August, 21, 10, 0, 4, 0, time.UTC), Valid: true},
+			}
+			err := retryExpiredFormalWaitTransition(context.Background(), evidence, func(context.Context, int64) (bool, error) {
+				calls++
+				return changed, nil
+			})
+			if err != nil {
+				t.Fatalf("error = %v, want ACK", err)
+			}
+			if calls != 1 {
+				t.Fatalf("conditional miss calls = %d, want 1", calls)
+			}
+		})
+	}
+}
+
+func TestFormalTerminalRedeliveryAcknowledgesWithoutMissRetry(t *testing.T) {
+	for _, status := range []string{"missed_contiguous_period", "completed", "chain_broken"} {
+		t.Run(status, func(t *testing.T) {
+			calls := 0
+			err := retryExpiredFormalWaitTransition(context.Background(), formalCommittedPhaseOneEvidence{
+				DecisionID: 41,
+				Status:     status,
+			}, func(context.Context, int64) (bool, error) {
+				calls++
+				return false, errors.New("must not be called")
+			})
+			if err != nil {
+				t.Fatalf("error = %v, want terminal ACK", err)
+			}
+			if calls != 0 {
+				t.Fatalf("conditional miss calls = %d, want no terminal retry storm", calls)
+			}
+		})
+	}
+}
+
 type fakeFormalPhaseOneDecisionStore struct {
 	created    bool
 	decisionID int64
