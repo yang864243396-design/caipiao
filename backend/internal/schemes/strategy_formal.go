@@ -214,6 +214,26 @@ func retryExpiredFormalWaitTransition(
 	return err
 }
 
+// resolveCommittedFormalWaitTransition runs phase two only after the matching
+// phase-one transaction is known committed. Terminal decisions ACK without
+// re-entering the resolver, preventing redelivery loops.
+func resolveCommittedFormalWaitTransition(
+	ctx context.Context,
+	evidence formalCommittedPhaseOneEvidence,
+	resolve func(context.Context, int64) error,
+) error {
+	if evidence.Status != "awaiting_target" {
+		return nil
+	}
+	if evidence.DecisionID <= 0 || !evidence.TargetDeadlineAt.Valid {
+		return formalPhaseOneInconsistent(evidence.DecisionID, "awaiting target retry evidence is incomplete")
+	}
+	if resolve == nil {
+		return formalPhaseOneInconsistent(evidence.DecisionID, "awaiting target resolver is unavailable")
+	}
+	return resolve(ctx, evidence.DecisionID)
+}
+
 func (p *StrategyProcessor) validateExistingFormalPhaseOneConflict(
 	ctx context.Context,
 	q *sqlcdb.Queries,

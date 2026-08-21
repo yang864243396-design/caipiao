@@ -86,6 +86,32 @@ func TestCurrentRecordsSharedSnapshotOnlyOncePerProcess(t *testing.T) {
 	}
 }
 
+func TestCurrentUncachedRollbackDoesNotPolluteCommittedSnapshotCache(t *testing.T) {
+	now := time.Now().UTC()
+	code := uniqueTestLotteryCode("transaction_snapshot", now)
+	currentSnapshotCache.Delete(code)
+	closeAt := now.Add(6 * time.Second)
+	lottery.UpdatePeriodsScheduleFullWithDuration(
+		code, "P-101", "P-101", closeAt, closeAt, 6, closeAt.Format("2006-01-02 15:04:05"), now,
+	)
+	t.Cleanup(func() {
+		currentSnapshotCache.Delete(code)
+		lottery.ClearPeriodsSchedule(code)
+	})
+
+	rolledBack := &fakeSnapshotRecorder{id: 501}
+	_, snapshotID, ok, err := CurrentUncached(context.Background(), rolledBack, code, "P-100", now)
+	if err != nil || !ok || snapshotID != 501 || rolledBack.calls.Load() != 1 {
+		t.Fatalf("rolled-back snapshot=%d ok=%v calls=%d err=%v", snapshotID, ok, rolledBack.calls.Load(), err)
+	}
+
+	retry := &fakeSnapshotRecorder{id: 502}
+	_, snapshotID, ok, err = Current(context.Background(), retry, code, "P-100", now)
+	if err != nil || !ok || snapshotID != 502 || retry.calls.Load() != 1 {
+		t.Fatalf("retry snapshot=%d ok=%v calls=%d err=%v; want a fresh committed record", snapshotID, ok, retry.calls.Load(), err)
+	}
+}
+
 func TestCurrentRejectsSourcePeriod(t *testing.T) {
 	now := time.Now().UTC()
 	code := uniqueTestLotteryCode("shared_source", now)

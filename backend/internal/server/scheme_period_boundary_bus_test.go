@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"caipiao/backend/internal/db/sqlcdb"
 	"caipiao/backend/internal/schemeeventbus"
@@ -49,6 +51,25 @@ func TestLeasedContiguousTargetWorkerCarriesStrategyFence(t *testing.T) {
 	}
 }
 
+func TestLeasedContiguousTargetWorkerCarriesStrategyFenceForRecovery(t *testing.T) {
+	wantErr := errors.New("lease assertion failed")
+	capture := &contiguousTargetWorkerCapture{recoveryErr: wantErr}
+	worker := leasedContiguousTargetWorker{
+		worker: capture,
+		fence:  schemes.StrategyLeaseFence{ShardNo: 3, Owner: "node-a", Epoch: 7},
+	}
+	baseContext := context.Background()
+	err := worker.RunContiguousTargetRecovery(
+		baseContext, []string{"tron_ffc_6s"}, []int32{3}, 32, 1, time.Second,
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("error=%v want recovery error", err)
+	}
+	if capture.recoveryContext == nil || capture.recoveryContext == baseContext {
+		t.Fatal("recovery did not receive the lease-wrapped context")
+	}
+}
+
 type recordingBoundaryAwaitingSource struct {
 	rows  []sqlcdb.AwaitingContiguousTargetRow
 	limit int32
@@ -76,12 +97,21 @@ func (publisher *recordingContiguousTargetPublisher) PublishContiguousTargetRead
 }
 
 type contiguousTargetWorkerCapture struct {
-	decisionID int64
+	decisionID      int64
+	recoveryContext context.Context
+	recoveryErr     error
 }
 
 func (capture *contiguousTargetWorkerCapture) ProcessContiguousTargetReady(ctx context.Context, event schemeeventbus.ContiguousTargetReady) error {
 	capture.decisionID = event.DecisionID
 	return nil
+}
+
+func (capture *contiguousTargetWorkerCapture) RunContiguousTargetRecovery(
+	ctx context.Context, _ []string, _ []int32, _, _ int, _ time.Duration,
+) error {
+	capture.recoveryContext = ctx
+	return capture.recoveryErr
 }
 
 func itoa(value int) string {

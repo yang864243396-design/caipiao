@@ -267,6 +267,49 @@ func TestFormalTerminalRedeliveryAcknowledgesWithoutMissRetry(t *testing.T) {
 	}
 }
 
+func TestFormalAwaitingExactRedeliveryResolvesOnceAndPropagatesTransientError(t *testing.T) {
+	wantErr := errors.New("transient resolver failure")
+	calls := 0
+	err := resolveCommittedFormalWaitTransition(context.Background(), formalCommittedPhaseOneEvidence{
+		DecisionID:       41,
+		Status:           "awaiting_target",
+		TargetDeadlineAt: pgtype.Timestamptz{Time: time.Date(2026, time.August, 21, 10, 0, 4, 0, time.UTC), Valid: true},
+	}, func(_ context.Context, decisionID int64) error {
+		calls++
+		if decisionID != 41 {
+			t.Fatalf("decision=%d want=41", decisionID)
+		}
+		return wantErr
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("error=%v want transient resolver failure", err)
+	}
+	if calls != 1 {
+		t.Fatalf("resolver calls=%d want=1", calls)
+	}
+}
+
+func TestFormalTerminalExactRedeliveryAcknowledgesWithoutResolutionStorm(t *testing.T) {
+	for _, status := range []string{"completed", "missed_contiguous_period", "chain_broken"} {
+		t.Run(status, func(t *testing.T) {
+			calls := 0
+			err := resolveCommittedFormalWaitTransition(context.Background(), formalCommittedPhaseOneEvidence{
+				DecisionID: 41,
+				Status:     status,
+			}, func(context.Context, int64) error {
+				calls++
+				return errors.New("must not resolve terminal decision")
+			})
+			if err != nil {
+				t.Fatalf("error=%v want ACK", err)
+			}
+			if calls != 0 {
+				t.Fatalf("resolver calls=%d want=0", calls)
+			}
+		})
+	}
+}
+
 type fakeFormalPhaseOneDecisionStore struct {
 	created    bool
 	decisionID int64

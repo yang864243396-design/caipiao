@@ -346,6 +346,7 @@ func New(cfg config.Config) (*Server, error) {
 				launchWorker(func() {
 					if err := runLeasedSchemeContiguousTargetConsumer(
 						workerCtx, schemeEventBus, pool, shard, eventLeaseOwner, 2*cfg.SchemeBettingLease, schemeWorker,
+						cfg.SchemeBettingLotteries, int(cfg.SchemeBettingBatch), cfg.SchemeBettingConcurrency, time.Second,
 					); err != nil {
 						slog.Error("scheme contiguous-target shard consumer stopped", "shard", shard, "err", err)
 					}
@@ -396,18 +397,6 @@ func New(cfg config.Config) (*Server, error) {
 			}
 			launchWorker(func() { dw.Run(workerCtx) })
 		}
-	}
-	if schemeEventBus != nil && schemeWorker != nil &&
-		(strings.EqualFold(cfg.SchemeBettingMode, "gray") || strings.EqualFold(cfg.SchemeBettingMode, "production")) {
-		// Start after the draw websocket worker and durable consumers have been
-		// launched. The scan itself runs immediately, then remains bounded at
-		// the established recovery cadence.
-		launchWorker(func() {
-			schemeWorker.RunContiguousTargetRecovery(
-				workerCtx, cfg.SchemeBettingLotteries, cfg.SchemeBettingShards,
-				int(cfg.SchemeBettingBatch), cfg.SchemeBettingConcurrency, time.Second,
-			)
-		})
 	}
 
 	// periods API：同步第三方封盘倒计时（running 彩种，需挂机 token）

@@ -77,8 +77,9 @@ func TestImmediateContiguousSuccessorRejectsSkippedAndAmbiguousIssues(t *testing
 func TestResolveAwaitingTargetTerminatesGapAndDeadlineWithoutOutbox(t *testing.T) {
 	f := newResolverTerminalFixture(t)
 	t.Run("gap", func(t *testing.T) {
-		decisionID := f.seed("100", f.databaseNow().Add(time.Minute))
-		if !lottery.UpdatePeriodState("tron_ffc_6s", "101", "102", time.Now().UTC(), 6) {
+		source, current := nextResolverEntryBoundary()
+		decisionID := f.seed(source, f.databaseNow().Add(time.Minute))
+		if !lottery.UpdatePeriodState("tron_ffc_6s", current, incrementDecimal(current), time.Now().UTC(), 15) {
 			t.Fatal("set websocket boundary")
 		}
 		if err := f.processor.ResolveAwaitingTarget(f.ctx, decisionID); err != nil {
@@ -87,7 +88,8 @@ func TestResolveAwaitingTargetTerminatesGapAndDeadlineWithoutOutbox(t *testing.T
 		f.assertMissedWithoutOutbox(decisionID)
 	})
 	t.Run("deadline", func(t *testing.T) {
-		decisionID := f.seed("200", f.databaseNow().Add(-time.Millisecond))
+		source, _ := nextResolverEntryBoundary()
+		decisionID := f.seed(source, f.databaseNow().Add(-time.Millisecond))
 		if err := f.processor.ResolveAwaitingTarget(f.ctx, decisionID); err != nil {
 			t.Fatal(err)
 		}

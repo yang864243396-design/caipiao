@@ -43,10 +43,10 @@ func (p *StrategyProcessor) ProcessStrategyReady(ctx context.Context, recordID i
 		if err != nil {
 			return err
 		}
-		if err := p.retryExpiredFormalWait(ctx, qtx, evidence); err != nil {
+		if err := tx.Commit(ctx); err != nil {
 			return err
 		}
-		return tx.Commit(ctx)
+		return resolveCommittedFormalWaitTransition(ctx, evidence, p.ResolveAwaitingTarget)
 	}
 	return p.process(ctx, row)
 }

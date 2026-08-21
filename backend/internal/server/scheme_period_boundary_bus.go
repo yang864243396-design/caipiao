@@ -68,15 +68,30 @@ func runSchemePeriodBoundaryExpander(
 	})
 }
 
+type contiguousTargetWorker interface {
+	ProcessContiguousTargetReady(context.Context, schemeeventbus.ContiguousTargetReady) error
+	RunContiguousTargetRecovery(context.Context, []string, []int32, int, int, time.Duration) error
+}
+
 type leasedContiguousTargetWorker struct {
-	worker interface {
-		ProcessContiguousTargetReady(context.Context, schemeeventbus.ContiguousTargetReady) error
-	}
-	fence schemes.StrategyLeaseFence
+	worker contiguousTargetWorker
+	fence  schemes.StrategyLeaseFence
 }
 
 func (worker leasedContiguousTargetWorker) ProcessContiguousTargetReady(ctx context.Context, event schemeeventbus.ContiguousTargetReady) error {
 	return worker.worker.ProcessContiguousTargetReady(schemes.WithStrategyLeaseFence(ctx, worker.fence), event)
+}
+
+func (worker leasedContiguousTargetWorker) RunContiguousTargetRecovery(
+	ctx context.Context,
+	lotteryCodes []string,
+	_ []int32,
+	batch, concurrency int,
+	interval time.Duration,
+) error {
+	return worker.worker.RunContiguousTargetRecovery(
+		schemes.WithStrategyLeaseFence(ctx, worker.fence), lotteryCodes, []int32{worker.fence.ShardNo}, batch, concurrency, interval,
+	)
 }
 
 func runSchemeContiguousTargetConsumer(ctx context.Context, bus *schemeeventbus.Bus, shard uint32, worker interface {
@@ -102,9 +117,10 @@ func runLeasedSchemeContiguousTargetConsumer(
 	shard uint32,
 	owner string,
 	leaseDuration time.Duration,
-	worker interface {
-		ProcessContiguousTargetReady(context.Context, schemeeventbus.ContiguousTargetReady) error
-	},
+	worker contiguousTargetWorker,
+	lotteryCodes []string,
+	batch, concurrency int,
+	recoveryInterval time.Duration,
 ) error {
 	if pool == nil || owner == "" {
 		return errors.New("contiguous target strategy lease configuration is incomplete")
@@ -128,7 +144,10 @@ func runLeasedSchemeContiguousTargetConsumer(
 				continue
 			}
 		}
-		err = holdSchemeContiguousTargetShardLease(ctx, bus, q, shard, owner, epoch, leaseDuration, worker)
+		err = holdSchemeContiguousTargetShardLease(
+			ctx, bus, q, shard, owner, epoch, leaseDuration, worker,
+			lotteryCodes, batch, concurrency, recoveryInterval,
+		)
 		if errors.Is(err, errContiguousTargetShardLeaseLost) {
 			continue
 		}
@@ -146,23 +165,32 @@ func holdSchemeContiguousTargetShardLease(
 	owner string,
 	epoch int64,
 	leaseDuration time.Duration,
-	worker interface {
-		ProcessContiguousTargetReady(context.Context, schemeeventbus.ContiguousTargetReady) error
-	},
+	worker contiguousTargetWorker,
+	lotteryCodes []string,
+	batch, concurrency int,
+	recoveryInterval time.Duration,
 ) error {
 	leaseCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	done := make(chan error, 1)
+	done := make(chan error, 2)
 	fencedWorker := leasedContiguousTargetWorker{worker: worker, fence: schemes.StrategyLeaseFence{ShardNo: int32(shard), Owner: owner, Epoch: epoch}}
 	go func() { done <- runSchemeContiguousTargetConsumer(leaseCtx, bus, shard, fencedWorker) }()
+	go func() {
+		done <- fencedWorker.RunContiguousTargetRecovery(
+			leaseCtx, lotteryCodes, []int32{int32(shard)}, batch, concurrency, recoveryInterval,
+		)
+	}()
 	renew := time.NewTicker(leaseDuration / 3)
 	defer renew.Stop()
 	for {
 		select {
 		case err := <-done:
+			cancel()
+			<-done
 			return err
 		case <-ctx.Done():
 			cancel()
+			<-done
 			<-done
 			return nil
 		case <-renew.C:
@@ -171,6 +199,7 @@ func holdSchemeContiguousTargetShardLease(
 				continue
 			}
 			cancel()
+			<-done
 			<-done
 			if err != nil {
 				return err

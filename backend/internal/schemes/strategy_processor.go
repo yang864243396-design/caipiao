@@ -153,10 +153,10 @@ func (p *StrategyProcessor) process(ctx context.Context, row sqlcdb.PendingForma
 		if err != nil {
 			return err
 		}
-		if err := p.retryExpiredFormalWait(ctx, qtx, evidence); err != nil {
+		if err := tx.Commit(ctx); err != nil {
 			return err
 		}
-		return tx.Commit(ctx)
+		return resolveCommittedFormalWaitTransition(ctx, evidence, p.ResolveAwaitingTarget)
 	}
 	evaluation, err := qtx.GetSchemeStrategyEvaluation(ctx, sqlcdb.GetSchemeStrategyEvaluationParams{InstanceID: row.SchemeID, PeriodNo: row.PeriodNo})
 	if err != nil {

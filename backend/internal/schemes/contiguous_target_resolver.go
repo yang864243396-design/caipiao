@@ -139,7 +139,7 @@ func (p *StrategyProcessor) ResolveAwaitingTarget(ctx context.Context, decisionI
 	case contiguousTargetWaiting:
 		return tx.Commit(ctx)
 	}
-	target, snapshotID, ready, err := providerperiodtarget.Current(ctx, qtx, row.LotteryCode, row.SourcePeriodNo, databaseNowTime)
+	target, snapshotID, ready, err := providerperiodtarget.CurrentUncached(ctx, qtx, row.LotteryCode, row.SourcePeriodNo, databaseNowTime)
 	if err != nil {
 		return err
 	}

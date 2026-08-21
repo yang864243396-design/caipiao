@@ -35,6 +35,37 @@ func Current(
 	lotteryCode, sourcePeriod string,
 	now time.Time,
 ) (schemebetting.PeriodSnapshot, int64, bool, error) {
+	return current(ctx, recorder, lotteryCode, sourcePeriod, now, recordCurrentSnapshot)
+}
+
+// CurrentUncached records a provider snapshot without consulting or updating
+// the process-wide committed snapshot cache. Callers whose recorder is scoped
+// to a database transaction must use this path so rollback cannot publish an
+// unusable snapshot ID to later transactions.
+func CurrentUncached(
+	ctx context.Context,
+	recorder SnapshotRecorder,
+	lotteryCode, sourcePeriod string,
+	now time.Time,
+) (schemebetting.PeriodSnapshot, int64, bool, error) {
+	return current(ctx, recorder, lotteryCode, sourcePeriod, now, recordCurrentSnapshotUncached)
+}
+
+type currentSnapshotRecorder func(
+	context.Context,
+	SnapshotRecorder,
+	string,
+	schemebetting.PeriodSnapshot,
+	string,
+) (schemebetting.PeriodSnapshot, int64, bool, error)
+
+func current(
+	ctx context.Context,
+	recorder SnapshotRecorder,
+	lotteryCode, sourcePeriod string,
+	now time.Time,
+	record currentSnapshotRecorder,
+) (schemebetting.PeriodSnapshot, int64, bool, error) {
 	lotteryCode = strings.TrimSpace(lotteryCode)
 	sourcePeriod = strings.TrimSpace(sourcePeriod)
 	now = now.UTC()
@@ -42,7 +73,7 @@ func Current(
 		return schemebetting.PeriodSnapshot{}, 0, false, nil
 	}
 	if target, ok := freshShortPeriodWSNext(lotteryCode, sourcePeriod, now); ok {
-		return recordCurrentSnapshot(ctx, recorder, lotteryCode, target, "guaji_draw_ws_next")
+		return record(ctx, recorder, lotteryCode, target, "guaji_draw_ws_next")
 	}
 	if lottery.RequiresFreshShortPeriodWSBetTarget(lotteryCode) {
 		return schemebetting.PeriodSnapshot{}, 0, false, nil
@@ -76,7 +107,7 @@ func Current(
 	target := schemebetting.PeriodSnapshot{
 		PeriodNo: periodNo, OpenAt: openAt, CloseAt: closeAt, ObservedAt: observedAt,
 	}
-	return recordCurrentSnapshot(ctx, recorder, lotteryCode, target, "guaji_periods_current")
+	return record(ctx, recorder, lotteryCode, target, "guaji_periods_current")
 }
 
 // CurrentForInitialDispatch resolves callers that do not have a persisted
@@ -117,6 +148,27 @@ func recordCurrentSnapshot(
 	target schemebetting.PeriodSnapshot,
 	source string,
 ) (schemebetting.PeriodSnapshot, int64, bool, error) {
+	return recordCurrentSnapshotWithCache(ctx, recorder, lotteryCode, target, source, true)
+}
+
+func recordCurrentSnapshotUncached(
+	ctx context.Context,
+	recorder SnapshotRecorder,
+	lotteryCode string,
+	target schemebetting.PeriodSnapshot,
+	source string,
+) (schemebetting.PeriodSnapshot, int64, bool, error) {
+	return recordCurrentSnapshotWithCache(ctx, recorder, lotteryCode, target, source, false)
+}
+
+func recordCurrentSnapshotWithCache(
+	ctx context.Context,
+	recorder SnapshotRecorder,
+	lotteryCode string,
+	target schemebetting.PeriodSnapshot,
+	source string,
+	useCache bool,
+) (schemebetting.PeriodSnapshot, int64, bool, error) {
 	periodNo := strings.TrimSpace(target.PeriodNo)
 	openAt := target.OpenAt.UTC()
 	closeAt := target.CloseAt.UTC()
@@ -131,6 +183,18 @@ func recordCurrentSnapshot(
 	}
 	digest := sha256.Sum256(canonical)
 	snapshotHash := hex.EncodeToString(digest[:])
+	params := sqlcdb.RecordCurrentProviderPeriodSnapshotParams{
+		LotteryCode: lotteryCode, PeriodNo: periodNo, OpenAt: openAt, CloseAt: closeAt,
+		ObservedAt: observedAt, Source: source,
+		SnapshotHash: snapshotHash, RawPayload: canonical,
+	}
+	if !useCache {
+		snapshotID, err := recorder.RecordCurrentProviderPeriodSnapshot(ctx, params)
+		if err != nil {
+			return schemebetting.PeriodSnapshot{}, 0, false, err
+		}
+		return target, snapshotID, true, nil
+	}
 	value, _ := currentSnapshotCache.LoadOrStore(lotteryCode, &snapshotCacheEntry{})
 	cache := value.(*snapshotCacheEntry)
 	cache.mu.Lock()
@@ -138,11 +202,7 @@ func recordCurrentSnapshot(
 	if cache.hash == snapshotHash && cache.id > 0 {
 		return target, cache.id, true, nil
 	}
-	snapshotID, err := recorder.RecordCurrentProviderPeriodSnapshot(ctx, sqlcdb.RecordCurrentProviderPeriodSnapshotParams{
-		LotteryCode: lotteryCode, PeriodNo: periodNo, OpenAt: openAt, CloseAt: closeAt,
-		ObservedAt: observedAt, Source: source,
-		SnapshotHash: snapshotHash, RawPayload: canonical,
-	})
+	snapshotID, err := recorder.RecordCurrentProviderPeriodSnapshot(ctx, params)
 	if err != nil {
 		return schemebetting.PeriodSnapshot{}, 0, false, err
 	}
