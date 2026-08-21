@@ -17,7 +17,10 @@ import (
 	"caipiao/backend/internal/ws"
 )
 
-const maxDrawWSReconnectBackoff = 30 * time.Second
+const (
+	maxDrawWSReconnectBackoff   = 30 * time.Second
+	boundaryHealthCheckInterval = 100 * time.Millisecond
+)
 
 type drawSubscriber interface {
 	SubscribeDraws(context.Context, func([]guaji.DrawEvent)) error
@@ -31,6 +34,7 @@ type Worker struct {
 	hub              *ws.Hub
 	reconnectJitter  func(time.Duration) time.Duration
 	waitRetry        func(context.Context, time.Duration) bool
+	boundaryHealth   *guaji.BoundaryHealth
 	strategyNotifier interface {
 		NotifyStrategyDraw(context.Context, string, string)
 	}
@@ -48,7 +52,13 @@ func NewWorker(pool *db.Pool, client *guaji.Client, hub *ws.Hub) *Worker {
 	if pool == nil || client == nil || !client.Enabled() {
 		return nil
 	}
-	return &Worker{pool: pool, q: sqlcdb.New(pool), client: client, hub: hub}
+	return &Worker{
+		pool:           pool,
+		q:              sqlcdb.New(pool),
+		client:         client,
+		hub:            hub,
+		boundaryHealth: guaji.NewBoundaryHealth(lottery.FormalShortPeriodLotteryCodes()),
+	}
 }
 
 // Run 持续订阅；断开后退避重连，直至 ctx 取消。
@@ -62,7 +72,9 @@ func (w *Worker) Run(ctx context.Context) {
 			return
 		}
 		validFrame := false
-		err := w.client.SubscribeDraws(ctx, func(events []guaji.DrawEvent) {
+		connectionCtx, cancelConnection := context.WithCancel(ctx)
+		supervisorDone := w.superviseBoundaryHealth(connectionCtx, cancelConnection)
+		err := w.client.SubscribeDraws(connectionCtx, func(events []guaji.DrawEvent) {
 			if len(events) > 0 {
 				validFrame = true
 			}
@@ -72,6 +84,10 @@ func (w *Worker) Run(ctx context.Context) {
 				}
 			}
 		})
+		cancelConnection()
+		if supervisorDone != nil {
+			<-supervisorDone
+		}
 		if ctx.Err() != nil {
 			return
 		}
@@ -84,6 +100,36 @@ func (w *Worker) Run(ctx context.Context) {
 			return
 		}
 	}
+}
+
+// superviseBoundaryHealth only requests cancellation of the current shared
+// subscription. Run owns the one serial reconnect loop, while SubscribeDraws
+// and its Task 2 liveness goroutine close the current connection.
+func (w *Worker) superviseBoundaryHealth(ctx context.Context, cancelConnection context.CancelFunc) <-chan struct{} {
+	if w == nil || w.boundaryHealth == nil {
+		return nil
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(boundaryHealthCheckInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				stale := w.boundaryHealth.Stale(now)
+				if len(stale) == 0 {
+					continue
+				}
+				slog.Warn("guaji draw boundary stale, reconnecting shared websocket", "staleLotteryCount", len(stale))
+				cancelConnection()
+				return
+			}
+		}
+	}()
+	return done
 }
 
 type drawWSReconnectBackoff struct {
@@ -168,17 +214,21 @@ func (w *Worker) Ingest(ctx context.Context, ev guaji.DrawEvent) error {
 	if len(targets) == 0 {
 		return nil // outbound_lottery_code 未配置该键，跳过
 	}
+	receivedMono := time.Now()
 	for _, tgt := range targets {
-		balls := ev.Balls.BallsFor(tgt.template)
-		if len(balls) == 0 {
-			continue
-		}
 		drawnAt := ev.DrawnAt
 		if drawnAt.IsZero() {
 			drawnAt = time.Now()
 		}
 		if intervalSec := w.drawIntervalSec(ctx, tgt.code); intervalSec > 0 {
 			lottery.UpdatePeriodState(tgt.code, ev.Periods, ev.NextPeriods, drawnAt, intervalSec)
+			if w.boundaryHealth != nil {
+				w.boundaryHealth.Observe(tgt.code, ev.Periods, ev.NextPeriods, receivedMono, time.Duration(intervalSec)*time.Second)
+			}
+		}
+		balls := ev.Balls.BallsFor(tgt.template)
+		if len(balls) == 0 {
+			continue
 		}
 		_, inserted, err := lottery.PersistDrawFactFromBalls(ctx, w.q, w.hub, tgt.code, ev.Periods, balls, drawnAt, lottery.DrawFactMeta{
 			Source:          "draw_ws",
@@ -230,9 +280,5 @@ func (w *Worker) drawIntervalSec(ctx context.Context, lotteryCode string) int {
 	if w == nil || w.q == nil {
 		return 0
 	}
-	cat, err := w.q.GetLotteryCatalogByCode(ctx, lotteryCode)
-	if err != nil || !cat.DrawInterval.Valid {
-		return 0
-	}
-	return lottery.ParseDrawIntervalSec(cat.DrawInterval.String)
+	return lottery.DrawIntervalSecForLottery(ctx, w.q, lotteryCode)
 }

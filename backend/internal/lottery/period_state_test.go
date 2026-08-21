@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-func TestPeriodCountdownSecForLottery_wallClockFallback(t *testing.T) {	// 无 DB：DrawIntervalSecForLottery 返回 0，CountdownSecForLottery 返回 0
+func TestPeriodCountdownSecForLottery_wallClockFallback(t *testing.T) { // 无 DB：DrawIntervalSecForLottery 返回 0，CountdownSecForLottery 返回 0
 	sec, err := PeriodCountdownSecForLottery(nil, nil, "tron_ffc_1m", time.Unix(100, 0))
 	if err != nil || sec != 0 {
 		t.Fatalf("got %d err=%v want 0", sec, err)
@@ -37,6 +37,23 @@ func TestSmoothCountdown_newPeriodReset(t *testing.T) {
 	got := smoothCountdown(code, now.Add(2*time.Second), 58)
 	if got != 58 {
 		t.Fatalf("new period should reset countdown, got %d", got)
+	}
+}
+
+func TestFreshShortPeriodWSBetTargetRequiresMatchingCurrentIssue(t *testing.T) {
+	now := time.Now().UTC()
+	for code, interval := range map[string]int{
+		"tron_ffc_3s":  3,
+		"tron_ffc_6s":  6,
+		"tron_ffc_15s": 15,
+	} {
+		UpdatePeriodState(code, "ws-current", "ws-next", now, interval)
+		if _, ok := FreshShortPeriodWSBetTarget(code, "rest-current", now.Add(100*time.Millisecond)); ok {
+			t.Fatalf("%s accepted a target without matching WS current issue", code)
+		}
+		if state, ok := FreshShortPeriodWSBetTarget(code, "ws-current", now.Add(100*time.Millisecond)); !ok || state.NextIssue != "ws-next" {
+			t.Fatalf("%s target = %+v ok=%v, want ws-next from matching boundary", code, state, ok)
+		}
 	}
 }
 

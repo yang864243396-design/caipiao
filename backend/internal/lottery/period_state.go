@@ -17,6 +17,14 @@ type PeriodState struct {
 
 var periodState sync.Map // lotteryCode -> PeriodState
 
+var formalShortPeriodLotteryCodes = []string{"tron_ffc_3s", "tron_ffc_6s", "tron_ffc_15s"}
+
+// FormalShortPeriodLotteryCodes returns the configured formal lotteries whose
+// period targets must come from fresh draw websocket boundaries.
+func FormalShortPeriodLotteryCodes() []string {
+	return append([]string(nil), formalShortPeriodLotteryCodes...)
+}
+
 // UpdatePeriodState 在开奖 WS 入库时更新彩种期号与封盘时刻。
 func UpdatePeriodState(lotteryCode, currentIssue, nextIssue string, drawnAt time.Time, intervalSec int) {
 	lotteryCode = strings.TrimSpace(lotteryCode)
@@ -57,12 +65,13 @@ func PeriodStateFor(lotteryCode string) (PeriodState, bool) {
 // REST feed can advertise the following issue before the bet endpoint accepts
 // it, so REST is not a safe formal-betting fallback.
 func RequiresFreshShortPeriodWSBetTarget(lotteryCode string) bool {
-	switch strings.TrimSpace(lotteryCode) {
-	case "tron_ffc_3s", "tron_ffc_6s", "tron_ffc_15s":
-		return true
-	default:
-		return false
+	lotteryCode = strings.TrimSpace(lotteryCode)
+	for _, code := range formalShortPeriodLotteryCodes {
+		if lotteryCode == code {
+			return true
+		}
 	}
+	return false
 }
 
 // FreshShortPeriodWSBetTarget returns the provider websocket's next_periods
