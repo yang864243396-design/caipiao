@@ -307,11 +307,14 @@ func (c *Client) SubscribeDraws(ctx context.Context, handler func([]DrawEvent)) 
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
-
-	go func() {
-		<-ctx.Done()
+	connectionCtx, cancel := context.WithCancel(ctx)
+	liveness := newDrawWSLiveness(conn, time.Now)
+	livenessDone := make(chan error, 1)
+	go func() { livenessDone <- liveness.Run(connectionCtx) }()
+	defer func() {
+		cancel()
 		_ = conn.Close()
+		<-livenessDone
 	}()
 
 	for {
@@ -322,6 +325,7 @@ func (c *Client) SubscribeDraws(ctx context.Context, handler func([]DrawEvent)) 
 		if err != nil {
 			return err
 		}
+		liveness.MarkFrame()
 		events := ParseDrawEvents(raw)
 		if len(events) > 0 {
 			handler(events)

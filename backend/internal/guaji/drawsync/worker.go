@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math/rand"
 	"strings"
 	"time"
 
@@ -16,12 +17,20 @@ import (
 	"caipiao/backend/internal/ws"
 )
 
+const maxDrawWSReconnectBackoff = 30 * time.Second
+
+type drawSubscriber interface {
+	SubscribeDraws(context.Context, func([]guaji.DrawEvent)) error
+}
+
 // Worker 订阅第三方开奖 WS，过滤忽略彩种，按 outbound_lottery_code 反查入库并广播 WS-5（T3）。
 type Worker struct {
 	pool             *db.Pool
 	q                *sqlcdb.Queries
-	client           *guaji.Client
+	client           drawSubscriber
 	hub              *ws.Hub
+	reconnectJitter  func(time.Duration) time.Duration
+	waitRetry        func(context.Context, time.Duration) bool
 	strategyNotifier interface {
 		NotifyStrategyDraw(context.Context, string, string)
 	}
@@ -47,12 +56,16 @@ func (w *Worker) Run(ctx context.Context) {
 	if w == nil {
 		return
 	}
-	backoff := time.Second
+	backoff := newDrawWSReconnectBackoff(w.jitterReconnectDelay)
 	for {
 		if ctx.Err() != nil {
 			return
 		}
+		validFrame := false
 		err := w.client.SubscribeDraws(ctx, func(events []guaji.DrawEvent) {
+			if len(events) > 0 {
+				validFrame = true
+			}
 			for _, ev := range events {
 				if ierr := w.Ingest(ctx, ev); ierr != nil {
 					slog.Warn("guaji draw ingest failed", "gameKey", ev.GameKey, "periods", ev.Periods, "err", ierr)
@@ -62,15 +75,74 @@ func (w *Worker) Run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		slog.Warn("guaji draw ws disconnected, retrying", "err", err, "backoff", backoff.String())
-		select {
-		case <-ctx.Done():
+		if validFrame {
+			backoff.Reset()
+		}
+		delay := backoff.Next()
+		slog.Warn("guaji draw ws disconnected, retrying", "err", err, "backoff", delay.String())
+		if !w.waitForReconnect(ctx, delay) {
 			return
-		case <-time.After(backoff):
 		}
-		if backoff < 30*time.Second {
-			backoff *= 2
+	}
+}
+
+type drawWSReconnectBackoff struct {
+	next   time.Duration
+	jitter func(time.Duration) time.Duration
+}
+
+func newDrawWSReconnectBackoff(jitter func(time.Duration) time.Duration) *drawWSReconnectBackoff {
+	if jitter == nil {
+		jitter = jitterDrawWSReconnectDelay
+	}
+	return &drawWSReconnectBackoff{next: time.Second, jitter: jitter}
+}
+
+func (b *drawWSReconnectBackoff) Next() time.Duration {
+	base := b.next
+	if b.next < maxDrawWSReconnectBackoff {
+		b.next *= 2
+		if b.next > maxDrawWSReconnectBackoff {
+			b.next = maxDrawWSReconnectBackoff
 		}
+	}
+	return b.jitter(base)
+}
+
+func (b *drawWSReconnectBackoff) Reset() {
+	b.next = time.Second
+}
+
+func (w *Worker) jitterReconnectDelay(delay time.Duration) time.Duration {
+	if w != nil && w.reconnectJitter != nil {
+		return w.reconnectJitter(delay)
+	}
+	return jitterDrawWSReconnectDelay(delay)
+}
+
+func jitterDrawWSReconnectDelay(delay time.Duration) time.Duration {
+	spread := delay / 5
+	if spread <= 0 {
+		return delay
+	}
+	jittered := delay - spread + time.Duration(rand.Int63n(int64(2*spread)+1))
+	if jittered > maxDrawWSReconnectBackoff {
+		return maxDrawWSReconnectBackoff
+	}
+	return jittered
+}
+
+func (w *Worker) waitForReconnect(ctx context.Context, delay time.Duration) bool {
+	if w != nil && w.waitRetry != nil {
+		return w.waitRetry(ctx, delay)
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 
