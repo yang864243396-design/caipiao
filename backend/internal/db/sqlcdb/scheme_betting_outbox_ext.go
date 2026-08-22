@@ -82,6 +82,7 @@ type InsertSchemePeriodDecisionParams struct {
 	Status             string
 	Diagnostics        []byte
 	TargetDeadlineAt   pgtype.Timestamptz
+	ShardNo            pgtype.Int4
 }
 
 // FormalPhaseOneDecisionState is the locked database evidence required before
@@ -116,17 +117,21 @@ type FormalPhaseOneDecisionState struct {
 }
 
 func (q *Queries) InsertSchemePeriodDecision(ctx context.Context, arg InsertSchemePeriodDecisionParams) (int64, bool, error) {
+	diagnostics := arg.Diagnostics
+	if len(diagnostics) == 0 {
+		diagnostics = []byte(`{}`)
+	}
 	var id int64
 	err := q.db.QueryRow(ctx, `
 INSERT INTO scheme_period_decisions
     (scheme_id, lottery_code, source_period_no, source_bet_record_id, draw_hash,
      state_version_before, state_version_after, rule_version, rule_snapshot_hash,
-     local_hit, winning_units, status, diagnostics, target_deadline_at)
-VALUES ($1, $2, $3, NULLIF($4, 0), NULLIF($5, ''), $6, $7, $8, $9, $10, $11, $12, $13, $14)
+     local_hit, winning_units, status, diagnostics, target_deadline_at, shard_no)
+VALUES ($1, $2, $3, NULLIF($4, 0), NULLIF($5, ''), $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 ON CONFLICT (scheme_id, source_period_no) DO NOTHING
 RETURNING id`, arg.SchemeID, arg.LotteryCode, arg.SourcePeriodNo, arg.SourceBetRecordID, arg.DrawHash,
 		arg.StateVersionBefore, arg.StateVersionAfter, arg.RuleVersion, arg.RuleSnapshotHash,
-		arg.LocalHit, arg.WinningUnits, arg.Status, arg.Diagnostics, arg.TargetDeadlineAt).Scan(&id)
+		arg.LocalHit, arg.WinningUnits, arg.Status, diagnostics, arg.TargetDeadlineAt, arg.ShardNo).Scan(&id)
 	if err == nil {
 		return id, true, nil
 	}

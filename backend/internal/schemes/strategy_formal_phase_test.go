@@ -448,13 +448,13 @@ WHERE FALSE`); err != nil {
 	stamp := time.Now().UnixNano()
 	schemeID := fmt.Sprintf("formal-phase-instance-%d", stamp)
 	definitionID := fmt.Sprintf("formal-phase-definition-%d", stamp)
-	lotteryCode := fmt.Sprintf("formal-phase-lottery-%d", stamp)
-	periodNo := fmt.Sprintf("formal-phase-period-%d", stamp)
+	lotteryCode := fmt.Sprintf("fp_%x", stamp)
+	periodNo := fmt.Sprintf("%x", stamp)
 	var memberID int64
 	if err := tx.QueryRow(ctx, `
 INSERT INTO members (account, password_hash, display_name, status)
 VALUES ($1, 'test', 'formal phase test', 'active')
-RETURNING id`, fmt.Sprintf("formal-phase-account-%d", stamp)).Scan(&memberID); err != nil {
+RETURNING id`, fmt.Sprintf("fpa_%x", stamp)).Scan(&memberID); err != nil {
 		t.Fatal(err)
 	}
 	definitionConfig := []byte(`{"runTypeId":"fixed","schemeGroups":["1"]}`)
@@ -492,8 +492,8 @@ INSERT INTO cloud_bet_records
      multiplier, round_label, amount, status, bet_content, third_party_bet_id,
      rule_snapshot, rule_version, rule_snapshot_hash)
 VALUES ($1, $2, false, $3, 'formal phase test', $4, $5, 'test',
-        '1', '1/1', 1, 'hit', '1\n2\n3', 'accepted-formal-phase', $6::jsonb, 1, 'formal-phase-rule')
-RETURNING id`, fmt.Sprintf("formal-phase-record-%d", stamp), memberID, schemeID, lotteryCode, periodNo, snapshot).Scan(&recordID); err != nil {
+        '1', '1/1', 1, 'hit', $7, 'accepted-formal-phase', $6::jsonb, 1, 'formal-phase-rule')
+RETURNING id`, fmt.Sprintf("fpr_%x", stamp), memberID, schemeID, lotteryCode, periodNo, snapshot, "1\n2\n3").Scan(&recordID); err != nil {
 		t.Fatal(err)
 	}
 	instance, err := sqlcdb.New(tx).GetSchemeInstanceFull(ctx, schemeID)

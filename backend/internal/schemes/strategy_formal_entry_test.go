@@ -32,7 +32,7 @@ func TestFormalEvaluationCommitsAwaitingTargetBeforeProviderAvailability(t *test
 		t.Fatalf("decision count=%d status=%q deadline=%+v", s.DecisionCount, s.DecisionStatus, s.TargetDeadlineAt)
 	}
 	wantDeadline := f.drawnAt.Add(15*time.Second - guajiPlaceCloseSafety)
-	if !s.TargetDeadlineAt.Time.Equal(wantDeadline) {
+	if delta := s.TargetDeadlineAt.Time.Sub(wantDeadline); delta <= -time.Microsecond || delta >= time.Microsecond {
 		t.Fatalf("deadline=%s want=%s", s.TargetDeadlineAt.Time, wantDeadline)
 	}
 	if s.EvaluationStatus != "completed" || !s.StrategyEvaluatedAt.Valid || s.OutboxCount != 0 {
@@ -285,8 +285,8 @@ INSERT INTO cloud_bet_records
      multiplier, round_label, amount, status, bet_content, third_party_bet_id,
      rule_snapshot, rule_version, rule_snapshot_hash)
 VALUES ($1, $2, false, $3, 'formal phase entry test', $4, $5, 'test',
-        '1', '1/2', 1, 'hit', '1\n2\n3', $6, $7::jsonb, 1, 'formal-phase-rule')
-RETURNING id`, fmt.Sprintf("FPR%d", stamp), f.memberID, f.schemeID, f.lotteryCode, f.periodNo, fmt.Sprintf("accepted-%d", stamp), snapshot).Scan(&f.recordID); err != nil {
+        '1', '1/2', 1, 'hit', $8, $6, $7::jsonb, 1, 'formal-phase-rule')
+RETURNING id`, fmt.Sprintf("FPR%d", stamp), f.memberID, f.schemeID, f.lotteryCode, f.periodNo, fmt.Sprintf("accepted-%d", stamp), snapshot, "1\n2\n3").Scan(&f.recordID); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(ctx); err != nil {

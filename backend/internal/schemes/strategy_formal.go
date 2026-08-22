@@ -13,6 +13,7 @@ import (
 	"caipiao/backend/internal/cloud/schemestate"
 	"caipiao/backend/internal/db/sqlcdb"
 	"caipiao/backend/internal/lottery"
+	"caipiao/backend/internal/schemebetting"
 )
 
 var (
@@ -405,6 +406,7 @@ func (p *StrategyProcessor) persistFormalAwaitingTarget(
 		RuleVersion: row.RuleVersion, RuleSnapshotHash: row.RuleSnapshotHash,
 		LocalHit: result.Hit, WinningUnits: result.WinningUnits, Status: "awaiting_target", Diagnostics: diagnostics,
 		TargetDeadlineAt: pgtype.Timestamptz{Time: deadline.UTC(), Valid: true},
+		ShardNo:          pgtype.Int4{Int32: int32(schemebetting.ShardForScheme(row.SchemeID, shadowOutboxShardCount)), Valid: true},
 	}
 	decisionID, created, err := reserveFormalPhaseOneDecision(ctx, q, params, func() error {
 		return schemestate.ProcessStrategyAfterDraw(ctx, q, inst, row.PeriodNo, result.Hit, definitionConfig)

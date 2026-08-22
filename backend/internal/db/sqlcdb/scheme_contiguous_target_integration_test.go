@@ -174,10 +174,10 @@ WHERE FALSE`); err != nil {
 		tx:          tx,
 		q:           sqlcdb.New(tx),
 		schemeID:    fmt.Sprintf("awaiting-inst-%d", stamp),
-		lotteryCode: fmt.Sprintf("awaiting-lottery-%d", stamp),
+		lotteryCode: fmt.Sprintf("aw_%x", stamp),
 		shardNo:     7,
 	}
-	account := fmt.Sprintf("awaiting-account-%d", stamp)
+	account := fmt.Sprintf("awa_%x", stamp)
 	definitionID := fmt.Sprintf("awaiting-definition-%d", stamp)
 	var memberID int64
 	if err := tx.QueryRow(ctx, `
@@ -312,14 +312,14 @@ WHERE FALSE`); err != nil {
 		pool:         pool,
 		schemeID:     fmt.Sprintf("awaiting-concurrent-inst-%d", stamp),
 		definitionID: fmt.Sprintf("awaiting-concurrent-definition-%d", stamp),
-		lotteryCode:  fmt.Sprintf("awaiting-concurrent-lottery-%d", stamp),
+		lotteryCode:  fmt.Sprintf("ac_%x", stamp),
 		shardNo:      7,
 	}
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	account := fmt.Sprintf("awaiting-concurrent-account-%d", stamp)
+	account := fmt.Sprintf("aca_%x", stamp)
 	if err := tx.QueryRow(ctx, `
 INSERT INTO members (account, password_hash, display_name, status)
 VALUES ($1, 'test', 'awaiting concurrent target test', 'active')
